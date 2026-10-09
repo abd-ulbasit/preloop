@@ -49,6 +49,7 @@ const NAV_PERMISSIONS: Record<string, string[]> = {
   '/console/flows': ['view_flows'],
   '/console/settings/runners': ['view_flows'],
   '/console/settings/webhooks': ['view_policies'],
+  '/console/settings/inference-hooks': ['manage_policies'],
   '/console/tools': ['view_tools', 'view_policies'],
   '/console/policies': ['view_policies'],
   '/console/trackers': ['view_trackers'],
@@ -1435,6 +1436,17 @@ export class ConsoleShell extends LitElement {
                                   '/console/settings/chat',
                                   html`<span class="nav-row"
                                     >Chat connections</span
+                                  >`
+                                )
+                              : nothing,
+                            hasCapability(
+                              this.features,
+                              'anthropic_inference_hooks'
+                            )
+                              ? this._renderNavLink(
+                                  '/console/settings/inference-hooks',
+                                  html`<span class="nav-row"
+                                    >Inference hooks</span
                                   >`
                                 )
                               : nothing,
