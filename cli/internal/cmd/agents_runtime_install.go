@@ -175,16 +175,14 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	desktopOpts := desktopInstallOptions{Runtime: spec.kind, Output: os.Stdout}
 	if desktop {
-		ctx := cmd.Context()
-		if ctx == nil {
-			ctx = context.Background()
-		}
 		// Unsupported desktops fail here, before the runtime installer runs.
-		if err := installDesktop(ctx, desktopInstallOptions{
-			Runtime: spec.kind,
-			Output:  os.Stdout,
-		}); err != nil {
+		if err := installDesktop(ctx, desktopOpts); err != nil {
 			return err
 		}
 	}
@@ -200,6 +198,14 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stdout, "✓ Installed %s\n", spec.displayName) //nolint:errcheck
 	}
 	if installOnly {
+		if desktop && skipInstall {
+			// The deployment's desktop stage runs after onboarding: the
+			// agent exists, so the tunnel must come up or the stage fails.
+			return enableRuntimeDesktopTunnel(ctx, spec, desktopOpts)
+		}
+		if desktop {
+			fmt.Fprintln(os.Stdout, "Desktop installed. After onboarding, run 'preloop desktop enable --agent <id>' to allow live views.") //nolint:errcheck
+		}
 		return nil
 	}
 
@@ -236,7 +242,13 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 	}
 	// A skipped managed launcher (missing agent binary) is a partial success:
 	// the warning has been printed and the command exits 0.
-	return ignoreLauncherSkipped(executeManagedEnrollment(agent, opts))
+	if err := ignoreLauncherSkipped(executeManagedEnrollment(agent, opts)); err != nil {
+		return err
+	}
+	if desktop {
+		return enableRuntimeDesktopTunnel(ctx, spec, desktopOpts)
+	}
+	return nil
 }
 
 func runRuntimeInstallCommand(command []string, writer io.Writer) error {
