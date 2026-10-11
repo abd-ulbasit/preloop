@@ -41,13 +41,14 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_flow_execution, crud_issue_cost
+from preloop.models.crud.issue_cost import FAILED_EXECUTION_STATUSES
 from preloop.schemas.issue_cost import (
     COVERAGE_COMPLETE,
     COVERAGE_PARTIAL,
@@ -147,6 +148,19 @@ READINESS_CSV_COLUMNS: tuple[str, ...] = (
     "readiness_observation_completed_at",
 )
 CSV_COLUMNS += READINESS_CSV_COLUMNS
+
+#: Seat billing (#1481), appended last so existing column positions hold.
+BILLING_CSV_COLUMNS: tuple[str, ...] = (
+    "billing_mode",
+    "billing_label",
+    "seat_run_count",
+    "premium_requests",
+)
+CSV_COLUMNS += BILLING_CSV_COLUMNS
+# Failed runs per failure category ("result_schema_invalid:2;timeout:1"), so
+# a run that finished with an unusable result is visible next to the counts
+# (#868). Appended last so earlier columns keep their positions.
+CSV_COLUMNS += ("failure_categories",)
 
 UNASSIGNED_ISSUE_KEY = "(unassigned)"
 
@@ -1145,6 +1159,11 @@ def record_execution_finished(
             "pr_key": attribution.pr_key,
             "link": link,
             "status": str(execution.status or "").upper()[:32],
+            "failure_category": (
+                str(execution.failure_category)[:32]
+                if getattr(execution, "failure_category", None)
+                else None
+            ),
             "total_tokens": int(execution.total_tokens or 0),
             "estimated_cost": execution.estimated_cost,
             "start_time": _aware(execution.start_time or datetime.now(UTC)),
@@ -1814,6 +1833,7 @@ def build_report(
     project_id: Optional[uuid.UUID] = None,
     flow_id: Optional[uuid.UUID] = None,
     include_execution_ids: bool = False,
+    include_failure_categories: bool = False,
     limit: int = MAX_REPORT_ROWS,
 ) -> IssueCostReport:
     """Issue rows, summaries and the unassigned bucket for one filter.
@@ -1835,6 +1855,8 @@ def build_report(
         include_execution_ids: Attach contributing execution ids and the
             unassigned executions (JSON export). The unassigned totals are
             always computed.
+        include_failure_categories: Attach per-issue failed-run counts by
+            failure category (exports).
         limit: Maximum issue rows.
 
     Returns:
@@ -1877,7 +1899,8 @@ def build_report(
         )
 
     execution_ids: dict[uuid.UUID, list[uuid.UUID]] = {}
-    if include_execution_ids:
+    failure_categories: dict[uuid.UUID, dict[str, int]] = {}
+    if include_execution_ids or include_failure_categories:
         for fact, _name in crud_issue_cost.list_facts(
             db,
             account_id=account_id,
@@ -1885,8 +1908,13 @@ def build_report(
             flow_id=flow_id,
             limit=limit * 50,
         ):
-            if fact.rollup_id is not None:
-                execution_ids.setdefault(fact.rollup_id, []).append(fact.execution_id)
+            if fact.rollup_id is None:
+                continue
+            execution_ids.setdefault(fact.rollup_id, []).append(fact.execution_id)
+            category = getattr(fact, "failure_category", None)
+            if category and fact.status in FAILED_EXECUTION_STATUSES:
+                counts = failure_categories.setdefault(fact.rollup_id, {})
+                counts[category] = counts.get(category, 0) + 1
 
     unassigned_filter: dict[str, Any] = {
         "account_id": account_id,
@@ -1919,6 +1947,10 @@ def build_report(
         failed=unassigned_failed,
         known_cost_runs=unassigned_known_cost_runs,
         unknown_cost_runs=unassigned_unknown_cost_runs,
+    )
+
+    billing = crud_issue_cost.billing_totals_by_rollup(
+        db, rollup_ids=rollup_ids, flow_id=flow_id
     )
 
     trackers, projects, flows = crud_issue_cost.names(
@@ -1975,6 +2007,7 @@ def build_report(
                 total_tokens=totals.tokens,
                 run_count=totals.runs,
                 failed_run_count=totals.failed,
+                **_billing_fields(totals.runs, *billing.get(rollup.id, (0, None))),
                 first_event_at=_optional_aware(rollup.first_event_at),
                 pr_opened_at=_optional_aware(rollup.pr_opened_at),
                 approved_at=_optional_aware(rollup.approved_at),
@@ -2001,6 +2034,11 @@ def build_report(
                 ),
                 execution_ids=execution_ids.get(rollup.id, [])
                 if include_execution_ids
+                else None,
+                failure_categories=dict(
+                    sorted(failure_categories.get(rollup.id, {}).items())
+                )
+                if include_failure_categories
                 else None,
             )
         )
@@ -2043,7 +2081,7 @@ def build_report(
         total_tokens=unassigned_totals.tokens,
         run_count=unassigned_totals.runs,
         failed_run_count=unassigned_totals.failed,
-        executions=[_execution_row(fact, name) for fact, name in unassigned_facts],
+        executions=_execution_rows(db, unassigned_facts),
     )
     return IssueCostReport(
         start=start,
@@ -2058,14 +2096,37 @@ def build_report(
     )
 
 
+def _billing_fields(
+    run_count: int, seat_run_count: int, premium_requests: Optional[float]
+) -> dict[str, Any]:
+    """Issue-row billing label from its seat runs (#1481)."""
+    from preloop.services.host_exec import SEAT_BILLING_LABEL
+
+    if seat_run_count <= 0:
+        mode = "metered"
+    elif seat_run_count >= run_count:
+        mode = "seat"
+    else:
+        mode = "mixed"
+    return {
+        "billing_mode": mode,
+        "billing_label": SEAT_BILLING_LABEL if seat_run_count > 0 else None,
+        "seat_run_count": seat_run_count,
+        "premium_requests": premium_requests,
+    }
+
+
 def _execution_row(
-    fact: models.IssueCostExecution, flow_name: str
+    fact: models.IssueCostExecution,
+    flow_name: str,
+    billing_mode: Optional[str] = None,
 ) -> IssueCostExecutionRow:
     return IssueCostExecutionRow(
         execution_id=fact.execution_id,
         flow_id=fact.flow_id,
         flow_name=flow_name,
         status=fact.status,
+        failure_category=getattr(fact, "failure_category", None),
         link=fact.link,
         pr_url=fact.pr_key,
         estimated_cost=None
@@ -2074,7 +2135,20 @@ def _execution_row(
         total_tokens=int(fact.total_tokens or 0),
         start_time=_aware(fact.start_time),
         end_time=_optional_aware(fact.end_time),
+        billing_mode=billing_mode,
     )
+
+
+def _execution_rows(
+    db: Session, facts: Sequence[tuple[models.IssueCostExecution, str]]
+) -> list[IssueCostExecutionRow]:
+    """Execution rows with each run's billing mode."""
+    modes = crud_issue_cost.billing_modes_for_executions(
+        db, execution_ids=[fact.execution_id for fact, _name in facts]
+    )
+    return [
+        _execution_row(fact, name, modes.get(fact.execution_id)) for fact, name in facts
+    ]
 
 
 def list_issue_executions(
@@ -2098,12 +2172,12 @@ def list_issue_executions(
     rollup = crud_issue_cost.get_rollup(db, account_id=account_id, rollup_id=rollup_id)
     if rollup is None:
         return None
-    return [
-        _execution_row(fact, name)
-        for fact, name in crud_issue_cost.list_facts(
+    return _execution_rows(
+        db,
+        crud_issue_cost.list_facts(
             db, account_id=account_id, rollup_ids=[rollup.id], flow_id=flow_id
-        )
-    ]
+        ),
+    )
 
 
 def list_unassigned_executions(
@@ -2133,9 +2207,9 @@ def list_unassigned_executions(
     Returns:
         The executions, each with the reason it is unassigned in ``link``.
     """
-    return [
-        _execution_row(fact, name)
-        for fact, name in crud_issue_cost.list_facts(
+    return _execution_rows(
+        db,
+        crud_issue_cost.list_facts(
             db,
             account_id=account_id,
             unassigned=True,
@@ -2144,8 +2218,8 @@ def list_unassigned_executions(
             project_id=project_id,
             flow_id=flow_id,
             limit=limit,
-        )
-    ]
+        ),
+    )
 
 
 # --- export --------------------------------------------------------------------
@@ -2212,6 +2286,11 @@ def report_to_csv(report: IssueCostReport) -> str:
                     row.unknown_cost_run_count,
                     row.attributed_cost_usd,
                     *_readiness_csv_values(row),
+                    row.billing_mode,
+                    row.billing_label,
+                    row.seat_run_count,
+                    row.premium_requests,
+                    _failure_categories_cell(row.failure_categories),
                 )
             ]
         )
@@ -2237,7 +2316,12 @@ def report_to_csv(report: IssueCostReport) -> str:
             bucket.attributed_cost_usd,
         )
         blanks = ("",) * (
-            len(CSV_COLUMNS) - len(READINESS_CSV_COLUMNS) - len(leading) - len(coverage)
+            len(CSV_COLUMNS)
+            - len(READINESS_CSV_COLUMNS)
+            - len(BILLING_CSV_COLUMNS)
+            - 1  # failure_categories, left blank for the bucket
+            - len(leading)
+            - len(coverage)
         )
         writer.writerow(
             [
@@ -2246,9 +2330,18 @@ def report_to_csv(report: IssueCostReport) -> str:
                 + blanks
                 + coverage
                 + ("",) * len(READINESS_CSV_COLUMNS)
+                + ("",) * len(BILLING_CSV_COLUMNS)
+                + ("",)
             ]
         )
     return buffer.getvalue()
+
+
+def _failure_categories_cell(counts: Optional[dict[str, int]]) -> str:
+    """``category:count`` pairs joined by ``;``, sorted by category."""
+    if not counts:
+        return ""
+    return ";".join(f"{key}:{counts[key]}" for key in sorted(counts))
 
 
 def report_to_json(report: IssueCostReport) -> str:

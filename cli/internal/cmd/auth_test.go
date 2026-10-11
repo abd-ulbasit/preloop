@@ -171,7 +171,7 @@ func TestRunAuthStatusRefreshesStoredLoginBeforeFetchingUser(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":"fresh-token","refresh_token":"rotated-refresh"}`))
-		case userInfoPath:
+		case userInfoPath, authUserInfoPath:
 			requestedUserInfo = true
 			if got := r.Header.Get("Authorization"); got != "Bearer fresh-token" {
 				t.Fatalf("expected refreshed bearer token, got %q", got)
@@ -212,7 +212,7 @@ func TestRunAuthStatusPrintsUnderlyingError(t *testing.T) {
 	defer restore()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userInfoPath {
+		if r.URL.Path != userInfoPath && r.URL.Path != authUserInfoPath {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusBadGateway)
@@ -286,6 +286,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(blockingJobHelperEnv) != "" {
 		runBlockingJobHelper()
 		os.Exit(0)
+	}
+	// The session checkout tests run git with this test binary as the
+	// askpass helper, exactly as the CLI's Execute does for the real binary.
+	if code, ok := maybeRunGitAskpass(); ok {
+		os.Exit(code)
 	}
 
 	// Prevent tests from reading the developer's real config. This is the
@@ -376,7 +381,7 @@ func TestRunAuthLoginSkipsWhenAlreadyAuthenticated(t *testing.T) {
 	loginForce = false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userInfoPath {
+		if r.URL.Path != userInfoPath && r.URL.Path != authUserInfoPath {
 			t.Fatalf("unexpected path %q (login should not start OAuth)", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -454,7 +459,7 @@ func TestRunAuthLoginTokenBypassesPreCheck(t *testing.T) {
 	loginForce = false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userInfoPath {
+		if r.URL.Path != userInfoPath && r.URL.Path != authUserInfoPath {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")

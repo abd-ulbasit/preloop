@@ -92,7 +92,9 @@ the operator's agent CLI logins and keychain stay visible to host execution
 profiles. Runner output is appended to `~/.preloop/runner.log` (launchd has
 no journal). The plist sets a `PATH` that includes `~/.local/bin`,
 `/opt/homebrew/bin` and `/usr/local/bin`, because launchd starts agents with
-a minimal environment.
+a minimal environment. It also pins `HOME` to the home directory of the user
+who ran `enable`, so the agent always reads that user's
+`~/.preloop/config.yaml`. Run `enable` again after changing `HOME`.
 
 `preloop runner stop`, `restart` and `disable` (alias `uninstall`) manage the
 agent with `launchctl`. A LaunchAgent runs while you are logged in; a Mac

@@ -212,6 +212,9 @@ class FlowExecution(Base):
     # without downloading the pack. The legal_hold field it carries is the
     # artifact's own flag, not a storage-layer object-lock claim.
     evidence_receipt = Column(JSONB, nullable=True)
+    # Capture-time result schema outcome (#868): {"valid", "errors",
+    # "error_count"}; null when the flow sets no schema or it was exempt.
+    result_schema_validation = Column(JSONB, nullable=True)
     # Derived legal-hold enforcement flag. The account-visible record (actor,
     # reason, release) is a legal_hold row; this column is what the retention
     # purge tests, in the same transaction, so a batch DELETE stays a single
@@ -302,6 +305,15 @@ class FlowExecution(Base):
     # worker log. A log line per refusal is not an option: the recovery loop
     # revisits every unclaimed execution every 30 seconds.
     queued_reason = Column(String(200), nullable=True)
+
+    # Harness routing (#1481, contract B). ``routing_reason`` names why a
+    # harness-routed run is waiting, failed or fell back (no_runner_with_harness,
+    # harness_signed_out, harness_disabled, model_not_available, runner_offline,
+    # owner_has_no_runner, queue_timeout, fell_back_to_server); NULL once a
+    # runner took it. ``billing_mode`` is seat | metered | unknown, taken from
+    # the runner's harness inventory at lease time; NULL is a gateway run.
+    routing_reason = Column(String(64), nullable=True)
+    billing_mode = Column(String(16), nullable=True)
 
     # Stale-claim reaper backoff. How many times the reaper has re-published
     # a task for this execution without it ever being claimed, and when it

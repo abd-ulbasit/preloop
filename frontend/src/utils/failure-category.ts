@@ -85,6 +85,11 @@ export const FAILURE_CATEGORY_META: Record<string, FailureCategoryMeta> = {
     tooltip:
       'The flow was set to open a pull request, but the run ended without one: nothing was pushed or the request did not complete.',
   },
+  result_schema_invalid: {
+    label: 'result schema invalid',
+    tooltip:
+      'The agent finished, but its result.json does not match the result schema set on this flow, so the result is not usable. The errors are listed on the execution.',
+  },
   tool_error: {
     label: 'tool error',
     tooltip: 'A command the agent ran in its own workspace exited non-zero.',

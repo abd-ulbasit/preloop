@@ -47,6 +47,15 @@ from preloop.models.db.session import release_transaction
 
 from preloop.plugins.account_hooks import VISIBLE_RUNNER, filter_viewable
 from preloop.services.flow_pr_binding import record_runner_handoff_markers
+from preloop.services.runner_sessions import (
+    apply_runner_session_message,
+    end_sessions_for_kill_switch,
+    flows_or_tools_halted,
+    pending_runner_messages,
+)
+from preloop.services.runner_workspace_credentials import (
+    normalize_authorized_directories,
+)
 from preloop.services.harness_inventory import (
     inventory_for_viewer,
     inventory_hash_known,
@@ -54,6 +63,7 @@ from preloop.services.harness_inventory import (
     redact_harness_inventory,
     viewer_is_account_admin,
 )
+from preloop.services.runner_presence import derive_presence, parse_idle_seconds
 from preloop.services.runner_service import (
     derive_execution_runner,
     emit_runner_deleted,
@@ -214,6 +224,17 @@ def _evict_live_runner_from_worker(
         )
 
 
+def _refresh_presence(db: Session, runner: FlowRunner) -> bool:
+    """Derive presence (#1506) and store it; True when the state changed."""
+    presence = derive_presence(runner)
+    return crud_flow_runner.record_presence(
+        db,
+        runner,
+        state=presence.state,
+        since=presence.since or datetime.now(timezone.utc),
+    )
+
+
 def _to_response(
     row: FlowRunner,
     db: Optional[Session] = None,
@@ -221,6 +242,9 @@ def _to_response(
     viewer_is_admin: Optional[bool] = None,
 ) -> schemas.RunnerResponse:
     data = schemas.RunnerResponse.model_validate(row)
+    presence = derive_presence(row)
+    data.presence = presence.state
+    data.presence_since = presence.since
     if db is not None and row.registered_by_user_id:
         user = crud_user.get(db, id=row.registered_by_user_id)
         if user is not None:
@@ -250,6 +274,16 @@ def register_runner(
     capabilities = normalize_host_exec_advertisements(
         [profile.model_dump() for profile in advertised]
     )
+    # Registration is the connecting process's full advertisement and
+    # replaces the stored capabilities wholesale (no merge with the resumed
+    # row): a CLI that omits the field (it predates remote sessions, or the
+    # operator rolled back) cannot host a session, so a resumed row must not
+    # keep listing directories from an earlier process. Heartbeats update
+    # per key instead.
+    if body.authorized_directories is not None:
+        capabilities["authorized_directories"] = normalize_authorized_directories(
+            body.authorized_directories
+        )
     # A CI account registers a new ephemeral runner per job. Reap the ones
     # whose job died without unregistering before adding another.
     crud_flow_runner.sweep_stale_ephemeral(db, account_id=current_user.account_id)
@@ -684,6 +718,25 @@ def _parse_runner_execution_id(value: Any) -> Optional[UUID]:
         return None
 
 
+#: Runner -> server remote session frames (contract C, #1482). They are not
+#: acknowledged: the runner re-reports live sessions on every reconnect.
+RUNNER_SESSION_MESSAGE_TYPES = frozenset(
+    {"session_state", "session_event", "session_turn_done"}
+)
+
+
+async def _deliver_session_messages(
+    db: Session, websocket: WebSocket, runner: FlowRunner
+) -> None:
+    """Send pending remote session frames, enforcing the kill switch first."""
+    if flows_or_tools_halted(db, runner.account_id):
+        end_sessions_for_kill_switch(db, runner.account_id)
+    messages = pending_runner_messages(db, runner)
+    release_transaction(db)
+    for message in messages:
+        await websocket.send_json(message)
+
+
 @router.websocket("/runners/{runner_id}/ws")
 async def runner_ws(
     websocket: WebSocket,
@@ -752,6 +805,9 @@ async def runner_ws(
             controller.execution_id = assignment.execution_id
             controller.nonce = state["nonce"]
     crud_flow_runner.touch_heartbeat(db, runner, status="online")
+    # Reconnecting means the machine is awake again.
+    crud_flow_runner.set_presence_signals(db, runner, sleeping=False)
+    _refresh_presence(db, runner)
     hello: Dict[str, Any] = {
         "type": "hello",
         "runner_id": runner_key,
@@ -789,6 +845,10 @@ async def runner_ws(
     # payload must not still be holding their locks while we block on the peer.
     release_transaction(db)
     await websocket.send_json(hello)
+    # Remote session commands written while the runner was away (or by a
+    # replica that does not hold this socket). Same path as every heartbeat,
+    # so the account kill switch is enforced before anything is replayed.
+    await _deliver_session_messages(db, websocket, runner)
 
     try:
         while True:
@@ -882,8 +942,17 @@ async def runner_ws(
                 for assignment in list(runner.assignments or []):
                     if assignment.halt_requested:
                         await close_publication(assignment.execution_id)
-                if "host_exec_profiles" in raw:
-                    runner.capabilities = normalize_host_exec_advertisements(raw)
+                if "host_exec_profiles" in raw or "authorized_directories" in raw:
+                    # Each advertisement replaces only its own key: a
+                    # heartbeat that carries one must not drop the other.
+                    merged = dict(runner.capabilities or {})
+                    if "host_exec_profiles" in raw:
+                        merged.update(normalize_host_exec_advertisements(raw))
+                    if "authorized_directories" in raw:
+                        merged["authorized_directories"] = (
+                            normalize_authorized_directories(raw)
+                        )
+                    runner.capabilities = merged
                 # Harness inventory (#1480): every heartbeat names its hash,
                 # the body comes only when it changed or we asked for it.
                 inventory_wanted = False
@@ -902,10 +971,19 @@ async def runner_ws(
                     db, runner, status="busy" if runner.free_slots <= 0 else "online"
                 )
                 db.refresh(runner)
+                # Presence (#1506): a heartbeat means awake; OS idle time is
+                # optional and only replaced when the runner sends it.
+                presence_signals: Dict[str, Any] = {"sleeping": False}
+                if "os_idle_seconds" in raw:
+                    presence_signals["os_idle_seconds"] = parse_idle_seconds(
+                        raw.get("os_idle_seconds")
+                    )
+                crud_flow_runner.set_presence_signals(db, runner, **presence_signals)
+                presence_changed = _refresh_presence(db, runner)
                 reply: Dict[str, Any] = {"type": "ack", "concurrency": runner.capacity}
                 if inventory_wanted:
                     reply["inventory_wanted"] = True
-                if inventory_changed:
+                if inventory_changed or presence_changed:
                     emit_runner_updated(runner, db)
                 heartbeat_jobs = []
                 halts = []
@@ -936,6 +1014,14 @@ async def runner_ws(
                 # release before `receive_json`.
                 release_transaction(db)
                 await websocket.send_json(reply)
+                await _deliver_session_messages(db, websocket, runner)
+                continue
+
+            if msg_type in RUNNER_SESSION_MESSAGE_TYPES:
+                for session_reply in apply_runner_session_message(db, runner, raw):
+                    await websocket.send_json(session_reply)
+                # A state change can make a queued turn deliverable.
+                await _deliver_session_messages(db, websocket, runner)
                 continue
 
             if msg_type == "status":
@@ -1170,6 +1256,17 @@ async def runner_ws(
                 await websocket.send_json({"type": "ack"})
                 continue
 
+            if msg_type == "going_to_sleep":
+                # Presence (#1506): the host is about to suspend. Stored so
+                # the drop that follows reads as asleep, not offline, and so
+                # routing stops sending it new work right away.
+                crud_flow_runner.set_presence_signals(db, runner, sleeping=True)
+                if _refresh_presence(db, runner):
+                    emit_runner_updated(runner, db)
+                release_transaction(db)
+                await websocket.send_json({"type": "ack"})
+                continue
+
             await websocket.send_json({"type": "error", "error": f"unknown {msg_type}"})
     except WebSocketDisconnect:
         db.rollback()
@@ -1195,6 +1292,7 @@ async def runner_ws(
             ):
                 row = crud_flow_runner.get_fresh(db, runner_id=runner_id)
                 if row:
+                    _refresh_presence(db, row)
                     emit_runner_updated(row, db)
 
 
