@@ -143,9 +143,7 @@ def test_missing_output_still_400s_without_content():
 
 def test_crosschat_delivery_between_call_and_output_still_400s():
     with pytest.raises(ModelGatewayAPIError) as caught:
-        _normalize(
-            [_call(), _developer("ctx"), _item(output=DELEGATION), _output()]
-        )
+        _normalize([_call(), _developer("ctx"), _item(output=DELEGATION), _output()])
     message = caught.value.message
     assert caught.value.status_code == 400
     assert "index=2" in message
@@ -184,3 +182,18 @@ def test_ws_developer_message_inserted_inside_chain_forces_full_resend():
     assert (plan.mode, plan.reason) == ("full", "input_mismatch")
     assert plan.previous_response_id is None
     assert plan.items == current
+
+
+def test_message_between_custom_tool_call_and_output_is_kept_and_pairs():
+    """Codex replays freeform calls as ``custom_tool_call`` on every turn."""
+    call = {
+        "type": "custom_tool_call",
+        "call_id": "call_c",
+        "name": "apply_patch",
+        "input": "*** Begin Patch",
+    }
+    output = {"type": "custom_tool_call_output", "call_id": "call_c", "output": "ok"}
+    messages = _normalize([_user("go"), call, _developer("ctx"), output])
+    _assert_tool_pairing(messages)
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "developer"]
+    assert messages[2]["tool_call_id"] == "call_c"
