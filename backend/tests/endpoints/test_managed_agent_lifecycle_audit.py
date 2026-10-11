@@ -147,6 +147,7 @@ async def test_lifecycle_change_persists_actor_and_previous_state(
         session_source_id="example-principal",
         lifecycle_state=previous,
         lifecycle_reason="operator request",
+        tags={},
         owner_user_id=None,
         runtime_session_id=None,
     )
@@ -252,3 +253,54 @@ def test_removed_agent_keeps_persisted_operator_audit(
     removal = next(row for row in audits if row.action == "managed_agent_removed")
     assert removal.details["session_source_id"] == "synthetic-audit-principal"
     assert removal.details["previous_lifecycle_state"] == "decommissioned"
+
+
+def test_tag_changes_are_audited_and_noop_saves_are_skipped(
+    client: Any,
+    db_session: Any,
+    test_user: Any,
+) -> None:
+    """Tag-only saves expose changes safely; repeating a save adds no fake edit."""
+    response = client.post("/api/v1/agents", json={"display_name": "Example Agent"})
+    assert response.status_code == 201
+    agent_id = response.json()["id"]
+    tags = {"environment": "test", "api_key": "synthetic-secret"}
+    for _ in range(2):
+        assert (
+            client.patch(f"/api/v1/agents/{agent_id}", json={"tags": tags}).status_code
+            == 200
+        )
+    rows = endpoints.crud_audit_log.get_by_account(
+        db_session,
+        account_id=test_user.account_id,
+        resource_type="managed_agent",
+        resource_id=agent_id,
+        action="managed_agent_updated",
+    )
+    assert len(rows) == 1
+    assert rows[0].details["tags"]["environment"] == "test"
+    assert rows[0].details["previous_tags"] == {}
+    assert "synthetic-secret" not in str(rows[0].details)
+
+
+def test_registry_removal_commits_when_requested(
+    db_session: Any,
+    test_user: Any,
+) -> None:
+    """The CRUD helper also supports standalone committed removal."""
+    agent = endpoints.crud_managed_agent.create_custom_agent(
+        db_session,
+        account_id=test_user.account_id,
+        display_name="Example Agent",
+        owner_user_id=test_user.id,
+    )
+    agent_id = str(agent.id)
+    endpoints.crud_managed_agent.remove_registry_entry(db_session, agent=agent)
+    assert (
+        endpoints.crud_managed_agent.get_for_account(
+            db_session,
+            account_id=str(test_user.account_id),
+            agent_id=agent_id,
+        )
+        is None
+    )

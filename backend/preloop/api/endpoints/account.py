@@ -152,6 +152,7 @@ from preloop.services.subject_governance import (
     set_subject_governance,
 )
 from preloop.utils.permissions import require_permission
+from preloop.utils.redaction import redact_dict
 from preloop.schemas.gateway_usage import GatewayUsageBreakdown
 
 logger = logging.getLogger(__name__)
@@ -2669,6 +2670,8 @@ async def update_account_managed_agent(
     prior_lifecycle_state = agent.lifecycle_state
     previous_owner_user_id = str(agent.owner_user_id) if agent.owner_user_id else None
     previous_display_name = agent.display_name
+    previous_lifecycle_reason = agent.lifecycle_reason
+    previous_tags = dict(agent.tags or {})
 
     set_owner = "owner_user_id" in update.model_fields_set
     set_display_name = "display_name" in update.model_fields_set
@@ -2783,33 +2786,49 @@ async def update_account_managed_agent(
             session_source_id=agent.session_source_id,
             commit=False,
         )
-    crud_audit_log.log_action(
-        db,
-        account_id=account.id,
-        user_id=current_user.id,
-        action="managed_agent_updated",
-        resource_type="managed_agent",
-        resource_id=agent_id,
-        status="success",
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        details={
-            "agent_id": agent_id,
-            "session_source_type": updated.session_source_type,
-            "session_source_id": updated.session_source_id,
-            "lifecycle_action": update.lifecycle_action,
-            "previous_lifecycle_state": prior_lifecycle_state,
-            "lifecycle_state": updated.lifecycle_state,
-            "lifecycle_reason": updated.lifecycle_reason,
-            "previous_display_name": previous_display_name,
-            "display_name": updated.display_name,
-            "previous_owner_user_id": previous_owner_user_id,
-            "owner_user_id": str(updated.owner_user_id)
-            if updated.owner_user_id
-            else None,
-        },
-        commit=False,
+    owner_id_after = str(updated.owner_user_id) if updated.owner_user_id else None
+    has_changes = (
+        prior_lifecycle_state != updated.lifecycle_state
+        or previous_lifecycle_reason != updated.lifecycle_reason
+        or previous_owner_user_id != owner_id_after
+        or previous_display_name != updated.display_name
+        or previous_tags != dict(updated.tags or {})
     )
+    # Explicit lifecycle requests may restore/revoke access even when the
+    # visible state is unchanged, and still deserve an operator action record.
+    if has_changes or update.lifecycle_action is not None:
+        crud_audit_log.log_action(
+            db,
+            account_id=account.id,
+            user_id=current_user.id,
+            action="managed_agent_updated",
+            resource_type="managed_agent",
+            resource_id=agent_id,
+            status="success",
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            details=redact_dict(
+                {
+                    "agent_id": agent_id,
+                    "session_source_type": updated.session_source_type,
+                    "session_source_id": updated.session_source_id,
+                    "lifecycle_action": update.lifecycle_action,
+                    "previous_lifecycle_state": prior_lifecycle_state,
+                    "lifecycle_state": updated.lifecycle_state,
+                    "previous_lifecycle_reason": previous_lifecycle_reason,
+                    "lifecycle_reason": updated.lifecycle_reason,
+                    "previous_tags": previous_tags,
+                    "tags": dict(updated.tags or {}),
+                    "previous_display_name": previous_display_name,
+                    "display_name": updated.display_name,
+                    "previous_owner_user_id": previous_owner_user_id,
+                    "owner_user_id": str(updated.owner_user_id)
+                    if updated.owner_user_id
+                    else None,
+                }
+            ),
+            commit=False,
+        )
     db.commit()
     db.refresh(updated)
 
