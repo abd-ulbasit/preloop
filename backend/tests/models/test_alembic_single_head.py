@@ -337,6 +337,10 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert otlp_ingest.down_revision == "20261010_anthropic_import"
     harness_inventory = script.get_revision("20261011_harness_inventory")
     assert harness_inventory.down_revision == "20261010_otlp_telemetry_ingest"
+    harness_routing = script.get_revision("20261011_harness_routing")
+    assert harness_routing.down_revision == "20261011_harness_inventory"
+    runner_sessions = script.get_revision("20261011_runner_remote_sessions")
+    assert runner_sessions.down_revision == "20261011_harness_routing"
     audit_outbox = script.get_revision("20261011_audit_outbox")
-    assert audit_outbox.down_revision == "20261011_harness_inventory"
+    assert audit_outbox.down_revision == "20261011_runner_remote_sessions"
     assert script.get_heads() == ["20261011_audit_outbox"]

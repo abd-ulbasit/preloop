@@ -5,7 +5,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261011_audit_outbox"
-down_revision = "20261011_harness_inventory"
+down_revision = "20261011_runner_remote_sessions"
 branch_labels = None
 depends_on = None
 
