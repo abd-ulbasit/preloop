@@ -165,7 +165,9 @@ func encodeUTF16LEWithBOM(s string) []byte {
 
 // decodeWindowsTaskOutput turns schtasks output into UTF-8 text whatever
 // encoding it used: UTF-16LE with a BOM (what /XML writes), UTF-8 with a
-// BOM, or plain text.
+// BOM, plain ASCII or UTF-8 (a console set to code page 65001), or the
+// console OEM code page (what /FO CSV and error text use on a default
+// console), which only Windows itself can decode.
 func decodeWindowsTaskOutput(raw []byte) string {
 	switch {
 	case len(raw) >= 2 && raw[0] == 0xFF && raw[1] == 0xFE:
@@ -179,7 +181,7 @@ func decodeWindowsTaskOutput(raw []byte) string {
 	case utf8.Valid(raw):
 		return string(raw)
 	default:
-		return strings.ToValidUTF8(string(raw), "")
+		return decodeWindowsConsoleBytes(raw)
 	}
 }
 

@@ -1748,18 +1748,49 @@ func writeWindowsScheduledTask(bin string, out io.Writer) error {
 	if err != nil {
 		return windowsLogonTaskCreateError(taskName, xmlPath, output, err, windowsTaskCreationPolicy())
 	}
-	// A task registered by 0.17.0 under the shared name would start a second
-	// runner for this user at logon. Another user's task under that name is
-	// not ours to delete, and the attempt fails harmlessly.
-	if taskName != windowsLegacyLogonTaskName {
-		_, _ = runWindowsSchtasks("/Delete", "/TN", windowsLegacyLogonTaskName, "/F")
-	}
 	fmt.Fprintf(
 		out,
 		"Installed logon task %s for %s: runs in your interactive session without admin rights (logs: %s)\n",
 		taskName, userID, logPath,
 	)
+	if taskName != windowsLegacyLogonTaskName {
+		if warning := removeOwnLegacyWindowsTask(userID); warning != "" {
+			fmt.Fprintln(out, warning)
+		}
+	}
 	return nil
+}
+
+// windowsTaskBelongsTo reports whether a task definition is this user's:
+// the principal matches (case-insensitively, as Windows compares account
+// names) or the definition names no principal at all.
+func windowsTaskBelongsTo(def windowsTaskDefinition, userID string) bool {
+	return def.UserID == "" || strings.EqualFold(def.UserID, userID)
+}
+
+// removeOwnLegacyWindowsTask deletes the task 0.17.0 registered under the
+// shared name when it belongs to userID: left in place it would start a
+// second runner for this user at logon. Another account's task under that
+// name (a co-worker on a shared machine) is never touched, even when this
+// account could delete it. A failed delete is reported, not swallowed,
+// because two runners would then start at the next logon.
+func removeOwnLegacyWindowsTask(userID string) string {
+	output, err := runWindowsSchtasks("/Query", "/TN", windowsLegacyLogonTaskName, "/XML", "ONE")
+	if err != nil {
+		// No legacy task, or none this account may see.
+		return ""
+	}
+	def, parseErr := parseWindowsTaskXML([]byte(output))
+	if parseErr != nil || !windowsTaskBelongsTo(def, userID) {
+		return ""
+	}
+	if output, err := runWindowsSchtasks("/Delete", "/TN", windowsLegacyLogonTaskName, "/F"); err != nil {
+		return fmt.Sprintf(
+			"Warning: the task %s registered by an earlier CLI for this user could not be removed (%s); two runners would start at your next logon. Remove it with: schtasks /Delete /TN %s /F",
+			windowsLegacyLogonTaskName, strings.TrimSpace(output), windowsLegacyLogonTaskName,
+		)
+	}
+	return ""
 }
 
 // findWindowsRunnerTask locates this user's runner task: the per-user name
@@ -1782,7 +1813,7 @@ func findWindowsRunnerTask() (string, windowsTaskDefinition, bool) {
 			// a task under our name.
 			def = windowsTaskDefinition{}
 		}
-		if name == windowsLegacyLogonTaskName && def.UserID != "" && !strings.EqualFold(def.UserID, userID) {
+		if name == windowsLegacyLogonTaskName && !windowsTaskBelongsTo(def, userID) {
 			continue
 		}
 		return name, def, true

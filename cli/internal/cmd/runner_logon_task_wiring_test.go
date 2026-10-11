@@ -21,6 +21,8 @@ type fakeSchtasks struct {
 	// createErr, when set, is what /Create returns together with createOut.
 	createErr error
 	createOut string
+	// deleteErr, when set, is what /Delete returns for an existing task.
+	deleteErr error
 	statusCSV string
 }
 
@@ -55,6 +57,9 @@ func installFakeSchtasks(t *testing.T, userID, taskName string) *fakeSchtasks {
 		case "/Delete":
 			if _, ok := fake.tasks[name]; !ok {
 				return "ERROR: The system cannot find the file specified.", errors.New("exit status 1")
+			}
+			if fake.deleteErr != nil {
+				return "ERROR: Access is denied.", fake.deleteErr
 			}
 			delete(fake.tasks, name)
 			return "SUCCESS", nil
@@ -138,8 +143,9 @@ func TestWriteWindowsScheduledTaskRegistersPerUserTaskWithoutElevation(t *testin
 	if !strings.Contains(definition, "-File \""+filepath.Join(home, ".preloop", "runner-task.ps1")+"\"") {
 		t.Fatalf("task must run the launcher script:\n%s", definition)
 	}
-	// Create first, then the legacy cleanup; no elevation probe, no /SC ONLOGON.
-	if got := strings.Join(fake.verbs(), ","); got != "/Create,/Delete" {
+	// Create first, then the legacy task is inspected before it is deleted;
+	// no elevation probe, no /SC ONLOGON.
+	if got := strings.Join(fake.verbs(), ","); got != "/Create,/Query,/Delete" {
 		t.Fatalf("schtasks verbs = %s", got)
 	}
 	for _, arg := range fake.calls[0] {
@@ -269,5 +275,45 @@ func TestFindWindowsRunnerTaskUpgradesOwnLegacyTask(t *testing.T) {
 	// which runRunnerDisable already tolerates for --delete.
 	if err := removeWindowsScheduledTask(); err == nil {
 		t.Fatal("removing a missing task must report it")
+	}
+}
+
+func TestWriteWindowsScheduledTaskLeavesAnotherUsersLegacyTask(t *testing.T) {
+	testenv.SetTempHome(t)
+	fake := installFakeSchtasks(t, `DESKTOP-1\bob`, "PreloopRunner-bob")
+	// An administrator account could delete jane's task; enable must not.
+	fake.tasks[windowsLegacyLogonTaskName] = `<Task><Principals><Principal><UserId>DESKTOP-1\jane</UserId></Principal></Principals></Task>`
+	var out bytes.Buffer
+	if err := writeWindowsScheduledTask(`C:\preloop.exe`, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := fake.tasks[windowsLegacyLogonTaskName]; !kept {
+		t.Fatal("another user's 0.17.0 task must survive this user's enable")
+	}
+	if _, ok := fake.tasks["PreloopRunner-bob"]; !ok {
+		t.Fatal("bob's task not registered")
+	}
+	if got := strings.Join(fake.verbs(), ","); got != "/Create,/Query" {
+		t.Fatalf("schtasks verbs = %s", got)
+	}
+	if strings.Contains(out.String(), "Warning") {
+		t.Fatalf("nothing to warn about: %q", out.String())
+	}
+}
+
+func TestWriteWindowsScheduledTaskReportsAFailedLegacyDelete(t *testing.T) {
+	testenv.SetTempHome(t)
+	fake := installFakeSchtasks(t, `DESKTOP-1\jane`, "PreloopRunner-jane")
+	fake.tasks[windowsLegacyLogonTaskName] = `<Task><Principals><Principal><UserId>desktop-1\Jane</UserId></Principal></Principals></Task>`
+	fake.deleteErr = errors.New("exit status 1")
+	var out bytes.Buffer
+	if err := writeWindowsScheduledTask(`C:\preloop.exe`, &out); err != nil {
+		t.Fatalf("the per-user task is installed; a legacy cleanup failure is a warning, got %v", err)
+	}
+	if !strings.Contains(out.String(), "Installed logon task PreloopRunner-jane") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Warning: the task PreloopRunner registered by an earlier CLI for this user could not be removed (ERROR: Access is denied.); two runners would start at your next logon. Remove it with: schtasks /Delete /TN PreloopRunner /F") {
+		t.Fatalf("output = %q", out.String())
 	}
 }

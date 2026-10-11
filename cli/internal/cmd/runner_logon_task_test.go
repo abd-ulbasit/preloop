@@ -120,6 +120,22 @@ func TestDecodeWindowsTaskOutput(t *testing.T) {
 	if got := decodeWindowsTaskOutput([]byte("\xEF\xBB\xBF" + utf8Text)); got != utf8Text {
 		t.Fatalf("UTF-8 BOM input = %q", got)
 	}
+	// Bytes that are not UTF-8 (schtasks /FO CSV in the console OEM code
+	// page) go through the platform decoder, whose Windows version uses
+	// MultiByteToWideChar; here a stand-in maps code page 850's ü.
+	previous := decodeWindowsConsoleBytes
+	decodeWindowsConsoleBytes = func(raw []byte) string {
+		return strings.ReplaceAll(string(raw), "\x81", "ü")
+	}
+	t.Cleanup(func() { decodeWindowsConsoleBytes = previous })
+	oem := []byte("\"\\PreloopRunner-jane\",\"N/A\",\"Wird ausgef\x81hrt\"\r\n")
+	if got := windowsTaskStatusFromCSV(decodeWindowsTaskOutput(oem)); got != "Wird ausgeführt" {
+		t.Fatalf("OEM status = %q", got)
+	}
+	decodeWindowsConsoleBytes = previous
+	if got := windowsTaskStatusFromCSV(decodeWindowsTaskOutput(oem)); got != "Wird ausgefhrt" {
+		t.Fatalf("without a code page decoder the invalid byte is dropped, got %q", got)
+	}
 }
 
 func TestParseWindowsTaskXMLReadsPrincipalAndLimit(t *testing.T) {
