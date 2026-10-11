@@ -1,5 +1,6 @@
 """Bounded gateway retries for transient 502 / mid-stream disconnect."""
 
+from http.client import HTTPMessage
 from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import MagicMock, patch
@@ -727,11 +728,13 @@ def test_codex_http_retries_only_transient_handshake_errors(status: int) -> None
     service, ai_model, _ = _service_and_model()
     ai_model.provider_name = "openai-codex"
     credentials = SimpleNamespace(value="oauth-token", payload={"account_id": "acct-1"})
+    headers = HTTPMessage()
+    headers["Retry-After"] = "1"
     failure = HTTPError(
         "https://example.com/responses",
         status,
         "upstream error",
-        {"Retry-After": "1"},
+        headers,
         BytesIO(b"temporarily unavailable"),
     )
     response = MagicMock()
@@ -810,7 +813,7 @@ def test_codex_http_transient_failure_exhausts_bounded_retries(
             "https://example.com/responses",
             503,
             "unavailable",
-            {},
+            HTTPMessage(),
             BytesIO(b"connection refused"),
         )
         if failure_kind == "http"

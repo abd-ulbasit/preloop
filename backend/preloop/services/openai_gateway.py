@@ -5621,7 +5621,7 @@ class OpenAIGatewayService:
                 finally:
                     exc.close()
                 raise self._openai_passthrough_raw_error(
-                    exc.code, detail, httpx.Headers(exc.headers or {})
+                    exc.code, detail, httpx.Headers(list((exc.headers or {}).items()))
                 ) from exc
 
         # Only the handshake can be replayed safely. Once a body is opened,
