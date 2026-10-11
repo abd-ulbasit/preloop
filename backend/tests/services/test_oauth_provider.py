@@ -1,9 +1,11 @@
 """Tests for PreloopOAuthProvider (MCP OAuth 2.1 Authorization Server)."""
 
 import time
+from datetime import UTC, datetime
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 from uuid import uuid4
 
 from mcp.server.auth.provider import (
@@ -20,6 +22,27 @@ from preloop.services.oauth_provider import (
     REFRESH_TOKEN_EXPIRY,
     AUTH_CODE_EXPIRY,
 )
+
+
+@pytest.fixture(autouse=True)
+def canonical_identity_boundary(monkeypatch):
+    """Keep protocol unit tests independent of identity persistence."""
+    from preloop.models.crud import crud_person, crud_account
+
+    person = SimpleNamespace(
+        id=uuid4(),
+        username="protocol-person",
+        email="protocol@example.com",
+        identity_status="active",
+        email_verified_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        crud_person, "resolve_for_membership", lambda *args, **kwargs: person
+    )
+    monkeypatch.setattr(crud_person, "lock_for_session", lambda *args, **kwargs: person)
+    monkeypatch.setattr(
+        crud_account, "get", lambda *args, **kwargs: SimpleNamespace(is_active=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +526,9 @@ class TestExchangeRefreshToken:
         user_id = uuid4()
         account_id = uuid4()
         db_old_refresh = MagicMock()
+        db_old_refresh.is_revoked = False
+        db_old_refresh.client_id = mock_client.client_id
+        db_old_refresh.expires_at = int(time.time()) + 3600
         db_old_refresh.user_id = user_id
         db_old_refresh.account_id = account_id
 
@@ -532,7 +558,9 @@ class TestExchangeRefreshToken:
         assert result.access_token == "new_access"
         assert result.refresh_token == "new_refresh"
         # Old refresh token should be revoked
-        mock_rt.revoke.assert_called_once_with(mock_db, obj=db_old_refresh)
+        mock_rt.revoke.assert_called_once_with(
+            mock_db, obj=db_old_refresh, commit=False
+        )
         mock_at.create.assert_called_once()
         mock_rt.create.assert_called_once()
 
@@ -558,6 +586,9 @@ class TestExchangeRefreshToken:
     @pytest.mark.asyncio
     async def test_rotation_uses_provided_scopes(self, provider, mock_db, mock_client):
         db_old = MagicMock()
+        db_old.is_revoked = False
+        db_old.client_id = mock_client.client_id
+        db_old.expires_at = int(time.time()) + 3600
         db_old.user_id = uuid4()
         db_old.account_id = uuid4()
 

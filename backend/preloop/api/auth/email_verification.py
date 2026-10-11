@@ -27,7 +27,12 @@ from typing import Dict, Optional
 from fastapi import HTTPException, status
 
 from preloop.config import settings
-from preloop.models.models.user import User as UserModel, UserSource
+from preloop.models import models
+from preloop.models.crud import crud_person
+from sqlalchemy.orm import Session
+
+UserModel = models.User
+UserSource = models.UserSource
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +73,7 @@ def resend_window_seconds() -> int:
     return settings.email_verification_resend_window_seconds
 
 
-def verification_required(user: UserModel) -> bool:
+def verification_required(user: UserModel, db: Session | None = None) -> bool:
     """Whether this user must verify the address before holding a session.
 
     Args:
@@ -80,6 +85,9 @@ def verification_required(user: UserModel) -> bool:
     """
     if not settings.require_email_verification:
         return False
+    if db is not None:
+        person = crud_person.resolve_for_membership(db, membership_id=user.id)
+        return person.email_verified_at is None
     if user.email_verified:
         return False
     return (user.user_source or UserSource.LOCAL) == UserSource.LOCAL
@@ -109,7 +117,7 @@ def raise_email_not_verified(email: Optional[str] = None) -> None:
     )
 
 
-def enforce_verified_email(user: UserModel) -> None:
+def enforce_verified_email(user: UserModel, db: Session | None = None) -> None:
     """Gate token issuance for ``user``.
 
     Args:
@@ -119,7 +127,7 @@ def enforce_verified_email(user: UserModel) -> None:
         HTTPException: 403 ``email_not_verified`` when verification is
             required and missing.
     """
-    if verification_required(user):
+    if verification_required(user, db):
         logger.info(
             "Refusing token for unverified user %s (require_email_verification)",
             user.username,

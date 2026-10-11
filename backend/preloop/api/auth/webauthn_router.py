@@ -46,6 +46,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
+from preloop.api.auth.identity import login_membership, require_active_identity
 from preloop.api.auth.email_verification import enforce_verified_email
 from preloop.api.auth.jwt import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -56,10 +57,9 @@ from preloop.api.auth.jwt import (
     get_current_active_user,
     user_auth_generation,
 )
-from preloop.models.crud import crud_audit_log, crud_user, crud_webauthn_credential
+from preloop.models.crud import crud_audit_log, crud_person, crud_webauthn_credential
 from preloop.models.db.session import get_db_session
 from preloop.models.models.user import User
-from preloop.models.models.webauthn_credential import WebAuthnCredential
 from preloop.utils.request import get_client_ip
 
 logger = logging.getLogger(__name__)
@@ -152,13 +152,16 @@ def _expected_origin(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
-def _issue_challenge_token(challenge: bytes, purpose: str, user_id: str = "") -> str:
+def _issue_challenge_token(
+    challenge: bytes, purpose: str, user_id: str = "", *, auth_generation: int = 0
+) -> str:
     """Sign the ceremony challenge into a short-lived stateless token."""
     return jwt.encode(
         {
             "chal": base64.urlsafe_b64encode(challenge).decode().rstrip("="),
             "purpose": purpose,
             "user_id": user_id,
+            "gen": auth_generation,
             "exp": datetime.now(UTC) + timedelta(seconds=CHALLENGE_TTL_SECONDS),
         },
         SECRET_KEY,
@@ -246,7 +249,8 @@ def registration_options(
     _require_enabled()
     _check_challenge_rate_limit(request)
 
-    existing = crud_webauthn_credential.list_for_user(db, user_id=current_user.id)
+    person = require_active_identity(db, current_user)
+    existing = crud_webauthn_credential.list_for_person(db, person_id=person.id)
     exclude: List[PublicKeyCredentialDescriptor] = [
         PublicKeyCredentialDescriptor(id=base64url_to_bytes(cred.credential_id))
         for cred in existing
@@ -255,9 +259,9 @@ def registration_options(
     options = generate_registration_options(
         rp_id=_rp_id(request),
         rp_name="Preloop",
-        user_id=str(current_user.id).encode("utf-8"),
-        user_name=current_user.username,
-        user_display_name=current_user.full_name or current_user.username,
+        user_id=str(person.id).encode("utf-8"),
+        user_name=person.username,
+        user_display_name=person.full_name or person.username,
         exclude_credentials=exclude,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED,
@@ -268,7 +272,10 @@ def registration_options(
     return RegistrationOptionsResponse(
         options=json.loads(options_to_json(options)),
         challenge_token=_issue_challenge_token(
-            options.challenge, "register", str(current_user.id)
+            options.challenge,
+            "register",
+            str(person.id),
+            auth_generation=person.auth_generation,
         ),
     )
 
@@ -283,8 +290,12 @@ def registration_verify(
     """Complete passkey registration and store the credential."""
     _require_enabled()
 
+    person = require_active_identity(db, current_user)
     payload = _read_challenge_token(body.challenge_token, "register")
-    if payload.get("user_id") != str(current_user.id):
+    if (
+        payload.get("user_id") != str(person.id)
+        or payload.get("gen") != person.auth_generation
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Challenge was issued for a different user",
@@ -317,21 +328,22 @@ def registration_verify(
 
     transports = body.credential.get("response", {}).get("transports")
 
-    cred = WebAuthnCredential(
-        user_id=current_user.id,
-        credential_id=credential_id_b64,
-        public_key=base64.urlsafe_b64encode(verification.credential_public_key)
-        .decode()
-        .rstrip("="),
-        sign_count=verification.sign_count,
-        transports=json.dumps(transports) if transports else None,
-        name=(body.name or "Passkey")[:100],
-        aaguid=str(verification.aaguid) if verification.aaguid else None,
-        is_active=True,
+    cred = crud_webauthn_credential.create(
+        db,
+        obj_in={
+            "person_id": person.id,
+            "user_id": current_user.id,
+            "credential_id": credential_id_b64,
+            "public_key": base64.urlsafe_b64encode(verification.credential_public_key)
+            .decode()
+            .rstrip("="),
+            "sign_count": verification.sign_count,
+            "transports": json.dumps(transports) if transports else None,
+            "name": (body.name or "Passkey")[:100],
+            "aaguid": str(verification.aaguid) if verification.aaguid else None,
+            "is_active": True,
+        },
     )
-    db.add(cred)
-    db.commit()
-    db.refresh(cred)
 
     return PasskeySummary(
         id=cred.id,
@@ -405,8 +417,9 @@ def authentication_verify(
             detail="Passkey authentication failed",
         )
 
-    user = crud_user.get(db, id=cred.user_id)
-    if user is None or not user.is_active:
+    person = crud_person.get(db, id=cred.person_id)
+    user = login_membership(db, person) if person is not None else None
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",
@@ -415,7 +428,8 @@ def authentication_verify(
     # A passkey is a second way into the same local account, so it obeys the
     # same verification requirement the password endpoints do. Without this,
     # registering a passkey would be a way around REQUIRE_EMAIL_VERIFICATION.
-    enforce_verified_email(user)
+    require_active_identity(db, user)
+    enforce_verified_email(user, db)
 
     crud_webauthn_credential.touch(db, obj=cred, sign_count=verification.new_sign_count)
 
@@ -502,7 +516,8 @@ def list_credentials(
 ) -> List[PasskeySummary]:
     """List the signed-in user's passkeys."""
     _require_enabled()
-    creds = crud_webauthn_credential.list_for_user(db, user_id=current_user.id)
+    person = require_active_identity(db, current_user)
+    creds = crud_webauthn_credential.list_for_person(db, person_id=person.id)
     return [
         PasskeySummary(
             id=c.id,
@@ -522,8 +537,9 @@ def delete_credential(
 ) -> None:
     """Remove one of the signed-in user's passkeys."""
     _require_enabled()
+    person = require_active_identity(db, current_user)
     cred = crud_webauthn_credential.get(db, id=credential_id)
-    if cred is None or cred.user_id != current_user.id or not cred.is_active:
+    if cred is None or cred.person_id != person.id or not cred.is_active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Passkey not found",
