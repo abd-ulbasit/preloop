@@ -23766,6 +23766,16 @@ components:
           maxLength: 64
           minLength: 1
           title: Id
+        path:
+          anyOf:
+          - type: string
+            maxLength: 1024
+          - type: 'null'
+          title: Path
+        allow_dirty:
+          type: boolean
+          title: Allow Dirty
+          default: false
       additionalProperties: false
       type: object
       required:

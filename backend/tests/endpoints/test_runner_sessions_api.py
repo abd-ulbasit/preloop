@@ -283,6 +283,59 @@ def test_admin_starts_session_on_another_members_runner(db_session, test_user, s
     _assert_audited(db_session, runner, test_user, "runner_session.start_requested")
 
 
+def test_owner_may_pass_a_subpath_and_allow_dirty(db_session, test_user, service):
+    runner = _runner(db_session, test_user)
+    response = _client(db_session, test_user).post(
+        f"/api/v1/runners/{runner.id}/sessions",
+        json=_start_body(
+            workspace={
+                "kind": "authorized_directory",
+                "id": "dir_api",
+                "path": "pkg/api",
+                "allow_dirty": True,
+            }
+        ),
+    )
+    assert response.status_code == 202, response.text
+    workspace = service.plans[0].workspace
+    assert workspace["path"] == "pkg/api"
+    assert workspace["allow_dirty"] is True
+
+
+@pytest.mark.parametrize("path", ["/etc", "../x", "a/../b", "C:\\x", "a//b"])
+def test_subpath_must_stay_relative(db_session, test_user, service, path):
+    runner = _runner(db_session, test_user)
+    response = _client(db_session, test_user).post(
+        f"/api/v1/runners/{runner.id}/sessions",
+        json=_start_body(
+            workspace={"kind": "authorized_directory", "id": "dir_api", "path": path}
+        ),
+    )
+    assert response.status_code == 422
+    assert not service.plans
+
+
+def test_allow_dirty_is_owner_only(db_session, test_user, service):
+    member = _member(db_session, test_user, "member")
+    runner = _runner(db_session, member)
+    account = db_session.get(models.Account, test_user.account_id)
+    account.primary_user_id = test_user.id
+    db_session.flush()
+    response = _client(db_session, test_user).post(
+        f"/api/v1/runners/{runner.id}/sessions",
+        json=_start_body(
+            workspace={
+                "kind": "authorized_directory",
+                "id": "dir_api",
+                "allow_dirty": True,
+            }
+        ),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "not_runner_owner"
+    assert not service.plans
+
+
 def test_other_member_is_refused(db_session, test_user, service):
     runner = _runner(db_session, test_user)
     member = _member(db_session, test_user, "member")

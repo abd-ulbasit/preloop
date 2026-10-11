@@ -152,8 +152,11 @@ Workspaces:
 
 ```json
 {"kind": "authorized_directory", "id": "dir_9f2c"}
+{"kind": "authorized_directory", "id": "dir_9f2c", "path": "pkg/api", "allow_dirty": true}
 {"kind": "tracker_checkout", "tracker_id": "<uuid>", "repository": "example/app", "ref": "main"}
 ```
+
+`path` is optional and relative to the directory. `allow_dirty` is accepted only from the runner owner (`403 not_runner_owner` otherwise).
 
 Refusals use the body `{"detail": {"code": "...", "message": "..."}}`.
 

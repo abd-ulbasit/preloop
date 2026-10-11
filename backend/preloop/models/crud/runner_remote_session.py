@@ -66,6 +66,15 @@ class CRUDRunnerRemoteSession(CRUDBase[RunnerRemoteSession]):
             .first()
         )
 
+    def lock_runner(self, db: Session, *, runner_id: Any) -> None:
+        """Lock the runner row until commit: serializes session starts."""
+        (
+            db.query(models.FlowRunner)
+            .filter(models.FlowRunner.id == runner_id)
+            .with_for_update()
+            .first()
+        )
+
     def lock(
         self, db: Session, *, remote_session_id: Any
     ) -> Optional[RunnerRemoteSession]:

@@ -33,7 +33,7 @@ from uuid import UUID, uuid4
 import anyio
 from anyio import from_thread
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import get_current_active_user
@@ -94,6 +94,27 @@ class AuthorizedDirectoryWorkspace(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["authorized_directory"]
     id: str = Field(min_length=1, max_length=64)
+    #: Optional relative path below the directory (#1484). The runner proves
+    #: it stays inside after realpath resolution; refused here when it is
+    #: absolute or climbs out lexically.
+    path: Optional[str] = Field(None, max_length=1024)
+    #: Open a git work tree with uncommitted changes. Only the runner owner
+    #: may ask for it; the runner honours it as sent.
+    allow_dirty: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def _relative_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        parts = value.replace("\\", "/").split("/")
+        if (
+            value.startswith(("/", "\\"))
+            or (len(value) > 1 and value[1] == ":")
+            or any(part in ("", ".", "..") for part in parts)
+        ):
+            raise ValueError("path must be a relative path below the directory")
+        return value
 
 
 class TrackerCheckoutWorkspace(BaseModel):
@@ -230,6 +251,9 @@ class RemoteSessionRecord:
     started_at: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     end_reason: Optional[str] = None
+    #: Frames a service's sync ``persist_*`` step prepared for the async
+    #: send. Never persisted.
+    outgoing: List[Dict[str, Any]] = field(default_factory=list, repr=False)
 
 
 @dataclass
@@ -248,6 +272,8 @@ class SessionStartPlan:
     first_prompt: Optional[str]
     title: Optional[str]
     limits: Dict[str, Any]
+    #: Set by a service's ``persist_start``; ``start`` then only sends.
+    record: Optional[RemoteSessionRecord] = None
 
 
 class RunnerSessionError(Exception):
@@ -300,6 +326,14 @@ class RunnerSessionService(Protocol):
     async def send_turn(
         self, db: Session, record: RemoteSessionRecord, *, turn_id: str, text: str
     ) -> None: ...
+
+    # Optional sync steps. A service that implements them does every
+    # database write there (on the threadpool, before the awaited call), so
+    # the async methods above are left with the socket send:
+    #
+    #   persist_start(db, plan) -> None         sets plan.record
+    #   persist_turn(db, record, *, turn_id, text) -> None
+    #   persist_stop(db, record, *, mode) -> RemoteSessionRecord
 
     async def stop(
         self, db: Session, record: RemoteSessionRecord, *, mode: str
@@ -782,12 +816,25 @@ def _prepare_start(
                 "workspace_not_authorized",
                 "The directory is not authorized for this harness on the runner.",
             )
+        if workspace.allow_dirty and str(
+            getattr(runner, "registered_by_user_id", None) or ""
+        ) != str(current_user.id):
+            raise audit.reject(
+                403,
+                "not_runner_owner",
+                "Only the runner owner can open a directory with uncommitted changes.",
+            )
         stored_workspace: Dict[str, Any] = {
             "kind": workspace.kind,
             "id": workspace.id,
             "label": directory.label,
             "mode": directory.mode,
         }
+        if workspace.path:
+            stored_workspace["path"] = workspace.path
+            stored_workspace["label"] = f"{directory.label}/{workspace.path}"
+        if workspace.allow_dirty:
+            stored_workspace["allow_dirty"] = True
     else:
         tracker = crud_tracker.get_by_id_and_account(
             db, id=str(workspace.tracker_id), account_id=str(current_user.account_id)
@@ -884,6 +931,9 @@ def start_runner_session(
     """
     service, plan, audit = _prepare_start(db, current_user, runner_id, body)
     try:
+        persist = getattr(service, "persist_start", None)
+        if persist is not None:
+            persist(db, plan)
         record = _call_service(lambda: service.start(db, plan))
     except RunnerSessionError as exc:
         raise audit.reject(409, exc.code, exc.message) from None
@@ -933,6 +983,9 @@ def send_runner_session_turn(
     service, record, audit = _prepare_turn(db, current_user, session_id)
     turn_id = str(uuid4())
     try:
+        persist = getattr(service, "persist_turn", None)
+        if persist is not None:
+            persist(db, record, turn_id=turn_id, text=body.text)
         _call_service(
             lambda: service.send_turn(db, record, turn_id=turn_id, text=body.text)
         )
@@ -966,6 +1019,9 @@ def stop_runner_session(
     if record.state in ACTIVE_STATES:
         current = record
         try:
+            persist = getattr(service, "persist_stop", None)
+            if persist is not None:
+                current = persist(db, current, mode=mode)
             record = _call_service(lambda: service.stop(db, current, mode=mode))
         except RunnerSessionError as exc:
             raise audit.reject(409, exc.code, exc.message) from None
