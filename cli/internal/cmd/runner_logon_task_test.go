@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -133,7 +134,9 @@ func TestDecodeWindowsTaskOutput(t *testing.T) {
 		t.Fatalf("OEM status = %q", got)
 	}
 	decodeWindowsConsoleBytes = previous
-	if got := windowsTaskStatusFromCSV(decodeWindowsTaskOutput(oem)); got != "Wird ausgefhrt" {
+	// Off Windows there is no code page to consult and the invalid byte is
+	// dropped; the Windows decoder is covered by its own tagged test.
+	if got := windowsTaskStatusFromCSV(decodeWindowsTaskOutput(oem)); runtime.GOOS != "windows" && got != "Wird ausgefhrt" {
 		t.Fatalf("without a code page decoder the invalid byte is dropped, got %q", got)
 	}
 }
