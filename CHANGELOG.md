@@ -23,6 +23,15 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 **MCP tools** resolve first-wins with shadow warnings and an optional
 `tool_prefix`, and backend CI runs as **18 duration-balanced shards**.
 
+**Personal runners** (wave 1) put your own machine and your own agent seats
+behind Preloop. Sign in with `preloop login` on a terminal, accept the prompt,
+and the CLI installs a runner as a background service on Linux, macOS or
+Windows. The Runners page then lists the agent harnesses installed on that
+machine (Copilot CLI, Cursor CLI, Claude Code, Codex CLI and others) with
+their login state, models and governance. The runner never reads, copies or
+forwards harness credentials. The controls are written down in
+`docs/security/personal-runners.md`.
+
 ### Breaking or behavior changes
 
 - Model gateway budget denials return `429` with a provider-shaped body and
@@ -44,6 +53,14 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 
 ### Security
 
+- Personal runners have a threat model with numbered controls T1 to T12:
+  per-harness opt-in on the host, who may start a session, the host notice,
+  workspace containment, short-lived clone credentials, harness credentials
+  never touched, mandatory approval hook, limits, kill switch, audit event
+  names and revocation. It also states what leaves the machine and what wave 1
+  does not stop (an uninstalled or unenrolled machine). See
+  `docs/security/personal-runners.md`
+  ([#1491](https://github.com/preloop/preloop/pull/1491)).
 - WebSocket execution commands now require authentication, the
   `execute_flows` permission, and account ownership.
 - Scorecard's vulnerable-dependency list is reduced by moving patched
@@ -66,6 +83,38 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 
 ### Added
 
+- **Install a personal runner at login.** After an interactive
+  `preloop login`, the CLI offers to install a runner as a background service
+  (systemd user unit, launchd agent or Windows logon scheduled task). The
+  default answer is no and a decline is remembered; `preloop login --force`
+  asks again and `preloop runner setup` runs the step on demand. The prompt is
+  skipped for `--token`, `PRELOOP_TOKEN`, headless login, `--no-runner`,
+  `PRELOOP_NO_RUNNER=1`, a non-terminal and an already installed service. The
+  runner registers as the hostname with labels `personal`, `os:<goos>` and
+  `arch:<goarch>`, and login waits up to 30 seconds for it to come online and
+  prints the harnesses it found. A failed install never fails login; on
+  Windows without elevation it prints `preloop runner setup`.
+  `GET /api/v1/users/me` returns `runner_policy` (`optional`, `required`,
+  `forbidden`); open source always answers `optional`, and the Enterprise
+  runner policy plugin can require or forbid a runner (#1479).
+- **Harness inventory on runners.** A runner reports the agent harnesses on its
+  host on register and, when the inventory changes, on heartbeat: Copilot CLI
+  and Cursor CLI from the binary on `PATH`, Claude Code, Codex CLI, OpenCode,
+  Gemini CLI, Claude Desktop and VS Code Copilot from `preloop agents
+  discover`. Each entry has login state and source (presence of an env token
+  or a stored login, never the value), account host, governance (from the
+  Preloop hooks file), billing and models. No credential store is opened. The
+  server stores the report in `flow_runners.harness_inventory`, audits
+  `runner.harness_inventory_changed`, and shows version and account host only
+  to the runner owner and account admins. The Runners page has a Harnesses
+  column, and `preloop runner inventory [--refresh] [--json]` prints it.
+  `harnesses.<id>.enabled` in `~/.preloop/runner.json` turns a harness off.
+  The runner also generates conservative `copilot` and `cursor` host execution
+  profiles; a hand-written profile for the same harness wins. The runner
+  quickstarts lead with "Harnesses are detected automatically", and
+  `docs/guide/agent-discovery-reporting.md` lists the fields
+  ([#1492](https://github.com/preloop/preloop/pull/1492),
+  [#1518](https://github.com/preloop/preloop/pull/1518)).
 - **Consecutive-failure flow alerts.** A flow emails and pushes its account's
   owners after N failed runs in a row (per-flow
   `notifications.on_failure.alert_after_consecutive_failures`, default 3). The
@@ -782,9 +831,19 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
   so a resume cannot wait on a person. Any other value, including the
   preset default `exec`, is unchanged.
 
+### Known limits
+
+- Personal runners install as a per-user service (systemd user unit, launchd
+  agent, logon scheduled task). A system-context service is planned (#1488).
+- Cursor CLI reports `auto` as its only model; probing the account's models
+  is planned. Runtime hints (signed out after a failed run, observed models)
+  reset when the runner restarts.
+- A harness is turned off with the `runner.json` key; there is no
+  `preloop runner harnesses` command yet.
+
 ### Pull requests by area
 
-Every pull request merged to `main` between `v0.16.0` and this release (325).
+Every pull request merged to `main` between `v0.16.0` and this release (329).
 
 #### Gateway
 
@@ -1039,6 +1098,13 @@ Every pull request merged to `main` between `v0.16.0` and this release (325).
 - Copilot host feedback continuation on the originating runner (#1069, part 2) ([#1466](https://github.com/preloop/preloop/pull/1466))
 - Document VS Code Copilot Chat manual BYOK ([#1470](https://github.com/preloop/preloop/pull/1470))
 - Let restricted CI credentials reach the webhook subscription handlers ([#1471](https://github.com/preloop/preloop/pull/1471))
+
+#### Personal runners
+
+- Personal runners threat model and controls (T1-T12) ([#1491](https://github.com/preloop/preloop/pull/1491))
+- Harness inventory and remote session wire contracts ([#1492](https://github.com/preloop/preloop/pull/1492))
+- Publish and show the harness inventory ([#1518](https://github.com/preloop/preloop/pull/1518))
+- Offer a personal runner install after login ([#1520](https://github.com/preloop/preloop/pull/1520))
 
 #### Security
 
