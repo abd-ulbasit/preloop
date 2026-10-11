@@ -89,11 +89,12 @@ def record_failure(
     """Count a failed attempt and schedule a retry with exponential backoff.
 
     After ``max_attempts`` the intent is parked as ``failed``; it is kept for
-    operator replay rather than deleted. Commits.
+    operator replay rather than deleted. Commits when it records a failure;
+    leaves the session untouched when the intent is gone or no longer
+    pending.
     """
     row = db.get(AuditOutbox, outbox_id, with_for_update=True)
     if row is None or row.status != AUDIT_OUTBOX_PENDING:
-        db.rollback()
         return row
     row.attempt_count = (row.attempt_count or 0) + 1
     row.last_error = error[:200]
@@ -116,10 +117,16 @@ def get_status(db: Session, outbox_id: UUID) -> Optional[str]:
 
 
 def oldest_pending_age_seconds(db: Session) -> float:
-    """Drain lag: age of the oldest pending intent, 0 when the outbox is empty."""
+    """Drain lag: age of the oldest intent that is due now.
+
+    Intents waiting out a retry backoff are excluded, so a queue that is
+    retrying on schedule does not read as a stalled relay. Failed attempts
+    are measured separately by the relay. 0 when nothing is due.
+    """
     oldest = db.execute(
         select(func.min(AuditOutbox.created_at)).where(
-            AuditOutbox.status == AUDIT_OUTBOX_PENDING
+            AuditOutbox.status == AUDIT_OUTBOX_PENDING,
+            AuditOutbox.next_attempt_at <= _utcnow(),
         )
     ).scalar_one_or_none()
     if oldest is None:
@@ -137,6 +144,7 @@ def requeue_failed(db: Session, *, account_id: Optional[UUID] = None) -> int:
             AuditOutbox.status: AUDIT_OUTBOX_PENDING,
             AuditOutbox.attempt_count: 0,
             AuditOutbox.next_attempt_at: _utcnow(),
+            AuditOutbox.last_error: None,
         },
         synchronize_session=False,
     )

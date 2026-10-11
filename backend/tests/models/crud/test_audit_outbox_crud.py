@@ -105,9 +105,69 @@ def test_record_failure_backs_off_then_parks_and_requeue_replays(db_session, acc
     db_session.refresh(row)
     assert row.status == AUDIT_OUTBOX_PENDING
     assert row.attempt_count == 0
+    assert row.last_error is None
 
 
-def test_oldest_pending_age(db_session, account):
+def test_oldest_pending_age_ignores_intents_in_backoff(db_session, account):
     assert crud_audit_outbox.oldest_pending_age_seconds(db_session) == 0.0
-    _enqueue(db_session, account)
-    assert crud_audit_outbox.oldest_pending_age_seconds(db_session) >= 0.0
+    row = _enqueue(db_session, account)
+    row.created_at = row.created_at - timedelta(minutes=10)
+    db_session.flush()
+    assert crud_audit_outbox.oldest_pending_age_seconds(db_session) >= 590
+    row.next_attempt_at = row.next_attempt_at + timedelta(hours=1)
+    db_session.flush()
+    assert crud_audit_outbox.oldest_pending_age_seconds(db_session) == 0.0
+
+
+def test_record_failure_leaves_the_session_alone_for_a_delivered_intent(
+    db_session, account
+):
+    row = _enqueue(db_session, account)
+    crud_audit_outbox.mark_delivered(db_session, row)
+    other = _enqueue(db_session, account, n=2)
+    crud_audit_outbox.record_failure(
+        db_session, outbox_id=row.id, error="late", max_attempts=3
+    )
+    # The caller's other uncommitted work survives.
+    assert db_session.get(AuditOutbox, other.id) is not None
+    assert row.status == AUDIT_OUTBOX_DELIVERED
+
+
+def test_two_relays_never_claim_the_same_intent(db_engine):
+    """SKIP LOCKED on separate connections: the second claimer moves on."""
+    from sqlalchemy.orm import Session as OrmSession
+
+    setup = OrmSession(bind=db_engine)
+    acct = crud_account.create(
+        setup, obj_in={"organization_name": "Outbox Race Org", "is_active": True}
+    )
+    ids = [
+        crud_audit_outbox.enqueue(
+            setup, account_id=acct.id, operation="log_tool_call", payload={"n": n}
+        ).id
+        for n in range(2)
+    ]
+    setup.commit()
+    first = OrmSession(bind=db_engine)
+    second = OrmSession(bind=db_engine)
+    try:
+        claimed_a = crud_audit_outbox.claim_next(first)
+        claimed_b = crud_audit_outbox.claim_next(second)
+        assert {claimed_a.id, claimed_b.id} == set(ids)
+        assert crud_audit_outbox.claim_next(OrmSession(bind=db_engine)) is None
+        crud_audit_outbox.mark_delivered(first, claimed_a)
+        first.commit()
+        second.rollback()
+        # The released row is claimable again; the delivered one never is.
+        third = OrmSession(bind=db_engine)
+        again = crud_audit_outbox.claim_next(third)
+        assert again.id == claimed_b.id
+        third.rollback()
+        third.close()
+    finally:
+        first.close()
+        second.close()
+        setup.query(AuditOutbox).filter(AuditOutbox.account_id == acct.id).delete()
+        setup.delete(setup.get(type(acct), acct.id))
+        setup.commit()
+        setup.close()
