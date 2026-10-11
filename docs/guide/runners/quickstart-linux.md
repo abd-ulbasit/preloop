@@ -135,6 +135,10 @@ preloop runner start
 preloop runner status    # service state + last heartbeat + current execution
 ```
 
+The unit pins `HOME` to the home directory of the user who ran `enable`, so
+the service always reads that user's `~/.preloop/config.yaml`. Run `enable`
+again after changing `HOME`.
+
 `preloop runner stop`, `restart`, and `disable` do what they say.
 `preloop runner status` prints `running: <held>/<slots>` and one line per
 execution the runner currently holds.
@@ -257,6 +261,26 @@ memory, disk and the Docker daemon, and each one may start containers of
 its own. Flows that bind fixed host ports (for example a `docker compose`
 file with `ports:`) collide when two of them run together; reach services
 by container-network name instead.
+
+## Runner presence
+
+The runner sends a heartbeat every 15 seconds. The control plane turns those
+heartbeats into one presence state per runner, and the Runners page and the
+runner picker show it. Hover the state to see the last heartbeat time.
+
+| State | Meaning | Gets new work |
+| --- | --- | --- |
+| `online` | Heartbeats are fresh and a slot is free. | Yes |
+| `busy` | Heartbeats are fresh and every slot is taken. | When a slot frees up |
+| `idle` | Online, and the host reported no user input for 5 minutes or more. | Yes |
+| `asleep` | The runner said it was going to sleep before it disconnected. | No |
+| `offline` | No heartbeat for 45 seconds and no sleep signal. | No |
+
+`idle` appears only for runners that report OS idle time; older runners show
+`online` instead. A runner that wakes up and reconnects returns to `online` on
+its first heartbeat, and the change is pushed to open console tabs without a
+reload. The thresholds live in one place on the server
+(`backend/preloop/services/runner_presence.py`).
 
 ## How runner work counts against your account
 

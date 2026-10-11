@@ -16,6 +16,7 @@ FlowRunner = models.FlowRunner
 FlowRunnerAssignment = models.FlowRunnerAssignment
 
 ONLINE_HEARTBEAT_TTL = timedelta(seconds=45)
+_UNSET: Any = object()
 
 
 def runner_capacity(runner: models.FlowRunner) -> int:
@@ -439,6 +440,9 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
                 FlowRunner.status.in_(("online", "busy")),
                 FlowRunner.last_heartbeat.isnot(None),
                 FlowRunner.last_heartbeat >= cutoff,
+                # Presence (#1506): a runner that said going_to_sleep is
+                # asleep even before its socket drops; no new work.
+                FlowRunner.sleep_signaled_at.is_(None),
             )
         rows = query.all()
         pool_l = pool.lower()
@@ -491,6 +495,9 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
             .filter(
                 FlowRunner.id == runner_id,
                 FlowRunner.status.in_(("online", "busy")),
+                # Presence (#1506): asleep runners take no new work, even
+                # when a caller holds a runner id from before the signal.
+                FlowRunner.sleep_signaled_at.is_(None),
             )
             .populate_existing()
             .with_for_update(skip_locked=True)
@@ -1051,6 +1058,52 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
         )
         db.commit()
         return int(deleted)
+
+    def set_presence_signals(
+        self,
+        db: Session,
+        runner: FlowRunner,
+        *,
+        sleeping: Optional[bool] = None,
+        os_idle_seconds: Any = _UNSET,
+    ) -> FlowRunner:
+        """Store the presence signals a runner sent (#1506) and commit.
+
+        ``sleeping=True`` records ``going_to_sleep``; ``False`` clears it
+        (any later heartbeat or reconnect means the machine woke up).
+        """
+        changed = False
+        if sleeping is True:
+            runner.sleep_signaled_at = datetime.now(timezone.utc)
+            changed = True
+        elif sleeping is False and getattr(runner, "sleep_signaled_at", None):
+            runner.sleep_signaled_at = None
+            changed = True
+        if os_idle_seconds is not _UNSET and (
+            getattr(runner, "os_idle_seconds", None) != os_idle_seconds
+        ):
+            runner.os_idle_seconds = os_idle_seconds
+            changed = True
+        if not changed:
+            # The common heartbeat: nothing new, no extra write.
+            return runner
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+        return runner
+
+    def record_presence(
+        self, db: Session, runner: FlowRunner, *, state: str, since: datetime
+    ) -> bool:
+        """Persist a derived presence state; True when it changed."""
+        if getattr(runner, "presence_state", None) == state:
+            return False
+        runner.presence_state = state
+        runner.presence_since = since
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+        return True
 
     def touch_heartbeat(
         self,

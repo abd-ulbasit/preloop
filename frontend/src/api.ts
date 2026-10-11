@@ -5026,6 +5026,10 @@ export interface RunnerRecord {
   /** Harnesses the runner host reports; null for runners that predate it. */
   harness_inventory?: HarnessInventory | null;
   harness_inventory_updated_at?: string | null;
+  /** Server-derived presence (#1506): online, busy, idle, asleep, offline. */
+  presence?: string | null;
+  /** When the current presence state began. */
+  presence_since?: string | null;
 }
 
 export interface HarnessInventoryEntry {

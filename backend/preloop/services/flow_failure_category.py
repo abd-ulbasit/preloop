@@ -127,6 +127,9 @@ FAILURE_CATEGORY_AGENT_NO_PROGRESS = "agent_no_progress"
 # The run succeeded but the pull request it was configured to open does not
 # exist (nothing pushed, or the push/PR request did not complete).
 FAILURE_CATEGORY_PUBLICATION_MISSING = "publication_missing"
+# The run finished but its result.json does not match the flow result schema
+# (#868), so the result is not usable even though the agent reported success.
+FAILURE_CATEGORY_RESULT_SCHEMA_INVALID = "result_schema_invalid"
 FAILURE_CATEGORY_SETUP_FAILED = "setup_failed"
 FAILURE_CATEGORY_VERIFICATION_FAILED = "verification_failed"
 FAILURE_CATEGORY_VERIFICATION_BLOCKED = "verification_blocked"
@@ -149,6 +152,7 @@ FAILURE_CATEGORIES = (
     FAILURE_CATEGORY_NO_CONFIRMATION,
     FAILURE_CATEGORY_AGENT_NO_PROGRESS,
     FAILURE_CATEGORY_PUBLICATION_MISSING,
+    FAILURE_CATEGORY_RESULT_SCHEMA_INVALID,
     FAILURE_CATEGORY_SETUP_FAILED,
     FAILURE_CATEGORY_VERIFICATION_FAILED,
     FAILURE_CATEGORY_VERIFICATION_BLOCKED,
@@ -387,7 +391,12 @@ _AGENT_ERROR_RE = re.compile(
 # a run killed by a Job name conflict, a wall-clock timeout, a human stop, or
 # the completion contract is that thing even if the logs also contain a
 # transient blip the executor's analyser latched onto.
+_RESULT_SCHEMA_INVALID_RE = re.compile(
+    r"^Result document does not match the flow result schema\b"
+)
+
 _STRUCTURAL_MESSAGE_RULES = (
+    (_RESULT_SCHEMA_INVALID_RE, FAILURE_CATEGORY_RESULT_SCHEMA_INVALID),
     (_AGENT_NO_PROGRESS_RE, FAILURE_CATEGORY_AGENT_NO_PROGRESS),
     (_HOSTED_TARIFF_RE, FAILURE_CATEGORY_MODEL_CONFIG),
     (_EXECUTION_BUDGET_RE, FAILURE_CATEGORY_BUDGET_EXCEEDED),

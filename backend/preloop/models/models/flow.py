@@ -7,6 +7,7 @@ from sqlalchemy import (  # Added JSON
     String,
     Text,
     JSON,
+    text,
 )
 
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -174,6 +175,13 @@ class Flow(Base):
     # on_failure keys (comment_on_trigger_issue, attention_item) are ignored.
     # The column is JSONB, so there is nothing to migrate.
     notifications = Column(JSONB, nullable=True, default=None)
+    # Optional JSON Schema (draft 2020-12) for the agent's result.json
+    # (#868). When set and validate_result is on, a captured document that
+    # does not conform fails the run with result_schema_invalid.
+    result_schema = Column(JSONB, nullable=True, default=None)
+    validate_result = Column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
 
     ai_model = relationship("AIModel", back_populates="flows")
     account = relationship("Account", back_populates="flows", foreign_keys=[account_id])

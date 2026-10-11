@@ -419,6 +419,14 @@ RECEIPT_KEYS = (
 )
 
 
+def _result_schema_valid(execution: Any) -> Optional[bool]:
+    """True/False when the flow result schema was checked (#868), else None."""
+    validation = getattr(execution, "result_schema_validation", None)
+    if isinstance(validation, Mapping) and isinstance(validation.get("valid"), bool):
+        return validation["valid"]
+    return None
+
+
 def flow_execution_finished_data(
     execution: Any,
     flow: Any,
@@ -439,6 +447,7 @@ def flow_execution_finished_data(
         "flow_name": getattr(flow, "name", None),
         "status": status,
         "failure_category": failure_category,
+        "result_schema_valid": _result_schema_valid(execution),
         "trigger_type": getattr(execution, "trigger_type", None),
         "started_at": _iso(getattr(execution, "start_time", None)),
         "finished_at": _iso(getattr(execution, "end_time", None)),

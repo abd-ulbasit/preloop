@@ -167,6 +167,8 @@ class IssueCostExecution(Base):
     # delegated, pull_request, closing_reference; or unassigned / ambiguous.
     link: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The execution's failure_category, copied so exports can group by it.
+    failure_category: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     total_tokens: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
     )

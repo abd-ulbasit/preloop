@@ -28221,6 +28221,24 @@ components:
           - type: 'null'
           description: When to comment on the triggering issue and raise a console
             attention item after a terminal execution. Leave unset for no notifications.
+        result_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result Schema
+          description: Optional JSON Schema (draft 2020-12, at most 64 KiB) for the
+            result.json the agent writes. When set and validate_result is true, a
+            captured document that does not conform fails the execution with failure_category
+            result_schema_invalid; the document is still stored. Null means no schema
+            (no check). The CRA security-audit presets keep their own validator and
+            are exempt.
+        validate_result:
+          type: boolean
+          title: Validate Result
+          description: Apply result_schema to the captured result.json. Ignored when
+            result_schema is null.
+          default: true
         max_budget:
           anyOf:
           - type: number
@@ -28700,10 +28718,21 @@ components:
             succeed: one of runner_conflict, runner_error, model_transient, model_auth,
             provider_billing, model_quota (legacy, superseded by provider_billing),
             budget_exceeded, model_config, no_confirmation, agent_no_progress, publication_missing,
+            result_schema_invalid (result.json does not match the flow result schema),
             setup_failed, verification_failed, verification_blocked, tool_error, agent_error,
             model_stream_idle (timed out while the model stream was silent), timeout,
             cancelled, unknown. Null for successful or still-running executions, and
             for executions that predate this field.'
+        result_schema_validation:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result Schema Validation
+          description: 'Outcome of checking result.json against the flow result schema
+            at capture: {valid, errors: [{path, message}], error_count}. Null when
+            the flow sets no schema, the check is off, or the flow is a CRA preset
+            with its own validator.'
         queued_reason:
           anyOf:
           - type: string
@@ -29183,6 +29212,24 @@ components:
           - type: 'null'
           description: When to comment on the triggering issue and raise a console
             attention item after a terminal execution. Leave unset for no notifications.
+        result_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result Schema
+          description: Optional JSON Schema (draft 2020-12, at most 64 KiB) for the
+            result.json the agent writes. When set and validate_result is true, a
+            captured document that does not conform fails the execution with failure_category
+            result_schema_invalid; the document is still stored. Null means no schema
+            (no check). The CRA security-audit presets keep their own validator and
+            are exempt.
+        validate_result:
+          type: boolean
+          title: Validate Result
+          description: Apply result_schema to the captured result.json. Ignored when
+            result_schema is null.
+          default: true
         max_budget:
           anyOf:
           - type: number
@@ -29589,6 +29636,24 @@ components:
           - type: 'null'
           description: When to comment on the triggering issue and raise a console
             attention item after a terminal execution. Leave unset for no notifications.
+        result_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result Schema
+          description: Optional JSON Schema (draft 2020-12, at most 64 KiB) for the
+            result.json the agent writes. When set and validate_result is true, a
+            captured document that does not conform fails the execution with failure_category
+            result_schema_invalid; the document is still stored. Null means no schema
+            (no check). The CRA security-audit presets keep their own validator and
+            are exempt.
+        validate_result:
+          type: boolean
+          title: Validate Result
+          description: Apply result_schema to the captured result.json. Ignored when
+            result_schema is null.
+          default: true
         max_budget:
           anyOf:
           - type: number
@@ -31735,6 +31800,12 @@ components:
         status:
           type: string
           title: Status
+        failure_category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Failure Category
+          description: The execution's failure_category; null unless it failed.
         link:
           type: string
           title: Link
@@ -32193,6 +32264,16 @@ components:
           - type: 'null'
           title: Execution Ids
           description: Contributing execution ids (JSON export only).
+        failure_categories:
+          anyOf:
+          - additionalProperties:
+              type: integer
+            type: object
+          - type: 'null'
+          title: Failure Categories
+          description: Failed runs of this issue by failure_category, for example
+            result_schema_invalid for a run whose result.json did not match the flow
+            result schema (exports only).
       type: object
       required:
       - id
@@ -37666,6 +37747,23 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time
@@ -37793,6 +37891,23 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time

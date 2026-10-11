@@ -1,0 +1,10 @@
+{
+  "codex-scanner": {
+    "version": 1,
+    "image": "ghcr.io/preloop/preloop-codex-scanner@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "harness": "codex",
+    "protocol_version": 1,
+    "env": {"TRIVY_CACHE_DIR": "/opt/trivy-cache"},
+    "required_executables": ["python3", "git", "bash", "trivy"]
+  }
+}

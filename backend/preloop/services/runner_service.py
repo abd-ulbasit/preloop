@@ -17,6 +17,7 @@ from preloop.models.crud.user import crud_user
 from preloop.models.models.flow import Flow
 from preloop.models.models.flow_runner import FlowRunner
 from preloop.services.harness_inventory import redact_harness_inventory
+from preloop.services.runner_presence import derive_presence
 from preloop.services.host_exec import (
     BILLING_MODES,
     BILLING_MODE_UNKNOWN,
@@ -851,6 +852,7 @@ def runner_console_payload(
     execution_id = runner.current_execution_id
     assignments = list(getattr(runner, "assignments", None) or [])
     inventory_updated = getattr(runner, "harness_inventory_updated_at", None)
+    presence = derive_presence(runner)
     return {
         "id": str(runner.id),
         "name": runner.name,
@@ -877,6 +879,10 @@ def runner_console_payload(
         ),
         "harness_inventory_updated_at": (
             inventory_updated.isoformat() if inventory_updated is not None else None
+        ),
+        "presence": presence.state,
+        "presence_since": (
+            presence.since.isoformat() if presence.since is not None else None
         ),
     }
 

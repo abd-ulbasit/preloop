@@ -1,11 +1,15 @@
-"""Add the durable audit outbox table (EE #94); additive, no backfill."""
+"""Add the durable audit outbox table (EE #94); additive, no backfill.
+
+Revises ``20261011_flow_result_schema`` so runner presence and the flow
+result schema stay on the single head.
+"""
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261011_audit_outbox"
-down_revision = "20261011_runner_remote_sessions"
+down_revision = "20261011_flow_result_schema"
 branch_labels = None
 depends_on = None
 
