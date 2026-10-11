@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, get_args
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 
 from preloop.models.models.flow_runner import (
     DEFAULT_RUNNER_CONCURRENCY,
@@ -89,6 +96,7 @@ class HarnessInventory(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     #: Wire name is ``schema``; renamed here because it shadows BaseModel.schema.
+    #: ``hash`` is the runner's opaque version token, stored as reported.
     schema_version: int = Field(1, ge=1, alias="schema")
     generated_at: datetime
     hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -121,15 +129,23 @@ def harness_inventory_hash(entries: List[HarnessInventoryEntry]) -> str:
     """Return ``sha256:<hex>`` of the canonical JSON of ``entries``.
 
     Canonical JSON: absent (null) fields omitted, keys sorted, no whitespace,
-    UTF-8 without ASCII escaping. The Go runner computes the same value
-    (``harnessInventoryHash`` in ``cli/internal/cmd/runner_inventory.go``).
+    UTF-8 without ASCII escaping except U+2028 and U+2029, which are written
+    as ``\\u2028``/``\\u2029`` because Go's encoding/json always escapes them.
+    The Go runner computes the same value (``harnessInventoryHash`` in
+    ``cli/internal/cmd/runner_inventory.go``).
+
+    The hash is the runner's: the server stores the reported ``hash`` verbatim
+    as an opaque version token and never recomputes it, because a newer
+    runner may hash entries this server drops as unknown.
     """
     payload = [
         entry.model_dump(mode="json", by_alias=True, exclude_none=True)
         for entry in entries
     ]
-    canonical = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    canonical = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
     )
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -162,6 +178,21 @@ class RunnerRegisterRequest(BaseModel):
     #: Locally installed harnesses (contract A). Absent or null for runners
     #: that predate it ("inventory unknown").
     harness_inventory: Optional[HarnessInventory] = None
+
+    @field_validator("harness_inventory", mode="wrap")
+    @classmethod
+    def ignore_invalid_harness_inventory(
+        cls, value: Any, handler: ValidatorFunctionWrapHandler
+    ) -> Optional[HarnessInventory]:
+        """Register without inventory rather than fail on a malformed one.
+
+        The runner then sees ``inventory_wanted`` on its first heartbeat and
+        resends it, where the server caps sizes before validating.
+        """
+        try:
+            return handler(value)
+        except ValidationError:
+            return None
 
     #: How many jobs this process is willing to run at once. It may lower the
     #: stored ceiling for as long as it is connected; it never raises it.
