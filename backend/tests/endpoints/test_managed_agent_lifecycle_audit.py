@@ -202,3 +202,53 @@ async def test_lifecycle_change_persists_actor_and_previous_state(
     assert entry["details"]["lifecycle_action"] == action
     assert entry["details"]["previous_lifecycle_state"] == previous
     assert entry["details"]["lifecycle_state"] == next_state
+
+
+def test_removed_agent_keeps_persisted_operator_audit(
+    client: Any,
+    db_session: Any,
+    test_user: Any,
+) -> None:
+    """The operator can reconstruct removal after the registry row is gone."""
+    token = client.post(
+        "/api/v1/auth/runtime-sessions/token",
+        json={
+            "session_source_type": "codex",
+            "session_source_id": "synthetic-audit-run",
+            "runtime_principal_id": "synthetic-audit-principal",
+            "runtime_principal_name": "Example Agent",
+        },
+    )
+    assert token.status_code == 201
+    agent_id = client.get("/api/v1/agents").json()["items"][0]["id"]
+    update = client.patch(
+        f"/api/v1/agents/{agent_id}",
+        json={
+            "lifecycle_action": "decommission",
+            "reason": "operator requested offboard",
+        },
+    )
+    assert update.status_code == 200
+    assert client.delete(f"/api/v1/agents/{agent_id}").status_code == 200
+    assert (
+        endpoints.crud_managed_agent.get_for_account(
+            db_session,
+            account_id=str(test_user.account_id),
+            agent_id=agent_id,
+        )
+        is None
+    )
+    audits = endpoints.crud_audit_log.get_by_account(
+        db_session,
+        account_id=test_user.account_id,
+        resource_type="managed_agent",
+        resource_id=agent_id,
+    )
+    assert {row.action for row in audits} == {
+        "managed_agent_updated",
+        "managed_agent_removed",
+    }
+    assert all(row.user_id == test_user.id for row in audits)
+    removal = next(row for row in audits if row.action == "managed_agent_removed")
+    assert removal.details["session_source_id"] == "synthetic-audit-principal"
+    assert removal.details["previous_lifecycle_state"] == "decommissioned"
