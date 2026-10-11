@@ -846,6 +846,83 @@ async def test_actions_detail_reads_are_bounded_and_missing_evidence_blocks() ->
 
 
 @pytest.mark.asyncio
+async def test_unread_actions_jobs_do_not_veto_a_confirmed_script_failure() -> None:
+    """A confirmed script failure still repairs when later jobs are unread.
+
+    A pull request often fails lint, several test shards and a rollup job.
+    Only two Actions jobs are read. The rest must not be classified as an
+    unexplained failure, or the implementation thread blocks and a trusted
+    review never resumes it. Unread job names still travel with the repair.
+    """
+    from preloop.services.flow_feedback_provider import classify_checks
+
+    provider, _ = github_fixture()
+    checks = [
+        {
+            "id": index,
+            "name": f"job-{index}",
+            "head_sha": "head",
+            "app": {"slug": "github-actions"},
+            "conclusion": "failure",
+            "details_url": f"https://github.com/example/repo/actions/runs/1/job/{index}",
+        }
+        for index in range(1, 5)
+    ]
+
+    async def job(method: str, path: str, data: Any = None) -> dict[str, Any]:
+        del method, data
+        job_id = path.rsplit("/", 1)[-1]
+        return {
+            "head_sha": "head",
+            "check_run_url": (
+                "https://api.github.com/repos/example/repo/check-runs/" + job_id
+            ),
+            "steps": [
+                {"number": 1, "name": "Set up job", "conclusion": "success"},
+                {"number": 2, "name": "Run tests", "conclusion": "failure"},
+            ],
+        }
+
+    request = AsyncMock(side_effect=job)
+    enriched = await provider._github_job_details(
+        request, "/repositories/123", checks, "head", []
+    )
+    assert request.await_count == 2
+    result = classify_checks(enriched, [])
+    assert result.blocked_reason is None
+    assert not result.passed
+    assert [item["name"] for item in result.failures] == [
+        "job-1",
+        "job-2",
+        "job-3",
+        "job-4",
+    ]
+    assert result.failures[0]["failure_reason"] == "script_failure"
+    assert result.failures[1]["failure_reason"] == "script_failure"
+    assert "failure_reason" not in result.failures[2]
+    assert result.failures[2]["details_deferred"] is True
+    assert "details_unavailable" not in result.failures[2]
+
+
+def test_deferred_actions_jobs_block_without_a_confirmed_script_failure() -> None:
+    """Unread Actions jobs are not evidence for a repair on their own."""
+    from preloop.services.flow_feedback_provider import classify_checks
+
+    result = classify_checks(
+        [
+            {
+                "name": "lint",
+                "conclusion": "failure",
+                "details_deferred": True,
+            }
+        ],
+        [],
+    )
+    assert result.blocked_reason == "ci_failure_unclassified"
+    assert not result.failures
+
+
+@pytest.mark.asyncio
 async def test_provider_job_urls_cannot_redirect_requests_or_launder_user_steps() -> (
     None
 ):
