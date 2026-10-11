@@ -113,6 +113,7 @@ var runnerStatusCmd = &cobra.Command{
 
 func init() {
 	runnerCmd.AddCommand(runnerFgCmd)
+	runnerCmd.AddCommand(runnerSetupCmd)
 	runnerCmd.AddCommand(runnerEnableCmd)
 	runnerCmd.AddCommand(runnerDisableCmd)
 	runnerCmd.AddCommand(runnerStartCmd)
@@ -154,6 +155,9 @@ type runnerState struct {
 	// sessions may open (preloop runner dirs). Kept here so a token
 	// rotation or re-registration never drops it.
 	AuthorizedDirectories []authorizedDirectory `json:"authorized_directories,omitempty"`
+	// Harnesses holds per-harness switches, e.g.
+	// {"cursor_cli": {"enabled": false}}. Kept on rewrite.
+	Harnesses map[string]runnerHarnessConfig `json:"harnesses,omitempty"`
 }
 
 type runnerAPIRecord struct {
@@ -199,6 +203,8 @@ type runnerWSMessage struct {
 	HaltExecutionIDs []string         `json:"halt_execution_ids,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	RunnerID         string           `json:"runner_id,omitempty"`
+	// InventoryWanted on an ack asks for the full harness inventory.
+	InventoryWanted bool `json:"inventory_wanted,omitempty"`
 }
 
 // deliveredJobs returns every job in one server frame, first one first and
@@ -237,7 +243,8 @@ func (m runnerWSMessage) haltedExecutions() []string {
 }
 
 func runRunnerFg(cmd *cobra.Command, args []string) error {
-	labels, _ := cmd.Flags().GetStringSlice("labels")
+	flagLabels, _ := cmd.Flags().GetStringSlice("labels")
+	labels := effectiveRunnerLabels(flagLabels)
 	name, _ := cmd.Flags().GetString("name")
 	once, err := runnerOnceFromFlags(cmd)
 	if err != nil {
@@ -323,6 +330,7 @@ func loadOrRegisterRunner(
 		concurrency = config.DefaultRunnerConcurrency
 	}
 	req := map[string]any{
+		"harness_inventory":      runnerInventory.current(true),
 		"host_exec_profiles":     hostExecAdvertisements(),
 		"authorized_directories": authorizedDirectoryAdvertisements(),
 		"name":                   name,
@@ -347,6 +355,7 @@ func loadOrRegisterRunner(
 				existing.Token = resumed.Token
 			}
 			_ = writeRunnerState(existing)
+			runnerInventory.markSent(registeredInventoryHash(req))
 			return existing, nil
 		}
 		delete(req, "runner_id")
@@ -362,10 +371,13 @@ func loadOrRegisterRunner(
 	// row, so they survive a fresh registration.
 	if previous, err := readRunnerState(); err == nil {
 		state.AuthorizedDirectories = previous.AuthorizedDirectories
+		// A fresh registration keeps the operator's harness switches.
+		state.Harnesses = previous.Harnesses
 	}
 	if err := writeRunnerState(state); err != nil {
 		return nil, err
 	}
+	runnerInventory.markSent(registeredInventoryHash(req))
 	return state, nil
 }
 
@@ -754,6 +766,9 @@ func runRunnerSession(
 						return err
 					}
 				}
+			}
+			if msg.Type == "ack" && msg.InventoryWanted {
+				runnerInventory.requestFull()
 			}
 			if msg.Type == "logs_ack" {
 				if b := jobs.job(msg.ExecutionID).logBuffer(); b != nil {
@@ -1289,20 +1304,36 @@ func writeRunnerState(state *runnerState) error {
 }
 
 func runRunnerEnable(cmd *cobra.Command, args []string) error {
+	return installRunnerService(cmd.OutOrStdout())
+}
+
+// installRunnerService writes the platform service unit and, on macOS,
+// loads it. Linux enable does not start the unit. Windows creates the
+// logon task and does not run it until start.
+func installRunnerService(out io.Writer) error {
 	bin, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		return writeLaunchdPlist(bin, cmd.OutOrStdout())
+		return writeLaunchdPlist(bin, out)
 	case "linux":
-		return writeSystemdUserUnit(bin, cmd.OutOrStdout())
+		return writeSystemdUserUnit(bin, out)
 	case "windows":
-		return writeWindowsScheduledTask(bin, cmd.OutOrStdout())
+		return writeWindowsScheduledTask(bin, out)
 	default:
 		return fmt.Errorf("service install is not implemented on %s; use preloop runner fg", runtime.GOOS)
 	}
+}
+
+// effectiveRunnerLabels uses --labels when the caller passed any, and
+// otherwise the labels saved by `preloop runner setup` or login.
+func effectiveRunnerLabels(flag []string) []string {
+	if len(flag) > 0 {
+		return flag
+	}
+	return config.RunnerLabels()
 }
 
 // Service hooks. Variables so tests can drive disable and rotate-token
