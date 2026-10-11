@@ -3,7 +3,7 @@
 Preloop builds an opt-in Codex agent image that carries Trivy and a baked,
 digest-pinned advisory database, so a security flow can scan a repository
 with no network. The default agent image does not change. The decision and
-its measurements are in the [scanner binaries decision note](scanner-binaries-decision.md).
+its measurements are recorded in [Scanner binaries in the agent image](scanner-binaries-decision.md).
 
 ## What the image contains
 
