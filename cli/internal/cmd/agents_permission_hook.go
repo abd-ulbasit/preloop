@@ -298,6 +298,8 @@ func resolvePermissionDecision(source string, raw []byte, failOpen bool) hookDec
 		}
 	}
 
+	registerSpawnFromPermissionHook(source, raw)
+
 	// Cursor's preToolUse fires for every tool, including Shell and MCP tools
 	// that beforeShellExecution / beforeMCPExecution already gate. Answer the
 	// duplicate locally so one command raises exactly one approval request.

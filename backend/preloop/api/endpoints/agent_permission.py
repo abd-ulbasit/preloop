@@ -683,6 +683,11 @@ class AgentSessionStartRequest(BaseModel):
             "caller's account; ignored otherwise. Write-once."
         ),
     )
+    alias: Optional[str] = Field(
+        None,
+        max_length=4096,
+        description="Spawn-time label from PRELOOP_SESSION_ALIAS; sanitized to 64 characters, write-once.",
+    )
     first_prompt: Optional[str] = Field(
         None,
         max_length=20000,
@@ -697,6 +702,7 @@ class AgentSessionStartResponse(BaseModel):
     parent_session_id: Optional[str] = None
     started_at: str
     created: bool
+    alias: Optional[str] = None
 
 
 def _register_session_start(
@@ -720,6 +726,7 @@ def _register_session_start(
             cwd=(payload.cwd or "").strip() or None,
             parent_session_id=payload.parent_session_id,
             first_prompt=payload.first_prompt,
+            alias=payload.alias,
         )
 
 
@@ -747,7 +754,14 @@ async def agent_session_start(
         )
     token = authorization.split(" ", 1)[1].strip()
     identity = await run_db_off_loop(lambda: _resolve_permission_identity(token))
-    result = await run_db_off_loop(lambda: _register_session_start(identity, payload))
+    from preloop.models.crud.runtime_session import SpawnAliasConflictError
+
+    try:
+        result = await run_db_off_loop(
+            lambda: _register_session_start(identity, payload)
+        )
+    except SpawnAliasConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -761,4 +775,5 @@ async def agent_session_start(
         parent_session_id=result.parent_session_id,
         started_at=result.started_at.isoformat(),
         created=result.created,
+        alias=result.alias,
     )

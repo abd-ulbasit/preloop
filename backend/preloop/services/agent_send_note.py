@@ -119,6 +119,7 @@ def send_note_from_agent(
     execution_id: Optional[Any] = None,
     author_execution_id: Optional[Any] = None,
     subject_context: Optional[Dict[str, Any]] = None,
+    alias: Optional[str] = None,
     external_session_id: Optional[str] = None,
     children: Optional[str] = None,
     author_session_ids: Optional[List[Any]] = None,
@@ -172,6 +173,7 @@ def send_note_from_agent(
         "execution_id": execution_id,
     }
     aliases = {
+        "alias": alias,
         "external_session_id": external_session_id,
         "children": children,
     }
@@ -182,7 +184,7 @@ def send_note_from_agent(
         named_text = ", ".join(named) if named else "none"
         return _refusal(
             ERROR_TARGET_COUNT,
-            "Name exactly one target: runtime_session_id, external_session_id, "
+            "Name exactly one target: runtime_session_id, alias, external_session_id, "
             "children, agent_id or execution_id. This call named "
             f"{len(named)} ({named_text}).",
         )
@@ -201,6 +203,7 @@ def send_note_from_agent(
             text=text,
             author_execution_id=author_execution_id,
             subject_context=subject_context,
+            alias=alias,
             external_session_id=external_session_id,
             children=children,
             author_session_ids=author_session_ids,
@@ -414,6 +417,7 @@ def _send_to_alias(
     text: str,
     author_execution_id: Any,
     subject_context: Optional[Dict[str, Any]],
+    alias: Optional[str],
     external_session_id: Optional[str],
     children: Optional[str],
     author_session_ids: Optional[List[Any]],
@@ -438,6 +442,30 @@ def _send_to_alias(
             subject_context=subject_context,
             author_session_ids=author_session_ids,
         )
+
+    if alias not in (None, ""):
+        principal_type, principal_id = author_principal or (None, None)
+        from preloop.models.crud import crud_runtime_session
+
+        matches = crud_runtime_session.resolve_alias(
+            db,
+            account_id=account_id,
+            alias=str(alias),
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
+        if not matches:
+            return _refusal(
+                ERROR_TARGET_NOT_FOUND,
+                "No active session in this account carries that alias.",
+            )
+        if len(matches) > 1:
+            return _refusal(
+                ERROR_TARGET_AMBIGUOUS,
+                "Alias matches multiple active sessions; name runtime_session_id.",
+                candidates=[str(m.id) for m in matches],
+            )
+        return _send(matches[0].id)
 
     if external_session_id not in (None, ""):
         principal_type, principal_id = author_principal or (None, None)

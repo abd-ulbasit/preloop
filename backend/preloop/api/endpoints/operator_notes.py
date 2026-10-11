@@ -31,6 +31,7 @@ from preloop.models import models
 from preloop.models.crud import (
     crud_agent_control_command,
     crud_audit_log,
+    crud_runtime_session,
 )
 from preloop.models.db.session import get_db_session, get_session_factory
 from preloop.schemas.operator_notes import (
@@ -94,11 +95,37 @@ def _resolve_target(
     "not in this account" into the 404 the API has always returned.
     """
     try:
+        session_id = payload.runtime_session_id
+        if payload.alias or payload.external_session_id:
+            if payload.alias:
+                matches = crud_runtime_session.resolve_alias(
+                    db, account_id=account_id, alias=payload.alias
+                )
+            else:
+                from preloop.services.agent_session_lineage import (
+                    resolve_external_session,
+                )
+
+                matches = resolve_external_session(
+                    db,
+                    account_id=account_id,
+                    external_session_id=payload.external_session_id,
+                )
+            if not matches:
+                raise operator_notes.NoteTargetError(
+                    "No matching session in this account."
+                )
+            if len(matches) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="target_ambiguous: name a runtime_session_id",
+                )
+            session_id = matches[0].id
         return operator_notes.resolve_note_target(
             db,
             account_id=account_id,
             agent_id=payload.agent_id,
-            runtime_session_id=payload.runtime_session_id,
+            runtime_session_id=session_id,
             execution_id=payload.execution_id,
         )
     except operator_notes.NoteTargetError as exc:
@@ -223,7 +250,7 @@ def _create_note(
 
 @router.post(
     "/operator-notes",
-    response_model=OperatorNoteResponse,
+    response_model=OperatorNoteResponse | OperatorNoteList,
     status_code=status.HTTP_201_CREATED,
     tags=["Operator Notes"],
 )
@@ -237,8 +264,49 @@ def create_operator_note(
     payload: OperatorNoteCreate,
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
-) -> OperatorNoteResponse:
+) -> OperatorNoteResponse | OperatorNoteList:
     """Send a note to a running agent, delivered at its next turn boundary."""
+    if payload.children:
+        ensure_permission_in_oss(db, current_user, CONTROL_PERMISSION)
+        from preloop.services.agent_session_lineage import live_children
+        from preloop.services.agent_send_note import MAX_CHILDREN_FANOUT
+
+        parent = crud_runtime_session.get_account_session(
+            db,
+            account_id=current_user.account_id,
+            runtime_session_id=payload.parent_session_id,
+        )
+        if parent is None:
+            raise HTTPException(
+                status_code=404, detail="Parent session not found in this account"
+            )
+        children = live_children(
+            db,
+            account_id=current_user.account_id,
+            parent_session_ids=[parent.id],
+            limit=MAX_CHILDREN_FANOUT,
+        )
+        if not children:
+            raise HTTPException(status_code=404, detail="no_live_children")
+        if payload.children == "latest":
+            children = children[:1]
+        notes = []
+        for child in children:
+            target = payload.model_copy(
+                update={
+                    "children": None,
+                    "parent_session_id": None,
+                    "runtime_session_id": child.id,
+                }
+            )
+            notes.append(
+                _to_response(
+                    _create_note(
+                        db, request=request, current_user=current_user, payload=target
+                    )
+                )
+            )
+        return OperatorNoteList(notes=notes) if payload.children == "all" else notes[0]
     note = _create_note(db, request=request, current_user=current_user, payload=payload)
     return _to_response(note)
 

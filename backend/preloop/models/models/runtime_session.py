@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -42,6 +43,14 @@ class RuntimeSession(Base):
             "account_id",
             "last_activity_at",
             postgresql_ops={"last_activity_at": "DESC"},
+        ),
+        Index(
+            "uq_runtime_session_active_alias",
+            "account_id",
+            "alias_namespace",
+            "alias",
+            unique=True,
+            postgresql_where=text("alias IS NOT NULL AND ended_at IS NULL"),
         ),
         Index(
             "ix_runtime_session_parent_session_id",
@@ -77,6 +86,9 @@ class RuntimeSession(Base):
     runtime_principal_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    alias: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Internal uniqueness key: parent id, otherwise the registering principal.
+    alias_namespace: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     #: Working directory the agent's hook last reported for this session.
     #: Observed, not trusted: it labels a session in lists so two runs that

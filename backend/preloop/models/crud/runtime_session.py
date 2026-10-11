@@ -188,6 +188,10 @@ def _latest_gateway_usage_for_sessions(
     return latest_by_session
 
 
+class SpawnAliasConflictError(ValueError):
+    """A resumed session cannot rename its write-once alias to avoid a clash."""
+
+
 class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
     """CRUD helpers for shared runtime session identities."""
 
@@ -473,6 +477,8 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             db_obj.runtime_principal_name = runtime_principal_name
         if parent_session_id is not None and db_obj.parent_session_id is None:
             db_obj.parent_session_id = parent_session_id
+            if db_obj.alias:
+                db_obj.alias_namespace = f"parent:{parent_session_id}"
         if reopen_if_ended and db_obj.ended_at is not None and ended_at is None:
             db_obj.ended_at = None
             db_obj.started_at = started_at or last_activity_at
@@ -486,6 +492,104 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         db.add(db_obj)
         db.flush()
         return db_obj
+
+    def lock_alias_account(self, db: Session, *, account_id: Any) -> None:
+        """Serialize spawn alias assignment within an account until commit."""
+        from preloop.models.models.account import Account
+
+        db.query(Account.id).filter(Account.id == account_id).with_for_update().one()
+
+    def assign_spawn_alias(
+        self,
+        db: Session,
+        *,
+        session: RuntimeSession,
+        alias: Optional[str],
+        principal_type: str,
+        principal_id: str,
+    ) -> None:
+        """Fill a write-once alias, suffixing active clashes in its namespace.
+
+        The caller holds lock_alias_account through the session commit.
+        A parent groups workers across principals; otherwise the principal
+        is the namespace. Ended sessions release their names.
+        """
+        if not session.alias and not alias:
+            return
+        query = db.query(self.model.alias).filter(
+            self.model.account_id == session.account_id,
+            self.model.ended_at.is_(None),
+            self.model.id != session.id,
+            self.model.alias.isnot(None),
+        )
+        if session.parent_session_id is not None:
+            query = query.filter(
+                self.model.parent_session_id == session.parent_session_id
+            )
+        else:
+            prefix = (
+                principal_id.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            query = query.filter(
+                self.model.parent_session_id.is_(None),
+                self.model.session_source_type == principal_type,
+                self.model.session_source_id.like(prefix + ":%", escape="\\"),
+            )
+        taken = {row[0] for row in query.all()}
+        session.alias_namespace = (
+            f"parent:{session.parent_session_id}"
+            if session.parent_session_id is not None
+            else f"principal:{principal_type}:{principal_id}"
+        )
+        if session.alias:
+            if session.alias in taken:
+                raise SpawnAliasConflictError(
+                    "This session alias is already active in its namespace; end the other run before resuming."
+                )
+            return
+        candidate = alias
+        number = 2
+        while candidate in taken:
+            suffix = f"-{number}"
+            candidate = alias[: 64 - len(suffix)] + suffix
+            number += 1
+        session.alias = candidate
+
+    def resolve_alias(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        alias: str,
+        principal_type: Optional[str] = None,
+        principal_id: Optional[str] = None,
+    ) -> list[RuntimeSession]:
+        """Resolve an active alias, preferring the caller's own principal."""
+        query = db.query(self.model).filter(
+            self.model.account_id == account_id,
+            self.model.alias == alias,
+            self.model.ended_at.is_(None),
+        )
+        if principal_type and principal_id:
+            prefix = (
+                principal_id.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            owned = (
+                query.filter(
+                    self.model.session_source_type == principal_type,
+                    self.model.session_source_id.like(prefix + ":%", escape="\\"),
+                )
+                .order_by(self.model.started_at.desc())
+                .limit(5)
+                .all()
+            )
+            if owned:
+                return owned
+        return query.order_by(self.model.started_at.desc()).limit(5).all()
 
     def list_for_search_backfill(
         self,
@@ -538,6 +642,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         offset: int = 0,
         principals: Optional[list[tuple[str, str]]] = None,
         source_types: Optional[list[str]] = None,
+        alias: Optional[str] = None,
         parent_session_id: Optional[str] = None,
         flow_execution_id: Optional[str] = None,
         active_within: Optional[timedelta] = None,
@@ -571,6 +676,8 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             session_query = session_query.filter(
                 or_(*alternatives) if alternatives else false()
             )
+        if alias:
+            session_query = session_query.filter(self.model.alias == alias)
         if parent_session_id:
             session_query = session_query.filter(
                 self.model.parent_session_id == parent_session_id
@@ -893,6 +1000,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 self.model.session_source_type,
                 self.model.session_source_id,
                 self.model.session_reference,
+                self.model.alias,
                 parent_session_id_column,
                 self.model.runtime_principal_type,
                 self.model.runtime_principal_id,
@@ -940,6 +1048,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 self.model.session_source_type,
                 self.model.session_source_id,
                 self.model.session_reference,
+                self.model.alias,
                 # PostgreSQL rejects a bound NULL constant in GROUP BY.
                 *([parent_session_id_column] if parent_session_id_available else []),
                 self.model.runtime_principal_type,
@@ -1192,6 +1301,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 self.model.session_source_type,
                 self.model.session_source_id,
                 self.model.session_reference,
+                self.model.alias,
                 parent_session_id_column,
                 self.model.runtime_principal_type,
                 self.model.runtime_principal_id,
@@ -1242,6 +1352,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 self.model.session_source_type,
                 self.model.session_source_id,
                 self.model.session_reference,
+                self.model.alias,
                 # PostgreSQL rejects a bound NULL constant in GROUP BY.
                 *([parent_session_id_column] if parent_session_id_available else []),
                 self.model.runtime_principal_type,
@@ -1385,6 +1496,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             "session_source_type": row.session_source_type,
             "session_source_id": row.session_source_id,
             "session_reference": row.session_reference,
+            "alias": row.alias,
             "parent_session_id": (
                 str(row.parent_session_id)
                 if row.parent_session_id is not None

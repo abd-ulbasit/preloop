@@ -156,3 +156,15 @@ describe('session-observer notes', () => {
     expect(merged[0].latestNoteAuthorDisplay).to.equal('Jane Doe');
   });
 });
+
+describe('spawn aliases', () => {
+  it('uses the spawn alias as the primary label even after a title arrives', () => {
+    const session = normalizeObservedSession({
+      id: 'worker-session',
+      alias: 'brief-api',
+      title: 'Investigate the API regression',
+      runtime_principal_name: 'Claude Code',
+    });
+    expect(session.title).to.equal('brief-api');
+  });
+});

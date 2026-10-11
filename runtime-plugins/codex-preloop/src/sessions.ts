@@ -1,3 +1,4 @@
+import { SessionRegistrar } from "./session-registration.js";
 // Codex session layer. The WebSocket sidecar in index.ts is ported from
 // runtime-plugins/claude-preloop/src/index.ts; this file is the runtime-
 // specific half and is the only place that talks to @openai/codex-sdk.
@@ -36,6 +37,7 @@ export type CodexThreadOptions = {
 
 export type CodexRunOptions = {
   signal?: AbortSignal;
+  onSessionStarted?: (id: string) => Promise<void>;
 };
 
 /** One Codex thread. `id` may be null until the first turn starts. */
@@ -80,6 +82,7 @@ type OwnedThread = {
   thread: CodexThread;
   controller?: AbortController;
   lastActivity: number;
+  cwd?: string;
   /** Prior turn on this thread. The next turn waits so two runs cannot overlap. */
   tail?: Promise<void>;
 };
@@ -171,6 +174,11 @@ type SdkThread = {
     input: string,
     options?: { signal?: AbortSignal },
   ): Promise<{ finalResponse: string; usage: CodexUsage | null }>;
+  runStreamed?(input: string, options?: { signal?: AbortSignal }): Promise<{ events: AsyncIterable<{
+    type: string; thread_id?: string; item?: {type: string; text?: string};
+    usage?: CodexUsage; error?: {message: string};
+  }> }>;
+
 };
 
 function toSdkThreadOptions(
@@ -194,8 +202,18 @@ function wrapThread(thread: SdkThread): CodexThread {
     get id() {
       return thread.id;
     },
-    run(input, options) {
-      return thread.run(input, options);
+    async run(input, options) {
+      if (!thread.runStreamed || !options?.onSessionStarted) return thread.run(input, options);
+      const { events } = await thread.runStreamed(input, { signal: options.signal });
+      let finalResponse = "";
+      let usage: CodexUsage | null = null;
+      for await (const event of events) {
+        if (event.type === "thread.started" && event.thread_id) await options.onSessionStarted(event.thread_id);
+        else if (event.type === "item.completed" && event.item?.type === "agent_message") finalResponse = event.item.text ?? "";
+        else if (event.type === "turn.completed") usage = event.usage ?? null;
+        else if (event.type === "turn.failed") throw new Error(event.error?.message ?? "Codex turn failed");
+      }
+      return { finalResponse, usage };
     },
   };
 }
@@ -217,6 +235,7 @@ export async function ensureSdkClient(
 
 export class SessionManager {
   private sessions = new Map<string, OwnedThread>();
+  private registrar: SessionRegistrar;
   private commandSessions = new Map<string, OwnedThread>();
   private client?: CodexClient;
   private clientPromise?: Promise<CodexClient>;
@@ -224,7 +243,7 @@ export class SessionManager {
   constructor(
     private readonly config: ControlConfig,
     private readonly clientFactory: CodexClientFactory = sdkCodexClientFactory,
-  ) {}
+  ) { this.registrar = new SessionRegistrar(config, "codex"); }
 
   private async clientOrLoad(): Promise<CodexClient> {
     if (this.client) {
@@ -291,8 +310,10 @@ export class SessionManager {
         key: thread.id ?? resumeId ?? `pending-${this.sessions.size + 1}`,
         thread,
         lastActivity: Date.now(),
+        cwd: options.workingDirectory,
       };
       this.remember(session);
+      await this.registrar.register(thread.id ?? undefined, options.workingDirectory);
     }
     if (params.commandId) this.commandSessions.set(params.commandId, session);
     const limits = params.metadata?.["run_limits"] as Record<string, number> | undefined;
@@ -340,12 +361,16 @@ export class SessionManager {
             ),
           );
         }, timeoutMs);
-        session.thread.run(text, { signal: controller.signal }).then(
+        session.thread.run(text, { signal: controller.signal, onSessionStarted: async id => {
+          this.remember(session);
+          await this.registrar.register(id, session.cwd);
+        } }).then(
           (value) => resolve(value),
           (error: unknown) => reject(error),
         );
       });
       this.remember(session);
+      await this.registrar.register(session.thread.id ?? undefined, session.cwd);
       return {
         reply_text: turn.finalResponse ?? "",
         session_id: session.thread.id ?? session.key,

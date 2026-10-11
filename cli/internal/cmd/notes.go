@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -36,11 +37,15 @@ const (
 // operatorNoteCreate is the request body. The target fields are omitted when
 // empty because the server accepts exactly one of them and counts nulls.
 type operatorNoteCreate struct {
-	Text             string `json:"text"`
-	AgentID          string `json:"agent_id,omitempty"`
-	RuntimeSessionID string `json:"runtime_session_id,omitempty"`
-	ExecutionID      string `json:"execution_id,omitempty"`
-	ExpiresInSeconds int    `json:"expires_in_seconds,omitempty"`
+	Text              string `json:"text"`
+	AgentID           string `json:"agent_id,omitempty"`
+	RuntimeSessionID  string `json:"runtime_session_id,omitempty"`
+	ExecutionID       string `json:"execution_id,omitempty"`
+	Alias             string `json:"alias,omitempty"`
+	ExternalSessionID string `json:"external_session_id,omitempty"`
+	Children          string `json:"children,omitempty"`
+	ParentSessionID   string `json:"parent_session_id,omitempty"`
+	ExpiresInSeconds  int    `json:"expires_in_seconds,omitempty"`
 }
 
 // operatorNoteResponse is the part of the created note this command reports.
@@ -79,11 +84,14 @@ type noteSendOutput struct {
 }
 
 var (
-	noteAgentID     string
-	noteSessionID   string
-	noteExecutionID string
-	noteExpiresIn   time.Duration
-	noteJSON        bool
+	noteAlias             string
+	noteExternalSessionID string
+	noteChildren          string
+	noteAgentID           string
+	noteSessionID         string
+	noteExecutionID       string
+	noteExpiresIn         time.Duration
+	noteJSON              bool
 )
 
 // notesCmd is the parent for operator note commands.
@@ -109,6 +117,12 @@ starts. --session steers that conversation and only that one. --execution
 names a flow execution and the server resolves it to the session that
 execution is running on.
 
+--alias names an active worker by PRELOOP_SESSION_ALIAS. --external-session-id
+names the harness id. --children latest|all steers live workers spawned by the
+session in PRELOOP_PARENT_SESSION_ID, with a cap of 20.
+
+Spawning workers guide: https://docs.preloop.ai/guide/spawning-workers/
+
 The body is the argument. With no argument it is read from standard input, so
 a note can be piped or written in a heredoc, and a multi line body is sent
 unchanged.
@@ -124,6 +138,9 @@ Examples:
 }
 
 func init() {
+	notesSendCmd.Flags().StringVar(&noteAlias, "alias", "", "spawn-time alias of an active session")
+	notesSendCmd.Flags().StringVar(&noteExternalSessionID, "external-session-id", "", "harness session id, resolved in your account")
+	notesSendCmd.Flags().StringVar(&noteChildren, "children", "", "latest or all live children of PRELOOP_PARENT_SESSION_ID (at most 20)")
 	notesSendCmd.Flags().StringVar(&noteAgentID, "agent", "", "managed agent id to steer, current or next session")
 	notesSendCmd.Flags().StringVar(&noteSessionID, "session", "", "runtime session id, and only that session")
 	notesSendCmd.Flags().StringVar(&noteExecutionID, "execution", "", "flow execution id, resolved to its runtime session")
@@ -137,7 +154,7 @@ func runNotesSend(cmd *cobra.Command, args []string) error {
 	// Target, body, and --expires-in all run before any client exists: a
 	// note with no target, or with two, or with an expiry the server would
 	// 422, is a mistake the operator can fix in the shell.
-	target, err := resolveNoteTarget(noteAgentID, noteSessionID, noteExecutionID)
+	target, err := resolveNoteTarget(noteAgentID, noteSessionID, noteExecutionID, noteAlias, noteExternalSessionID, noteChildren)
 	if err != nil {
 		return err
 	}
@@ -166,16 +183,50 @@ func runNotesSend(cmd *cobra.Command, args []string) error {
 		payload.RuntimeSessionID = target.ID
 	case "execution":
 		payload.ExecutionID = target.ID
+	case "alias":
+		payload.Alias = target.ID
+	case "external-session-id":
+		payload.ExternalSessionID = target.ID
+	case "children":
+		if target.ID != "latest" && target.ID != "all" {
+			return errors.New("--children must be latest or all")
+		}
+		payload.Children = target.ID
+		payload.ParentSessionID = strings.TrimSpace(os.Getenv(parentSessionEnvVar))
+		if payload.ParentSessionID == "" {
+			return errors.New("--children needs PRELOOP_PARENT_SESSION_ID set to the spawning session id")
+		}
 	}
 	if expiresInSeconds != 0 {
 		payload.ExpiresInSeconds = expiresInSeconds
 	}
 
-	var note operatorNoteResponse
-	if err := client.Post(operatorNotesPath, payload, &note); err != nil {
+	var response json.RawMessage
+	if err := client.Post(operatorNotesPath, payload, &response); err != nil {
 		return explainOperatorNoteError(err)
 	}
 
+	if target.Kind == "children" && target.ID == "all" {
+		var batch struct {
+			Notes []operatorNoteResponse `json:"notes"`
+		}
+		if err := json.Unmarshal(response, &batch); err != nil {
+			return err
+		}
+		if noteJSON {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(batch)
+		}
+		for _, note := range batch.Notes {
+			if err := printSentNote(cmd.OutOrStdout(), note, target, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var note operatorNoteResponse
+	if err := json.Unmarshal(response, &note); err != nil {
+		return err
+	}
 	return printSentNote(cmd.OutOrStdout(), note, target, noteJSON)
 }
 
@@ -201,7 +252,7 @@ func noteExpiresInSeconds(d time.Duration) (int, error) {
 
 // resolveNoteTarget enforces the server's "exactly one target" rule locally,
 // and names which rule was broken rather than reprinting the whole grammar.
-func resolveNoteTarget(agentID, sessionID, executionID string) (noteTarget, error) {
+func resolveNoteTarget(agentID, sessionID, executionID string, additional ...string) (noteTarget, error) {
 	named := make([]noteTarget, 0, 3)
 	if id := strings.TrimSpace(agentID); id != "" {
 		named = append(named, noteTarget{Kind: "agent", ID: id})
@@ -213,12 +264,19 @@ func resolveNoteTarget(agentID, sessionID, executionID string) (noteTarget, erro
 		named = append(named, noteTarget{Kind: "execution", ID: id})
 	}
 
+	for i, kind := range []string{"alias", "external-session-id", "children"} {
+		if i < len(additional) {
+			if id := strings.TrimSpace(additional[i]); id != "" {
+				named = append(named, noteTarget{Kind: kind, ID: id})
+			}
+		}
+	}
 	switch len(named) {
 	case 1:
 		return named[0], nil
 	case 0:
 		return noteTarget{}, errors.New(
-			"no target: name exactly one of --agent, --session or --execution")
+			"no target: name exactly one of --agent, --session, --execution, --alias, --external-session-id or --children")
 	default:
 		kinds := make([]string, 0, len(named))
 		for _, candidate := range named {

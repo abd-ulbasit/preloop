@@ -82,3 +82,103 @@ def test_endpoint_requires_a_runtime_principal(db_session: Session) -> None:
     with patch.object(endpoint, "get_session_factory") as factory:
         assert endpoint._register_session_start(identity, payload) is None
         factory.assert_not_called()
+
+
+def test_alias_list_filter_and_note_target(client, db_session, account_id):
+    parent = _start(db_session, account_id, "alias-parent", "conduct")
+    workers = [
+        _start(
+            db_session,
+            account_id,
+            f"alias-worker-{i}",
+            "",
+            alias=f"brief-{i}",
+            parent_session_id=parent.runtime_session_id,
+        )
+        for i in range(4)
+    ]
+    response = client.get(
+        f"/api/v1/runtime-sessions?alias=brief-2&parent_session_id={parent.runtime_session_id}"
+    )
+    assert response.status_code == 200, response.text
+    assert [(r["alias"], r["parent_session_id"]) for r in response.json()["items"]] == [
+        ("brief-2", parent.runtime_session_id)
+    ]
+    for i, worker in enumerate(workers):
+        response = client.post(
+            "/api/v1/operator-notes",
+            json={"alias": f"brief-{i}", "text": "Report progress"},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["runtime_session_id"] == worker.runtime_session_id
+
+
+def test_cli_children_and_external_targets(client, db_session, account_id):
+    parent = _start(db_session, account_id, "cli-parent", "conduct")
+    workers = [
+        _start(
+            db_session,
+            account_id,
+            f"cli-worker-{i}",
+            "work",
+            parent_session_id=parent.runtime_session_id,
+        )
+        for i in range(23)
+    ]
+    response = client.post(
+        "/api/v1/operator-notes",
+        json={
+            "children": "all",
+            "parent_session_id": parent.runtime_session_id,
+            "text": "Report progress",
+        },
+    )
+    assert response.status_code == 201, response.text
+    notes = response.json()["notes"]
+    assert len(notes) == 20
+    assert {n["runtime_session_id"] for n in notes} == {
+        w.runtime_session_id for w in workers[-20:]
+    }
+    response = client.post(
+        "/api/v1/operator-notes",
+        json={
+            "children": "latest",
+            "parent_session_id": parent.runtime_session_id,
+            "text": "Report next step",
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["runtime_session_id"] == workers[-1].runtime_session_id
+    response = client.post(
+        "/api/v1/operator-notes",
+        json={"external_session_id": "cli-worker-0", "text": "Report"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["runtime_session_id"] == workers[0].runtime_session_id
+
+
+def test_alias_rest_ambiguity_and_target_exclusivity(client, db_session, account_id):
+    _start(db_session, account_id, "ambiguous-one", "", alias="brief")
+    register_session_start(
+        db_session,
+        account_id=account_id,
+        principal_type="codex_cli",
+        principal_id="another-principal",
+        principal_name="Worker",
+        external_session_id="ambiguous-two",
+        alias="brief",
+    )
+    response = client.post(
+        "/api/v1/operator-notes", json={"alias": "brief", "text": "Report"}
+    )
+    assert response.status_code == 409, response.text
+    assert "target_ambiguous" in response.json()["detail"]
+    response = client.post(
+        "/api/v1/operator-notes",
+        json={
+            "alias": "brief",
+            "external_session_id": "ambiguous-one",
+            "text": "Report",
+        },
+    )
+    assert response.status_code == 422, response.text

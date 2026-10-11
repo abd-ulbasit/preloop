@@ -536,6 +536,7 @@ export interface AccountGatewayUsageSearchResponse {
 }
 
 export interface RuntimeSessionSummary {
+  alias?: string | null;
   id: string;
   title?: string | null;
   summary?: string | null;

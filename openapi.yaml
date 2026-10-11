@@ -3298,6 +3298,16 @@ paths:
           title: Agent Kind
         description: Agent kind (claude_code, codex, cursor, hermes, ...); sessions
           of managed agents of that kind or recorded from that source
+      - name: alias
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 64
+          - type: 'null'
+          title: Alias
       - name: parent_session_id
         in: query
         required: false
@@ -18252,7 +18262,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OperatorNoteResponse'
+                anyOf:
+                - $ref: '#/components/schemas/OperatorNoteResponse'
+                - $ref: '#/components/schemas/OperatorNoteList'
+                title: Response Create Operator Note Api V1 Operator Notes Post
         '422':
           description: Validation Error
           content:
@@ -21483,6 +21496,14 @@ components:
           description: Runtime session id of the session that spawned this one, as
             the hook read it from PRELOOP_PARENT_SESSION_ID. Must be in the caller's
             account; ignored otherwise. Write-once.
+        alias:
+          anyOf:
+          - type: string
+            maxLength: 4096
+          - type: 'null'
+          title: Alias
+          description: Spawn-time label from PRELOOP_SESSION_ALIAS; sanitized to 64
+            characters, write-once.
         first_prompt:
           anyOf:
           - type: string
@@ -21520,6 +21541,11 @@ components:
         created:
           type: boolean
           title: Created
+        alias:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Alias
       type: object
       required:
       - runtime_session_id
@@ -35008,6 +35034,36 @@ components:
           - type: 'null'
           title: Execution Id
           description: Flow execution, resolved to its live runtime session.
+        alias:
+          anyOf:
+          - type: string
+            maxLength: 64
+            minLength: 1
+            pattern: ^[A-Za-z0-9._-]+$
+          - type: 'null'
+          title: Alias
+        external_session_id:
+          anyOf:
+          - type: string
+            maxLength: 200
+            minLength: 1
+          - type: 'null'
+          title: External Session Id
+        children:
+          anyOf:
+          - type: string
+            enum:
+            - latest
+            - all
+          - type: 'null'
+          title: Children
+        parent_session_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parent Session Id
+          description: Spawning session for a children target; same account only.
         expires_in_seconds:
           anyOf:
           - type: integer
@@ -39272,6 +39328,11 @@ components:
           - type: string
           - type: 'null'
           title: Session Reference
+        alias:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Alias
         parent_session_id:
           anyOf:
           - type: string
@@ -43877,7 +43938,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

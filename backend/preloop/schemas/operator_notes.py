@@ -43,6 +43,14 @@ class OperatorNoteCreate(BaseModel):
     execution_id: Optional[UUID] = Field(
         None, description="Flow execution, resolved to its live runtime session."
     )
+    alias: Optional[str] = Field(
+        None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$"
+    )
+    external_session_id: Optional[str] = Field(None, min_length=1, max_length=200)
+    children: Optional[Literal["latest", "all"]] = None
+    parent_session_id: Optional[UUID] = Field(
+        None, description="Spawning session for a children target; same account only."
+    )
     expires_in_seconds: Optional[int] = Field(
         None,
         ge=60,
@@ -56,11 +64,22 @@ class OperatorNoteCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_single_target(self) -> "OperatorNoteCreate":
-        targets = [self.agent_id, self.runtime_session_id, self.execution_id]
+        targets = [
+            self.agent_id,
+            self.runtime_session_id,
+            self.execution_id,
+            self.alias,
+            self.external_session_id,
+            self.children,
+        ]
         if sum(1 for target in targets if target is not None) != 1:
             raise ValueError(
                 "Name exactly one of agent_id, runtime_session_id, execution_id"
             )
+        if self.children and not self.parent_session_id:
+            raise ValueError("children requires parent_session_id")
+        if self.parent_session_id and not self.children:
+            raise ValueError("parent_session_id is only valid with children")
         return self
 
 

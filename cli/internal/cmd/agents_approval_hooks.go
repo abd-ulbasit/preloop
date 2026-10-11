@@ -312,6 +312,11 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 			}
 		}
 	case permissionSourceCodexCLI:
+		for _, event := range sessionHookEvents {
+			if err := upsertNestedCommandHook(configPath, event, "", sessionHookCommand(source), sessionHookTimeoutSeconds); err != nil {
+				return err
+			}
+		}
 		// Independent gates: central rules before execution, then remote
 		// handling of any permission prompt Codex's own policy still requires.
 		if err := upsertNestedCommandHook(configPath, "PreToolUse", "*", command+" --hook-event PreToolUse", hostTimeoutSeconds); err != nil {
@@ -321,6 +326,9 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 			return err
 		}
 	case permissionSourceCursor:
+		if err := upsertFlatCommandHook(configPath, []string{"sessionStart", "beforeSubmitPrompt"}, sessionHookCommand(source), sessionHookTimeoutSeconds); err != nil {
+			return err
+		}
 		// beforeShellExecution / beforeMCPExecution cover terminal + MCP.
 		// preToolUse is required for native file tools (Write / StrReplace /
 		// Edit) — the path that Claude Code's PreToolUse was incorrectly
@@ -469,6 +477,11 @@ func removeApprovalHooks(agent AgentConfig, out io.Writer) error {
 			}
 		}
 	case permissionSourceCodexCLI:
+		for _, event := range sessionHookEvents {
+			if err := removeNestedCommandHook(configPath, event, false); err != nil {
+				return err
+			}
+		}
 		if err := removeNestedCommandHook(configPath, "PreToolUse", true); err != nil {
 			return err
 		}
@@ -478,7 +491,7 @@ func removeApprovalHooks(agent AgentConfig, out io.Writer) error {
 	case permissionSourceCursor:
 		if err := removeFlatCommandHook(
 			configPath,
-			[]string{"beforeShellExecution", "beforeMCPExecution", "preToolUse"},
+			[]string{"beforeShellExecution", "beforeMCPExecution", "preToolUse", "sessionStart", "beforeSubmitPrompt"},
 			true,
 		); err != nil {
 			return err
