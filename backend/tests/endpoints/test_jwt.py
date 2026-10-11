@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import jwt
@@ -9,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from preloop.api.auth import jwt as jwt_module
+from preloop.api.auth import identity as identity_module
 
 
 class TestPasswordHashing:
@@ -157,8 +159,8 @@ class TestGetCurrentUser:
     """Tests for get_current_user function."""
 
     @pytest.fixture
-    def mock_user(self):
-        """Create a mock user."""
+    def mock_user(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        """Create an active membership with explicit canonical CRUD boundaries."""
         user = MagicMock()
         user.id = uuid.uuid4()
         user.username = "testuser"
@@ -166,6 +168,18 @@ class TestGetCurrentUser:
         user.is_active = True
         user.account_id = str(uuid.uuid4())
         user.auth_generation = 0
+        user.person_id = uuid.uuid4()
+        person = SimpleNamespace(id=user.person_id, identity_status="active")
+        monkeypatch.setattr(
+            identity_module.crud_person,
+            "resolve_for_membership",
+            lambda db, *, membership_id: person,
+        )
+        monkeypatch.setattr(
+            identity_module.crud_account,
+            "get",
+            lambda db, *, id: SimpleNamespace(id=id, is_active=True),
+        )
         return user
 
     def test_get_current_user_with_jwt(self, mock_user):
