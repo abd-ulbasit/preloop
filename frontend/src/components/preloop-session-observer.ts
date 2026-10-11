@@ -11,6 +11,12 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/icon-button/icon-button.js';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
+import './desktop-view';
+import {
+  type DesktopEndpoint,
+  canTakeDesktopControl,
+  listOnlineDesktopEndpoints,
+} from '../desktop-api';
 import {
   applyRuntimeSessionOptimization,
   createBudgetPolicy,
@@ -27,6 +33,7 @@ import {
   getRuntimeSessionOptimizationJob,
   getRuntimeSessionRequests,
   getSimilarSessions,
+  getUserProfile,
   listApprovalRequests,
   listRuntimeSessionOptimizationActions,
   optimizeRuntimeSession,
@@ -177,6 +184,7 @@ const DEFAULT_FEATURES: Required<SessionObserverFeatures> = {
   rawPayloads: true,
   endSession: false,
   similarSessions: false,
+  liveDesktop: false,
 };
 
 @customElement('preloop-session-observer')
@@ -259,6 +267,27 @@ export class PreloopSessionObserver extends LitElement {
 
   @state()
   private activeSessionId: string | null = null;
+
+  /** Online desktop endpoint for the active session, if any (#870). */
+  @state()
+  private desktopEndpoint: DesktopEndpoint | null = null;
+
+  /** Whether the live desktop side panel is open. */
+  @state()
+  private desktopPanelOpen = false;
+
+  @state()
+  private canControlDesktop = false;
+
+  /** Bumped per lookup so a slow answer for another session is dropped. */
+  private desktopLookup = 0;
+
+  /**
+   * Session the last lookup was for. Hosts pass `features` as a fresh object
+   * literal on every render, so `changed.has('features')` alone would
+   * re-query (and close the panel) on each parent update.
+   */
+  private desktopLookupKey: string | null = null;
 
   // Collapsed session list: once a session is selected the list gives its
   // grid column to the transcript and shrinks into a compact picker bar.
@@ -481,6 +510,38 @@ export class PreloopSessionObserver extends LitElement {
 
       .observer.with-sidebar {
         grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      }
+
+      /* Live desktop (#870): the viewer sits beside the timeline so model
+         turns, tool calls and the screen can be read together. */
+      .desktop-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 45%);
+        gap: var(--sl-spacing-large);
+        min-width: 0;
+        align-items: start;
+      }
+
+      .desktop-panel {
+        position: sticky;
+        top: var(--sl-spacing-medium);
+        display: flex;
+        flex-direction: column;
+        gap: var(--sl-spacing-small);
+        min-width: 0;
+      }
+
+      .desktop-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-weight: var(--sl-font-weight-semibold);
+      }
+
+      @media (max-width: 1100px) {
+        .desktop-split {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
 
       /* Collapsed list: single column, transcript takes the full width and a
@@ -2161,6 +2222,9 @@ export class PreloopSessionObserver extends LitElement {
   }
 
   updated(changed: Map<string | number | symbol, unknown>): void {
+    if (changed.has('activeSessionId') || changed.has('features')) {
+      void this.refreshDesktopEndpoint();
+    }
     if (changed.has('focusArtifactId')) {
       // Cleared (another session picked, or Back to a URL without it): forget
       // the last landing so returning to the same ?artifact= lands again.
@@ -2325,6 +2389,81 @@ export class PreloopSessionObserver extends LitElement {
    * inside the server's 10 minute window, so Follow and Pause go away while a
    * session is quiet and come back when it wakes.
    */
+  /**
+   * Asks the server for an online desktop endpoint linked to the active
+   * session. Any failure (feature off, older server, no permission) reads as
+   * "none" and keeps the button hidden.
+   */
+  private async refreshDesktopEndpoint(): Promise<void> {
+    const sessionId = this.activeSessionId;
+    const key =
+      this.enabledFeatures.liveDesktop && sessionId ? sessionId : null;
+    if (key === this.desktopLookupKey) return;
+    this.desktopLookupKey = key;
+    const lookup = ++this.desktopLookup;
+    if (!key || !sessionId) {
+      this.desktopEndpoint = null;
+      this.desktopPanelOpen = false;
+      return;
+    }
+    // A different session: the open panel belonged to the previous one.
+    this.desktopPanelOpen = false;
+    this.desktopEndpoint = null;
+    const [endpoints, profile] = await Promise.all([
+      listOnlineDesktopEndpoints({ runtimeSessionId: sessionId }),
+      getUserProfile().catch(() => null),
+    ]);
+    if (lookup !== this.desktopLookup) return;
+    this.desktopEndpoint = endpoints[0] ?? null;
+    this.canControlDesktop = canTakeDesktopControl(profile?.permissions);
+    if (!this.desktopEndpoint) this.desktopPanelOpen = false;
+  }
+
+  /** The "Live desktop" toolbar button, or nothing when unavailable. */
+  private renderLiveDesktopButton(session: ObservedSession | null) {
+    if (!this.enabledFeatures.liveDesktop || !this.desktopEndpoint) {
+      return nothing;
+    }
+    if (!session || !this.isSessionLive(session)) return nothing;
+    return html`
+      <sl-button
+        class="live-desktop"
+        size="small"
+        variant=${this.desktopPanelOpen ? 'primary' : 'default'}
+        @click=${() => (this.desktopPanelOpen = !this.desktopPanelOpen)}
+      >
+        <sl-icon slot="prefix" name="display"></sl-icon>
+        Live desktop
+      </sl-button>
+    `;
+  }
+
+  private renderDesktopPanel() {
+    const endpoint = this.desktopEndpoint;
+    if (!endpoint) return nothing;
+    return html`
+      <aside class="desktop-panel" aria-label="Live desktop">
+        <div class="desktop-panel-header">
+          <span
+            >Live desktop
+            <span class="meta">${endpoint.hostname} ${endpoint.display}</span>
+          </span>
+          <sl-icon-button
+            name="x-lg"
+            label="Close live desktop"
+            @click=${() => (this.desktopPanelOpen = false)}
+          ></sl-icon-button>
+        </div>
+        <desktop-view
+          autoStart
+          .endpointId=${endpoint.id}
+          .runtimeSessionId=${this.activeSessionId ?? ''}
+          ?canControl=${this.canControlDesktop}
+        ></desktop-view>
+      </aside>
+    `;
+  }
+
   private isSessionLive(session: ObservedSession | null): boolean {
     if (!session) return true;
     if (session.status === 'ended' || session.endedAt) return false;
@@ -2488,6 +2627,7 @@ export class PreloopSessionObserver extends LitElement {
             <sl-icon slot="prefix" name="list-columns-reverse"></sl-icon>
             Requests
           </sl-button>
+          ${this.renderLiveDesktopButton(session)}
           ${this.renderEvidenceExportButton(session)} ${this.renderTalkButton()}
           <sl-button size="small" @click=${() => this.reloadActiveSession()}>
             Refresh
@@ -2911,7 +3051,15 @@ export class PreloopSessionObserver extends LitElement {
                   </div>
                 `
         }
-        ${content}
+        ${
+          this.desktopPanelOpen &&
+          this.desktopEndpoint &&
+          this.isSessionLive(this.activeSession)
+            ? html`<div class="desktop-split">
+                ${content} ${this.renderDesktopPanel()}
+              </div>`
+            : content
+        }
       </div>
     `;
   }
