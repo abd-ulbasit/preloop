@@ -738,6 +738,96 @@ def test_account_override_wins_over_global_setting():
         assert service._codex_upstream_ws_enabled() is True
 
 
+def _codex_model_with(meta: Optional[Dict[str, Any]], provider="openai-codex"):
+    model = _model()
+    model.provider_name = provider
+    model.meta_data = meta
+    return model
+
+
+@pytest.mark.parametrize(
+    "model_flag,account_flag,global_flag,expected,source",
+    [
+        (True, False, False, True, "model"),
+        (False, True, True, False, "model"),
+        (None, True, False, True, "account"),
+        (None, False, True, False, "account"),
+        (None, None, True, True, "global"),
+        (None, None, False, False, "global"),
+    ],
+)
+def test_model_override_precedence(
+    model_flag, account_flag, global_flag, expected, source
+):
+    service = _service()
+    model_meta = {"gateway": {"enabled": True}}
+    if model_flag is not None:
+        model_meta["codex_upstream_websocket"] = model_flag
+    account_meta = {}
+    if account_flag is not None:
+        account_meta["codex_upstream_websocket"] = account_flag
+    with (
+        patch(
+            "preloop.models.crud.crud_account.get",
+            return_value=SimpleNamespace(meta_data=account_meta),
+        ),
+        patch("preloop.services.openai_gateway.settings") as fake_settings,
+    ):
+        fake_settings.codex_upstream_websocket = global_flag
+        assert (
+            service._codex_upstream_ws_enabled(_codex_model_with(model_meta))
+            is expected
+        )
+    assert service._codex_ws_override_source == source
+
+
+def test_model_override_ignored_for_non_codex_provider():
+    service = _service()
+    model = _codex_model_with({"codex_upstream_websocket": True}, provider="openai")
+    with (
+        patch(
+            "preloop.models.crud.crud_account.get",
+            return_value=SimpleNamespace(meta_data={}),
+        ),
+        patch("preloop.services.openai_gateway.settings") as fake_settings,
+    ):
+        fake_settings.codex_upstream_websocket = False
+        assert service._codex_upstream_ws_enabled(model) is False
+    assert service._codex_ws_override_source == "global"
+
+
+def test_model_override_false_records_source_on_http_call():
+    """Model false beats account true end to end; the source lands in meta."""
+    upstream = _Upstream([], flag=False)
+    service = _service()
+    credentials = SimpleNamespace(value="oauth", payload={"account_id": "acct-1"})
+    model = _codex_model_with({"codex_upstream_websocket": False})
+    with (
+        patch.object(
+            service, "_resolve_openai_codex_credentials", return_value=credentials
+        ),
+        patch(
+            "preloop.models.crud.crud_account.get",
+            return_value=SimpleNamespace(meta_data={"codex_upstream_websocket": True}),
+        ),
+        patch.object(cw, "default_connect", side_effect=upstream.connect),
+        patch(
+            "preloop.services.openai_gateway.urllib_request.urlopen",
+            side_effect=upstream.urlopen,
+        ),
+        patch(
+            "preloop.services.hosted_spend_guard.guard_unmetered_hosted_call",
+            return_value=None,
+        ),
+    ):
+        service._create_openai_codex_response(model, _payload(FIRST))
+    assert upstream.handshakes == []
+    assert service._codex_transport_meta == {
+        "transport": "http",
+        "ws_override_source": "model",
+    }
+
+
 # --------------------------------------------------------------------------
 # Usage row meta (DB-backed)
 # --------------------------------------------------------------------------
@@ -761,7 +851,11 @@ def test_usage_row_records_transport_and_raw_usage(db_session, test_user):
     service = OpenAIGatewayService(
         db_session, ModelGatewayAuthContext(token="t", user=test_user)
     )
-    service._codex_transport_meta = {"transport": "ws", "ws_mode": "incremental"}
+    service._codex_transport_meta = {
+        "transport": "ws",
+        "ws_mode": "incremental",
+        "ws_override_source": "model",
+    }
     raw_usage = {
         "input_tokens": 100,
         "input_tokens_details": {"cached_tokens": 90},
@@ -787,4 +881,5 @@ def test_usage_row_records_transport_and_raw_usage(db_session, test_user):
     meta = row.meta_data or {}
     assert meta["transport"] == "ws"
     assert meta["ws_mode"] == "incremental"
+    assert meta["ws_override_source"] == "model"
     assert meta["usage_details"] == raw_usage

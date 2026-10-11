@@ -327,6 +327,15 @@ class GatewayUsageSearchResultItem(BaseModel):
     #: ``absent`` when it did not. With ``absent`` the zero cache counts mean
     #: "unknown" (``token_usage.cache_hit_ratio`` is null), not "no cache hit".
     cache_detail_source: Optional[Literal["upstream", "absent"]] = None
+    #: Codex upstream transport (#1454): ``http`` or ``ws``; null for
+    #: non-Codex rows.
+    transport: Optional[str] = None
+    #: On ``ws``: ``incremental`` frame or ``full`` resend.
+    ws_mode: Optional[str] = None
+    #: Which switch decided the Codex transport: the model's
+    #: ``meta_data.codex_upstream_websocket``, the account's, or the global
+    #: ``CODEX_UPSTREAM_WEBSOCKET`` setting.
+    ws_override_source: Optional[Literal["model", "account", "global"]] = None
     excerpt: str
     meta_data: dict = Field(default_factory=dict)
 

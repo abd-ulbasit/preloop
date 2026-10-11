@@ -1045,3 +1045,79 @@ def test_bedrock_api_key_listing_inputs_are_redacted_and_restored() -> None:
         "aws_bearer_token_bedrock": "synthetic-bedrock-key",
         "aws_region_name": "us-east-1",
     }
+
+
+# --- Codex upstream WebSocket per-model override (#1524) ---
+
+
+def _codex_db_model(meta=None, provider="openai-codex"):
+    return MagicMock(provider_name=provider, meta_data=meta)
+
+
+def test_codex_ws_override_set_merges_into_stored_meta_data():
+    stored = {"gateway": {"enabled": True, "model_alias": "gpt-6.1-sol-gm"}}
+    out = ai_models._apply_codex_ws_override(
+        _codex_db_model(stored), {"codex_upstream_websocket": True}
+    )
+    assert out == {
+        "meta_data": {
+            "gateway": {"enabled": True, "model_alias": "gpt-6.1-sol-gm"},
+            "codex_upstream_websocket": True,
+        }
+    }
+    assert "codex_upstream_websocket" not in stored  # stored dict not mutated
+
+
+def test_codex_ws_override_false_and_unset():
+    model = _codex_db_model({"gateway": {}, "codex_upstream_websocket": True})
+    out = ai_models._apply_codex_ws_override(model, {"codex_upstream_websocket": False})
+    assert out["meta_data"]["codex_upstream_websocket"] is False
+    out = ai_models._apply_codex_ws_override(model, {"codex_upstream_websocket": None})
+    assert out["meta_data"] == {"gateway": {}}
+
+
+def test_codex_ws_override_merges_with_request_meta_data():
+    out = ai_models._apply_codex_ws_override(
+        _codex_db_model({"old": 1}),
+        {"meta_data": {"new": 2}, "codex_upstream_websocket": True},
+    )
+    assert out["meta_data"] == {"new": 2, "codex_upstream_websocket": True}
+
+
+def test_codex_ws_override_rejected_for_non_codex_models():
+    with pytest.raises(HTTPException) as exc:
+        ai_models._apply_codex_ws_override(
+            _codex_db_model({}, provider="openai"), {"codex_upstream_websocket": True}
+        )
+    assert exc.value.status_code == 400
+
+
+def test_put_ai_model_sets_and_clears_codex_ws_override(
+    mock_account, mocker: MockerFixture
+):
+    client, crud, _, existing = _credential_payload_client(mock_account, mocker)
+    crud.get.return_value = mocker.MagicMock(
+        id=existing.id,
+        account_id=mock_account.account_id,
+        provider_name="openai-codex",
+        meta_data={"gateway": {"enabled": True, "model_alias": "gpt-6.1-sol-gm"}},
+    )
+
+    response = client.put(
+        f"/api/v1/ai-models/{existing.id}", json={"codex_upstream_websocket": True}
+    )
+    assert response.status_code == 200, response.text
+    _, kwargs = crud.update.call_args
+    assert kwargs["obj_in"] == {
+        "meta_data": {
+            "gateway": {"enabled": True, "model_alias": "gpt-6.1-sol-gm"},
+            "codex_upstream_websocket": True,
+        }
+    }
+
+    response = client.put(
+        f"/api/v1/ai-models/{existing.id}", json={"codex_upstream_websocket": None}
+    )
+    assert response.status_code == 200, response.text
+    _, kwargs = crud.update.call_args
+    assert "codex_upstream_websocket" not in kwargs["obj_in"]["meta_data"]
