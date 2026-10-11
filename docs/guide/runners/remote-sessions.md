@@ -238,7 +238,9 @@ When a session asks for an authorized directory (optionally with a relative
 
 On Windows the comparison is case-insensitive and 8.3 short names are
 expanded; drive-letter and UNC paths are canonicalised. On Linux and macOS
-the comparison is exact.
+the comparison is exact. The credential directories above are also matched by file
+identity, so a different spelling of the same directory on a
+case-insensitive volume (the macOS default) is refused too.
 
 ### Dirty directories
 
