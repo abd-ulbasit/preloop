@@ -10,9 +10,9 @@ repos:
     -   id: trailing-whitespace
         # Vendored bundles are byte-exact upstream copies; rewriting their
         # whitespace would break the recorded SHA-256 hashes.
-        exclude: ^backend/preloop/static/vendor/
+        exclude: ^(backend/preloop/static/vendor/|frontend/vendor/novnc/)
     -   id: end-of-file-fixer
-        exclude: ^backend/preloop/static/vendor/
+        exclude: ^(backend/preloop/static/vendor/|frontend/vendor/novnc/)
     -   id: check-yaml
         exclude: ^(helm/|scripts/examples/helm|mkdocs\.yml$|docs/scripts/screenshot-stack/compose\.(screenshots|ee)\.yml$)
     -   id: check-added-large-files
