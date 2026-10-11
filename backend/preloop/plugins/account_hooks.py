@@ -13,7 +13,9 @@ from :meth:`preloop.plugins.base.Plugin.on_startup` (and from
 H7). Registries are read on every call, never captured at import or
 decoration time, because plugins start after the routes exist. Call sites test for
 ``None`` before doing anything, so with nothing registered they behave
-exactly as before and issue no extra query. The last registration wins;
+exactly as before and issue no extra query. H10 is the exception:
+``GET /users/me`` always resolves a runner policy, and with no provider it
+reads the account through the CRUD layer. The last registration wins;
 registering ``None`` clears a hook.
 
 Isolation is kept by construction: every query still filters on one
@@ -41,6 +43,8 @@ Hooks:
   ``account_ids`` list.
 * H9 :class:`SessionHook`: what signing out of a console session does
   beyond clearing it, and extra revocation of individual JWTs.
+* H10 :data:`RunnerPolicyProvider`: the ``runner_policy`` object on
+  ``GET /users/me``. With nothing registered, the OSS default is served.
 """
 
 from __future__ import annotations
@@ -268,6 +272,10 @@ ACTION_RUNNER_ACCEPT = "runner:accept"
 ACTION_FLOW_RUN = "flow:run"
 ACTION_RESOURCE_SHARE = "resource:share"
 ACTION_RESOURCE_VIEW = "resource:view"
+#: Start (or steer) a remote harness session on a personal runner (#1483).
+#: The open source rule is "runner owner or account admin", see
+#: :func:`may_start_runner_session`.
+ACTION_RUNNER_SESSION_START = "runner:session_start"
 
 
 @dataclass(frozen=True)
@@ -338,6 +346,66 @@ def authorize(ctx: AuthorizationContext, action: str, resource: Any = None) -> D
         return ALLOW
     decision = authorizer(ctx, action, resource)
     return decision if decision is not None else ALLOW
+
+
+def may_start_runner_session(
+    ctx: AuthorizationContext, runner: Any, *, is_account_admin: bool
+) -> Decision:
+    """Decide :data:`ACTION_RUNNER_SESSION_START` for one runner.
+
+    Default rule: the user who registered the runner, or an account admin,
+    in the runner's own account. The registered authorizer is then asked
+    with ``attributes["default_allowed"]`` set. It may always deny. It may
+    widen the default (team sharing of a runner) only with an explicit
+    ``allow`` that names the rules which granted it, so an authorizer that
+    simply has no opinion never opens someone's laptop to other members.
+
+    Args:
+        ctx: Caller context; ``ctx.user`` is the acting user.
+        runner: The ``FlowRunner`` row.
+        is_account_admin: Whether the caller administers ``ctx.account_id``.
+
+    Returns:
+        The decision; a denial carries ``reason="not_runner_owner"`` unless
+        the authorizer gave its own reason.
+    """
+    user = ctx.user
+    same_account = user is not None and str(runner.account_id) == str(
+        getattr(user, "account_id", None)
+    )
+    is_owner = (
+        same_account
+        and runner.registered_by_user_id is not None
+        and str(runner.registered_by_user_id) == str(user.id)
+    )
+    default_allowed = bool(same_account and (is_owner or is_account_admin))
+    authorizer = _authorizer
+    if authorizer is not None:
+        attrs = dict(ctx.attributes)
+        attrs["default_allowed"] = default_allowed
+        decision = authorizer(
+            AuthorizationContext(
+                account_id=ctx.account_id,
+                db=ctx.db,
+                user=user,
+                principal=ctx.principal,
+                attributes=attrs,
+            ),
+            ACTION_RUNNER_SESSION_START,
+            runner,
+        )
+        if decision is not None:
+            if not decision.allowed:
+                return Decision(
+                    "deny",
+                    decision.rule_ids,
+                    decision.reason or "not_runner_owner",
+                )
+            if decision.rule_ids and not default_allowed:
+                return decision
+    if default_allowed:
+        return ALLOW
+    return Decision("deny", ("oss:runner_owner_or_admin",), "not_runner_owner")
 
 
 def filter_viewable(
@@ -600,6 +668,93 @@ def is_token_revoked(db: "Session", user: "User", claims: Mapping[str, Any]) -> 
 
 
 # ---------------------------------------------------------------------------
+# H10: runner policy provider
+# ---------------------------------------------------------------------------
+
+#: ``(db, account_id, user) -> mapping | None``. ``None`` keeps the OSS
+#: default. The mapping is the ``runner_policy`` object on ``GET /users/me``.
+RunnerPolicyProvider = Callable[["Session", Any, "User"], Optional[Mapping[str, Any]]]
+
+_runner_policy_provider: Optional[RunnerPolicyProvider] = None
+
+
+def register_runner_policy_provider(
+    provider: Optional[RunnerPolicyProvider],
+) -> None:
+    """Register (or clear, with ``None``) the H10 runner policy provider."""
+    global _runner_policy_provider
+    _runner_policy_provider = provider
+
+
+def get_runner_policy_provider() -> Optional[RunnerPolicyProvider]:
+    """Return the registered H10 provider, or ``None``."""
+    return _runner_policy_provider
+
+
+def oss_default_runner_policy(db: "Session", user: "User") -> dict[str, Any]:
+    """Return the OSS runner policy for one user.
+
+    ``requirement`` is ``optional``. ``can_decide`` is true for the account
+    owner and for a single-user account, and false for every other member.
+    Members still receive the prompt. A false ``can_decide`` only changes
+    the decline copy the CLI prints.
+
+    Args:
+        db: Database session of the request.
+        user: The authenticated user.
+
+    Returns:
+        The policy mapping served when no provider is registered, or when
+        the provider returns ``None``.
+    """
+    from preloop.models.crud import crud_account, crud_user
+    from preloop.schemas.auth import OSS_RUNNER_CAPABILITIES
+
+    account = crud_account.get(db, id=user.account_id)
+    is_owner = (
+        account is not None
+        and account.primary_user_id is not None
+        and account.primary_user_id == user.id
+    )
+    member_count = crud_user.count_by_account(db, account_id=str(user.account_id))
+    return {
+        "requirement": "optional",
+        "capabilities": list(OSS_RUNNER_CAPABILITIES),
+        "mandated_capabilities": [],
+        "grace_until": None,
+        "can_decide": is_owner or member_count <= 1,
+        "message": None,
+    }
+
+
+def resolve_runner_policy(db: "Session", user: "User") -> Mapping[str, Any]:
+    """Return the runner policy for ``user``.
+
+    A registered provider wins when it returns a mapping. ``None``, a
+    missing provider, or a provider error falls back to the OSS default.
+    The caller validates the mapping before putting it on the response.
+
+    Args:
+        db: Database session of the request.
+        user: The authenticated user.
+
+    Returns:
+        A policy mapping. A provider mapping is not checked against the
+        response schema here.
+    """
+    provider = _runner_policy_provider
+    if provider is not None:
+        try:
+            provided = provider(db, user.account_id, user)
+        except Exception:
+            logger.exception("runner policy provider failed; using the OSS default")
+            provided = None
+        if provided is not None:
+            return dict(provided)
+    return oss_default_runner_policy(db, user)
+
+
+# ---------------------------------------------------------------------------
 
 
 def reset_account_hooks() -> None:
@@ -612,3 +767,4 @@ def reset_account_hooks() -> None:
     register_halt_ancestry(None)
     register_billing_account_resolver(None)
     register_session_hook(None)
+    register_runner_policy_provider(None)

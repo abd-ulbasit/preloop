@@ -59,6 +59,7 @@ from preloop.agents.verification import (
 from preloop.services.flow_failure_category import (
     FAILURE_CATEGORY_AGENT_NO_PROGRESS,
     FAILURE_CATEGORY_PUBLICATION_MISSING,
+    FAILURE_CATEGORY_RESULT_SCHEMA_INVALID,
     FAILURE_CATEGORY_MODEL_STREAM_IDLE,
     FAILURE_CATEGORY_TIMEOUT,
     FAILURE_CATEGORY_UNKNOWN,
@@ -104,6 +105,7 @@ from preloop.services.prompt_resolvers import (
 )
 from preloop.services.prompt_resolvers.execution import resume_rebase_conflict_hint
 from preloop.services.flow_execution_logger import FlowExecutionLogger
+from preloop.services.host_exec import HARNESS_FALLBACK_CONTEXT_KEY
 from preloop.services.flow_runtime_token import (
     create_flow_runtime_token,
     revoke_flow_runtime_tokens,
@@ -988,6 +990,7 @@ class FlowExecutionOrchestrator:
         self._report_publication: Optional[Dict[str, Any]] = None
         # CRA persist-boundary decision from the last result.json capture.
         self._cra_persist_decision: Optional[Any] = None
+        self._result_schema_validation: Optional[Dict[str, Any]] = None
 
         # Execution metrics tracked during execution
         self.total_tokens: int = 0
@@ -3128,10 +3131,102 @@ class FlowExecutionOrchestrator:
         await self._attach_git_credentials(context)
         return context
 
+    def _apply_harness_routing_decision(self) -> None:
+        """Apply ``harness_fallback=fallback_server`` before the run starts.
+
+        Only for a harness-routed flow (``agent_config.harness``, no profile
+        pin) whose fallback is ``fallback_server`` and for which no runner is
+        eligible right now: the run switches to the hosted
+        ``HARNESS_SERVER_FALLBACK_AGENT_TYPE`` harness with the flow's
+        ``fallback_model_identifier`` and records ``fell_back_to_server``.
+        ``queue`` and ``fail`` are decided at lease time.
+        """
+        from preloop.services.host_exec import (
+            BILLING_MODE_METERED,
+            HARNESS_FALLBACK_SERVER,
+            HARNESS_SERVER_FALLBACK_AGENT_TYPE,
+            ROUTING_FELL_BACK_TO_SERVER,
+            harness_fallback_mode,
+            harness_pinned_runner_id,
+            host_exec_harness_selector,
+            host_exec_model_identifier,
+        )
+
+        if getattr(self, "_harness_fell_back", False):
+            return
+        from preloop.services.runner_service import unwrap_agent_config
+
+        kind = self.agent_type or self.flow.agent_type
+        config = unwrap_agent_config(self.flow.agent_config)
+        if not isinstance(config, dict):
+            config = {}
+        harness = host_exec_harness_selector(kind, config)
+        if not harness or harness_fallback_mode(config) != HARNESS_FALLBACK_SERVER:
+            return
+        from preloop.models.crud.flow_runner import crud_flow_runner
+        from preloop.services.runner_service import (
+            AUTO_RUNNER_POOL,
+            harness_routing_reason,
+            resolve_fallback_server_model,
+            resolve_runner_pool,
+        )
+
+        pool = (
+            resolve_runner_pool(
+                self.flow,
+                {"trigger_event_data": self.trigger_event_data},
+                db=self.db,
+            )
+            or AUTO_RUNNER_POOL
+        )
+        runners = crud_flow_runner.find_matching(
+            self.db, account_id=self.flow.account_id, pool=pool, online_only=False
+        )
+        pin = harness_pinned_runner_id(config)
+        if pin is not None:
+            runners = [row for row in runners if row.id == pin]
+        eligible, reason = harness_routing_reason(
+            self.db,
+            runners,
+            account_id=self.flow.account_id,
+            harness=harness,
+            model=host_exec_model_identifier(kind, config),
+            pool=pool,
+            pinned_runner_id=pin,
+        )
+        if eligible:
+            return
+        wanted = str(config.get("fallback_model_identifier") or "").strip()
+        model = resolve_fallback_server_model(
+            self.db, account_id=self.flow.account_id, wanted=wanted
+        )
+        if model is None:
+            raise ValueError(
+                f"No runner can take this run on harness {harness} ({reason}) "
+                f"and fallback model {wanted!r} is not available to the account"
+            )
+        logger.info(
+            "Harness %s has no eligible runner (%s); falling back to %s on "
+            "the server pool with model %s",
+            harness,
+            reason,
+            HARNESS_SERVER_FALLBACK_AGENT_TYPE,
+            model.model_identifier,
+        )
+        self.agent_type = HARNESS_SERVER_FALLBACK_AGENT_TYPE
+        self.ai_model = model
+        self._harness_fell_back = True
+        if self.execution_log is not None:
+            self.execution_log.routing_reason = ROUTING_FELL_BACK_TO_SERVER
+            self.execution_log.billing_mode = BILLING_MODE_METERED
+            self.db.add(self.execution_log)
+            self.db.commit()
+
     async def _prepare_execution_context(
         self, *, resolved_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Prepare the full execution context for the agent."""
+        self._apply_harness_routing_decision()
         effective_agent_type = self.agent_type or self.flow.agent_type
         logger.info(
             f"Preparing execution context for agent type: {effective_agent_type}"
@@ -3160,14 +3255,16 @@ class FlowExecutionOrchestrator:
         # secrets here.
         from preloop.services.host_exec import (
             HOST_EXEC_AGENT_TYPE,
+            host_exec_effective_profile,
             host_exec_flow_error,
             host_exec_model_identifier,
-            host_exec_profile_name,
             host_exec_unavailable_reason,
             is_host_exec_agent_type,
         )
 
-        profile = host_exec_profile_name(self.flow.agent_config)
+        profile = host_exec_effective_profile(
+            effective_agent_type, self.flow.agent_config
+        )
         if is_host_exec_agent_type(effective_agent_type) or profile:
             clone_config = self.flow.git_clone_config
             if isinstance(clone_config, dict):
@@ -3297,6 +3394,7 @@ class FlowExecutionOrchestrator:
             "git_clone_config": self._git_clone_config_for_trigger(),
             "custom_commands": self.flow.custom_commands,
             "trigger_event_data": self.trigger_event_data,
+            HARNESS_FALLBACK_CONTEXT_KEY: getattr(self, "_harness_fell_back", False),
             "trigger_project_ids": [str(pid) for pid in self.flow.trigger_project_ids]
             if self.flow.trigger_project_ids
             else None,  # For git clone fallback
@@ -4271,9 +4369,96 @@ class FlowExecutionOrchestrator:
             if archive:
                 artifact = extract_result_json(archive)
         sanitized = sanitize_captured_result(artifact)
-        return self._persist_cra_result_boundary(
+        persisted = self._persist_cra_result_boundary(
             sanitized, session_reference=session_reference
         )
+        self._check_result_schema(sanitized)
+        return persisted
+
+    def _persist_merged_artifact(
+        self,
+        artifact: Optional[Dict[str, Any]],
+        session_reference: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Re-run the capture checks on a document assembled after capture.
+
+        The confirmation round can complete result.json after the first
+        capture. The stored document and its result schema outcome must
+        describe the same document, so both checks run again here.
+        """
+        persisted = self._persist_cra_result_boundary(
+            artifact, session_reference=session_reference
+        )
+        self._check_result_schema(artifact)
+        return persisted
+
+    def _check_result_schema(self, document: Optional[Dict[str, Any]]) -> None:
+        """Validate the captured result against the flow's schema (#868).
+
+        Stores the outcome on ``self._result_schema_validation`` for the
+        finalize step, which turns a SUCCEEDED run with an invalid document
+        into FAILED. A flow without a schema (or with the check off) stores
+        None, so nothing changes for it. A document the CRA validator claimed
+        is exempt: that validator already ran and owns the outcome.
+        """
+        from preloop.services.flow_result_schema import (
+            flow_result_schema,
+            validate_result_document,
+        )
+
+        self._result_schema_validation = None
+        schema = flow_result_schema(getattr(self, "flow", None))
+        if schema is None:
+            return
+        decision = getattr(self, "_cra_persist_decision", None)
+        validation = getattr(decision, "validation", None)
+        if validation is not None and not getattr(validation, "skipped", True):
+            return
+        outcome = validate_result_document(document, schema)
+        self._result_schema_validation = outcome
+        logger_ = getattr(self, "execution_logger", None)
+        if logger_ is not None:
+            logger_.log_milestone(
+                "result_schema_checked",
+                {
+                    "valid": outcome["valid"],
+                    "error_count": outcome["error_count"],
+                    "errors": outcome["errors"][:3],
+                },
+            )
+
+    def _apply_result_schema_gate(
+        self, final_status: str, agent_result: Dict[str, Any]
+    ) -> tuple[str, Dict[str, Any]]:
+        """Fail a SUCCEEDED run whose result does not match the flow schema.
+
+        Success means a recognised status or verdict AND, when the flow sets
+        a schema, a conforming document. Any other status is left alone: the
+        run already did not succeed, and its own category is the better one.
+        """
+        from preloop.services.flow_result_schema import schema_failure_message
+
+        validation = getattr(self, "_result_schema_validation", None)
+        if (
+            final_status != "SUCCEEDED"
+            or not isinstance(validation, dict)
+            or validation.get("valid") is not False
+        ):
+            return final_status, agent_result
+        message = schema_failure_message(validation)
+        self.execution_logger.log_milestone(
+            "result_schema_invalid",
+            {
+                "error_count": validation.get("error_count"),
+                "errors": (validation.get("errors") or [])[:3],
+            },
+        )
+        return "FAILED", {
+            **agent_result,
+            "status": "FAILED",
+            "error_message": message,
+            "failure_category": FAILURE_CATEGORY_RESULT_SCHEMA_INVALID,
+        }
 
     def _cra_prompt_text(self) -> Optional[str]:
         """Configured flow prompt used to detect an expected CRA result schema."""
@@ -5354,7 +5539,7 @@ class FlowExecutionOrchestrator:
             An actionable ``publication_failed`` message, or None when there
             was nothing to do or the pull request is bound.
         """
-        from preloop.services.host_exec import host_exec_profile_name
+        from preloop.services.host_exec import host_exec_effective_profile
         from preloop.services.host_exec_delivery import (
             build_host_exec_checkout,
             host_exec_target_branch,
@@ -5367,7 +5552,10 @@ class FlowExecutionOrchestrator:
 
         if final_status != "SUCCEEDED" or self.execution_log is None:
             return None
-        if not host_exec_profile_name(getattr(self.flow, "agent_config", None)):
+        if not host_exec_effective_profile(
+            getattr(self, "agent_type", None) or getattr(self.flow, "agent_type", None),
+            getattr(self.flow, "agent_config", None),
+        ):
             return None
         try:
             self.db.refresh(self.execution_log)
@@ -6080,7 +6268,7 @@ class FlowExecutionOrchestrator:
                 if isinstance(result_artifact, dict)
                 else nudge_artifact
             )
-            merged_artifact = self._persist_cra_result_boundary(
+            merged_artifact = self._persist_merged_artifact(
                 merged_artifact, session_reference=session_reference
             )
 
@@ -9257,6 +9445,13 @@ class FlowExecutionOrchestrator:
                     "authenticated": False,
                 }
 
+            # A result that does not match the flow's result schema is not
+            # usable, so the run did not succeed (#868). The document is
+            # still stored below for the consumer to inspect.
+            final_status, agent_result = self._apply_result_schema_gate(
+                final_status, agent_result
+            )
+
             # A run configured to open a pull request that ends without one
             # is not a success: say why on the row and on the issue.
             missing_publication = self._missing_publication_reason(
@@ -9310,6 +9505,9 @@ class FlowExecutionOrchestrator:
                 actions_taken_summary=agent_result.get("actions_taken"),
                 mcp_usage_logs=agent_result.get("mcp_usage_logs"),
                 result=merged_result,
+                result_schema_validation=getattr(
+                    self, "_result_schema_validation", None
+                ),
                 end_time=datetime.now(timezone.utc),
                 tool_calls_count=self.tool_calls_count,
                 total_tokens=self.total_tokens,

@@ -60,6 +60,28 @@ of scope (security always is, so that box always names the Release
 Security Audit family at minimum). The machine `result.json` contract is
 unchanged.
 
+### Flow-level result schema
+
+Any flow (not only these presets) can set an optional **result schema**: a
+JSON Schema (draft 2020-12, at most 64 KiB) for the `result.json` its agent
+writes. Set it under *Result schema* in the flow form, or as `result_schema`
+(with `validate_result`, default true) in the flows API. A schema that is
+too large or is not a valid JSON Schema is rejected when the flow is saved.
+
+When the flow has a schema and *Validate result* is on, the captured
+document is checked at capture time. A run is SUCCEEDED only when the agent
+reported success **and** the document matches the schema. Otherwise the
+run ends FAILED with `failure_category: result_schema_invalid`; the errors
+(JSON path and message, at most 20) are stored on the execution and listed
+on the execution page, and the document itself is still stored so you can
+inspect it. `GET /api/v1/flows/executions/{id}/result` returns them as
+`schema_validation: {valid, errors[], error_count}` (null without a
+schema), and `flow.execution.finished` carries `result_schema_valid`
+(`true`, `false`, or `null`). Flows without a schema behave as before. The
+CRA security-audit presets keep their dedicated validator and are exempt
+from the generic one. Platform metadata such as `container_termination` is
+not part of the checked document.
+
 ## The shared skeleton
 
 All four presets follow the same guarantees:

@@ -98,6 +98,7 @@ def export_issue_costs(
         project_id=project_id,
         flow_id=flow_id,
         include_execution_ids=format == "json",
+        include_failure_categories=True,
     )
     if format == "json":
         return Response(

@@ -316,7 +316,7 @@ func TestAuthStatusShowsProfileAndAccount(t *testing.T) {
 	t.Setenv(config.EnvToken, "")
 	t.Setenv(config.EnvURL, "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == userInfoPath && r.Header.Get("Authorization") == "Bearer acme-access" {
+		if (r.URL.Path == userInfoPath || r.URL.Path == authUserInfoPath) && r.Header.Get("Authorization") == "Bearer acme-access" {
 			_ = json.NewEncoder(w).Encode(map[string]string{"name": "Ada", "email": "ada@example.com"})
 			return
 		}

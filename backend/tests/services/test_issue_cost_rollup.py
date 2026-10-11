@@ -187,6 +187,7 @@ class World:
         result: Optional[dict[str, Any]] = None,
         parent: Optional[models.FlowExecution] = None,
         record: bool = True,
+        failure_category: Optional[str] = None,
     ) -> models.FlowExecution:
         execution = crud_flow_execution.create(
             self.db,
@@ -200,6 +201,7 @@ class World:
         execution.total_tokens = tokens
         execution.estimated_cost = None if cost is None else Decimal(cost)
         execution.result = result
+        execution.failure_category = failure_category
         if parent is not None:
             execution.parent_execution_id = parent.id
             execution.root_execution_id = parent.id
@@ -1073,6 +1075,53 @@ def test_csv_and_json_match_the_table(world: World) -> None:
         assert json_row["run_count"] == table_row.run_count
         assert len(json_row["execution_ids"]) == table_row.run_count
     assert len(document["unassigned"]["execution_ids"]) == 1
+
+
+def test_export_names_failure_categories_of_failed_runs(world: World) -> None:
+    """#868: a run that finished with an unusable result shows in the export."""
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0,
+        status="FAILED",
+        failure_category="result_schema_invalid",
+    )
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0 + timedelta(hours=1),
+        status="FAILED",
+        failure_category="result_schema_invalid",
+    )
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0 + timedelta(hours=2),
+        status="FAILED",
+        failure_category="timeout",
+    )
+    world.run(world.triage, world.issue_details(), start=T0 + timedelta(hours=3))
+
+    assert world.report().issues[0].failure_categories is None
+    exported = world.report(include_failure_categories=True)
+    assert exported.issues[0].failure_categories == {
+        "result_schema_invalid": 2,
+        "timeout": 1,
+    }
+    rows = list(csv.DictReader(io.StringIO(rollup_service.report_to_csv(exported))))
+    assert rows[0]["failure_categories"] == "result_schema_invalid:2;timeout:1"
+    assert rows[0]["failed_run_count"] == "3"
+
+    drill = rollup_service.list_issue_executions(
+        world.db, account_id=world.account.id, rollup_id=world.rollup().id
+    )
+    assert drill is not None
+    assert [row.failure_category for row in drill] == [
+        "result_schema_invalid",
+        "result_schema_invalid",
+        "timeout",
+        None,
+    ]
 
 
 def test_csv_neutralizes_formulas(world: World) -> None:
@@ -2200,3 +2249,78 @@ def test_cycle_time_fields_state_what_they_measure() -> None:
     assert "exclusive" in (report["end"].description or "").lower()
     assert "first_event_at" in (report["start"].description or "")
     assert "lifetime" in (report["flow_id"].description or "")
+
+
+def test_copilot_seat_runs_export_billing_mode_seat(world: World) -> None:
+    """#1481: a Copilot host run shows the seat label and premium requests."""
+    from preloop.models.crud import crud_api_usage
+    from preloop.services.host_exec_usage import (
+        COPILOT_PREMIUM_SOURCE,
+        host_exec_premium_fingerprint,
+    )
+
+    flow = world.make_flow("copilot-seat")
+    seat = world.run(flow, world.issue_details(), start=T0, cost=None, record=False)
+    seat.billing_mode = "seat"
+    world.db.commit()
+    world.record(seat)
+    crud_api_usage.log_imported_usage_event(
+        world.db,
+        account_id=str(world.account.id),
+        timestamp=T0.replace(tzinfo=None),
+        model_alias="claude-sonnet-4.6",
+        source=COPILOT_PREMIUM_SOURCE,
+        cost_usd=None,
+        cost_source="subscription",
+        flow_id=flow.id,
+        flow_execution_id=seat.id,
+        import_fingerprint=host_exec_premium_fingerprint(seat.id),
+        meta_data={
+            "event_type": "host_exec_result",
+            "harness": "copilot_cli",
+            "premium_requests": 3,
+            "gateway_metered": False,
+        },
+        endpoint="/runners/host-exec/copilot",
+    )
+
+    export = world.report(include_execution_ids=True)
+    (row,) = export.issues
+    assert row.billing_mode == "seat"
+    assert row.billing_label == "Seat (not metered by gateway)"
+    assert row.seat_run_count == 1
+    assert row.premium_requests == 3.0
+
+    csv_row = next(csv.DictReader(io.StringIO(rollup_service.report_to_csv(export))))
+    assert csv_row["billing_mode"] == "seat"
+    assert csv_row["billing_label"] == "Seat (not metered by gateway)"
+    assert csv_row["seat_run_count"] == "1"
+    assert csv_row["premium_requests"] == "3.0"
+    assert csv_row["first_event_at"]  # elapsed-time columns still present
+
+    document = json.loads(rollup_service.report_to_json(export))
+    assert document["issues"][0]["billing_mode"] == "seat"
+    executions = rollup_service.list_issue_executions(
+        world.db, account_id=world.account.id, rollup_id=row.id
+    )
+    assert [item.billing_mode for item in executions] == ["seat"]
+
+    # A gateway run on the same issue makes the row mixed.
+    world.run(world.make_flow("gateway"), world.issue_details(), start=T0)
+    (mixed,) = world.report().issues
+    assert (mixed.billing_mode, mixed.seat_run_count) == ("mixed", 1)
+
+
+def test_gateway_only_issue_is_metered_without_seat_label(world: World) -> None:
+    world.run(world.make_flow("gateway"), world.issue_details(), start=T0)
+    (row,) = world.report().issues
+    assert (row.billing_mode, row.billing_label, row.seat_run_count) == (
+        "metered",
+        None,
+        0,
+    )
+    csv_row = next(
+        csv.DictReader(io.StringIO(rollup_service.report_to_csv(world.report())))
+    )
+    assert csv_row["billing_mode"] == "metered"
+    assert csv_row["premium_requests"] == ""

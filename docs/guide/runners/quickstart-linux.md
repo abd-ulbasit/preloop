@@ -55,6 +55,33 @@ export PRELOOP_TOKEN=<account-api-token>
 Precedence: `--token`/`--url` flags > `PRELOOP_TOKEN`/`PRELOOP_URL` env >
 `~/.preloop/config.yaml` (written by `preloop login`).
 
+## Install during login
+
+On a terminal, `preloop login` asks whether to install a runner as a
+background service. The default answer is no. The service is a systemd
+user unit. It starts on login, connects outbound to the instance you just
+signed in to, can run flow executions on this machine, and reports
+installed agent harnesses (names, versions, signed in or not). It does
+not read or forward harness credentials. Remote sessions stay off until
+you enable them per harness.
+
+Consent wording (what the runner may see and do):
+<https://docs.preloop.ai/security/personal-runners/>.
+
+An account policy of `required` installs without a question and prints
+why. `forbidden` prints one line and does not install. Skip the step with
+`--no-runner` or `PRELOOP_NO_RUNNER=1`. Headless login, `--token`,
+`PRELOOP_TOKEN`, and a shell that is not a terminal never ask and never
+install. A service that is already installed is left as it is.
+
+Run the same step later with `preloop runner setup`. A decline is
+remembered in `~/.preloop/config.yaml` (`runner_prompt_answered_at`).
+`preloop login --force` asks again. Remove the service with
+`preloop runner disable`.
+
+The runner registers as the machine hostname with labels `personal`,
+`os:<os>` and `arch:<arch>`.
+
 ## 3. Run the runner in the foreground (first test)
 
 ```sh
@@ -107,6 +134,10 @@ preloop runner enable    # writes a systemd user unit + enables it
 preloop runner start
 preloop runner status    # service state + last heartbeat + current execution
 ```
+
+The unit pins `HOME` to the home directory of the user who ran `enable`, so
+the service always reads that user's `~/.preloop/config.yaml`. Run `enable`
+again after changing `HOME`.
 
 `preloop runner stop`, `restart`, and `disable` do what they say.
 `preloop runner status` prints `running: <held>/<slots>` and one line per
@@ -231,6 +262,26 @@ its own. Flows that bind fixed host ports (for example a `docker compose`
 file with `ports:`) collide when two of them run together; reach services
 by container-network name instead.
 
+## Runner presence
+
+The runner sends a heartbeat every 15 seconds. The control plane turns those
+heartbeats into one presence state per runner, and the Runners page and the
+runner picker show it. Hover the state to see the last heartbeat time.
+
+| State | Meaning | Gets new work |
+| --- | --- | --- |
+| `online` | Heartbeats are fresh and a slot is free. | Yes |
+| `busy` | Heartbeats are fresh and every slot is taken. | When a slot frees up |
+| `idle` | Online, and the host reported no user input for 5 minutes or more. | Yes |
+| `asleep` | The runner said it was going to sleep before it disconnected. | No |
+| `offline` | No heartbeat for 45 seconds and no sleep signal. | No |
+
+`idle` appears only for runners that report OS idle time; older runners show
+`online` instead. A runner that wakes up and reconnects returns to `online` on
+its first heartbeat, and the change is pushed to open console tabs without a
+reload. The thresholds live in one place on the server
+(`backend/preloop/services/runner_presence.py`).
+
 ## How runner work counts against your account
 
 A Preloop instance bounds how many executions one account may have admitted
@@ -316,7 +367,80 @@ its environment and delegates arguments to Bash can opt into
 or mirrored codex-universal images). Images that cannot execute this bootstrap
 fail explicitly; an idle shell cannot be reported as successful work.
 
-## Host execution profiles (opt-in, private only)
+## Harnesses are detected automatically
+
+A runner reports which agent harnesses are installed on its host when it
+registers and keeps the report current on its heartbeat. Nothing needs to be
+configured: install and sign in to the harness as the user the runner runs as
+(`copilot login`, `cursor-agent login`), then start or restart the runner.
+
+```bash
+preloop runner inventory            # what this runner reports
+preloop runner inventory --refresh  # rebuild now; a running service picks it up within a minute
+preloop runner inventory --json
+```
+
+The inventory is rebuilt when the runner starts, every 6 hours, after
+`preloop runner inventory --refresh`, and within a minute of
+`preloop agents onboard` or `preloop agents offboard`. The Runners page in
+the console shows each harness with its login state, governance, models and
+billing. A runner on an older CLI shows **Inventory unknown** there and keeps
+working with hand-written profiles.
+
+For **GitHub Copilot CLI** (`copilot`) and **Cursor CLI** (`cursor-agent`)
+the runner also generates a host execution profile named `copilot` or
+`cursor`, so a flow can run them without a profile file. Generated profiles
+use conservative defaults: no repository checkout, no publication, no forced
+writes and no tool grants beyond the harness default. Models listed for the
+harness are offered as-is in the profile's model map.
+
+What the runner checks, and what it never reads:
+
+- **Login.** For Copilot CLI: whether `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or
+  `GITHUB_TOKEN` is **set** (the value is never read), otherwise whether
+  `~/.copilot/config.json` (or `$COPILOT_HOME/config.json`) has a stored
+  login record, of which only the host is read. A run that fails with
+  "No authentication information found" marks Copilot signed out until the
+  next successful run. For Cursor CLI: whether `CURSOR_API_KEY` is set,
+  otherwise the result of `cursor-agent status`. The runner never opens a
+  credential store and never reads, copies or forwards a harness token.
+- **Account host.** `COPILOT_GH_HOST` or `GH_HOST`, or the host of the stored
+  login (for example `github.com` or `<name>.ghe.com`). Host only.
+- **Governance.** The same checks `preloop agents status` uses: Preloop hooks
+  and the approval hook installed (`governed`), usage hooks or MCP only
+  (`partial`), nothing installed (`ungoverned`).
+- **Models.** Copilot CLI has no command that lists models, so the runner
+  reports a short list shipped with the CLI (`static`), the `model` set in
+  Copilot's config (`configured`) and models seen in completed runs
+  (`observed`).
+
+Executable paths, arguments, environment values and user names never leave
+the host.
+
+### Turning a harness off
+
+To stop a runner offering a harness (it is still reported, marked disabled,
+so compliance views see it), add it to `~/.preloop/runner.json`:
+
+```json
+{
+  "harnesses": {
+    "cursor_cli": {"enabled": false}
+  }
+}
+```
+
+Harness ids: `copilot_cli`, `cursor_cli`, `claude_code`, `codex_cli`,
+`opencode`, `gemini_cli`, `claude_desktop`, `vscode_copilot`. Restart the
+runner or run `preloop runner inventory --refresh` after editing.
+
+## Host execution profiles (advanced override, private only)
+
+The generated `copilot` and `cursor` profiles above are the default path. A
+hand-written profile file is the advanced override: use it to pin a working
+directory, map team model aliases, grant Copilot tools, or opt in to
+checkout and publication. A hand-written profile for the same harness, or
+with the name `copilot` or `cursor`, replaces the generated one.
 
 Docker remains the default, including a flow's custom `image` /
 `docker_image`. A host execution profile is a separate, explicit

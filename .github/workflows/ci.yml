@@ -74,6 +74,8 @@ jobs:
               # backend/tests/test_perl_agent_image.py and
               # test_preloop_perl_toolchain.py pin these recipes.
               - 'environments/perl/**'
+              # backend/tests/test_scanner_agent_image.py pins this recipe.
+              - 'environments/scanner/**'
               - 'environments/preloop/Dockerfile'
               - 'pyproject.toml'
               - 'requirements/**'

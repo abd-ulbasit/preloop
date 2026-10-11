@@ -270,12 +270,23 @@ class FlowExecutionBase(BaseModel):
             "succeed: one of runner_conflict, runner_error, model_transient, "
             "model_auth, provider_billing, model_quota (legacy, superseded "
             "by provider_billing), budget_exceeded, model_config, "
-            "no_confirmation, agent_no_progress, publication_missing, setup_failed, "
+            "no_confirmation, agent_no_progress, publication_missing, "
+            "result_schema_invalid (result.json does not match the flow "
+            "result schema), setup_failed, "
             "verification_failed, verification_blocked, tool_error, "
             "agent_error, model_stream_idle (timed out while the model "
             "stream was silent), timeout, cancelled, "
             "unknown. Null for successful or still-running executions, and "
             "for executions that predate this field."
+        ),
+    )
+    result_schema_validation: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Outcome of checking result.json against the flow result schema "
+            "at capture: {valid, errors: [{path, message}], error_count}. "
+            "Null when the flow sets no schema, the check is off, or the "
+            "flow is a CRA preset with its own validator."
         ),
     )
     queued_reason: Optional[str] = Field(
@@ -285,6 +296,24 @@ class FlowExecutionBase(BaseModel):
             "account_concurrency_cap when the account already has its "
             "maximum number of executions running. Cleared when the "
             "execution is claimed; null for every other row."
+        ),
+    )
+    routing_reason: Optional[str] = Field(
+        None,
+        description=(
+            "Why a harness-routed run (agent_config.harness) is waiting, "
+            "failed or fell back: no_runner_with_harness, harness_signed_out, "
+            "harness_disabled, model_not_available, runner_offline, "
+            "owner_has_no_runner, queue_timeout, fell_back_to_server. Null "
+            "once a runner took the run and for every other execution."
+        ),
+    )
+    billing_mode: Optional[str] = Field(
+        None,
+        description=(
+            "How the model usage of this run is billed: seat (the runner "
+            "user's own Copilot or Cursor seat, not metered by the gateway), "
+            "metered or unknown. Null for gateway runs."
         ),
     )
     retry_of_execution_id: Optional[uuid.UUID] = Field(
@@ -352,6 +381,7 @@ class FlowExecutionUpdate(BaseModel):
     agent_session_reference: Optional[str] = None
     error_message: Optional[str] = None
     failure_category: Optional[str] = None
+    result_schema_validation: Optional[Dict[str, Any]] = None
     tool_calls_count: Optional[int] = None
     total_tokens: Optional[int] = None
     estimated_cost: Optional[float] = None
@@ -425,6 +455,24 @@ class FlowExecutionListResponse(ExecutionModelProjection):
         description=(
             "Why a PENDING execution has not been admitted yet "
             "(account_concurrency_cap). Null for every other row."
+        ),
+    )
+    routing_reason: Optional[str] = Field(
+        None,
+        description=(
+            "Why a harness-routed run (agent_config.harness) is waiting, "
+            "failed or fell back: no_runner_with_harness, harness_signed_out, "
+            "harness_disabled, model_not_available, runner_offline, "
+            "owner_has_no_runner, queue_timeout, fell_back_to_server. Null "
+            "once a runner took the run and for every other execution."
+        ),
+    )
+    billing_mode: Optional[str] = Field(
+        None,
+        description=(
+            "How the model usage of this run is billed: seat (the runner "
+            "user's own Copilot or Cursor seat, not metered by the gateway), "
+            "metered or unknown. Null for gateway runs."
         ),
     )
     retry_of_execution_id: Optional[uuid.UUID] = None

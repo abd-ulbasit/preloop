@@ -34,6 +34,9 @@ const (
 	tokenPath     = "/oauth/token"
 	revokePath    = "/oauth/revoke"
 	userInfoPath  = "/api/v1/users/me"
+	// authUserInfoPath is served by OSS and EE. userInfoPath is EE-only
+	// (rbac plugin) but carries name and organization.
+	authUserInfoPath = "/api/v1/auth/users/me"
 
 	cliOAuthClientID       = "cli"
 	manualOAuthRedirectURI = "urn:ietf:wg:oauth:2.0:oob"
@@ -55,6 +58,40 @@ type UserInfo struct {
 	Email        string `json:"email"`
 	Name         string `json:"name"`
 	Organization string `json:"organization"`
+	// RunnerPolicy is the account runner install policy. Nil when the
+	// server omits the field. Callers treat nil as optional.
+	RunnerPolicy *runnerPolicy `json:"runner_policy,omitempty"`
+	// FullName and Username come from the OSS auth route, which has no
+	// name field.
+	FullName string `json:"full_name,omitempty"`
+	Username string `json:"username,omitempty"`
+}
+
+// fetchUserInfo reads the caller's profile from /api/v1/auth/users/me,
+// which OSS and EE both serve and which carries runner_policy. The EE-only
+// /api/v1/users/me is then read best effort to fill name and organization;
+// its errors are ignored so it can never hide the runner policy.
+func fetchUserInfo(client *api.Client, info *UserInfo) error {
+	*info = UserInfo{}
+	if err := client.Get(authUserInfoPath, info); err != nil {
+		return err
+	}
+	var extra UserInfo
+	if err := client.Get(userInfoPath, &extra); err == nil {
+		if extra.Name != "" {
+			info.Name = extra.Name
+		}
+		if extra.Organization != "" {
+			info.Organization = extra.Organization
+		}
+	}
+	if info.Name == "" {
+		info.Name = info.FullName
+	}
+	if info.Name == "" {
+		info.Name = info.Username
+	}
+	return nil
 }
 
 // authCmd represents the auth command group.
@@ -74,12 +111,18 @@ With --token: saves the provided API token directly (no server required).
 Without --token: starts OAuth authentication. The CLI automatically uses a
 loopback callback on local machines and a copy/paste flow on SSH or headless hosts.
 
+After a successful interactive login the CLI can install a Preloop runner
+on this machine. The default answer is no. Skip that step with --no-runner
+or PRELOOP_NO_RUNNER=1. Headless login, --token, and PRELOOP_TOKEN never
+install a runner. Run it later with 'preloop runner setup'.
+
 Examples:
   preloop login --token <your-token>
   preloop login --token <your-token> --url http://localhost:8000
   PRELOOP_URL=https://review.preloop.ai preloop login --headless
   preloop login
-  preloop login --headless`,
+  preloop login --headless
+  preloop login --no-runner`,
 	RunE: runAuthLogin,
 }
 
@@ -189,6 +232,7 @@ var (
 	loginLoopback bool
 	loginCode     string
 	loginForce    bool
+	loginNoRunner bool
 	// signupRequested tracks whether the current OAuth login flow was
 	// initiated via 'preloop signup'. When true, the browser is sent to the
 	// sign-up page first instead of the sign-in page.
@@ -297,7 +341,7 @@ func runTokenLogin(token string) error {
 
 	client := api.NewClientWithToken(apiURL, token)
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		if err := config.SetTokens(token, ""); err != nil {
 			return fmt.Errorf("failed to save token: %w", err)
 		}
@@ -378,7 +422,7 @@ func currentVerifiedLoginIdentity() *UserInfo {
 		}
 	}
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		return nil
 	}
 	return &userInfo
@@ -390,6 +434,7 @@ func configureLoginFlags(command *cobra.Command) {
 	command.Flags().BoolVar(&loginLoopback, "loopback", false, "force the local loopback callback OAuth flow")
 	command.Flags().StringVar(&loginCode, "code", "", "authorization code from a previous headless OAuth login")
 	command.Flags().BoolVar(&loginForce, "force", false, "re-authenticate even when a valid login already exists")
+	command.Flags().BoolVar(&loginNoRunner, "no-runner", false, "do not offer to install a Preloop runner after login")
 }
 
 func shouldUseHeadlessOAuth() bool {
@@ -488,7 +533,7 @@ func runLoopbackOAuthLogin(baseURL string) error {
 		return fmt.Errorf("authentication timed out")
 	}
 
-	return finishOAuthLogin(baseURL, code, redirectURI)
+	return finishOAuthLogin(baseURL, code, redirectURI, false)
 }
 
 func runHeadlessOAuthLogin(baseURL string) error {
@@ -523,10 +568,10 @@ func runHeadlessOAuthLogin(baseURL string) error {
 		return fmt.Errorf("authorization code is required")
 	}
 
-	return finishOAuthLogin(baseURL, code, redirectURI)
+	return finishOAuthLogin(baseURL, code, redirectURI, true)
 }
 
-func finishOAuthLogin(baseURL, code, redirectURI string) error {
+func finishOAuthLogin(baseURL, code, redirectURI string, headless bool) error {
 	fmt.Println("Exchanging code for tokens...")
 	tokenResp, err := exchangeCodeForTokens(baseURL, code, redirectURI)
 	if err != nil {
@@ -535,7 +580,7 @@ func finishOAuthLogin(baseURL, code, redirectURI string) error {
 
 	client := api.NewClientWithToken(baseURL, tokenResp.AccessToken)
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		if err := config.SetTokens(tokenResp.AccessToken, tokenResp.RefreshToken); err != nil {
 			return fmt.Errorf("failed to save tokens: %w", err)
 		}
@@ -545,6 +590,8 @@ func finishOAuthLogin(baseURL, code, redirectURI string) error {
 
 		fmt.Println("\nSuccessfully authenticated!")
 		fmt.Printf("API URL: %s\n", baseURL)
+		// The runner policy may be forbidden; without it, do not offer.
+		fmt.Fprintf(os.Stderr, "Warning: could not read account info (%v); skipping the runner offer. Run 'preloop runner setup' later.\n", err)
 		return nil
 	}
 
@@ -566,6 +613,9 @@ func finishOAuthLogin(baseURL, code, redirectURI string) error {
 		baseURL, tokenResp.AccessToken, version.Version, conversionEventName(),
 	)
 
+	// Login already succeeded. A runner install error is printed and does
+	// not fail this command.
+	offerRunnerAfterLogin(os.Stdout, &userInfo, baseURL, headless)
 	return nil
 }
 
@@ -799,7 +849,7 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		fmt.Println("Authenticated (token may be invalid or server unreachable)")
 		fmt.Printf("  API URL: %s\n", cfg.APIURL)
 		fmt.Printf("  Error:   %v\n", err)

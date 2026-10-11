@@ -9,6 +9,26 @@ import { invalidateApiCaches } from '../../api';
 import { resetConfirmDialogForTests } from '../../components/confirm-dialog';
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
 
+const SESSION_OPTIONS = {
+  runner_id: 'r',
+  online: true,
+  sessions_available: true,
+  harnesses: [
+    {
+      harness: 'copilot_cli',
+      display_name: 'GitHub Copilot CLI',
+      session_mode: 'resume',
+      models: [{ id: 'auto', source: 'static' }],
+      available: true,
+    },
+  ],
+  authorized_directories: [
+    { id: 'dir_api', label: 'api', mode: 'write', harnesses: 'all' },
+  ],
+  checkout_sources: [],
+  limits: { max_concurrent: 2, active: 0, idle_timeout_seconds: 1800 },
+};
+
 describe('RunnersView', () => {
   let fetchStub: sinon.SinonStub;
   let onRunnerMessage: ((message: unknown) => void) | undefined;
@@ -60,6 +80,9 @@ describe('RunnersView', () => {
               ? ['22222222-2222-4222-8222-222222222222']
               : [],
           });
+        }
+        if (url.includes('/session-options')) {
+          return json(SESSION_OPTIONS);
         }
         if (url.includes('/api/v1/runners')) {
           return json(runners);
@@ -173,6 +196,309 @@ describe('RunnersView', () => {
       'Auto (default): private first, then hosted'
     );
     expect(control?.shadowRoot?.textContent).to.contain('Preloop hosted only');
+  });
+
+  it('opens the new session dialog for an online runner', async () => {
+    fetchStub = createFetchStub([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'office-mac',
+        status: 'online',
+        labels: [],
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        name: 'ci-once',
+        status: 'online',
+        ephemeral: true,
+        labels: [],
+      },
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        name: 'old-box',
+        status: 'offline',
+        labels: [],
+      },
+    ]);
+    const element = (await fixture(
+      html`<runners-view></runners-view>`
+    )) as RunnersView;
+    await waitUntil(
+      () => !(element as unknown as { loading: boolean }).loading,
+      'Runners view did not finish loading'
+    );
+    await element.updateComplete;
+
+    const buttons = [
+      ...element.shadowRoot!.querySelectorAll('sl-button.new-session'),
+    ];
+    // Ephemeral CI runners never host sessions.
+    expect(buttons).to.have.length(2);
+    expect(buttons[1].hasAttribute('disabled')).to.equal(true);
+    const dialog = element.shadowRoot!.querySelector(
+      'new-runner-session-dialog'
+    )!;
+    expect(dialog.hasAttribute('open')).to.equal(false);
+    (buttons[0] as HTMLElement).click();
+    await element.updateComplete;
+    expect(dialog.hasAttribute('open')).to.equal(true);
+    expect(dialog.getAttribute('runner-id')).to.equal(
+      '11111111-1111-4111-8111-111111111111'
+    );
+    await waitUntil(
+      () => (dialog as any).options !== null,
+      'session options did not load'
+    );
+    await (dialog as any).updateComplete;
+    expect(dialog.shadowRoot!.querySelector('sl-alert.error')).to.not.exist;
+    expect(
+      dialog
+        .shadowRoot!.querySelector('sl-select.harness')!
+        .getAttribute('value')
+    ).to.equal('copilot_cli');
+  });
+
+  const copilotInventory = {
+    schema: 1,
+    generated_at: '2026-10-16T09:00:00Z',
+    hash: 'sha256:' + 'a'.repeat(64),
+    entries: [
+      {
+        harness: 'copilot_cli',
+        display_name: 'GitHub Copilot CLI',
+        version: '1.0.95',
+        login_state: 'signed_in',
+        login_source: 'stored',
+        account_host: 'github.com',
+        governance: 'governed',
+        support_level: 'flows_and_sessions',
+        enabled: true,
+        sessions_enabled: false,
+        session_mode: 'resume',
+        billing: 'seat',
+        models: [
+          { id: 'auto', source: 'static' },
+          { id: 'claude-sonnet-4.6', source: 'configured' },
+        ],
+        generated_profile: 'copilot',
+        capabilities: ['host_exec', 'copilot_cli'],
+      },
+      {
+        harness: 'cursor_cli',
+        display_name: 'Cursor CLI',
+        login_state: 'signed_out',
+        login_source: 'cli_status',
+        governance: 'ungoverned',
+        support_level: 'flows_only',
+        enabled: false,
+        sessions_enabled: false,
+        session_mode: 'none',
+        billing: 'seat',
+        models: [],
+        capabilities: [],
+      },
+    ],
+  };
+
+  async function renderWith(runners: unknown[]) {
+    fetchStub = createFetchStub(runners);
+    const element = (await fixture(
+      html`<runners-view></runners-view>`
+    )) as RunnersView;
+    await waitUntil(
+      () => !(element as unknown as { loading: boolean }).loading
+    );
+    await element.updateComplete;
+    return element;
+  }
+
+  it('renders the harness inventory with login, governance, models and billing', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        harness_inventory: copilotInventory,
+        harness_inventory_updated_at: '2026-10-16T09:00:00Z',
+      },
+    ]);
+    const harnesses = element.shadowRoot?.querySelectorAll('details.harness');
+    expect(harnesses).to.have.lengthOf(2);
+    const copilot = harnesses?.[0];
+    expect(copilot?.getAttribute('data-harness')).to.equal('copilot_cli');
+    const text = copilot?.textContent || '';
+    expect(text).to.contain('GitHub Copilot CLI');
+    expect(text).to.contain('signed in');
+    expect(text).to.contain('1.0.95');
+    expect(text).to.contain('github.com');
+    expect(text).to.contain('Governed');
+    expect(text).to.contain('Seat (not metered by gateway)');
+    expect(text).to.contain('claude-sonnet-4.6');
+    expect(harnesses?.[1]?.textContent).to.contain('disabled');
+    expect(element.shadowRoot?.querySelector('.inventory-unknown')).to.not
+      .exist;
+  });
+
+  it('shows inventory unknown for a runner that predates the inventory', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'old-runner',
+        status: 'online',
+        harness_inventory: null,
+      },
+    ]);
+    const unknown = element.shadowRoot?.querySelector('.inventory-unknown');
+    expect(unknown?.textContent).to.contain('Inventory unknown');
+  });
+
+  it('keeps the owner view of an unchanged inventory on a websocket update', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        harness_inventory: copilotInventory,
+      },
+    ]);
+    const memberView = {
+      ...copilotInventory,
+      entries: copilotInventory.entries.map((entry) => {
+        const {
+          version: _version,
+          account_host: _host,
+          ...rest
+        } = entry as Record<string, unknown>;
+        return rest;
+      }),
+    };
+    onRunnerMessage?.({
+      type: 'runner_updated',
+      payload: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        harness_inventory: memberView,
+      },
+    });
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).to.contain('1.0.95');
+  });
+
+  it('re-reads the owner view when the inventory changes over websocket', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        harness_inventory: copilotInventory,
+      },
+    ]);
+    const changedHash = 'sha256:' + 'b'.repeat(64);
+    const ownerView = {
+      ...copilotInventory,
+      hash: changedHash,
+      entries: [{ ...copilotInventory.entries[0], version: '1.0.96' }],
+    };
+    fetchStub.restore();
+    const detailStub = sinon.stub(window, 'fetch').callsFake(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: '11111111-1111-4111-8111-111111111111',
+            name: 'laptop',
+            status: 'online',
+            harness_inventory: ownerView,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    const memberEntry = { ...copilotInventory.entries[0] } as Record<
+      string,
+      unknown
+    >;
+    delete memberEntry.version;
+    delete memberEntry.account_host;
+    onRunnerMessage?.({
+      type: 'runner_updated',
+      payload: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        harness_inventory: {
+          ...copilotInventory,
+          hash: changedHash,
+          entries: [memberEntry],
+        },
+      },
+    });
+    await waitUntil(
+      () => element.shadowRoot?.textContent?.includes('1.0.96'),
+      'owner view was not re-read'
+    );
+    expect(String(detailStub.firstCall.args[0])).to.contain(
+      '/api/v1/runners/11111111-1111-4111-8111-111111111111'
+    );
+    expect(element.shadowRoot?.textContent).to.contain('github.com');
+  });
+
+  it('shows server presence with the last heartbeat as tooltip', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'offline',
+        presence: 'asleep',
+        presence_since: '2026-10-11T09:00:00Z',
+        last_heartbeat: '2026-10-11T08:59:50Z',
+      },
+    ]);
+    const badge = element.shadowRoot?.querySelector('sl-badge.presence');
+    expect(badge?.textContent?.trim()).to.equal('Asleep');
+    expect(badge?.getAttribute('title')).to.contain('Last heartbeat:');
+    expect(badge?.getAttribute('title')).to.contain('Asleep since');
+  });
+
+  it('updates presence when the account websocket pushes a transition', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        presence: 'online',
+        last_heartbeat: '2026-10-11T09:00:00Z',
+      },
+    ]);
+    const badge = () =>
+      element.shadowRoot?.querySelector('sl-badge.presence') as HTMLElement;
+    expect(badge().textContent?.trim()).to.equal('Online');
+    onRunnerMessage?.({
+      type: 'runner_updated',
+      payload: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        presence: 'idle',
+        presence_since: '2026-10-11T09:05:00Z',
+        last_heartbeat: '2026-10-11T09:05:00Z',
+      },
+    });
+    await element.updateComplete;
+    expect(badge().textContent?.trim()).to.equal('Idle');
+    expect(badge().getAttribute('variant')).to.equal('primary');
+  });
+
+  it('falls back to status when the server sends no presence', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'old',
+        status: 'busy',
+      },
+    ]);
+    const badge = element.shadowRoot?.querySelector('sl-badge.presence');
+    expect(badge?.textContent?.trim()).to.equal('Busy');
+    expect(badge?.getAttribute('title')).to.equal('No heartbeat yet');
   });
 
   it('badges an ephemeral runner only while it is connected', async () => {
