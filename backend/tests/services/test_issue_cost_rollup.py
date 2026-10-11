@@ -187,6 +187,7 @@ class World:
         result: Optional[dict[str, Any]] = None,
         parent: Optional[models.FlowExecution] = None,
         record: bool = True,
+        failure_category: Optional[str] = None,
     ) -> models.FlowExecution:
         execution = crud_flow_execution.create(
             self.db,
@@ -200,6 +201,7 @@ class World:
         execution.total_tokens = tokens
         execution.estimated_cost = None if cost is None else Decimal(cost)
         execution.result = result
+        execution.failure_category = failure_category
         if parent is not None:
             execution.parent_execution_id = parent.id
             execution.root_execution_id = parent.id
@@ -1073,6 +1075,53 @@ def test_csv_and_json_match_the_table(world: World) -> None:
         assert json_row["run_count"] == table_row.run_count
         assert len(json_row["execution_ids"]) == table_row.run_count
     assert len(document["unassigned"]["execution_ids"]) == 1
+
+
+def test_export_names_failure_categories_of_failed_runs(world: World) -> None:
+    """#868: a run that finished with an unusable result shows in the export."""
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0,
+        status="FAILED",
+        failure_category="result_schema_invalid",
+    )
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0 + timedelta(hours=1),
+        status="FAILED",
+        failure_category="result_schema_invalid",
+    )
+    world.run(
+        world.triage,
+        world.issue_details(),
+        start=T0 + timedelta(hours=2),
+        status="FAILED",
+        failure_category="timeout",
+    )
+    world.run(world.triage, world.issue_details(), start=T0 + timedelta(hours=3))
+
+    assert world.report().issues[0].failure_categories is None
+    exported = world.report(include_failure_categories=True)
+    assert exported.issues[0].failure_categories == {
+        "result_schema_invalid": 2,
+        "timeout": 1,
+    }
+    rows = list(csv.DictReader(io.StringIO(rollup_service.report_to_csv(exported))))
+    assert rows[0]["failure_categories"] == "result_schema_invalid:2;timeout:1"
+    assert rows[0]["failed_run_count"] == "3"
+
+    drill = rollup_service.list_issue_executions(
+        world.db, account_id=world.account.id, rollup_id=world.rollup().id
+    )
+    assert drill is not None
+    assert [row.failure_category for row in drill] == [
+        "result_schema_invalid",
+        "result_schema_invalid",
+        "timeout",
+        None,
+    ]
 
 
 def test_csv_neutralizes_formulas(world: World) -> None:

@@ -31353,6 +31353,12 @@ components:
         status:
           type: string
           title: Status
+        failure_category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Failure Category
+          description: The execution's failure_category; null unless it failed.
         link:
           type: string
           title: Link
@@ -31777,6 +31783,16 @@ components:
           - type: 'null'
           title: Execution Ids
           description: Contributing execution ids (JSON export only).
+        failure_categories:
+          anyOf:
+          - additionalProperties:
+              type: integer
+            type: object
+          - type: 'null'
+          title: Failure Categories
+          description: Failed runs of this issue by failure_category, for example
+            result_schema_invalid for a run whose result.json did not match the flow
+            result schema (exports only).
       type: object
       required:
       - id
