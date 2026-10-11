@@ -1,7 +1,7 @@
 """Per-flow result schema and its validation outcome.
 
 Revision ID: 20261011_flow_result_schema
-Revises: 20261011_harness_inventory
+Revises: 20261011_runner_remote_sessions
 Create Date: 2026-10-11
 
 Issue #868. A flow may set an optional JSON Schema for its result.json
@@ -21,7 +21,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20261011_flow_result_schema"
-down_revision: Union[str, None] = "20261011_harness_inventory"
+down_revision: Union[str, None] = "20261011_runner_remote_sessions"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 # Alembic reads these module globals by name; keep a local reference so static

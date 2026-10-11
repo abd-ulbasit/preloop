@@ -41,7 +41,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -148,6 +148,15 @@ READINESS_CSV_COLUMNS: tuple[str, ...] = (
     "readiness_observation_completed_at",
 )
 CSV_COLUMNS += READINESS_CSV_COLUMNS
+
+#: Seat billing (#1481), appended last so existing column positions hold.
+BILLING_CSV_COLUMNS: tuple[str, ...] = (
+    "billing_mode",
+    "billing_label",
+    "seat_run_count",
+    "premium_requests",
+)
+CSV_COLUMNS += BILLING_CSV_COLUMNS
 # Failed runs per failure category ("result_schema_invalid:2;timeout:1"), so
 # a run that finished with an unusable result is visible next to the counts
 # (#868). Appended last so earlier columns keep their positions.
@@ -1940,6 +1949,10 @@ def build_report(
         unknown_cost_runs=unassigned_unknown_cost_runs,
     )
 
+    billing = crud_issue_cost.billing_totals_by_rollup(
+        db, rollup_ids=rollup_ids, flow_id=flow_id
+    )
+
     trackers, projects, flows = crud_issue_cost.names(
         db,
         tracker_ids=[rollup.tracker_id for rollup in rollups],
@@ -1994,6 +2007,7 @@ def build_report(
                 total_tokens=totals.tokens,
                 run_count=totals.runs,
                 failed_run_count=totals.failed,
+                **_billing_fields(totals.runs, *billing.get(rollup.id, (0, None))),
                 first_event_at=_optional_aware(rollup.first_event_at),
                 pr_opened_at=_optional_aware(rollup.pr_opened_at),
                 approved_at=_optional_aware(rollup.approved_at),
@@ -2067,7 +2081,7 @@ def build_report(
         total_tokens=unassigned_totals.tokens,
         run_count=unassigned_totals.runs,
         failed_run_count=unassigned_totals.failed,
-        executions=[_execution_row(fact, name) for fact, name in unassigned_facts],
+        executions=_execution_rows(db, unassigned_facts),
     )
     return IssueCostReport(
         start=start,
@@ -2082,8 +2096,30 @@ def build_report(
     )
 
 
+def _billing_fields(
+    run_count: int, seat_run_count: int, premium_requests: Optional[float]
+) -> dict[str, Any]:
+    """Issue-row billing label from its seat runs (#1481)."""
+    from preloop.services.host_exec import SEAT_BILLING_LABEL
+
+    if seat_run_count <= 0:
+        mode = "metered"
+    elif seat_run_count >= run_count:
+        mode = "seat"
+    else:
+        mode = "mixed"
+    return {
+        "billing_mode": mode,
+        "billing_label": SEAT_BILLING_LABEL if seat_run_count > 0 else None,
+        "seat_run_count": seat_run_count,
+        "premium_requests": premium_requests,
+    }
+
+
 def _execution_row(
-    fact: models.IssueCostExecution, flow_name: str
+    fact: models.IssueCostExecution,
+    flow_name: str,
+    billing_mode: Optional[str] = None,
 ) -> IssueCostExecutionRow:
     return IssueCostExecutionRow(
         execution_id=fact.execution_id,
@@ -2099,7 +2135,20 @@ def _execution_row(
         total_tokens=int(fact.total_tokens or 0),
         start_time=_aware(fact.start_time),
         end_time=_optional_aware(fact.end_time),
+        billing_mode=billing_mode,
     )
+
+
+def _execution_rows(
+    db: Session, facts: Sequence[tuple[models.IssueCostExecution, str]]
+) -> list[IssueCostExecutionRow]:
+    """Execution rows with each run's billing mode."""
+    modes = crud_issue_cost.billing_modes_for_executions(
+        db, execution_ids=[fact.execution_id for fact, _name in facts]
+    )
+    return [
+        _execution_row(fact, name, modes.get(fact.execution_id)) for fact, name in facts
+    ]
 
 
 def list_issue_executions(
@@ -2123,12 +2172,12 @@ def list_issue_executions(
     rollup = crud_issue_cost.get_rollup(db, account_id=account_id, rollup_id=rollup_id)
     if rollup is None:
         return None
-    return [
-        _execution_row(fact, name)
-        for fact, name in crud_issue_cost.list_facts(
+    return _execution_rows(
+        db,
+        crud_issue_cost.list_facts(
             db, account_id=account_id, rollup_ids=[rollup.id], flow_id=flow_id
-        )
-    ]
+        ),
+    )
 
 
 def list_unassigned_executions(
@@ -2158,9 +2207,9 @@ def list_unassigned_executions(
     Returns:
         The executions, each with the reason it is unassigned in ``link``.
     """
-    return [
-        _execution_row(fact, name)
-        for fact, name in crud_issue_cost.list_facts(
+    return _execution_rows(
+        db,
+        crud_issue_cost.list_facts(
             db,
             account_id=account_id,
             unassigned=True,
@@ -2169,8 +2218,8 @@ def list_unassigned_executions(
             project_id=project_id,
             flow_id=flow_id,
             limit=limit,
-        )
-    ]
+        ),
+    )
 
 
 # --- export --------------------------------------------------------------------
@@ -2237,6 +2286,10 @@ def report_to_csv(report: IssueCostReport) -> str:
                     row.unknown_cost_run_count,
                     row.attributed_cost_usd,
                     *_readiness_csv_values(row),
+                    row.billing_mode,
+                    row.billing_label,
+                    row.seat_run_count,
+                    row.premium_requests,
                     _failure_categories_cell(row.failure_categories),
                 )
             ]
@@ -2265,6 +2318,7 @@ def report_to_csv(report: IssueCostReport) -> str:
         blanks = ("",) * (
             len(CSV_COLUMNS)
             - len(READINESS_CSV_COLUMNS)
+            - len(BILLING_CSV_COLUMNS)
             - 1  # failure_categories, left blank for the bucket
             - len(leading)
             - len(coverage)
@@ -2275,7 +2329,9 @@ def report_to_csv(report: IssueCostReport) -> str:
                 for value in leading
                 + blanks
                 + coverage
-                + ("",) * (len(READINESS_CSV_COLUMNS) + 1)
+                + ("",) * len(READINESS_CSV_COLUMNS)
+                + ("",) * len(BILLING_CSV_COLUMNS)
+                + ("",)
             ]
         )
     return buffer.getvalue()
