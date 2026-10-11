@@ -463,6 +463,18 @@ class Settings(BaseSettings):
             "into the gateway semantic-search corpus"
         ),
     )
+    desktop_views_enabled: bool = Field(
+        False,
+        description=(
+            "Enable brokered live desktop views (#870): desktop endpoints, "
+            "view creation and the viewer/endpoint WebSockets. Off by default."
+        ),
+    )
+    desktop_view_max_seconds: int = Field(
+        3600,
+        ge=60,
+        description="Longest allowed desktop view, in seconds.",
+    )
     session_search_index_enabled: bool = Field(
         True,
         description=(
@@ -1964,6 +1976,13 @@ class Settings(BaseSettings):
                 "MODEL_GATEWAY_AUTO_INDEX_INTERACTIONS", "true"
             ).lower()
             in ("true", "1", "t", "yes"),
+            desktop_views_enabled=os.getenv(
+                "PRELOOP_DESKTOP_VIEWS_ENABLED", "false"
+            ).lower()
+            in ("true", "1", "yes"),
+            desktop_view_max_seconds=max(
+                60, int(os.getenv("PRELOOP_DESKTOP_VIEW_MAX_SECONDS", "3600"))
+            ),
             session_search_index_enabled=os.getenv(
                 "SESSION_SEARCH_INDEX_ENABLED", "true"
             ).lower()
