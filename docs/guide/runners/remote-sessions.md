@@ -185,7 +185,8 @@ preloop runner dirs remove dir_9f2c        # by id or by path
 ```
 
 `add` resolves the path (symlinks included) and stores the real path with a
-generated id in `~/.preloop/runner.json` under `authorized_directories`:
+generated id in `~/.preloop/runner.json` under `authorized_directories`
+(under a lock, so a concurrent token rotation or registration keeps it):
 
 ```json
 {
@@ -215,6 +216,7 @@ Refused at `dirs add` and again every time an entry is used:
 | `~`, `$HOME`, `~/x`, globs (`*`, `?`, `[`) | The path must be explicit. Nothing is expanded. |
 | `/`, `C:\`, `\\server\share` | A filesystem root would authorize everything. |
 | Your home directory, or a directory that contains it | Authorizing the whole home directory authorizes every credential store and configuration file in it. Add project directories below it instead. |
+| The Preloop configuration directory (`~/.preloop`, with `runner.json` and `config.yaml`), `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.config/github-copilot`, `~/.copilot`, `~/.claude`, `~/.codex`, `~/.cursor`, anything below them, or a directory that contains them | They hold credentials (the runner token, your Preloop sign-in, keys and harness logins). A session must never see them, not even `read_only`. |
 | `\\?\...`, `\\.\...`, `\\server\C$\...` | Device namespace paths and UNC administrative shares. |
 | A path that is not a directory, or that no longer resolves to the stored real path | The directory was removed, moved, or replaced by a symlink or junction since it was authorized. `dirs list` shows the entry as `not usable` with the reason; remove it and add the current path. |
 

@@ -236,15 +236,26 @@ func readAuthorizedDirectories() ([]authorizedDirectory, error) {
 }
 
 func writeAuthorizedDirectories(entries []authorizedDirectory) error {
-	state, err := readRunnerState()
-	if err != nil {
-		if !os.IsNotExist(err) {
+	return updateAuthorizedDirectories(func([]authorizedDirectory) ([]authorizedDirectory, error) {
+		return entries, nil
+	})
+}
+
+// updateAuthorizedDirectories applies fn to the current list under the
+// runner.json lock, so a concurrent token rotation, registration or second
+// `dirs` command cannot drop the change.
+func updateAuthorizedDirectories(fn func([]authorizedDirectory) ([]authorizedDirectory, error)) error {
+	return updateRunnerState(func(state *runnerState) error {
+		if len(state.AuthorizedDirectories) > maxAuthorizedDirectories {
+			return fmt.Errorf("at most %d authorized directories are supported", maxAuthorizedDirectories)
+		}
+		entries, err := fn(state.AuthorizedDirectories)
+		if err != nil {
 			return err
 		}
-		state = &runnerState{}
-	}
-	state.AuthorizedDirectories = entries
-	return writeRunnerState(state)
+		state.AuthorizedDirectories = entries
+		return nil
+	})
 }
 
 // loadAuthorizedDirectories returns the entries that pass validation on
@@ -457,9 +468,28 @@ func isVolumeRoot(path string) bool {
 	return rest == "" || rest == string(filepath.Separator) || rest == "/"
 }
 
+// secretHomeDirs are directories below the home directory that hold
+// credentials: the Preloop config directory (runner.json with the runner
+// token, config.yaml with the user's OAuth tokens) is checked separately
+// because it can be moved. A harness session must never be pointed at them,
+// not even read_only.
+var secretHomeDirs = []string{
+	".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
+	filepath.Join(".config", "gh"), filepath.Join(".config", "github-copilot"),
+	".copilot", ".claude", ".codex", ".cursor",
+}
+
 // refuseHomeDirectory refuses the home directory as a whole entry and any
-// ancestor of it (which would contain every file the home holds).
+// ancestor of it (which would contain every file the home holds), the
+// Preloop config directory and the credential directories in
+// secretHomeDirs: the directory itself, anything below it, and anything
+// that contains it.
 func refuseHomeDirectory(resolved string) error {
+	if dir, err := config.GetConfigDir(); err == nil && dir != "" {
+		if err := refuseSecretDirectory(resolved, dir, "the Preloop configuration directory"); err != nil {
+			return err
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return nil
@@ -473,6 +503,24 @@ func refuseHomeDirectory(resolved string) error {
 	}
 	if pathWithin(resolved, canonicalHome) {
 		return fmt.Errorf("a directory that contains the home directory cannot be authorized")
+	}
+	for _, rel := range secretHomeDirs {
+		if err := refuseSecretDirectory(resolved, filepath.Join(canonicalHome, rel), "~"+string(filepath.Separator)+rel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refuseSecretDirectory refuses resolved when it is secret, below it, or
+// contains it. secret is canonicalised when it exists.
+func refuseSecretDirectory(resolved, secret, name string) error {
+	canonical, err := evalLinks(secret)
+	if err != nil {
+		canonical = filepath.Clean(secret)
+	}
+	if pathWithin(canonical, resolved) || pathWithin(resolved, canonical) {
+		return fmt.Errorf("%s holds credentials and cannot be an authorized directory or contain one", name)
 	}
 	return nil
 }
@@ -1121,19 +1169,18 @@ func runRunnerDirsAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot authorize %s: %w", path, err)
 	}
 	entry.Path = canonical
-	existing, err := readAuthorizedDirectories()
-	if err != nil {
-		return err
-	}
-	for _, other := range existing {
-		if samePath(other.Path, canonical) {
-			return fmt.Errorf("%s is already authorized as %s", canonical, other.ID)
+	err = updateAuthorizedDirectories(func(existing []authorizedDirectory) ([]authorizedDirectory, error) {
+		for _, other := range existing {
+			if samePath(other.Path, canonical) {
+				return nil, fmt.Errorf("%s is already authorized as %s", canonical, other.ID)
+			}
 		}
-	}
-	if len(existing) >= maxAuthorizedDirectories {
-		return fmt.Errorf("at most %d authorized directories are supported", maxAuthorizedDirectories)
-	}
-	if err := writeAuthorizedDirectories(append(existing, entry)); err != nil {
+		if len(existing) >= maxAuthorizedDirectories {
+			return nil, fmt.Errorf("at most %d authorized directories are supported", maxAuthorizedDirectories)
+		}
+		return append(existing, entry), nil
+	})
+	if err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Authorized %s as %s (%s, %s)\n", canonical, entry.ID, entry.Mode, harnessesText(entry.Harnesses))
@@ -1149,10 +1196,6 @@ func harnessesText(h authorizedHarnesses) string {
 }
 
 func runRunnerDirsRemove(cmd *cobra.Command, args []string) error {
-	existing, err := readAuthorizedDirectories()
-	if err != nil {
-		return err
-	}
 	wanted := args[0]
 	var wantedPath string
 	if filepath.IsAbs(wanted) {
@@ -1161,19 +1204,22 @@ func runRunnerDirsRemove(cmd *cobra.Command, args []string) error {
 			wantedPath = resolved
 		}
 	}
-	kept := make([]authorizedDirectory, 0, len(existing))
 	removed := 0
-	for _, entry := range existing {
-		if entry.ID == wanted || (wantedPath != "" && samePath(entry.Path, wantedPath)) {
-			removed++
-			continue
+	err := updateAuthorizedDirectories(func(existing []authorizedDirectory) ([]authorizedDirectory, error) {
+		kept := make([]authorizedDirectory, 0, len(existing))
+		for _, entry := range existing {
+			if entry.ID == wanted || (wantedPath != "" && samePath(entry.Path, wantedPath)) {
+				removed++
+				continue
+			}
+			kept = append(kept, entry)
 		}
-		kept = append(kept, entry)
-	}
-	if removed == 0 {
-		return fmt.Errorf("no authorized directory matches %s", wanted)
-	}
-	if err := writeAuthorizedDirectories(kept); err != nil {
+		if removed == 0 {
+			return nil, fmt.Errorf("no authorized directory matches %s", wanted)
+		}
+		return kept, nil
+	})
+	if err != nil {
 		return err
 	}
 	if removed == 1 {
