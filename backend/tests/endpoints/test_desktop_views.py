@@ -382,11 +382,16 @@ class Harness:
 
 
 @pytest.fixture
-def harness(app, db_session, test_user, monkeypatch):
+def harness(app, db_session, test_user, monkeypatch, request):
     from preloop.api.auth import get_current_active_user
 
     monkeypatch.setattr(settings, "desktop_views_enabled", True)
-    broker.set_desktop_bus(broker.LocalDesktopBus())
+    if getattr(request, "param", "local") == "nats":
+        from tests.services.test_desktop_broker import FakeNats
+
+        broker.set_desktop_bus(broker.NatsDesktopBus(FakeNats()))
+    else:
+        broker.set_desktop_bus(broker.LocalDesktopBus())
 
     from sqlalchemy import inspect as sa_inspect
     from sqlalchemy.exc import NoInspectionAvailable
@@ -481,6 +486,7 @@ async def open_view(h: Harness, endpoint: FakeEndpoint, **body: Any) -> dict:
 # Tests
 
 
+@pytest.mark.parametrize("harness", ["local", "nats"], indirect=True)
 def test_view_only_relay_blocks_input_then_control_grant_and_release(harness):
     h = harness
 
@@ -1065,3 +1071,102 @@ def test_sweeper_closes_abandoned_views(harness, db_session):
     assert endpoint_row.state == "offline"
     ended = h.audit("desktop.view.ended")
     assert [e.details["closed_reason"] for e in ended] == ["server_restart"]
+
+
+def test_machine_credentials_cannot_open_views() -> None:
+    """Runner execution keys, agent keys and session keys are not operators."""
+    from types import SimpleNamespace
+
+    for context in (
+        {"flow_execution_id": str(uuid.uuid4())},
+        {"flow_execution_id": str(uuid.uuid4()), "runtime_session_id": None},
+        {"managed_agent_id": str(uuid.uuid4())},
+        {"runtime_session_id": str(uuid.uuid4())},
+    ):
+        user = SimpleNamespace(_auth_api_key=SimpleNamespace(context_data=context))
+        assert desktop._is_machine_credential(user), context
+        with pytest.raises(Exception) as denied:
+            desktop._authorize_operator(None, user)  # type: ignore[arg-type]
+        assert getattr(denied.value, "status_code", None) == 403
+    personal = SimpleNamespace(_auth_api_key=SimpleNamespace(context_data={}))
+    assert not desktop._is_machine_credential(personal)
+    assert not desktop._is_machine_credential(SimpleNamespace())
+
+
+def test_runtime_session_must_be_linked_to_the_endpoint(harness, db_session):
+    h = harness
+    now = datetime.now(UTC).replace(tzinfo=None)
+    unrelated = models.RuntimeSession(
+        account_id=h.user.account_id,
+        session_source_type="custom",
+        session_source_id=f"s-{uuid.uuid4().hex[:8]}",
+        started_at=now,
+    )
+    db_session.add(unrelated)
+    db_session.commit()
+
+    async def scenario() -> None:
+        async with serving(h) as vnc:
+            endpoint = FakeEndpoint(h.base_ws, h.endpoint_key(), vnc.port)
+            await endpoint.connect()
+            async with h.http() as client:
+                eid = endpoint.registered["endpoint_id"]
+                response = await client.post(
+                    f"/api/v1/desktop/endpoints/{eid}/views",
+                    json={"runtime_session_id": str(unrelated.id)},
+                )
+            assert response.status_code == 422, response.text
+            assert response.json()["detail"]["code"] == "runtime_session_not_linked"
+            await endpoint.close()
+
+    asyncio.run(scenario())
+
+
+def test_list_endpoints_is_not_n_plus_one(harness, db_session):
+    """Active views and holders are fetched in one query for all endpoints."""
+    from sqlalchemy import event
+
+    h = harness
+    now = datetime.now(UTC).replace(tzinfo=None)
+    for i in range(6):
+        row = models.DesktopEndpoint(
+            account_id=h.user.account_id,
+            endpoint_id=f"ep-batch-{i:04d}",
+            state="online",
+            last_seen_at=now,
+        )
+        db_session.add(row)
+        db_session.flush()
+        db_session.add(
+            models.DesktopView(
+                account_id=h.user.account_id,
+                endpoint_pk=row.id,
+                user_id=h.user.id,
+                state="live",
+                expires_at=now + timedelta(minutes=5),
+            )
+        )
+    db_session.commit()
+    statements: list[str] = []
+
+    def count(conn, cursor, statement, *args):  # type: ignore[no-untyped-def]
+        if "desktop_view" in statement or '"user"' in statement:
+            statements.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        rows = asyncio.run(
+            desktop.list_desktop_endpoints.__wrapped__(  # type: ignore[attr-defined]
+                managed_agent_id=None,
+                runner_id=None,
+                runtime_session_id=None,
+                state=None,
+                current_user=h.user,
+                db=db_session,
+            )
+        )["endpoints"]
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len([r for r in rows if r["active_view"]]) == 6
+    assert len(statements) <= 2, statements
