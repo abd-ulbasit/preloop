@@ -219,6 +219,10 @@ func harnessSessionsEnabled(harness string) bool {
 // setHarnessSessionsEnabled records the host user's decision in runner.json
 // and keeps every other key as it was.
 func setHarnessSessionsEnabled(harness string, enabled bool) error {
+	return withRunnerStateLock(func() error { return setHarnessSessionsEnabledLocked(harness, enabled) })
+}
+
+func setHarnessSessionsEnabledLocked(harness string, enabled bool) error {
 	doc, err := loadRunnerConfigDoc()
 	if err != nil {
 		return err

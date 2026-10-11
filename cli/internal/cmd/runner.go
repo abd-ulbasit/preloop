@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -1324,11 +1325,46 @@ func readRunnerState() (*runnerState, error) {
 	return &state, nil
 }
 
-// updateRunnerState is a read-modify-write of runner.json under an
-// exclusive lock (runner.json.lock). Every writer that keeps fields it did
-// not change goes through it, so `preloop runner dirs`, a token rotation
-// and a registration cannot overwrite each other's change.
-func updateRunnerState(fn func(state *runnerState) error) (err error) {
+// mergeRunnerStateDoc renders state over the current runner.json, keeping
+// the keys runnerState does not model (for example "sessions", written by
+// `preloop runner sessions`) and the per-harness keys other commands own.
+func mergeRunnerStateDoc(path string, state *runnerState) ([]byte, error) {
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]any{}
+	if err := json.Unmarshal(encoded, &known); err != nil {
+		return nil, err
+	}
+	doc := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &doc)
+	}
+	for _, key := range runnerStateKeys() {
+		delete(doc, key)
+	}
+	for key, value := range known {
+		doc[key] = value
+	}
+	return json.MarshalIndent(doc, "", "  ")
+}
+
+// runnerStateKeys are the top-level runner.json keys runnerState owns.
+func runnerStateKeys() []string {
+	t := reflect.TypeOf(runnerState{})
+	keys := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
+}
+
+// withRunnerStateLock runs fn holding the exclusive runner.json lock.
+func withRunnerStateLock(fn func() error) (err error) {
 	path, err := runnerStatePath()
 	if err != nil {
 		return err
@@ -1349,17 +1385,27 @@ func updateRunnerState(fn func(state *runnerState) error) (err error) {
 		return err
 	}
 	defer unlockOperatorNoteFile(lockFile) //nolint:errcheck
-	state, err := readRunnerState()
-	if err != nil {
-		if !os.IsNotExist(err) {
+	return fn()
+}
+
+// updateRunnerState is a read-modify-write of runner.json under an
+// exclusive lock (runner.json.lock). Every writer that keeps fields it did
+// not change goes through it, so `preloop runner dirs`, a token rotation
+// and a registration cannot overwrite each other's change.
+func updateRunnerState(fn func(state *runnerState) error) error {
+	return withRunnerStateLock(func() error {
+		state, err := readRunnerState()
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			state = &runnerState{}
+		}
+		if err := fn(state); err != nil {
 			return err
 		}
-		state = &runnerState{}
-	}
-	if err = fn(state); err != nil {
-		return err
-	}
-	return writeRunnerState(state)
+		return writeRunnerState(state)
+	})
 }
 
 func writeRunnerState(state *runnerState) error {
@@ -1370,7 +1416,7 @@ func writeRunnerState(state *runnerState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := mergeRunnerStateDoc(path, state)
 	if err != nil {
 		return err
 	}

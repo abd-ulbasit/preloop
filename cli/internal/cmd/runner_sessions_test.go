@@ -772,3 +772,29 @@ func TestRunnerSessionReportLiveSendsStateBeforeReplayedResult(t *testing.T) {
 		t.Fatalf("want state then replayed result, got %v", msgs)
 	}
 }
+
+func TestRunnerStateWritesKeepSessionSettings(t *testing.T) {
+	testenv.SetTempHome(t)
+	if err := writeRunnerState(&runnerState{ID: "r1", Token: "old", Name: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := setHarnessSessionsEnabled("copilot_cli", true); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := loadRunnerConfigDoc()
+	doc["sessions"] = map[string]any{"max_concurrent": float64(3)}
+	if err := saveRunnerConfigDoc(doc); err != nil {
+		t.Fatal(err)
+	}
+	// A token rotation or registration rewrites runner.json from runnerState.
+	if err := updateRunnerState(func(s *runnerState) error { s.Token = "new"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ = loadRunnerConfigDoc()
+	if doc["token"] != "new" || !harnessSessionsEnabledIn(doc, "copilot_cli") {
+		t.Fatalf("doc = %v", doc)
+	}
+	if sessions, _ := doc["sessions"].(map[string]any); sessions["max_concurrent"] != float64(3) {
+		t.Fatalf("sessions settings were dropped: %v", doc)
+	}
+}
