@@ -47,8 +47,8 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
         "CREATE TABLE account_access_grant (subject_type TEXT,subject_id UUID)",
     ):
         connection.execute(text(ddl))
-    people = [uuid.uuid4() for _ in range(6)]
-    memberships = [uuid.uuid4() for _ in range(7)]
+    people = [uuid.uuid4() for _ in range(7)]
+    memberships = [uuid.uuid4() for _ in range(8)]
     for index, person_id in enumerate(people):
         connection.execute(
             text(
@@ -71,6 +71,7 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
         (2, "unrelated-provisional", "p1@example.com", "hash-d", None),
         (3, "provider-one", "p3@example.com", None, "subject-1"),
         (4, "provider-two", "p4@example.com", None, "subject-1"),
+        (6, "provider-independent", "p6@example.com", None, "subject-2"),
     ]
     # Align only the unrelated provisional's own address, without linking persons.
     connection.execute(
@@ -136,7 +137,7 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
     assert hashes == set()
     assert (
         connection.execute(text("SELECT count(*) FROM person_auth_identity")).scalar()
-        == 0
+        == 1
     )
     passkey = (
         connection.execute(

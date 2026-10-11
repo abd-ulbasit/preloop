@@ -48,8 +48,13 @@ def upgrade() -> None:
     for rows in users.values():
         for row in rows:
             source = row["user_source"]
-            if source == "oauth" and row["oauth_provider"] and row["oauth_id"]:
-                providers[(source, row["oauth_provider"], row["oauth_id"])].append(row)
+            if source == "oauth" or source.startswith("oauth_"):
+                provider = row["oauth_provider"] or (
+                    source[6:] if source.startswith("oauth_") else None
+                )
+                subject = row["oauth_id"] or row["external_id"]
+                if provider and subject:
+                    providers[(f"oauth_{provider}", provider, subject)].append(row)
             elif source not in {"local", "oauth"} and row["external_id"]:
                 # Older schema did not record issuer. Account namespace keeps
                 # unrelated LDAP/SAML deployments from claiming each other's IDs.

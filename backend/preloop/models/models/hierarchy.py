@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from .account import Account
 from .person import Person, normalize_email
+from .person_auth_identity import PersonAuthIdentity
 from .user import User
 from .webauthn_credential import WebAuthnCredential
 
@@ -177,6 +178,29 @@ def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
     person.last_active_user = user
     user.person = person
     session.add(person)
+    source = user.user_source or "local"
+    provider: str | None = None
+    subject: str | None = None
+    if source == "oauth" or source.startswith("oauth_"):
+        provider = user.oauth_provider or (
+            source[6:] if source.startswith("oauth_") else None
+        )
+        subject = user.oauth_id or user.external_id
+        if provider:
+            source = f"oauth_{provider}"
+    elif source != "local" and user.external_id:
+        provider = f"legacy-account:{user.account_id}"
+        subject = user.external_id
+    if provider and subject:
+        session.add(
+            PersonAuthIdentity(
+                person=person,
+                origin_user=user,
+                source=source,
+                provider=provider,
+                subject=subject,
+            )
+        )
 
 
 @event.listens_for(Session, "before_flush")

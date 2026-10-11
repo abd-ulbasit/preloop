@@ -356,3 +356,33 @@ def test_audit_transaction_enforces_read_only_database_access(db_engine):
                 )
             )
         db.rollback()
+
+
+def test_initial_oauth_identity_registers_provider_owner_and_provenance(db_session):
+    account = models.Account(organization_name="Example provider account")
+    db_session.add(account)
+    db_session.flush()
+    subject = "subject-" + uuid.uuid4().hex
+    user = models.User(
+        account_id=account.id,
+        username=uuid.uuid4().hex,
+        email="oauth@example.com",
+        user_source="oauth_github",
+        oauth_provider="github",
+        external_id=subject,
+    )
+    db_session.add(user)
+    db_session.flush()
+    owner = crud_person.get_by_provider(
+        db_session, source="oauth_github", provider="github", subject=subject
+    )
+    assert owner.id == user.person_id
+    from sqlalchemy import select
+
+    link = db_session.scalar(
+        select(models.PersonAuthIdentity).where(
+            models.PersonAuthIdentity.person_id == owner.id
+        )
+    )
+    assert link.origin_user_id == user.id
+    assert link.subject == subject
