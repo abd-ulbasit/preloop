@@ -209,46 +209,115 @@ func TestRunnerSessionRejectedWhenSessionsOffOnHost(t *testing.T) {
 func TestRunnerSessionRejectsUnauthorizedWorkspace(t *testing.T) {
 	h := newSessionHarness(t, true)
 	for name, ws := range map[string]map[string]any{
-		"unknown id":       {"kind": "authorized_directory", "id": "dir_nope"},
-		"tracker checkout": {"kind": "tracker_checkout", "tracker_id": "t", "repository": "acme/app"},
-		"raw path":         {"kind": "authorized_directory", "id": "dir_9f2c", "path": "/etc"},
+		"unknown id":    {"kind": "authorized_directory", "id": "dir_nope"},
+		"absolute path": {"kind": "authorized_directory", "id": "dir_9f2c", "path": "/etc"},
+		"escaping path": {"kind": "authorized_directory", "id": "dir_9f2c", "path": "../x"},
 	} {
 		msg := startMsg(sessTestID)
 		msg.Workspace = ws
 		h.m.handle(msg)
+		// A relative path below the directory is allowed by the #1484
+		// policy; an absolute or escaping one is refused.
 		got := findMsg(h.drain(), isState("failed"))
-		if name == "raw path" {
-			// The server cannot pick the path: only the id is read.
-			if got != nil {
-				t.Fatalf("%s: id lookup must ignore a server path, got %v", name, got)
-			}
-			h.m.handle(runnerWSMessage{Type: "session_stop", RemoteSessionID: sessTestID, Mode: "kill"})
-			h.drain()
-			continue
-		}
 		if got == nil || got["error_code"] != rejectWorkspaceNotAllowed {
 			t.Fatalf("%s: want workspace_not_authorized, got %v", name, got)
 		}
 	}
 }
 
-func TestRunnerSessionWorkspaceRejectsSymlinkRootAndHome(t *testing.T) {
-	testenv.SetTempHome(t)
-	real := realTempDir(t)
-	link := filepath.Join(realTempDir(t), "link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skip("symlinks unavailable")
+func TestRunnerSessionCheckoutWithoutCredentialFails(t *testing.T) {
+	h := newSessionHarness(t, true)
+	msg := startMsg(sessTestID)
+	msg.Workspace = map[string]any{"kind": "tracker_checkout", "tracker_id": "t", "repository": "acme/app"}
+	h.m.handle(msg)
+	if got := findMsg(h.drain(), isState("failed")); got == nil || got["error_code"] != workspaceErrCheckout {
+		t.Fatalf("want checkout_failed, got %v", got)
 	}
-	home, _ := os.UserHomeDir()
-	for _, path := range []string{link, "relative/dir", string(filepath.Separator), home} {
-		doc := map[string]any{"authorized_directories": []any{map[string]any{"id": "d", "path": path}}}
-		if _, err := resolveSessionWorkspace(doc, map[string]any{"kind": "authorized_directory", "id": "d"}, "copilot_cli"); err == nil {
-			t.Fatalf("path %q must not be authorized", path)
+}
+
+func TestRunnerSessionWorkspaceUsesPolicyChecks(t *testing.T) {
+	// The session host resolves workspaces through the #1484 policy: the
+	// harness list and dirty check apply at start, containment on every turn.
+	h := newSessionHarness(t, true)
+	other := startMsg(sessTestID)
+	other.Harness = "copilot_cli"
+	doc, _ := loadRunnerConfigDoc()
+	doc["authorized_directories"] = []any{
+		map[string]any{"id": "dir_9f2c", "path": h.dir, "label": "ims", "mode": "write", "harnesses": []any{"cursor_cli"}},
+	}
+	writeRunnerConfig(t, doc)
+	h.m.handle(other)
+	if got := findMsg(h.drain(), isState("failed")); got == nil || got["error_code"] != rejectWorkspaceNotAllowed {
+		t.Fatalf("directory authorized for another harness must be refused, got %v", got)
+	}
+}
+
+func TestRunnerSessionRefusesReadOnlyDirectory(t *testing.T) {
+	h := newSessionHarness(t, true)
+	doc, _ := loadRunnerConfigDoc()
+	doc["authorized_directories"] = []any{
+		map[string]any{"id": "dir_9f2c", "path": h.dir, "label": "ims", "mode": "read_only", "harnesses": []any{"copilot_cli"}},
+	}
+	writeRunnerConfig(t, doc)
+	h.m.handle(startMsg(sessTestID))
+	if got := findMsg(h.drain(), isState("failed")); got == nil || got["error_code"] != rejectWorkspaceNotAllowed {
+		t.Fatalf("read_only directory must be refused for a writable harness, got %v", got)
+	}
+}
+
+func TestRunnerSessionWorkspaceRejectionCodes(t *testing.T) {
+	for err, want := range map[error]string{
+		workspaceError(workspaceErrDirty, "x"):         workspaceErrDirty,
+		workspaceError(workspaceErrCheckout, "x"):      workspaceErrCheckout,
+		workspaceError(workspaceErrInvalid, "x"):       rejectWorkspaceNotAllowed,
+		workspaceError(workspaceErrNotAuthorized, "x"): rejectWorkspaceNotAllowed,
+	} {
+		if got := sessionWorkspaceRejectionCode(err); got != want {
+			t.Fatalf("%v: got %s want %s", err, got, want)
 		}
 	}
-	doc := map[string]any{"authorized_directories": []any{map[string]any{"id": "d", "path": real, "harnesses": []any{"cursor_cli"}}}}
-	if _, err := resolveSessionWorkspace(doc, map[string]any{"kind": "authorized_directory", "id": "d"}, "copilot_cli"); err == nil {
-		t.Fatalf("a directory authorized for another harness must be refused")
+}
+
+func TestRunnerSessionSpecNeverPersistsCredential(t *testing.T) {
+	spec := sanitizeSessionWorkspaceSpec(map[string]any{
+		"kind": "tracker_checkout", "tracker_id": "t", "provider": "github",
+		"repository": "acme/app", "ref": "main",
+		"credential": map[string]any{"username": "x-access-token", "token": "ghs_secret"},
+	})
+	if _, ok := spec["credential"]; ok {
+		t.Fatal("credential must not be persisted")
+	}
+	if spec["provider"] != "github" || spec["repository"] != "acme/app" {
+		t.Fatalf("spec = %v", spec)
+	}
+}
+
+func TestRunnerSessionCheckoutReusedAndCleanedUp(t *testing.T) {
+	testenv.SetTempHome(t)
+	root, err := sessionWorkspacesRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &runnerRemoteSession{RemoteSessionID: sessTestID, WorkspaceKind: workspaceKindTrackerCheckout, WorkspaceLabel: "acme/app"}
+	if _, err := existingSessionCheckout(s); err == nil {
+		t.Fatal("a session without a clone must be refused")
+	}
+	dir := filepath.Join(root, sessTestID, "app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.WorkspaceDir = dir
+	ws, err := resolveRunnerSessionWorkspace(context.Background(), s, map[string]any{"kind": "tracker_checkout", "tracker_id": "t", "repository": "acme/app"}, false, nil)
+	if err != nil || ws.Dir != dir {
+		t.Fatalf("later turn must reuse the clone: %v %v", ws, err)
+	}
+	s.WorkspaceDir = filepath.Join(realTempDir(t), "app")
+	if _, err := existingSessionCheckout(s); err == nil {
+		t.Fatal("a clone outside the session root must be refused")
+	}
+	cleanupSessionCheckout(s)
+	if _, err := os.Stat(filepath.Join(root, sessTestID)); !os.IsNotExist(err) {
+		t.Fatalf("session checkout must be removed, stat err = %v", err)
 	}
 }
 

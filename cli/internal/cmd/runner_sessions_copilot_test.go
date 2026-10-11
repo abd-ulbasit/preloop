@@ -244,6 +244,6 @@ func enableTestSessions(t *testing.T, dir string) {
 	t.Helper()
 	writeRunnerConfig(t, map[string]any{
 		"harnesses":              map[string]any{"copilot_cli": map[string]any{"sessions_enabled": true}},
-		"authorized_directories": []any{map[string]any{"id": "dir_9f2c", "path": dir, "label": "ims"}},
+		"authorized_directories": []any{map[string]any{"id": "dir_9f2c", "path": dir, "label": "ims", "mode": "write"}},
 	})
 }

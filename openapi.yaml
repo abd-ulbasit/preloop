@@ -14480,6 +14480,36 @@ paths:
       security:
       - bearerAuth: []
       x-restricted-ci: deny
+  /api/v1/flows/harness-options:
+    get:
+      tags:
+      - Flows
+      summary: Get Flow Harness Options
+      description: 'Harness + model choices for the flow editor.
+
+
+        Computed from the harness inventory of the runners the caller may route
+
+        to (their own, or every account runner for an admin), with online
+
+        eligible runner counts per harness and per model.'
+      operationId: get_flow_harness_options_api_v1_flows_harness_options_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HarnessOptionsResponse'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
   /api/v1/flows/presets:
     get:
       tags:
@@ -23837,6 +23867,24 @@ components:
           title: Queued Reason
           description: Why a PENDING execution has not been admitted yet (account_concurrency_cap).
             Null for every other row.
+        routing_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Reason
+          description: 'Why a harness-routed run (agent_config.harness) is waiting,
+            failed or fell back: no_runner_with_harness, harness_signed_out, harness_disabled,
+            model_not_available, runner_offline, owner_has_no_runner, queue_timeout,
+            fell_back_to_server. Null once a runner took the run and for every other
+            execution.'
+        billing_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Mode
+          description: 'How the model usage of this run is billed: seat (the runner
+            user''s own Copilot or Cursor seat, not metered by the gateway), metered
+            or unknown. Null for gateway runs.'
         retry_of_execution_id:
           anyOf:
           - type: string
@@ -27432,6 +27480,24 @@ components:
           title: Queued Reason
           description: Why a PENDING execution has not been admitted yet (account_concurrency_cap).
             Null for every other row.
+        routing_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Reason
+          description: 'Why a harness-routed run (agent_config.harness) is waiting,
+            failed or fell back: no_runner_with_harness, harness_signed_out, harness_disabled,
+            model_not_available, runner_offline, owner_has_no_runner, queue_timeout,
+            fell_back_to_server. Null once a runner took the run and for every other
+            execution.'
+        billing_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Mode
+          description: 'How the model usage of this run is billed: seat (the runner
+            user''s own Copilot or Cursor seat, not metered by the gateway), metered
+            or unknown. Null for gateway runs.'
         retry_of_execution_id:
           anyOf:
           - type: string
@@ -28044,6 +28110,24 @@ components:
           title: Queued Reason
           description: Why a PENDING execution has not been admitted yet (account_concurrency_cap).
             Null for every other row.
+        routing_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Reason
+          description: 'Why a harness-routed run (agent_config.harness) is waiting,
+            failed or fell back: no_runner_with_harness, harness_signed_out, harness_disabled,
+            model_not_available, runner_offline, owner_has_no_runner, queue_timeout,
+            fell_back_to_server. Null once a runner took the run and for every other
+            execution.'
+        billing_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Mode
+          description: 'How the model usage of this run is billed: seat (the runner
+            user''s own Copilot or Cursor seat, not metered by the gateway), metered
+            or unknown. Null for gateway runs.'
         retry_of_execution_id:
           anyOf:
           - type: string
@@ -28379,6 +28463,24 @@ components:
           description: 'Why a PENDING execution has not been admitted yet: account_concurrency_cap
             when the account already has its maximum number of executions running.
             Cleared when the execution is claimed; null for every other row.'
+        routing_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Reason
+          description: 'Why a harness-routed run (agent_config.harness) is waiting,
+            failed or fell back: no_runner_with_harness, harness_signed_out, harness_disabled,
+            model_not_available, runner_offline, owner_has_no_runner, queue_timeout,
+            fell_back_to_server. Null once a runner took the run and for every other
+            execution.'
+        billing_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Mode
+          description: 'How the model usage of this run is billed: seat (the runner
+            user''s own Copilot or Cursor seat, not metered by the gateway), metered
+            or unknown. Null for gateway runs.'
         retry_of_execution_id:
           anyOf:
           - type: string
@@ -31001,6 +31103,102 @@ components:
       title: HarnessModel
       description: One model a harness can run, and where the runner learned about
         it.
+    HarnessModelOption:
+      properties:
+        id:
+          type: string
+          title: Id
+        source:
+          type: string
+          title: Source
+        runners_online:
+          type: integer
+          title: Runners Online
+          default: 0
+      type: object
+      required:
+      - id
+      - source
+      title: HarnessModelOption
+      description: One model a harness can run on the caller's runners.
+    HarnessOption:
+      properties:
+        harness:
+          type: string
+          title: Harness
+        display_name:
+          type: string
+          title: Display Name
+        agent_type:
+          type: string
+          title: Agent Type
+        billing:
+          type: string
+          title: Billing
+        models:
+          items:
+            $ref: '#/components/schemas/HarnessModelOption'
+          type: array
+          title: Models
+        runners_online:
+          type: integer
+          title: Runners Online
+          default: 0
+        runners_total:
+          type: integer
+          title: Runners Total
+          default: 0
+        runners:
+          items:
+            $ref: '#/components/schemas/HarnessRunnerOption'
+          type: array
+          title: Runners
+      type: object
+      required:
+      - harness
+      - display_name
+      - agent_type
+      - billing
+      title: HarnessOption
+      description: One routable harness across the runners the caller may use.
+    HarnessOptionsResponse:
+      properties:
+        harnesses:
+          items:
+            $ref: '#/components/schemas/HarnessOption'
+          type: array
+          title: Harnesses
+      type: object
+      title: HarnessOptionsResponse
+      description: '``GET /api/v1/flows/harness-options`` (contract B editor endpoint).'
+    HarnessRunnerOption:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+        online:
+          type: boolean
+          title: Online
+        eligible:
+          type: boolean
+          title: Eligible
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      type: object
+      required:
+      - id
+      - name
+      - online
+      - eligible
+      title: HarnessRunnerOption
+      description: One runner reporting the harness (for the ``runner_id`` pin).
     HostExecProfileAdvertisement:
       properties:
         name:
@@ -31317,6 +31515,14 @@ components:
             format: date-time
           - type: 'null'
           title: End Time
+        billing_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Mode
+          description: seat for a Copilot or Cursor host run on the runner user's
+            own seat (not metered by the gateway), metered or unknown; null for a
+            gateway run.
       type: object
       required:
       - execution_id
@@ -31520,6 +31726,32 @@ components:
         failed_run_count:
           type: integer
           title: Failed Run Count
+        billing_mode:
+          type: string
+          title: Billing Mode
+          description: 'How the issue''s runs were billed: seat when every run used
+            a runner user''s own Copilot or Cursor seat (not metered by the gateway),
+            metered when none did, mixed otherwise. Seat runs contribute no estimated_cost.'
+          default: metered
+        billing_label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Billing Label
+          description: 'Console and export wording for seat runs: ''Seat (not metered
+            by gateway)''. Null when no run used a seat.'
+        seat_run_count:
+          type: integer
+          title: Seat Run Count
+          description: Runs that used a runner user's own seat.
+          default: 0
+        premium_requests:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Premium Requests
+          description: Copilot premium requests the CLI reported for the seat runs;
+            null when none were reported.
         first_event_at:
           anyOf:
           - type: string
@@ -37056,6 +37288,15 @@ components:
             maxItems: 64
           - type: 'null'
           title: Host Exec Profiles
+        authorized_directories:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+            maxItems: 64
+          - type: 'null'
+          title: Authorized Directories
         harness_inventory:
           anyOf:
           - $ref: '#/components/schemas/HarnessInventory'
@@ -42894,7 +43135,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

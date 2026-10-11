@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -241,104 +240,77 @@ func setHarnessSessionsEnabled(harness string, enabled bool) error {
 // ---------------------------------------------------------------------------
 // Workspace
 
-// runnerSessionWorkspace is a resolved place to run a session.
-type runnerSessionWorkspace struct {
-	Dir   string
-	Kind  string
-	Label string
+// Workspaces are resolved by the #1484 workspace policy
+// (runner_workspace_policy.go): authorized directories with realpath
+// containment and the dirty check, and short-lived tracker checkouts. The
+// helpers below adapt it to the session host.
+
+// sessionWorkspaceRejectionCode maps a workspace policy error to a contract
+// rejection code (RunnerSessionRejectionCode).
+func sessionWorkspaceRejectionCode(err error) string {
+	switch code := sessionWorkspaceErrorCode(err); code {
+	case workspaceErrDirty, workspaceErrCheckout:
+		return code
+	default:
+		return rejectWorkspaceNotAllowed
+	}
 }
 
-type runnerWorkspaceRejection struct {
-	code   string
-	detail string
-}
-
-func (e *runnerWorkspaceRejection) Error() string { return e.code + ": " + e.detail }
-
-// resolveSessionWorkspace turns the server's workspace spec (contract D)
-// into a directory on this host.
-//
-// Temporary resolver until #1484 lands its workspace policy
-// (runner_workspace_policy.go), which replaces this body and adds tracker
-// checkouts. Until then only {"kind":"authorized_directory","id":...} is
-// accepted, and only when the runner.json entry with that id names an
-// absolute path that is an existing directory and is already its own
-// realpath (no symlink anywhere in it), and is not a filesystem root or the
-// home directory itself. Anything else fails workspace_not_authorized.
-func resolveSessionWorkspace(doc map[string]any, spec map[string]any, harness string) (runnerSessionWorkspace, error) {
-	kind, _ := spec["kind"].(string)
-	if kind != "authorized_directory" {
-		return runnerSessionWorkspace{}, &runnerWorkspaceRejection{rejectWorkspaceNotAllowed, fmt.Sprintf("workspace kind %q is not supported by this runner", kind)}
-	}
-	id, _ := spec["id"].(string)
-	entries, _ := doc["authorized_directories"].([]any)
-	for _, raw := range entries {
-		entry, _ := raw.(map[string]any)
-		if entry == nil || entry["id"] != id || id == "" {
-			continue
-		}
-		if !authorizedDirectoryAllowsHarness(entry, harness) {
-			break
-		}
-		path, _ := entry["path"].(string)
-		dir, err := exactAuthorizedDirectory(path)
-		if err != nil {
-			return runnerSessionWorkspace{}, &runnerWorkspaceRejection{rejectWorkspaceNotAllowed, err.Error()}
-		}
-		label, _ := entry["label"].(string)
-		if strings.TrimSpace(label) == "" {
-			label = id
-		}
-		return runnerSessionWorkspace{Dir: dir, Kind: kind, Label: label}, nil
-	}
-	return runnerSessionWorkspace{}, &runnerWorkspaceRejection{rejectWorkspaceNotAllowed, fmt.Sprintf("directory %q is not authorized for %s on this host", id, harness)}
-}
-
-func authorizedDirectoryAllowsHarness(entry map[string]any, harness string) bool {
-	switch value := entry["harnesses"].(type) {
-	case nil:
-		return true
-	case string:
-		return value == "all"
-	case []any:
-		for _, item := range value {
-			if item == harness {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func exactAuthorizedDirectory(path string) (string, error) {
-	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("authorized directory must be an absolute path")
-	}
-	cleaned := filepath.Clean(path)
-	real, err := filepath.EvalSymlinks(cleaned)
+// resolveRunnerSessionWorkspace resolves the persisted (credential-free)
+// workspace spec of a session. At start it runs the full policy, including
+// the dirty check and a tracker clone. On later turns an authorized
+// directory is re-validated for containment only (the session's own edits
+// make it dirty), and a checkout is the session's existing clone.
+func resolveRunnerSessionWorkspace(ctx context.Context, s *runnerRemoteSession, raw map[string]any, atStart bool, logf func(string)) (*sessionWorkspace, error) {
+	spec, err := parseSessionWorkspaceSpec(raw)
 	if err != nil {
-		return "", fmt.Errorf("authorized directory is not available")
+		return nil, err
 	}
-	same := real == cleaned
-	if isWindowsAbsPath(cleaned) {
-		same = strings.EqualFold(real, cleaned)
+	if !atStart && spec.Kind == workspaceKindTrackerCheckout {
+		return existingSessionCheckout(s)
 	}
-	if !same {
-		return "", fmt.Errorf("authorized directory must not contain a symlink")
+	if !atStart {
+		spec.AllowDirty = true
 	}
-	info, err := os.Stat(real)
-	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("authorized directory is not a directory")
+	return resolveSessionWorkspace(ctx, s.RemoteSessionID, spec, sessionWorkspaceOptions{Harness: s.Harness, ReadOnlyUnsupported: true, Logf: logf})
+}
+
+// existingSessionCheckout returns the clone made at session start. It must
+// still be a real directory directly inside this session's workspace root.
+func existingSessionCheckout(s *runnerRemoteSession) (*sessionWorkspace, error) {
+	root, err := sessionWorkspacesRootPath()
+	if err != nil || s.WorkspaceDir == "" {
+		return nil, workspaceError(workspaceErrNotAuthorized, "the session checkout is not available")
 	}
-	if filepath.Dir(real) == real {
-		return "", fmt.Errorf("the filesystem root cannot be authorized")
+	sessionRoot := filepath.Join(root, strings.ToLower(s.RemoteSessionID))
+	dir := filepath.Clean(s.WorkspaceDir)
+	info, err := os.Lstat(dir)
+	if filepath.Dir(dir) != sessionRoot || err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, workspaceError(workspaceErrNotAuthorized, "the session checkout is not available")
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if realHome, err := filepath.EvalSymlinks(home); err == nil && strings.EqualFold(realHome, real) {
-			return "", fmt.Errorf("the whole home directory cannot be authorized")
+	return &sessionWorkspace{Kind: workspaceKindTrackerCheckout, Dir: dir, Label: s.WorkspaceLabel, Ephemeral: true, root: sessionRoot}, nil
+}
+
+// cleanupSessionCheckout deletes a tracker checkout when its session ends.
+func cleanupSessionCheckout(s *runnerRemoteSession) {
+	if s.WorkspaceKind != workspaceKindTrackerCheckout {
+		return
+	}
+	if root, err := sessionWorkspacesRootPath(); err == nil {
+		_ = removeSessionWorkspaceDir(filepath.Join(root, strings.ToLower(s.RemoteSessionID)))
+	}
+}
+
+// liveSessionCheckouts names the sessions on disk whose checkout a runner
+// restart must keep, so a restored session resumes in its own clone.
+func liveSessionCheckouts() map[string]bool {
+	keep := map[string]bool{}
+	for _, s := range persistedRunnerSessions() {
+		if s.WorkspaceKind == workspaceKindTrackerCheckout {
+			keep[strings.ToLower(s.RemoteSessionID)] = true
 		}
 	}
-	return real, nil
+	return keep
 }
 
 // ---------------------------------------------------------------------------
@@ -357,12 +329,16 @@ type runnerRemoteSession struct {
 	Workspace        map[string]any `json:"workspace"`
 	WorkspaceKind    string         `json:"workspace_kind"`
 	WorkspaceLabel   string         `json:"workspace_label"`
-	ActorUserID      string         `json:"actor_user_id"`
-	ActorName        string         `json:"actor_name,omitempty"`
-	StartedAt        time.Time      `json:"started_at"`
-	LastActivityAt   time.Time      `json:"last_activity_at"`
-	IdleTimeoutSecs  int            `json:"idle_timeout_seconds"`
-	Turns            int            `json:"turns"`
+	// WorkspaceDir is the clone of a tracker checkout, kept so later turns
+	// and a restarted runner use the same directory. Empty for authorized
+	// directories, which are resolved from runner.json on every turn.
+	WorkspaceDir    string    `json:"workspace_dir,omitempty"`
+	ActorUserID     string    `json:"actor_user_id"`
+	ActorName       string    `json:"actor_name,omitempty"`
+	StartedAt       time.Time `json:"started_at"`
+	LastActivityAt  time.Time `json:"last_activity_at"`
+	IdleTimeoutSecs int       `json:"idle_timeout_seconds"`
+	Turns           int       `json:"turns"`
 	// ActiveTurnID is the turn running when the state was saved; a restart
 	// reports it interrupted instead of leaving the server waiting.
 	ActiveTurnID string `json:"active_turn_id,omitempty"`
@@ -686,14 +662,19 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		return
 	}
 	spec := sanitizeSessionWorkspaceSpec(msg.Workspace)
-	workspace, err := resolveSessionWorkspace(doc, spec, msg.Harness)
+	parsed, err := parseSessionWorkspaceSpec(msg.Workspace)
+	var workspace *sessionWorkspace
+	if err == nil {
+		workspace, err = resolveSessionWorkspace(context.Background(), id, parsed, sessionWorkspaceOptions{
+			Harness: msg.Harness,
+			// No session adapter runs a harness read-only yet, so a
+			// read_only directory is refused rather than opened writable.
+			ReadOnlyUnsupported: true,
+			Logf:                func(line string) { m.logf("%s", line) },
+		})
+	}
 	if err != nil {
-		code, detail := rejectWorkspaceNotAllowed, err.Error()
-		var rejection *runnerWorkspaceRejection
-		if errors.As(err, &rejection) {
-			code, detail = rejection.code, rejection.detail
-		}
-		m.reject(id, code, detail)
+		m.reject(id, sessionWorkspaceRejectionCode(err), err.Error())
 		return
 	}
 	idle := settings.IdleTimeout
@@ -708,6 +689,7 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		Workspace:       spec,
 		WorkspaceKind:   workspace.Kind,
 		WorkspaceLabel:  workspace.Label,
+		WorkspaceDir:    checkoutDir(workspace),
 		StartedAt:       now,
 		LastActivityAt:  now,
 		IdleTimeoutSecs: int(idle / time.Second),
@@ -720,6 +702,7 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 	if err := adapter.Start(session); err != nil {
 		code, detail := classifySessionStartError(err)
 		session.state = runnerSessionStateFailed
+		_ = workspace.Cleanup()
 		m.reject(id, code, detail)
 		return
 	}
@@ -750,12 +733,23 @@ func classifySessionStartError(err error) (string, string) {
 // never persisted or echoed.
 func sanitizeSessionWorkspaceSpec(spec map[string]any) map[string]any {
 	out := map[string]any{}
-	for _, key := range []string{"kind", "id", "tracker_id", "repository", "ref"} {
+	// Never the credential: it is used once for the clone and discarded.
+	for _, key := range []string{"kind", "id", "path", "tracker_id", "provider", "repository", "ref"} {
 		if value, ok := spec[key].(string); ok {
 			out[key] = value
 		}
 	}
+	if spec["allow_dirty"] == true {
+		out["allow_dirty"] = true
+	}
 	return out
+}
+
+func checkoutDir(w *sessionWorkspace) string {
+	if w == nil || w.Kind != workspaceKindTrackerCheckout {
+		return ""
+	}
+	return w.Dir
 }
 
 func limitSeconds(limits map[string]any, key string) time.Duration {
@@ -875,12 +869,11 @@ func (m *runnerSessionManager) startTurn(s *runnerRemoteSession, turn runnerSess
 	m.persist(s)
 	m.setState(s, runnerSessionStateRunning)
 	adapter := m.adapters[s.Harness]
-	doc, err := m.loadConfig()
-	var workspace runnerSessionWorkspace
-	if err == nil {
-		// Containment is checked again at use: the directory may have been
-		// removed from runner.json or replaced by a symlink since the start.
-		workspace, err = resolveSessionWorkspace(doc, s.Workspace, s.Harness)
+	// Containment is checked again at use: the directory may have been
+	// removed from runner.json or replaced by a symlink since the start.
+	workspace, err := resolveRunnerSessionWorkspace(ctx, s, s.Workspace, false, func(line string) { m.logf("%s", line) })
+	if workspace == nil {
+		workspace = &sessionWorkspace{}
 	}
 	spec := runnerSessionTurnSpec{
 		HarnessSessionID: s.HarnessSessionID,
@@ -893,7 +886,7 @@ func (m *runnerSessionManager) startTurn(s *runnerRemoteSession, turn runnerSess
 	go func() {
 		var result runnerSessionTurnResult
 		if err != nil {
-			result = runnerSessionTurnResult{Status: "error", ErrorCode: rejectWorkspaceNotAllowed, Error: err.Error()}
+			result = runnerSessionTurnResult{Status: "error", ErrorCode: sessionWorkspaceRejectionCode(err), Error: err.Error()}
 		} else {
 			result = adapter.Turn(ctx, spec, func(kind string, payload map[string]any) {
 				m.emitEvent(sessionID, turn.ID, kind, payload)
@@ -1020,6 +1013,7 @@ func (m *runnerSessionManager) endLocked(s *runnerRemoteSession, reason string) 
 	if adapter := m.adapters[s.Harness]; adapter != nil {
 		_ = adapter.Stop(s)
 	}
+	cleanupSessionCheckout(s)
 	m.logf("Remote session %s ended: %s", s.RemoteSessionID, reason)
 }
 
@@ -1122,6 +1116,7 @@ func (m *runnerSessionManager) restore() {
 			_ = os.Remove(filepath.Join(m.stateDir, name))
 			s.state = runnerSessionStateEnded
 			s.endReason = runnerSessionEndIdleTimeout
+			cleanupSessionCheckout(&s)
 			m.enqueue(m.stateMessage(&s))
 			continue
 		}

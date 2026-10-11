@@ -109,12 +109,20 @@ def _actor_name(user: Any) -> str:
 
 
 def sanitize_workspace(workspace: Mapping[str, Any]) -> Dict[str, Any]:
-    """The workspace spec as stored: never a credential (contract D)."""
-    return {
+    """The workspace spec as stored: never a credential (contract D).
+
+    ``provider`` and the relative ``path`` are the #1484 additions the runner
+    needs (it derives the clone URL from the provider); ``allow_dirty`` is
+    kept only as a real boolean and is set by the caller for the owner only.
+    """
+    stored: Dict[str, Any] = {
         key: workspace[key]
-        for key in ("kind", "id", "tracker_id", "repository", "ref")
+        for key in ("kind", "id", "path", "tracker_id", "provider", "repository", "ref")
         if isinstance(workspace.get(key), str)
     }
+    if workspace.get("allow_dirty") is True:
+        stored["allow_dirty"] = True
+    return stored
 
 
 def audit_details(
