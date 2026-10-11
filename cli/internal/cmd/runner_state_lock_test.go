@@ -92,3 +92,35 @@ func TestCredentialDirectoriesCannotBeAuthorized(t *testing.T) {
 		t.Fatalf("a project directory must be allowed: %v", err)
 	}
 }
+
+func TestCredentialDirectoryRefusedUnderAnotherSpelling(t *testing.T) {
+	home := canonicalTempHome(t)
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(ssh, "keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// On a case-insensitive volume (the macOS default) ~/.SSH is ~/.ssh.
+	upper := filepath.Join(home, ".SSH")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("volume is case-sensitive")
+	}
+	for _, dir := range []string{upper, filepath.Join(upper, "keys")} {
+		if err := refuseHomeDirectory(dir); err == nil {
+			t.Fatalf("%s must be refused", dir)
+		}
+	}
+}
+
+func TestSameFileOrWithin(t *testing.T) {
+	base := t.TempDir()
+	child := filepath.Join(base, "a", "b")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !sameFileOrWithin(child, base) || !sameFileOrWithin(base, base) {
+		t.Fatal("child and base itself must match")
+	}
+	if sameFileOrWithin(base, child) || sameFileOrWithin(t.TempDir(), base) {
+		t.Fatal("unrelated or parent paths must not match")
+	}
+}

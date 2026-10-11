@@ -519,10 +519,30 @@ func refuseSecretDirectory(resolved, secret, name string) error {
 	if err != nil {
 		canonical = filepath.Clean(secret)
 	}
-	if pathWithin(canonical, resolved) || pathWithin(resolved, canonical) {
+	if pathWithin(canonical, resolved) || pathWithin(resolved, canonical) ||
+		sameFileOrWithin(resolved, canonical) || sameFileOrWithin(canonical, resolved) {
 		return fmt.Errorf("%s holds credentials and cannot be an authorized directory or contain one", name)
 	}
 	return nil
+}
+
+// sameFileOrWithin reports whether child, or one of its ancestors, is the
+// same directory as base by file identity. It catches a different spelling
+// of the same path on a case-insensitive volume (the macOS default), where
+// the lexical comparison is exact.
+func sameFileOrWithin(child, base string) bool {
+	baseInfo, err := os.Stat(base)
+	if err != nil {
+		return false
+	}
+	for current := filepath.Clean(child); ; current = filepath.Dir(current) {
+		if info, err := os.Stat(current); err == nil && os.SameFile(info, baseInfo) {
+			return true
+		}
+		if filepath.Dir(current) == current {
+			return false
+		}
+	}
 }
 
 // foldPath normalises a canonical path for comparison: case folded on
