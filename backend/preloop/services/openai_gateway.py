@@ -5450,7 +5450,12 @@ class OpenAIGatewayService:
         guard_unmetered_hosted_call(ai_model)
         self._codex_transport_meta = {"transport": "http"}
         # Resolved while the DB phase is still open (account override).
-        use_websocket = self._codex_upstream_ws_enabled()
+        self._codex_ws_override_source = None
+        use_websocket = self._codex_upstream_ws_enabled(ai_model)
+        # Which switch decided the transport (model | account | global).
+        override_source = getattr(self, "_codex_ws_override_source", None)
+        if override_source:
+            self._codex_transport_meta["ws_override_source"] = override_source
         self.release_db_for_wait(ai_model)
         if use_websocket:
             ws_response = self._create_openai_codex_response_ws(
@@ -5492,14 +5497,29 @@ class OpenAIGatewayService:
                 message="OpenAI Codex upstream returned invalid JSON",
             ) from exc
 
-    def _codex_upstream_ws_enabled(self) -> bool:
+    def _codex_upstream_ws_enabled(self, ai_model: Any = None) -> bool:
         """Whether this call may use the upstream Responses WebSocket (#1454).
 
-        Global default from ``CODEX_UPSTREAM_WEBSOCKET``; a boolean
-        ``codex_upstream_websocket`` key in the account's ``meta_data``
-        overrides it either way for that account.
+        Precedence (first boolean wins): the model's
+        ``meta_data.codex_upstream_websocket`` (openai-codex models only),
+        then the account's ``meta_data.codex_upstream_websocket``, then the
+        global ``CODEX_UPSTREAM_WEBSOCKET`` setting. The switch that applied
+        is kept in ``self._codex_ws_override_source`` for the usage row.
         """
+        model_override = None
+        if (
+            ai_model is not None
+            and str(getattr(ai_model, "provider_name", "") or "").strip().lower()
+            == "openai-codex"
+        ):
+            model_meta = getattr(ai_model, "meta_data", None)
+            if isinstance(model_meta, dict):
+                model_override = model_meta.get(CODEX_UPSTREAM_WS_ACCOUNT_SETTING)
+        if isinstance(model_override, bool):
+            self._codex_ws_override_source = "model"
+            return model_override
         enabled = bool(getattr(settings, "codex_upstream_websocket", False))
+        source = "global"
         try:
             from preloop.models.crud import crud_account
 
@@ -5512,8 +5532,10 @@ class OpenAIGatewayService:
             )
             if isinstance(override, bool):
                 enabled = override
+                source = "account"
         except Exception:  # noqa: BLE001 - the flag lookup must never fail a call
             logger.debug("Codex WS account override lookup failed", exc_info=True)
+        self._codex_ws_override_source = source
         return enabled
 
     def _codex_ws_fallback(self, reason: str, action: str) -> None:
@@ -5690,6 +5712,7 @@ class OpenAIGatewayService:
                 if plan.mode == "full":
                     codex_ws.count(f"full_reason_{plan.reason}")
                 self._codex_transport_meta = {
+                    **(self._codex_transport_meta or {}),
                     "transport": "ws",
                     "ws_mode": plan.mode,
                 }

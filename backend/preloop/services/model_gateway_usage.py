@@ -157,6 +157,14 @@ def _alias_failures(
     ]
 
 
+_WS_OVERRIDE_SOURCES = frozenset({"model", "account", "global"})
+
+
+def _str_or_none(value: Any) -> Optional[str]:
+    """Return ``value`` when it is a non-empty string, else ``None``."""
+    return value if isinstance(value, str) and value else None
+
+
 class ModelGatewayUsageService:
     """Build product-facing summaries from gateway usage facts."""
 
@@ -698,6 +706,7 @@ class ModelGatewayUsageService:
 
     @staticmethod
     def _search_row_to_schema(item) -> GatewayUsageSearchResultItem:
+        meta = item.get("meta_data") if isinstance(item.get("meta_data"), dict) else {}
         return GatewayUsageSearchResultItem(
             api_usage_id=item["api_usage_id"],
             ai_model_id=item["ai_model_id"],
@@ -724,6 +733,13 @@ class ModelGatewayUsageService:
             estimated_cost=item["estimated_cost"],
             token_usage=GatewayTokenUsage.from_row(item),
             cache_detail_source=item.get("cache_detail_source"),
+            transport=_str_or_none(meta.get("transport")),
+            ws_mode=_str_or_none(meta.get("ws_mode")),
+            ws_override_source=(
+                meta.get("ws_override_source")
+                if meta.get("ws_override_source") in _WS_OVERRIDE_SOURCES
+                else None
+            ),
             excerpt=item["excerpt"],
             meta_data=item["meta_data"],
         )

@@ -61,6 +61,10 @@ import {
   type ExecutionRunner,
 } from '../../utils/execution-presentation';
 import { renderFailureCategoryChip } from '../../utils/failure-category';
+import {
+  renderResultSchemaErrors,
+  type ResultSchemaValidation,
+} from '../../utils/result-schema';
 import '../../components/token-figures.ts';
 import {
   inputTokensOf,
@@ -136,6 +140,11 @@ interface FlowExecution {
    * on servers that do not derive it yet.
    */
   failure_category?: string | null;
+  /**
+   * The captured result.json checked against the flow result schema (#868).
+   * Null when the flow sets no schema.
+   */
+  result_schema_validation?: ResultSchemaValidation | null;
   mcp_usage_logs?: any[];
   tool_calls_count?: number;
   total_tokens?: number;
@@ -1441,6 +1450,7 @@ export class FlowExecutionView extends LitElement {
           'error_message',
           'end_time',
           'failure_category',
+          'result_schema_validation',
           'agent_session_reference',
           'runner',
           'result',
@@ -3143,6 +3153,7 @@ export class FlowExecutionView extends LitElement {
               `
             : ''
         }
+        ${renderResultSchemaErrors(execution.result_schema_validation)}
         ${
           execution.result
             ? html`

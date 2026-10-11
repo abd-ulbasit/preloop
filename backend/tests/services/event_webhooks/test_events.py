@@ -459,3 +459,38 @@ def test_agent_onboarded_outcome_classification():
     # Naive and aware stamps compare as UTC.
     assert outcome(prior_onboarding_at=earlier, latest_merge_at=later) == "merged"
     assert outcome(prior_onboarding_at=later, latest_merge_at=earlier) == "relinked"
+
+
+@pytest.mark.parametrize(
+    ("validation", "expected"),
+    [
+        (None, None),
+        ({"valid": False, "errors": [{"path": "$.verdict"}]}, False),
+        ({"valid": True, "errors": []}, True),
+    ],
+)
+def test_flow_execution_finished_carries_result_schema_valid(
+    db_session, account, make_endpoint, validation, expected
+):
+    """#868: a consumer can skip the result fetch for an invalid run."""
+    make_endpoint()
+    execution = SimpleNamespace(
+        id=uuid.uuid4(),
+        trigger_type="manual",
+        start_time=None,
+        end_time=None,
+        evidence_receipt=None,
+        result_schema_validation=validation,
+    )
+    flow = SimpleNamespace(id=uuid.uuid4(), account_id=account.id, name="Analysis")
+
+    emitters.emit_flow_execution_finished(
+        db_session,
+        execution,
+        flow,
+        status="failed" if expected is False else "succeeded",
+        failure_category="result_schema_invalid" if expected is False else None,
+    )
+
+    data = _only_payload(db_session, account.id)["data"]
+    assert data["result_schema_valid"] is expected

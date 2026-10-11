@@ -360,3 +360,69 @@ def test_chat_bridged_responses_stream_keeps_details_in_completed():
         "input_tokens_details": {"cached_tokens": 64},
         "output_tokens_details": {"reasoning_tokens": 3},
     }
+
+
+def _search_item(meta):
+    from datetime import datetime, timezone
+
+    return {
+        "api_usage_id": "u1",
+        "ai_model_id": None,
+        "timestamp": datetime(2026, 10, 11, tzinfo=timezone.utc),
+        "status_code": 200,
+        "outcome": "success",
+        "endpoint": "/openai/v1/responses",
+        "method": "POST",
+        "provider_name": "openai-codex",
+        "model_alias": "gpt-6.1-sol-gm",
+        **{
+            key: None
+            for key in (
+                "flow_id",
+                "flow_name",
+                "flow_execution_id",
+                "runtime_session_id",
+                "session_source_type",
+                "session_source_id",
+                "session_reference",
+                "runtime_principal_type",
+                "runtime_principal_id",
+                "runtime_principal_name",
+                "auth_subject_type",
+                "api_key_id",
+                "api_key_name",
+            )
+        },
+        "estimated_cost": 0.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 1,
+        "total_tokens": 11,
+        "excerpt": "",
+        "meta_data": meta,
+    }
+
+
+def test_search_item_exposes_codex_transport_fields():
+    from preloop.services.model_gateway_usage import ModelGatewayUsageService
+
+    item = ModelGatewayUsageService._search_row_to_schema(
+        _search_item(
+            {"transport": "ws", "ws_mode": "incremental", "ws_override_source": "model"}
+        )
+    )
+    assert item.transport == "ws"
+    assert item.ws_mode == "incremental"
+    assert item.ws_override_source == "model"
+
+
+def test_search_item_transport_fields_null_when_absent_or_unknown():
+    from preloop.services.model_gateway_usage import ModelGatewayUsageService
+
+    item = ModelGatewayUsageService._search_row_to_schema(
+        _search_item({"ws_override_source": "bogus"})
+    )
+    assert (item.transport, item.ws_mode, item.ws_override_source) == (
+        None,
+        None,
+        None,
+    )

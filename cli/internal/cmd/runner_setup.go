@@ -197,7 +197,8 @@ func offerRunnerAfterLogin(out io.Writer, user *UserInfo, instance string, headl
 	})
 }
 
-func loginTerminal() bool {
+// loginTerminal is a variable so tests can simulate an interactive login.
+var loginTerminal = func() bool {
 	return stdinIsTerminal() && stdoutIsTerminal()
 }
 
@@ -397,7 +398,7 @@ func fetchRunnerPolicy() *runnerPolicy {
 		return nil
 	}
 	var user UserInfo
-	if err := client.Get(userInfoPath, &user); err != nil {
+	if err := fetchUserInfo(client, &user); err != nil {
 		return nil
 	}
 	return user.RunnerPolicy
