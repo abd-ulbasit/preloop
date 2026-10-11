@@ -47,6 +47,12 @@ describe('RunnersView', () => {
             status,
             headers: { 'Content-Type': 'application/json' },
           });
+        if (url.includes('/scheduling')) {
+          return json({
+            ...(runners[0] as object),
+            ...JSON.parse(String(init?.body || '{}')),
+          });
+        }
         if (url.includes('/concurrency')) {
           const body = JSON.parse(String(init?.body || '{}')) as {
             concurrency?: number;
@@ -1124,6 +1130,51 @@ describe('RunnersView', () => {
     });
     await element.updateComplete;
     expect(element.shadowRoot?.textContent).not.to.contain('office-mac');
+  });
+
+  it('pauses a runner and opts into untagged jobs', async () => {
+    fetchStub = createFetchStub([
+      {
+        id: 'r',
+        name: 'Laptop',
+        status: 'online',
+        paused: false,
+        accept_untagged: false,
+      },
+    ]);
+    const element = await fixture<RunnersView>(
+      html`<runners-view></runners-view>`
+    );
+    await waitUntil(() =>
+      Boolean(element.shadowRoot?.querySelector('.pause-runner'))
+    );
+    (element.shadowRoot!.querySelector('.pause-runner') as HTMLElement).click();
+    await waitUntil(() =>
+      element
+        .shadowRoot!.querySelector('.pause-runner')!
+        .textContent!.includes('Resume runner')
+    );
+    expect(
+      (element.shadowRoot!.querySelector('.new-session') as HTMLButtonElement)
+        .disabled
+    ).to.equal(true);
+    (
+      element.shadowRoot!.querySelector('.accept-untagged') as HTMLElement
+    ).click();
+    await waitUntil(() =>
+      element
+        .shadowRoot!.querySelector('.accept-untagged')!
+        .textContent!.includes('on')
+    );
+    const patches = fetchStub
+      .getCalls()
+      .filter((call) => String(call.args[0]).includes('/scheduling'));
+    expect(JSON.parse(patches[0].args[1]!.body as string)).to.deep.equal({
+      paused: true,
+    });
+    expect(JSON.parse(patches[1].args[1]!.body as string)).to.deep.equal({
+      accept_untagged: true,
+    });
   });
 
   it('wraps the runners table in a horizontal scroll box', async () => {

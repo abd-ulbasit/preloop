@@ -23,6 +23,14 @@ on macOS.
   same user that runs the runner.
 - Optional: Docker Desktop, only if flows should use the Docker harness.
 
+## Docker capability and job selection
+
+The runner advertises `docker` only when `docker ps --quiet` succeeds within five seconds, both on registration and on heartbeats. A CLI on PATH is insufficient: Docker Desktop must be running and the runner user must be able to connect to its daemon. Container flows are never leased to a runner without that capability. Native Cursor, Copilot, and Devin jobs can still run in managed temporary workspaces or authorized directories.
+
+The LaunchAgent includes `~/.docker/bin` and Docker Desktop's application bin directory on PATH. The runner also checks those locations when launched by an older service definition. macOS has no general installation-time Docker permission grant; check `docker ps` as the runner user and start Docker Desktop if needed. Custom `DOCKER_HOST` or `DOCKER_CONTEXT` settings must also be present in the service environment, not only in your interactive shell.
+
+Installed, enabled and signed-in agents add tags such as `cursor_cli`, `copilot_cli`, `devin_cli`, `codex_cli`, `claude_code` and `opencode`. Presence of a tag does not change how that adapter executes: container adapters still require `docker`. In **Runners**, **Pause runner** stops new work while current jobs finish. **Untagged jobs** is off by default; enable it to accept jobs without a pool tag or native harness/profile selection.
+
 ## 1. Install the CLI
 
 ```sh
@@ -191,4 +199,4 @@ completion, injection rejection, process-group halt). macOS specifics:
 | `copilot_not_logged_in` | Run `copilot` once and `/login` as the runner user, or export `COPILOT_GITHUB_TOKEN` where the runner starts. |
 | CLI found in a terminal but not by the launchd runner | The agent CLI is outside the searched locations. Symlink it into `~/.local/bin` or install via Homebrew or npm. |
 | Service dies after logout | LaunchAgents run per login session. Use a Linux runner with systemd lingering for always-on machines. |
-| Docker flows report `docker is not available` | Host profiles do not need Docker. For the Docker harness, install Docker Desktop and make sure `docker info` succeeds as the runner user. |
+| Docker flows report `docker is not available` | Host profiles do not need Docker. For the Docker harness, install Docker Desktop and make sure `docker ps` succeeds as the runner user. |

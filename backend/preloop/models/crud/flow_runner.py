@@ -443,6 +443,7 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
                 # Presence (#1506): a runner that said going_to_sleep is
                 # asleep even before its socket drops; no new work.
                 FlowRunner.sleep_signaled_at.is_(None),
+                FlowRunner.paused.is_(False),
             )
         rows = query.all()
         pool_l = pool.lower()
@@ -498,6 +499,7 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
                 # Presence (#1506): asleep runners take no new work, even
                 # when a caller holds a runner id from before the signal.
                 FlowRunner.sleep_signaled_at.is_(None),
+                FlowRunner.paused.is_(False),
             )
             .populate_existing()
             .with_for_update(skip_locked=True)
@@ -1133,6 +1135,36 @@ def _created_before(row: FlowRunner, cutoff: datetime) -> bool:
     return created < cutoff
 
 
+def runner_labels(row: FlowRunner) -> List[str]:
+    """Custom labels plus current, usable capability tags."""
+    capability_labels = {
+        "docker",
+        "copilot_cli",
+        "devin_cli",
+        "cursor_cli",
+        "claude_code",
+        "codex_cli",
+        "opencode",
+        "gemini_cli",
+        "claude_desktop",
+        "vscode_copilot",
+    }
+    labels = {
+        label for label in (row.labels or []) if label.lower() not in capability_labels
+    }
+    if (getattr(row, "capabilities", None) or {}).get("docker_available") is True:
+        labels.add("docker")
+    inventory = getattr(row, "harness_inventory", None) or {}
+    for entry in inventory.get("entries", []):
+        if (
+            entry.get("enabled") is not False
+            and entry.get("login_state") == "signed_in"
+            and entry.get("support_level") in ("flows_only", "flows_and_sessions")
+        ):
+            labels.add(entry["harness"])
+    return sorted(labels)
+
+
 def runner_matches_pool(row: FlowRunner, pool: str) -> bool:
     """True when the runner id, name, or a label equals the pool string."""
     pool_l = (pool or "").strip().lower()
@@ -1140,7 +1172,7 @@ def runner_matches_pool(row: FlowRunner, pool: str) -> bool:
         return True
     if pool_l == "server":
         return False
-    labels = [str(label).lower() for label in (row.labels or [])]
+    labels = [str(label).lower() for label in runner_labels(row)]
     return (
         str(row.id).lower() == pool_l
         or (row.name or "").lower() == pool_l

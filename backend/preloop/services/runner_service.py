@@ -95,7 +95,9 @@ def _account_default_runner_pool(flow: Flow, db: Optional[Session]) -> Optional[
     return value if isinstance(value, str) or value is None else None
 
 
-def _has_online_private_runner(db: Session, account_id: Any) -> bool:
+def _has_online_private_runner(
+    db: Session, account_id: Any, *, agent_type: Any = None, agent_config: Any = None
+) -> bool:
     """True when the account has at least one private runner with a free slot.
 
     ``find_matching(..., online_only=True)`` includes runners that are full.
@@ -113,8 +115,20 @@ def _has_online_private_runner(db: Session, account_id: Any) -> bool:
     matches = crud_flow_runner.find_matching(
         db, account_id=account_id, pool=AUTO_RUNNER_POOL, online_only=True
     )
+    from preloop.services.host_exec import host_exec_effective_profile
+
+    profile = host_exec_effective_profile(agent_type, agent_config)
     return any(
-        getattr(row, "status", None) in ("online", "busy")
+        (
+            runner_has_host_exec_profile(row, profile, agent_type=agent_type)
+            if profile
+            else (
+                getattr(row, "accept_untagged", False) is True
+                and (getattr(row, "capabilities", None) or {}).get("docker_available")
+                is True
+            )
+        )
+        and getattr(row, "status", None) in ("online", "busy")
         and int(getattr(row, "free_slots", 0)) > 0
         for row in (matches or [])
     )
@@ -262,9 +276,51 @@ def resolve_runner_pool(
     account_id = getattr(flow, "account_id", None)
     if account_id is None:
         account_id = (execution_context or {}).get("account_id")
-    if db is not None and _has_online_private_runner(db, account_id):
+    if db is not None and _has_online_private_runner(
+        db,
+        account_id,
+        agent_type=getattr(flow, "agent_type", None),
+        agent_config=getattr(flow, "agent_config", None),
+    ):
         return AUTO_RUNNER_POOL
     return None
+
+
+class RunnerCapabilityError(ValueError):
+    """An explicitly selected runner pool cannot execute the requested job."""
+
+
+def validate_runner_capabilities(
+    db: Session, flow: Flow, execution_context: Dict[str, Any]
+) -> None:
+    """Refuse container triggers explicitly routed to a pool without Docker."""
+    from preloop.services.host_exec import host_exec_effective_profile
+
+    agent_type = getattr(flow, "agent_type", None)
+    agent_config = getattr(flow, "agent_config", None)
+    from preloop.services.host_exec_publication import host_publication_requested
+
+    if host_exec_effective_profile(
+        agent_type, agent_config
+    ) and not host_publication_requested(getattr(flow, "git_clone_config", None)):
+        return
+    pool = resolve_runner_pool(flow, execution_context, db=db)
+    if not pool or pool.lower() == AUTO_RUNNER_POOL:
+        return
+    matches = list(
+        crud_flow_runner.find_matching(
+            db, account_id=flow.account_id, pool=pool, online_only=False
+        )
+    )
+    if (matches or pool.lower() == "docker") and not any(
+        (runner.capabilities or {}).get("docker_available") is True
+        for runner in matches
+    ):
+        raise RunnerCapabilityError(
+            f"Runner pool '{pool}' cannot run container flows: no runner reports a "
+            "working Docker daemon. Start Docker and verify docker ps as the runner "
+            "user, or select a Docker-capable runner pool."
+        )
 
 
 _PERSISTED_SECRET_KEYS = ("account_api_token", "launch", "credential")
@@ -673,6 +729,29 @@ def harness_routing_reason(
     return 0, best or ROUTING_OWNER_HAS_NO_RUNNER
 
 
+def runner_accepts_job(
+    runner: FlowRunner,
+    pool: str,
+    payload: Dict[str, Any],
+    *,
+    pinned_runner_id: Optional[UUID] = None,
+) -> bool:
+    """Require a usable execution capability and honor scheduling preferences."""
+    if getattr(runner, "paused", False) is True:
+        return False
+    native = bool(host_exec_profile_name(payload))
+    if (not native or payload.get("_publication")) and (
+        getattr(runner, "capabilities", None) or {}
+    ).get("docker_available") is not True:
+        return False
+    selection = payload.get(HOST_EXEC_LEASE_KEY)
+    harness = selection.get("harness") if isinstance(selection, Mapping) else None
+    tagged = bool(
+        harness or native or pinned_runner_id or (pool and pool.lower() != "auto")
+    )
+    return tagged or getattr(runner, "accept_untagged", False) is True
+
+
 def lease_job(
     db: Session,
     *,
@@ -731,6 +810,8 @@ def lease_job(
     execution = crud_flow_execution.get(db, id=str(execution_id), account_id=account_id)
     flow_id = str(execution.flow_id) if execution else None
     for candidate in available:
+        if not runner_accepts_job(candidate, pool, payload, pinned_runner_id=pinned):
+            continue
         entry = None
         if harness:
             ok, _reason, entry = runner_eligible_for_harness(
@@ -767,6 +848,9 @@ def lease_job(
             continue
         runner = crud_flow_runner.claim_free_slot(db, runner_id=candidate.id)
         if runner is None:
+            continue
+        if not runner_accepts_job(runner, pool, payload, pinned_runner_id=pinned):
+            db.rollback()
             continue
         if payload.get("_publication"):
             capability = runner.publication_capabilities or {}
@@ -852,6 +936,8 @@ def runner_console_payload(
     execution_id = runner.current_execution_id
     assignments = list(getattr(runner, "assignments", None) or [])
     inventory_updated = getattr(runner, "harness_inventory_updated_at", None)
+    from preloop.models.crud.flow_runner import runner_labels
+
     presence = derive_presence(runner)
     return {
         "id": str(runner.id),
@@ -859,7 +945,9 @@ def runner_console_payload(
         "hostname": runner.hostname,
         "os": runner.os,
         "arch": runner.arch,
-        "labels": list(runner.labels or []),
+        "labels": runner_labels(runner),
+        "paused": bool(getattr(runner, "paused", False)),
+        "accept_untagged": bool(getattr(runner, "accept_untagged", False)),
         "status": runner.status,
         "last_heartbeat": heartbeat.isoformat() if heartbeat is not None else None,
         "current_execution_id": str(execution_id) if execution_id else None,
@@ -926,6 +1014,7 @@ def emit_runner_deleted(account_id: Any, runner_id: Any) -> None:
 _HARNESS_DISPLAY_NAMES = {
     "copilot_cli": "GitHub Copilot CLI",
     "cursor_cli": "Cursor CLI",
+    "devin_cli": "Devin CLI",
 }
 
 

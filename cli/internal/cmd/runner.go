@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -350,6 +351,7 @@ func loadOrRegisterRunner(
 		"harness_inventory":      runnerInventory.current(true),
 		"host_exec_profiles":     hostExecAdvertisements(),
 		"authorized_directories": authorizedDirectoryAdvertisements(),
+		"docker_available":       advertisedDockerAvailable(),
 		"name":                   name,
 		"hostname":               hostname,
 		"os":                     runtime.GOOS,
@@ -570,6 +572,8 @@ func runnerForegroundLoop(
 	connectedOnce := false
 
 	for {
+		// Probe before opening the socket so host checks cannot delay server errors.
+		initialHeartbeat := runnerHeartbeatMessage(jobs.concurrency)
 		conn, err := dialRunnerWebsocket(wsURL, state.Token)
 		if err != nil {
 			fmt.Fprintf(out, "Connection failed (%v). Retrying in %s...\n", err, backoff)
@@ -587,7 +591,7 @@ func runnerForegroundLoop(
 			connectedOnce = true
 		}
 		backoff = runnerReconnectMin
-		err = runRunnerSession(conn, interrupt, out, jobs)
+		err = runRunnerSession(conn, interrupt, out, jobs, initialHeartbeat)
 		_ = conn.Close()
 		if err == nil {
 			return nil
@@ -654,6 +658,7 @@ func runRunnerSession(
 	interrupt <-chan os.Signal,
 	out io.Writer,
 	jobs *runnerJobs,
+	preparedHeartbeat ...map[string]any,
 ) error {
 	// Publication controllers talk to the server over this socket, so they
 	// cannot outlive the session. The jobs themselves can, and do.
@@ -686,7 +691,13 @@ func runRunnerSession(
 		}
 	}()
 
-	if err := writeRunnerJSON(conn, runnerHeartbeatMessage(jobs.concurrency)); err != nil {
+	initialHeartbeat := map[string]any(nil)
+	if len(preparedHeartbeat) > 0 {
+		initialHeartbeat = preparedHeartbeat[0]
+	} else {
+		initialHeartbeat = runnerHeartbeatMessage(jobs.concurrency)
+	}
+	if err := writeRunnerJSON(conn, initialHeartbeat); err != nil {
 		return fmt.Errorf("initial heartbeat: %w", err)
 	}
 	// Remote sessions outlive the socket; tell this connection which are
@@ -1278,7 +1289,9 @@ func runnerControlPlaneURL() (string, error) {
 }
 
 func dockerAvailable() bool {
-	cmd := exec.Command("docker", "info")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, runnerDockerBinary(), "ps", "--quiet")
 	return cmd.Run() == nil
 }
 
@@ -1725,6 +1738,8 @@ func launchdPlistBody(bin, logPath, home string) string {
 	// the OS this code compiles on (the unit test runs everywhere).
 	path := strings.Join([]string{
 		strings.TrimRight(home, "/") + "/.local/bin",
+		strings.TrimRight(home, "/") + "/.docker/bin",
+		"/Applications/Docker.app/Contents/Resources/bin",
 		"/opt/homebrew/bin",
 		"/usr/local/bin",
 		"/usr/bin", "/bin", "/usr/sbin", "/sbin",

@@ -33,6 +33,7 @@ const (
 
 // harnessIDs is the closed wave-1 list; the server drops unknown ids.
 var harnessIDs = []string{
+	"devin_cli",
 	"copilot_cli",
 	"cursor_cli",
 	"claude_code",

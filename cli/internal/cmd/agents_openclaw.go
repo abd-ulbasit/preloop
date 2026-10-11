@@ -6901,6 +6901,9 @@ func loadAgentConfigDocument(agent AgentConfig) (map[string]interface{}, error) 
 		}
 	}
 
+	if isDevinAgent(agent) {
+		return loadDevinDocument(agent.ConfigPath)
+	}
 	if strings.EqualFold(strings.TrimSpace(agent.Name), "openclaw") {
 		return loadJSON5Document(agent.ConfigPath)
 	}
@@ -7336,7 +7339,7 @@ func allowsSynthesizedEmptyConfig(agent AgentConfig) bool {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(agent.Name)) {
-	case "opencode", "openclaw":
+	case "opencode", "openclaw", "copilot cli", "devin":
 		return true
 	case "hermes":
 		return true
@@ -7391,6 +7394,11 @@ func configPathsForAgentSpec(home string, spec agentSpec) []string {
 		paths = append(paths, cleaned)
 	}
 
+	if spec.Name == devinAgentName {
+		if path, err := devinConfigPath("mcp_config.json"); err == nil {
+			addPath(path)
+		}
+	}
 	for _, relPath := range spec.ConfigPaths {
 		addPath(filepath.Join(home, relPath))
 	}

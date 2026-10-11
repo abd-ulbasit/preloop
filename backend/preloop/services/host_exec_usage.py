@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 HOST_EXEC_HOOK_SOURCES: Dict[str, Tuple[str, ...]] = {
     "copilot": ("copilot_cli", "copilot"),
     "cursor": ("cursor",),
+    "devin": ("devin_cli",),
 }
 
 #: Source label of the Copilot premium-request row.

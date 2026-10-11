@@ -4995,6 +4995,8 @@ export async function getRunner(runnerId: string): Promise<RunnerRecord> {
 }
 
 export interface RunnerRecord {
+  paused?: boolean;
+  accept_untagged?: boolean;
   id: string;
   name: string;
   hostname?: string | null;
@@ -5098,6 +5100,27 @@ export async function getFlowHarnessOptions(): Promise<HarnessOption[]> {
 }
 
 /** Raise or lower how many executions a runner may hold at once. */
+export async function updateRunnerScheduling(
+  runnerId: string,
+  settings: { paused?: boolean; accept_untagged?: boolean }
+): Promise<RunnerRecord> {
+  const response = await fetchWithAuth(
+    `/api/v1/runners/${runnerId}/scheduling`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    }
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(errorData, 'Failed to update runner scheduling')
+    );
+  }
+  return response.json();
+}
+
 export async function updateRunnerConcurrency(
   runnerId: string,
   concurrency: number

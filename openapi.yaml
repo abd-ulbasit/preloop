@@ -16149,6 +16149,49 @@ paths:
       security:
       - bearerAuth: []
       x-restricted-ci: deny
+  /api/v1/runners/{runner_id}/scheduling:
+    patch:
+      tags:
+      - Runners
+      summary: Update Runner Scheduling
+      description: Pause new leases or opt into jobs without tags.
+      operationId: update_runner_scheduling_api_v1_runners__runner_id__scheduling_patch
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: runner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Runner Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunnerSchedulingUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunnerResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/runners/{runner_id}/concurrency:
     patch:
       tags:
@@ -31310,6 +31353,7 @@ components:
         harness:
           type: string
           enum:
+          - devin_cli
           - copilot_cli
           - cursor_cli
           - claude_code
@@ -37656,6 +37700,10 @@ components:
             maxItems: 64
           - type: 'null'
           title: Authorized Directories
+        docker_available:
+          type: boolean
+          title: Docker Available
+          default: false
         harness_inventory:
           anyOf:
           - $ref: '#/components/schemas/HarnessInventory'
@@ -37722,6 +37770,14 @@ components:
         status:
           type: string
           title: Status
+        paused:
+          type: boolean
+          title: Paused
+          default: false
+        accept_untagged:
+          type: boolean
+          title: Accept Untagged
+          default: false
         last_heartbeat:
           anyOf:
           - type: string
@@ -37866,6 +37922,14 @@ components:
         status:
           type: string
           title: Status
+        paused:
+          type: boolean
+          title: Paused
+          default: false
+        accept_untagged:
+          type: boolean
+          title: Accept Untagged
+          default: false
         last_heartbeat:
           anyOf:
           - type: string
@@ -37954,6 +38018,21 @@ components:
       - created_at
       - updated_at
       title: RunnerResponse
+    RunnerSchedulingUpdate:
+      properties:
+        paused:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Paused
+        accept_untagged:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Accept Untagged
+      type: object
+      title: RunnerSchedulingUpdate
+      description: Control new work without interrupting running jobs.
     RunnerSessionListItem:
       properties:
         session_id:
@@ -38043,6 +38122,7 @@ components:
         harness:
           type: string
           enum:
+          - devin_cli
           - copilot_cli
           - cursor_cli
           - claude_code

@@ -24,6 +24,7 @@ import (
 // Permission sources understood by the shared hook subcommand. These map onto
 // the `source` field of the frozen permission-check API contract.
 const (
+	permissionSourceDevinCLI   = "devin_cli"
 	permissionSourceClaudeCode = "claude_code"
 	permissionSourceCodexCLI   = "codex_cli"
 	permissionSourceCursor     = "cursor"
@@ -157,7 +158,7 @@ func init() {
 	agentsPermissionHookCmd.Flags().String(
 		"source",
 		"",
-		"agent source: claude_code, codex_cli, cursor, or copilot_cli",
+		"agent source: claude_code, codex_cli, cursor, copilot_cli, or devin_cli",
 	)
 	agentsPermissionHookCmd.Flags().Bool("require-flow-credential", false, "require execution-scoped flow credentials and fail closed")
 	agentsPermissionHookCmd.Flags().String("hook-event", "", "Codex event: PreToolUse or PermissionRequest (default PermissionRequest)")
@@ -178,7 +179,7 @@ func runAgentsPermissionHook(cmd *cobra.Command, args []string) error {
 	source := normalizePermissionSource(mustFlagString(cmd, "source"))
 	failOpen, _ := cmd.Flags().GetBool("fail-open")
 	if source == "" {
-		return fmt.Errorf("--source must be one of claude_code, codex_cli, cursor, copilot_cli")
+		return fmt.Errorf("--source must be one of claude_code, codex_cli, cursor, copilot_cli, devin_cli")
 	}
 
 	hookEvent := mustFlagString(cmd, "hook-event")
@@ -518,6 +519,8 @@ func failureDecision(source string, failOpen bool, reason string) hookDecision {
 // onboard/offboard commands accept, for actionable error messages.
 func permissionSourceDisplayName(source string) string {
 	switch source {
+	case permissionSourceDevinCLI:
+		return "Devin"
 	case permissionSourceClaudeCode:
 		return "Claude Code"
 	case permissionSourceCodexCLI:
@@ -571,11 +574,18 @@ func buildPermissionRequest(
 		req.Model = codexPermissionModel(req.SessionID, firstStringField(event, "transcript_path", "rollout_path"), firstStringField(event, "turn_id"))
 	}
 	req.Cwd = firstStringField(event, "cwd")
+	if source == permissionSourceDevinCLI && req.Cwd == "" {
+		req.Cwd = os.Getenv("DEVIN_PROJECT_DIR")
+	}
 	// Repository identity is a trusted observation of the hook's own cwd, never
 	// of the caller-supplied tool arguments: MCP paths are untrusted.
 	req.Repository = resolveRepositoryIdentity(req.Cwd)
 
 	switch source {
+	case permissionSourceDevinCLI:
+		req.ToolName = firstStringField(event, "tool_name")
+		req.ToolInput = coerceToolInput(event["tool_input"])
+		req.ClientDecision = "ask"
 	case permissionSourceClaudeCode:
 		req.ToolName = firstStringField(event, "tool_name")
 		req.ToolInput = coerceToolInput(event["tool_input"])
@@ -879,6 +889,11 @@ func renderHookDecision(source string, decision hookDecision) map[string]interfa
 	allow := decision.Behavior == "allow"
 	ask := decision.Behavior == "ask"
 	switch source {
+	case permissionSourceDevinCLI:
+		if allow {
+			return map[string]interface{}{"decision": "approve"}
+		}
+		return map[string]interface{}{"decision": "block", "reason": decision.Reason}
 	case permissionSourceClaudeCode:
 		behavior := "deny"
 		if allow {
@@ -955,6 +970,8 @@ func renderHookDecision(source string, decision hookDecision) map[string]interfa
 
 func normalizePermissionSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
+	case permissionSourceDevinCLI, "devin", "devin cli", "devin-cli":
+		return permissionSourceDevinCLI
 	case permissionSourceClaudeCode, "claude code", "claude-code":
 		return permissionSourceClaudeCode
 	case permissionSourceCodexCLI, "codex", "codex cli", "codex-cli":
