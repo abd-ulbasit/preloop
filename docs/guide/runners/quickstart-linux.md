@@ -135,6 +135,10 @@ preloop runner start
 preloop runner status    # service state + last heartbeat + current execution
 ```
 
+The unit pins `HOME` to the home directory of the user who ran `enable`, so
+the service always reads that user's `~/.preloop/config.yaml`. Run `enable`
+again after changing `HOME`.
+
 `preloop runner stop`, `restart`, and `disable` do what they say.
 `preloop runner status` prints `running: <held>/<slots>` and one line per
 execution the runner currently holds.
