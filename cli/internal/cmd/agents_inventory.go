@@ -204,7 +204,7 @@ func inventoryRuntimePresence(deps inventoryProbeDependencies, home string, spec
 		} else if !errors.Is(err, exec.ErrNotFound) && !errors.Is(err, os.ErrNotExist) {
 			failed = true
 		}
-		candidates := runtimeExecutableFallbackPathsFor(deps.GOOS, home, os.Getenv("APPDATA"), command)
+		candidates := runtimeExecutableFallbackPathsFor(deps.GOOS, home, os.Getenv("APPDATA"), os.Getenv("LOCALAPPDATA"), command)
 		if deps.GOOS != "windows" {
 			if matches, err := deps.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", command)); err == nil {
 				candidates = append(candidates, matches...)

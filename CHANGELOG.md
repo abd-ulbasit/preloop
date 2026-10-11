@@ -620,6 +620,25 @@ forwards harness credentials. The controls are written down in
 
 ### Fixed
 
+- **Windows runner runs as a per-user logon task without elevation**
+  (#1513): `preloop runner enable` (and the login prompt) register the task
+  from an XML definition with a logon trigger scoped to the user and an
+  interactive, least-privilege principal, which a standard account may
+  create; the "open an elevated PowerShell" step is gone. The definition
+  drops the `schtasks` defaults that stopped the runner after 72 hours or
+  on battery power, keeps it running while the screen is locked, and ends
+  it at sign-out (the runner reports offline). Task names carry the user
+  (`PreloopRunner-<user>`) so a second user on the machine gets a separate
+  task and runner identity; a 0.17.0 task is still found and upgraded. A
+  refused registration names the cause (`task_creation_prohibited_by_policy`
+  with the Group Policy key, `task_creation_denied` with the `schtasks`
+  command an administrator can run for the user,
+  `task_scheduler_unavailable`), and `preloop runner status` prints the
+  context the runner runs in. Harness binaries are resolved explicitly under
+  the task's registry `PATH`: npm global, winget links, pnpm, Volta, the
+  Copilot standalone install, `~/.local/bin`, scoop, and
+  `%ProgramFiles%\nodejs` / `%NVM_SYMLINK%` for the `node.exe` that
+  unwraps npm shims.
 - **Checkpoint failures name the HTTP status and reason** (#1331): a refused
   workspace capture, restore or evidence upload used to log only
   `PRELOOP_CHECKPOINT failed HTTPError`. The marker now carries
