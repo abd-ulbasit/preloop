@@ -1157,13 +1157,12 @@ def test_list_endpoints_is_not_n_plus_one(harness, db_session):
     event.listen(engine, "before_cursor_execute", count)
     try:
         rows = asyncio.run(
-            desktop.list_desktop_endpoints.__wrapped__(  # type: ignore[attr-defined]
+            desktop.list_desktop_endpoints(
                 managed_agent_id=None,
                 runner_id=None,
                 runtime_session_id=None,
                 state=None,
                 current_user=h.user,
-                db=db_session,
             )
         )["endpoints"]
     finally:
