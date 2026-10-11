@@ -754,3 +754,19 @@ func saveRunnerSetupClient(t *testing.T, apiURL string) {
 	FlagToken = ""
 	t.Cleanup(func() { FlagURL, FlagToken = oldURL, oldToken })
 }
+
+func TestEffectiveRunnerLabelsWithoutConfigMarshalAsEmptyList(t *testing.T) {
+	testenv.SetTempHome(t)
+	got := effectiveRunnerLabels(nil)
+	data, err := json.Marshal(registerRequestLabels{Labels: got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"labels":[]}` {
+		t.Fatalf("labels marshal as %s, want []", data)
+	}
+}
+
+type registerRequestLabels struct {
+	Labels []string `json:"labels"`
+}

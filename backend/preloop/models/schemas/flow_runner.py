@@ -167,6 +167,14 @@ class RunnerRegisterRequest(BaseModel):
         default_factory=list, max_length=64
     )
 
+    @field_validator("labels", mode="before")
+    @classmethod
+    def accept_null_labels(cls, value: Any) -> Any:
+        """Map JSON null to an empty list: configs from before #1479 have no labels."""
+        if value is None:
+            return []
+        return value
+
     @field_validator("host_exec_profiles", mode="before")
     @classmethod
     def accept_null_host_exec_profiles(cls, value: Any) -> Any:
