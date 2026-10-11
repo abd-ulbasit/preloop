@@ -438,6 +438,7 @@ export class PreloopFlowForm extends LitElement {
       customImage: this._customImageValue,
       approvalAmount: this._approvalWindowAmount,
       approvalUnit: this._approvalWindowUnit,
+      resultSchema: this._resultSchemaText,
       callableFlows: this.callableFlows,
     });
   }
@@ -521,6 +522,11 @@ export class PreloopFlowForm extends LitElement {
 
   @state()
   private _approvalWindowUnit?: 'minutes' | 'hours' | 'days';
+
+  // The result schema as typed (#868). Undefined means "not touched on this
+  // form": the saved schema is shown and is not resent on save.
+  @state()
+  private _resultSchemaText?: string;
 
   @state()
   private flowExecutionPath: 'ephemeral' | 'persistent' = 'ephemeral';
@@ -1457,6 +1463,45 @@ export class PreloopFlowForm extends LitElement {
    * miss: focusing and scrolling to the first invalid field shows what to
    * fix, and the banner's `role="alert"` announces why.
    */
+  /** The saved result schema as editable text. */
+  private get resultSchemaText(): string {
+    if (this._resultSchemaText !== undefined) return this._resultSchemaText;
+    const saved = this.flow.result_schema;
+    return saved ? JSON.stringify(saved, null, 2) : '';
+  }
+
+  /** The typed result schema: parsed, or a readable reason it is not JSON. */
+  private parsedResultSchema(): {
+    touched: boolean;
+    value: Record<string, unknown> | null;
+    error?: string;
+  } {
+    if (this._resultSchemaText === undefined) {
+      return { touched: false, value: null };
+    }
+    const text = this._resultSchemaText.trim();
+    if (!text) return { touched: true, value: null };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return {
+        touched: true,
+        value: null,
+        error: `Result schema is not valid JSON: ${reason}`,
+      };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {
+        touched: true,
+        value: null,
+        error: 'Result schema must be a JSON object (a JSON Schema).',
+      };
+    }
+    return { touched: true, value: parsed as Record<string, unknown> };
+  }
+
   private async failField(selector: string, message: string): Promise<void> {
     this.formError = message;
     await this.updateComplete;
@@ -1549,6 +1594,12 @@ export class PreloopFlowForm extends LitElement {
       return;
     }
 
+    const resultSchema = this.parsedResultSchema();
+    if (resultSchema.error) {
+      await this.failField('[data-field="result_schema"]', resultSchema.error);
+      return;
+    }
+
     const approvalWindowSeconds = this.composedApprovalWindowSeconds();
     if (
       approvalWindowSeconds !== null &&
@@ -1618,6 +1669,12 @@ export class PreloopFlowForm extends LitElement {
           : {}),
         ...('max_budget' in this.flow
           ? { max_budget: this.flow.max_budget ?? null }
+          : {}),
+        // Sent only when this form edited it; blank clears the schema. The
+        // server checks it is a valid JSON Schema and within the size bound.
+        ...(resultSchema.touched ? { result_schema: resultSchema.value } : {}),
+        ...('validate_result' in this.flow
+          ? { validate_result: this.flow.validate_result !== false }
           : {}),
         is_enabled: this.flow.is_enabled ?? true,
         runner_pool: this.normalizedFlowRunnerPool(),
@@ -4609,6 +4666,51 @@ export class PreloopFlowForm extends LitElement {
                   this.handleInputChange('max_iterations', e)}
               ></sl-input>
             </div>
+          </sl-card>
+        </sl-details>
+
+        <sl-details
+          data-advanced="result-schema"
+          summary=${`Result schema: ${this.resultSchemaText.trim() ? (this.flow.validate_result === false ? 'set, not checked' : 'checked at capture') : 'none'}`}
+          .open=${Boolean(this.resultSchemaText.trim())}
+        >
+          <sl-card>
+            <div slot="header" class="card-header-title">
+              <sl-icon name="braces"></sl-icon> Result schema
+            </div>
+            <p class="notifications-help">
+              Optional JSON Schema (draft 2020-12, up to 64 KiB) for the
+              result.json the agent writes. When it is checked, a run whose
+              result does not match ends Failed with the category "result schema
+              invalid" and the errors are listed on the execution. The result is
+              still stored. Leave blank for no check.
+            </p>
+            <sl-textarea
+              data-field="result_schema"
+              label="Schema (JSON)"
+              rows="8"
+              resize="auto"
+              placeholder='{"type": "object", "required": ["status", "verdict"]}'
+              .value=${this.resultSchemaText}
+              @sl-input=${(e: Event) => {
+                this._resultSchemaText = (
+                  e.target as HTMLTextAreaElement
+                ).value;
+              }}
+            ></sl-textarea>
+            <sl-checkbox
+              data-field="validate_result"
+              .checked=${this.flow.validate_result !== false}
+              ?disabled=${!this.resultSchemaText.trim()}
+              @sl-change=${(e: Event) => {
+                this.flow = {
+                  ...this.flow,
+                  validate_result: (e.target as HTMLInputElement).checked,
+                };
+              }}
+            >
+              Validate result
+            </sl-checkbox>
           </sl-card>
         </sl-details>
 
