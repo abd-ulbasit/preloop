@@ -66,17 +66,10 @@ func readVNCPasswordFile(path string) ([]byte, error) {
 	return plain[:end], nil
 }
 
-// encodeVNCPasswordFile is the inverse of readVNCPasswordFile (tests, fakes).
-func encodeVNCPasswordFile(password []byte) []byte {
-	block, _ := des.NewCipher(vncDESKey(vncPasswdObfuscationKey))
-	plain := make([]byte, 8)
-	copy(plain, password)
-	out := make([]byte, 8)
-	block.Encrypt(out, plain)
-	return out
-}
-
 // vncAuthResponse encrypts the 16 byte VNC auth challenge with the password.
+// RFB "VNC Authentication" is defined as DES (RFC 6143, 7.2.2); there is no
+// other choice when talking to x11vnc. It only ever runs over loopback, and
+// the brokered stream to Preloop is TLS plus a one-time view token.
 func vncAuthResponse(password, challenge []byte) ([]byte, error) {
 	if len(challenge) != 16 {
 		return nil, errors.New("vnc challenge must be 16 bytes")

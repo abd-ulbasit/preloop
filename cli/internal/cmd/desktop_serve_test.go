@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/des"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -454,4 +455,14 @@ func TestResolveDesktopToken(t *testing.T) {
 	if got, _ := resolveDesktopToken(home, ""); got != "pk-env" {
 		t.Fatalf("env token = %q", got)
 	}
+}
+
+// encodeVNCPasswordFile is the inverse of readVNCPasswordFile (test fakes only).
+func encodeVNCPasswordFile(password []byte) []byte {
+	block, _ := des.NewCipher(vncDESKey(vncPasswdObfuscationKey))
+	plain := make([]byte, 8)
+	copy(plain, password)
+	out := make([]byte, 8)
+	block.Encrypt(out, plain)
+	return out
 }
