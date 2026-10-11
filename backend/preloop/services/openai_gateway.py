@@ -9023,6 +9023,11 @@ class OpenAIGatewayService:
         messages: List[Dict[str, Any]] = []
         staged_tool_calls: List[Dict[str, Any]] = []
         pending_tool_call_ids: set[str] = set()
+        # Messages Codex records between a tool call and its result (#1557):
+        # held until the pending calls are answered, because chat-completions
+        # requires the tool messages to directly follow the assistant
+        # ``tool_calls`` message. Relative order among them is preserved.
+        deferred_messages: List[Dict[str, Any]] = []
 
         def tool_response_error(
             index: Optional[int] = None, reason: str = ""
@@ -9078,6 +9083,24 @@ class OpenAIGatewayService:
             pending_tool_call_ids = {tool_call["id"] for tool_call in staged_tool_calls}
             staged_tool_calls = []
 
+        def release_deferred_messages() -> None:
+            nonlocal deferred_messages
+            if staged_tool_calls or pending_tool_call_ids or not deferred_messages:
+                return
+            messages.extend(deferred_messages)
+            deferred_messages = []
+
+        def normalize_message(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+            normalized = self._normalize_responses_message_item(item)
+            if (
+                preserve_reasoning
+                and item.get("role") == "assistant"
+                and "reasoning_content" in item
+            ):
+                for message in normalized:
+                    message["reasoning_content"] = item["reasoning_content"]
+            return normalized
+
         for index, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
@@ -9115,6 +9138,7 @@ class OpenAIGatewayService:
                     }
                 )
                 pending_tool_call_ids.discard(call_id)
+                release_deferred_messages()
                 continue
 
             if is_unsolicited_crosschat_output(item):
@@ -9143,22 +9167,23 @@ class OpenAIGatewayService:
                     }
                 )
                 pending_tool_call_ids.discard(call_id)
+                release_deferred_messages()
                 continue
 
             if staged_tool_calls or pending_tool_call_ids:
+                # Codex records developer/user messages between a call and its
+                # output when the turn context changes mid-turn (e.g. a
+                # PreToolUse hook's additional context, a steer, a model or
+                # permissions switch). The Responses API accepts that, so the
+                # message is kept and the call stays pending (#1557).
+                if item_type == "message" or (item_type is None and "role" in item):
+                    deferred_messages.extend(normalize_message(item))
+                    continue
                 raise tool_response_error(
                     index, "item between a tool call and its result"
                 )
 
-            normalized = self._normalize_responses_message_item(item)
-            if (
-                preserve_reasoning
-                and item.get("role") == "assistant"
-                and "reasoning_content" in item
-            ):
-                for message in normalized:
-                    message["reasoning_content"] = item["reasoning_content"]
-            messages.extend(normalized)
+            messages.extend(normalize_message(item))
 
         flush_staged_tool_calls()
         if pending_tool_call_ids:
