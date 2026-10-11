@@ -175,6 +175,9 @@ function clearStoredOptimizationJobId(sessionId: string): void {
   }
 }
 
+/** How often a selected session's desktop endpoint is looked up again. */
+export const DESKTOP_RECHECK_MS = 30_000;
+
 const DEFAULT_FEATURES: Required<SessionObserverFeatures> = {
   summaries: true,
   optimization: false,
@@ -288,6 +291,9 @@ export class PreloopSessionObserver extends LitElement {
    * re-query (and close the panel) on each parent update.
    */
   private desktopLookupKey: string | null = null;
+
+  /** Timer re-asking whether the active session's endpoint is still online. */
+  private desktopRecheck: number | null = null;
 
   // Collapsed session list: once a session is selected the list gives its
   // grid column to the transcript and shrinks into a compact picker bar.
@@ -805,6 +811,9 @@ export class PreloopSessionObserver extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.clearDesktopRecheck();
+    // Reconnecting looks the endpoint up afresh.
+    this.desktopLookupKey = null;
     this.unsubscribeRealtime?.();
     this.removeEventListener(
       'session-inspect-requests',
@@ -2415,8 +2424,47 @@ export class PreloopSessionObserver extends LitElement {
     ]);
     if (lookup !== this.desktopLookup) return;
     this.desktopEndpoint = endpoints[0] ?? null;
-    this.canControlDesktop = canTakeDesktopControl(profile?.permissions);
+    this.canControlDesktop = canTakeDesktopControl(profile);
     if (!this.desktopEndpoint) this.desktopPanelOpen = false;
+    this.scheduleDesktopRecheck();
+  }
+
+  private clearDesktopRecheck(): void {
+    if (this.desktopRecheck !== null) {
+      window.clearTimeout(this.desktopRecheck);
+      this.desktopRecheck = null;
+    }
+  }
+
+  /**
+   * Keeps the button honest while a session stays selected: a host can go
+   * offline or come online mid-session. While the panel is open the viewer
+   * reports a lost host itself, so the open panel is left alone.
+   */
+  private scheduleDesktopRecheck(): void {
+    this.clearDesktopRecheck();
+    if (!this.isConnected || !this.desktopLookupKey) return;
+    this.desktopRecheck = window.setTimeout(
+      () => void this.recheckDesktopEndpoint(),
+      DESKTOP_RECHECK_MS
+    );
+  }
+
+  private async recheckDesktopEndpoint(): Promise<void> {
+    this.desktopRecheck = null;
+    const key = this.desktopLookupKey;
+    if (!key) return;
+    const lookup = this.desktopLookup;
+    if (!this.desktopPanelOpen) {
+      const endpoints = await listOnlineDesktopEndpoints({
+        runtimeSessionId: key,
+      });
+      if (lookup !== this.desktopLookup || key !== this.desktopLookupKey) {
+        return;
+      }
+      if (!this.desktopPanelOpen) this.desktopEndpoint = endpoints[0] ?? null;
+    }
+    this.scheduleDesktopRecheck();
   }
 
   /** The "Live desktop" toolbar button, or nothing when unavailable. */

@@ -7,19 +7,26 @@
  * list and the console renders nothing, so the UI stays inert until the
  * backend ships and is switched on.
  */
-import { fetchWithAuth } from './api';
+import { fetchWithAuth, isSameOriginPath } from './api';
 import { hasPermission, type UserPermissions } from './permissions';
 
 /**
  * Whether the caller may ask to take control of a view. Viewing needs
  * `control_managed_agent`; control is an approval, so it also needs
  * `decide_approvals` (the OSS flow is self-confirm with a reason). With RBAC
- * inactive both are granted.
+ * inactive (`permissions: null`) both are granted.
+ *
+ * A profile that failed to load is not "RBAC inactive": without it the
+ * answer is unknown, so the control affordance stays hidden. The server
+ * authorizes the control request either way.
  */
-export function canTakeDesktopControl(permissions: UserPermissions): boolean {
+export function canTakeDesktopControl(
+  profile: { permissions?: UserPermissions } | null | undefined
+): boolean {
+  if (!profile) return false;
   return (
-    hasPermission(permissions, 'control_managed_agent') &&
-    hasPermission(permissions, 'decide_approvals')
+    hasPermission(profile.permissions, 'control_managed_agent') &&
+    hasPermission(profile.permissions, 'decide_approvals')
   );
 }
 
@@ -220,15 +227,24 @@ export async function releaseDesktopControl(viewId: string): Promise<void> {
  * Browsers cannot set an Authorization header on a WebSocket, so the user
  * JWT goes in `?token=` (the contract's browser path). The URL is built at
  * connect time and never rendered or logged.
+ *
+ * `ws_url` comes from the server and must be a path on this origin: an
+ * absolute or protocol-relative URL would carry the token to another host,
+ * so anything else throws instead of connecting.
  */
 export function desktopViewerSocketUrl(
-  wsPath: string,
+  wsPath: unknown,
   token: string,
   location: Pick<Location, 'protocol' | 'host'> = window.location
 ): string {
+  if (!isSameOriginPath(wsPath)) {
+    throw new Error('The server returned a desktop socket on another origin.');
+  }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = new URL(wsPath, `${protocol}://${location.host}`);
-  url.protocol = `${protocol}:`;
+  const url = new URL(`${protocol}://${location.host}${wsPath}`);
+  if (url.host !== location.host) {
+    throw new Error('The server returned a desktop socket on another origin.');
+  }
   url.searchParams.set('token', token);
   return url.toString();
 }

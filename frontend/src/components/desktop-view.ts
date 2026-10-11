@@ -262,7 +262,13 @@ export class DesktopViewElement extends LitElement {
       this.applyCreateError(error);
       return;
     }
-    if (generation !== this.generation) return;
+    if (generation !== this.generation) {
+      // Ended or unmounted while the view was being created: `end()` saw no
+      // view to delete, so this one is ours to close or it would hold the
+      // viewer slot until it expires.
+      void endDesktopView(view.view_id).catch(() => undefined);
+      return;
+    }
     this.view = view;
     this.startTicker();
     await this.updateComplete;
@@ -330,11 +336,19 @@ export class DesktopViewElement extends LitElement {
     }
     if (generation !== this.generation || !this.screen) return;
     const token = localStorage.getItem('accessToken') || '';
+    let socketUrl: string;
+    try {
+      socketUrl = desktopViewerSocketUrl(view.ws_url, token);
+    } catch (error) {
+      this.teardown();
+      this.viewerState = 'error';
+      this.errorText = error instanceof Error ? error.message : String(error);
+      void endDesktopView(view.view_id).catch(() => undefined);
+      return;
+    }
     // Our own socket rather than a URL: noVNC reports a close as clean or
     // not, and the contract's close code is what tells the states apart.
-    const socket = new WebSocket(desktopViewerSocketUrl(view.ws_url, token), [
-      'binary',
-    ]);
+    const socket = new WebSocket(socketUrl, ['binary']);
     socket.binaryType = 'arraybuffer';
     socket.addEventListener('close', (event) => {
       if (generation !== this.generation) return;

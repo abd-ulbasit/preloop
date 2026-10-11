@@ -13,6 +13,7 @@ import {
 import sinon from 'sinon';
 
 import './desktop-view';
+import { canTakeDesktopControl, desktopViewerSocketUrl } from '../desktop-api';
 import {
   DESKTOP_VIEW_STRINGS,
   formatRemaining,
@@ -53,7 +54,9 @@ describe('desktop-view', () => {
   const calls: Call[] = [];
 
   function install(options: {
-    create: () => { status: number; body: unknown };
+    create: () =>
+      | { status: number; body: unknown }
+      | Promise<{ status: number; body: unknown }>;
     get?: (viewId: string) => unknown;
     control?: (viewId: string) => unknown;
   }) {
@@ -75,7 +78,7 @@ describe('desktop-view', () => {
         method === 'POST' &&
         /\/desktop\/endpoints\/[^/]+\/views$/.test(url)
       ) {
-        const { status, body: payload } = options.create();
+        const { status, body: payload } = await options.create();
         return json(payload, status);
       }
       const control = url.match(/\/desktop\/views\/([^/]+)\/control$/);
@@ -324,6 +327,119 @@ describe('desktop-view', () => {
     const control = calls.find((c) => c.url.endsWith('/control'))!;
     expect(control.body).to.deep.equal({ reason: 'fix a stuck dialog' });
     expect(el.shadowRoot!.querySelector('sl-button.release-control')).to.exist;
+  });
+});
+
+describe('desktop-view review fixes', () => {
+  let fetchStub: sinon.SinonStub;
+  const calls: Array<{ url: string; method: string }> = [];
+
+  afterEach(() => {
+    fixtureCleanup();
+    fetchStub?.restore();
+  });
+
+  function stub(create: () => Promise<Response>) {
+    calls.length = 0;
+    localStorage.setItem('accessToken', 'test-token');
+    fetchStub = sinon.stub(window, 'fetch').callsFake(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || 'GET').toUpperCase();
+      calls.push({ url, method });
+      if (method === 'POST') return create();
+      if (method === 'DELETE') return new Response(null, { status: 204 });
+      return new Response('{}', { status: 404 });
+    });
+  }
+
+  it('ends a view whose creation finished after the viewer unmounted', async () => {
+    const viewId = `live-orphan-${Date.now()}`;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    stub(async () => {
+      await held;
+      return new Response(JSON.stringify(viewRow(viewId)), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const el = await fixture<DesktopViewElement>(
+      html`<desktop-view endpointId="ep-1" autoStart></desktop-view>`
+    );
+    await waitUntil(() => calls.some((c) => c.method === 'POST'));
+    el.remove();
+    release();
+    await waitUntil(
+      () =>
+        calls.some(
+          (c) =>
+            c.method === 'DELETE' && c.url === `/api/v1/desktop/views/${viewId}`
+        ),
+      'orphaned view deleted'
+    );
+  });
+
+  it('refuses a ws_url on another origin and never connects with the token', async () => {
+    const viewId = `live-offorigin-${Date.now()}`;
+    stub(
+      async () =>
+        new Response(
+          JSON.stringify(
+            viewRow(viewId, {
+              ws_url: `wss://other.example.com/api/v1/ws/desktop/${viewId}`,
+            })
+          ),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    const socketSpy = sinon.spy(window, 'WebSocket');
+    try {
+      const el = await fixture<DesktopViewElement>(
+        html`<desktop-view endpointId="ep-1" autoStart></desktop-view>`
+      );
+      await waitUntil(() => el.viewerState === 'error');
+      expect(socketSpy.called).to.equal(false);
+      expect(el.shadowRoot!.textContent).to.contain('another origin');
+      await waitUntil(() => calls.some((c) => c.method === 'DELETE'));
+    } finally {
+      socketSpy.restore();
+    }
+  });
+});
+
+describe('desktop-api helpers', () => {
+  const location = { protocol: 'https:', host: 'console.example.com' };
+
+  it('builds the viewer socket URL on this origin only', () => {
+    expect(
+      desktopViewerSocketUrl('/api/v1/ws/desktop/v1', 'jwt', location)
+    ).to.equal('wss://console.example.com/api/v1/ws/desktop/v1?token=jwt');
+    for (const bad of [
+      'wss://other.example.com/api/v1/ws/desktop/v1',
+      '//other.example.com/api/v1/ws/desktop/v1',
+      '/\\other.example.com/x',
+      'api/v1/ws/desktop/v1',
+      null,
+    ]) {
+      expect(
+        () => desktopViewerSocketUrl(bad, 'jwt', location),
+        String(bad)
+      ).to.throw(/another origin/);
+    }
+  });
+
+  it('shows control only when the profile loaded and grants both permissions', () => {
+    expect(canTakeDesktopControl(null)).to.equal(false);
+    expect(canTakeDesktopControl(undefined)).to.equal(false);
+    expect(canTakeDesktopControl({ permissions: null })).to.equal(true);
+    expect(
+      canTakeDesktopControl({
+        permissions: ['control_managed_agent', 'decide_approvals'],
+      })
+    ).to.equal(true);
+    expect(
+      canTakeDesktopControl({ permissions: ['control_managed_agent'] })
+    ).to.equal(false);
   });
 });
 

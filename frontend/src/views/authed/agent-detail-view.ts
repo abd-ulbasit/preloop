@@ -1433,7 +1433,7 @@ export class AgentDetailView extends LitElement {
     ]);
     if (generation !== this.detailLoadGeneration) return;
     this.desktopEndpoints = endpoints;
-    this.canControlDesktop = canTakeDesktopControl(profile?.permissions);
+    this.canControlDesktop = canTakeDesktopControl(profile);
     if (this.activeTab === 'desktop' && endpoints.length === 0) {
       this.activeTab = 'sessions';
     }

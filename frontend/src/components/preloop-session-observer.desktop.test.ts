@@ -56,6 +56,7 @@ describe('PreloopSessionObserver live desktop', () => {
   let connectStub: sinon.SinonStub;
   let subscribeStub: sinon.SinonStub;
   let endpointsResponse: () => Response;
+  let profileResponse: () => Response;
   let viewId: string;
   const calls: Array<{ url: string; method: string; body: any }> = [];
 
@@ -63,6 +64,7 @@ describe('PreloopSessionObserver live desktop', () => {
     calls.length = 0;
     viewId = `live-observer-${Date.now()}`;
     endpointsResponse = () => jsonResponse({ endpoints: [ENDPOINT] });
+    profileResponse = () => jsonResponse({ id: 'user-1', permissions: null });
     localStorage.setItem('accessToken', 'test-access-token');
     localStorage.setItem('refreshToken', 'test-refresh-token');
     connectStub = sinon.stub(unifiedWebSocketManager, 'connect').resolves();
@@ -100,9 +102,7 @@ describe('PreloopSessionObserver live desktop', () => {
           );
         }
         if (method === 'DELETE') return new Response(null, { status: 204 });
-        if (url.includes('/auth/users/me')) {
-          return jsonResponse({ id: 'user-1', permissions: null });
-        }
+        if (url.includes('/auth/users/me')) return profileResponse();
         if (url.includes('/gateway-events')) {
           return jsonResponse({
             logs: [
@@ -200,6 +200,35 @@ describe('PreloopSessionObserver live desktop', () => {
     await el.updateComplete;
     expect(el.shadowRoot!.querySelector('.desktop-panel')).to.be.null;
     await waitUntil(() => calls.some((c) => c.method === 'DELETE'));
+  });
+
+  it('re-checks the endpoint while the session stays selected', async () => {
+    const el = await mount();
+    await waitUntil(() => liveDesktopButton(el), 'Live desktop button', {
+      timeout: 3000,
+    });
+    // The host goes offline: the next check hides the button.
+    endpointsResponse = () => jsonResponse({ endpoints: [] });
+    await (el as any).recheckDesktopEndpoint();
+    await el.updateComplete;
+    expect(liveDesktopButton(el)).to.be.null;
+    // And it comes back.
+    endpointsResponse = () => jsonResponse({ endpoints: [ENDPOINT] });
+    await (el as any).recheckDesktopEndpoint();
+    await el.updateComplete;
+    expect(liveDesktopButton(el)).to.exist;
+    expect((el as any).desktopRecheck, 'next check scheduled').to.not.equal(
+      null
+    );
+  });
+
+  it('hides Request control when the profile could not be loaded', async () => {
+    profileResponse = () => jsonResponse({ detail: 'boom' }, 500);
+    const el = await mount();
+    await waitUntil(() => liveDesktopButton(el), 'Live desktop button', {
+      timeout: 3000,
+    });
+    expect((el as any).canControlDesktop).to.equal(false);
   });
 
   it('stays inert when the server has no desktop views (404)', async () => {
