@@ -154,7 +154,8 @@ def test_two_relays_never_claim_the_same_intent(db_engine):
         claimed_a = crud_audit_outbox.claim_next(first)
         claimed_b = crud_audit_outbox.claim_next(second)
         assert {claimed_a.id, claimed_b.id} == set(ids)
-        assert crud_audit_outbox.claim_next(OrmSession(bind=db_engine)) is None
+        with OrmSession(bind=db_engine) as probe:
+            assert crud_audit_outbox.claim_next(probe) is None
         crud_audit_outbox.mark_delivered(first, claimed_a)
         first.commit()
         second.rollback()
