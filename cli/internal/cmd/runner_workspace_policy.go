@@ -469,12 +469,20 @@ func isVolumeRoot(path string) bool {
 }
 
 // secretHomeDirs are directories below the home directory that hold
-// credentials: the Preloop config directory (runner.json with the runner
+// credentials (keys, cloud CLI tokens, OS secret stores, harness logins);
+// extend it when a new credential store becomes common: the Preloop config directory (runner.json with the runner
 // token, config.yaml with the user's OAuth tokens) is checked separately
 // because it can be moved. A harness session must never be pointed at them,
 // not even read_only.
 var secretHomeDirs = []string{
-	".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
+	// Keys and signing.
+	".ssh", ".gnupg",
+	// Cloud and infrastructure CLIs.
+	".aws", ".azure", ".kube", ".docker", ".terraform.d",
+	filepath.Join(".config", "gcloud"), filepath.Join(".config", "rclone"),
+	// OS secret stores.
+	filepath.Join(".local", "share", "keyrings"), filepath.Join("Library", "Keychains"),
+	// GitHub CLI and harness logins.
 	filepath.Join(".config", "gh"), filepath.Join(".config", "github-copilot"),
 	".copilot", ".claude", ".codex", ".cursor",
 }
