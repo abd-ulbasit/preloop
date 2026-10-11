@@ -113,6 +113,7 @@ from .flow_execution import CRUDFlowExecution
 from .flow_execution_log import CRUDFlowExecutionLog
 from .flow_feedback import crud_flow_feedback
 from .flow_runner import CRUDFlowRunner, crud_flow_runner
+from .desktop import crud_desktop
 from .runner_remote_session import (
     CRUDRunnerRemoteSession,
     crud_runner_remote_session,
@@ -324,6 +325,7 @@ __all__ = [
     "CRUDFlowRunner",
     "crud_flow_runner",
     "CRUDRunnerRemoteSession",
+    "crud_desktop",
     "crud_runner_remote_session",
     "CRUDIssueComplianceResult",
     "CRUDIssueSet",

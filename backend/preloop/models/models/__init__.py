@@ -15,6 +15,7 @@ from .ci_principal import CiPrincipal
 from .api_usage import ApiUsage
 from .audit_log import AuditLog
 from .base import Base
+from .desktop import DESKTOP_VIEW_OPEN_STATES, DesktopEndpoint, DesktopView
 from .chat import ChatConnection, ChatIdentity, ChatLinkCode, ChatWork
 from .comment import Comment
 from .issue import EmbeddingModel, Issue, IssueEmbedding
@@ -167,6 +168,9 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "DESKTOP_VIEW_OPEN_STATES",
+    "DesktopEndpoint",
+    "DesktopView",
     "AUDIT_OUTBOX_DELIVERED",
     "AUDIT_OUTBOX_FAILED",
     "AUDIT_OUTBOX_PENDING",
