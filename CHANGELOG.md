@@ -699,6 +699,19 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Fixed
 
+- **Re-onboarding no longer strands gateway-registered subscription models.**
+  Picking a model in Codex CLI's or Claude Code's own picker makes the
+  gateway register a sibling row on the agent's subscription-OAuth secret and
+  bind it to the agent. `preloop agents onboard` then replaced the agent's
+  binding set with the onboarded model only, and the next request for the
+  sibling was refused with `400 model_not_authorized` ("bound to another
+  agent's subscription credentials") although nothing else held it. The
+  binding replacement now keeps autoregistered siblings that share a
+  credential secret with the new set, and the gateway re-binds a stranded
+  same-secret sibling (reactivating the slot, never duplicating the row)
+  before it considers refusing. A bound row on a different secret still gets
+  the 400 unless the principal holds its own subscription template, in which
+  case it registers its own sibling as before.
 - **Windows runner runs as a per-user logon task without elevation**
   (#1513): `preloop runner enable` (and the login prompt) register the task
   from an XML definition with a logon trigger scoped to the user and an
