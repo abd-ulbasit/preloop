@@ -570,7 +570,8 @@ func TestSystemSearchCandidatesExpandWindowsExtensions(t *testing.T) {
 	if got := systemSearchCandidates("windows", `C:\x`, "node.exe"); len(got) != 1 {
 		t.Fatalf("explicit extension expanded again: %v", got)
 	}
-	if got := systemSearchCandidates("darwin", "/opt/homebrew/bin", "node"); len(got) != 1 || got[0] != "/opt/homebrew/bin/node" {
+	if got := systemSearchCandidates("darwin", "/opt/homebrew/bin", "node"); len(got) != 1 ||
+		got[0] != filepath.Join("/opt/homebrew/bin", "node") {
 		t.Fatalf("posix candidates = %v", got)
 	}
 }
