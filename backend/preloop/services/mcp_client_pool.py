@@ -52,7 +52,7 @@ def describe_mcp_connection_error(exc: BaseException) -> str:
         code = cause.response.status_code
         if code in {401, 403}:
             return (
-                f"MCP server rejected authentication (HTTP {code}). "
+                f"MCP server rejected authentication or authorization (HTTP {code}). "
                 "Configure or reconnect authentication in Preloop, then rescan. "
                 "Credentials cached by your local agent may require a separate sign-in."
             )

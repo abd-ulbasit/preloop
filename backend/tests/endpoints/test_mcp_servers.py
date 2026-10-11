@@ -161,7 +161,7 @@ def test_create_mcp_server_with_connection_error(
     The server should still be created but with error status.
     """
     # Make the mock client raise an error on connect
-    mock_mcp_client.connect.side_effect = Exception("Connection refused")
+    mock_mcp_client.connect.side_effect = ConnectionRefusedError("Connection refused")
 
     server_data = {
         "name": "Failing Server",
@@ -177,7 +177,8 @@ def test_create_mcp_server_with_connection_error(
     assert response_json["name"] == "Failing Server"
     assert response_json["status"] == "error"
     assert response_json["last_error"] is not None
-    assert "Connection refused" in response_json["last_error"]
+    assert "Could not connect" in response_json["last_error"]
+    assert "reachability from Preloop" in response_json["last_error"]
 
     # Still verify UUID serialization works even with error status
     assert isinstance(response_json["id"], str)
