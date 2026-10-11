@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.models.crud import crud_issue_lifecycle
 from preloop.models.crud.base import CRUDBase
-from preloop.schemas.issue_triage import IssueTriageApply
+from preloop.schemas.issue_triage import IssueTriageApply, IssueTriageResult
 from preloop.services import issue_triage_controller as controller
 from preloop.services.issue_triage import get_context
 from tests.services.test_issue_triage_controller_review import (
@@ -22,6 +22,38 @@ from tests.services.test_issue_triage_controller_review import (
     _committed_rig,
     _rig,
 )
+
+
+def test_pinned_stale_failure_tells_the_model_to_stop() -> None:
+    """A raised stale_issue is partial or failed, not only a conflict.
+
+    The recheck after label creation raises ValueError("stale_issue"), and
+    apply_triage turns that into a partial result whose next_action still
+    says to fetch fresh context. A pinned run cannot use that revision.
+    """
+    partial = IssueTriageResult(
+        status="partial",
+        reason="stale_issue",
+        next_action="Inspect the updated issue and receipt, then fetch fresh context.",
+    )
+    controller._stop_pinned_stale_retry(object(), partial)
+    assert partial.next_action == controller._PINNED_STALE_STOP
+
+    other = IssueTriageResult(
+        status="failed",
+        reason="provider_request_failed",
+        next_action="Inspect the updated issue and receipt, then fetch fresh context.",
+    )
+    controller._stop_pinned_stale_retry(object(), other)
+    assert other.next_action.startswith("Inspect")
+
+    unpinned = IssueTriageResult(
+        status="conflict",
+        reason="stale_issue",
+        next_action="Refresh triage context and re-evaluate.",
+    )
+    controller._stop_pinned_stale_retry(None, unpinned)
+    assert unpinned.next_action.startswith("Refresh")
 
 
 @pytest.mark.asyncio

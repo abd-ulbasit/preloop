@@ -154,10 +154,15 @@ def test_tool_call_aggregates_accept_mixed_outcome_vocabulary(
     assert account_summary[0]["successful_calls"] == 2
     assert account_summary[0]["failed_calls"] == 2
 
-    recent = crud_runtime_session_activity.get_recent_successful_tool_calls_by_flow_execution(
+    recent = crud_runtime_session_activity.get_recent_tool_calls_by_flow_execution(
         db_session,
         flow_execution_id=execution.id,
         limit=10,
     )
-    assert len(recent) == 2
-    assert {row.status for row in recent} == {"success", "succeeded"}
+    assert len(recent) == 5
+    assert {row.status for row in recent} >= {
+        "success",
+        "succeeded",
+        "failed",
+        "refused",
+    }

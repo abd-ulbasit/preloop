@@ -494,6 +494,25 @@ def applicable_triage_packet(
     return None
 
 
+_PINNED_STALE_STOP = (
+    "The issue changed after this run claimed it. Stop without "
+    "writing. Do not call get_issue or update_issue again; a "
+    "later run triages the issue as it is now."
+)
+
+
+def _stop_pinned_stale_retry(row: Any, result: IssueTriageResult) -> None:
+    """Replace refresh-and-retry guidance on a run that cannot adopt a new revision.
+
+    ``apply_triage`` returns ``stale_issue`` as a conflict, and also as a
+    partial or failed result when the recheck after label creation raises.
+    Both next_action strings tell the model to fetch fresh context. This
+    execution can only write the revision it claimed.
+    """
+    if row is not None and result.reason == "stale_issue":
+        result.next_action = _PINNED_STALE_STOP
+
+
 async def apply_controlled_triage(
     db: Session,
     *,
@@ -618,20 +637,10 @@ async def apply_controlled_triage(
         result = await apply_triage(
             provider, effective_request, record, dispatch_label=dispatch_label
         )
-        if (
-            row is not None
-            and result.status == "conflict"
-            and result.reason == "stale_issue"
-        ):
-            # apply_triage tells a caller to refresh and retry. This
-            # execution cannot adopt the new revision, so that instruction
-            # makes the model call get_issue and update_issue until the
-            # loop guard stops the run.
-            result.next_action = (
-                "The issue changed after this run claimed it. Stop without "
-                "writing. Do not call get_issue or update_issue again; a "
-                "later run triages the issue as it is now."
-            )
+        # A conflict and a raised stale_issue (the recheck after label
+        # creation, returned as partial or failed) both tell the model to
+        # refresh. This execution cannot adopt the new revision.
+        _stop_pinned_stale_retry(row, result)
         if result.issue is not None:
             try:
                 values: dict[str, Any] = {
