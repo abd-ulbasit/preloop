@@ -28,6 +28,7 @@ def upgrade() -> None:
         ("avatar_source", sa.String(20)),
         ("hashed_password", sa.String(255)),
         ("migration_conflict", sa.Text()),
+        ("migration_resolution", sa.Text()),
     ):
         op.add_column("person", sa.Column(name, type_, nullable=True))
     op.add_column(
@@ -99,7 +100,6 @@ def upgrade() -> None:
             constraint,
         )
         op.create_index(f"ix_{table}_person_id", table, ["person_id"])
-        op.create_index(f"ix_{table}_id", table, ["id"])
     op.add_column(
         "webauthn_credential", sa.Column("person_id", UUID(as_uuid=True), nullable=True)
     )
@@ -138,6 +138,7 @@ def downgrade() -> None:
         "avatar_source",
         "hashed_password",
         "migration_conflict",
+        "migration_resolution",
         "identity_status",
         "auth_generation",
     ):

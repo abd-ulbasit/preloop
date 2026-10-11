@@ -20,6 +20,10 @@ class PersonAuthIdentity(Base):
     """One provider subject belongs to exactly one canonical person."""
 
     __tablename__ = "person_auth_identity"
+    # The primary key already indexes id; override Base's redundant index=True.
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     person_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("person.id", ondelete="CASCADE"),
@@ -47,6 +51,9 @@ class PersonPasswordCredential(Base):
     """Preserved historical password hash, owned by a person, until reset."""
 
     __tablename__ = "person_password_credential"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     person_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("person.id", ondelete="CASCADE"),

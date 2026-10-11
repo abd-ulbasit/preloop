@@ -15,6 +15,7 @@ the person setting the password is the person who completed it.
 """
 
 import uuid
+from collections.abc import Iterator
 from unittest.mock import MagicMock
 
 import pytest
@@ -66,7 +67,9 @@ def _clean_rate_limit():
 
 
 @pytest.fixture
-def anon_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def anon_client(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
     """A client with no authenticated user: these endpoints are anonymous."""
     from preloop.api.app import create_app
     from preloop.models.db.session import get_db_session

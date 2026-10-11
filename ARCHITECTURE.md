@@ -634,6 +634,15 @@ by most recent login, creation time and ID. No suffix stripping or email merge
 occurs. Conflicting linked addresses or provider claims quarantine the identities
 with non-secret reasons; operators must establish ownership before repairing
 canonical values. Unrelated provisional identities retain separate Person IDs.
+An authorized administrator can then call `crud_person.repair_conflict` with a
+fresh canonical profile/password, a non-secret ownership-evidence reference and
+explicit acceptance of credential retirement. The operation clears quarantine,
+stores the reference in `migration_resolution`, retires all disputed passwords,
+passkeys and provider links, clears verification and revokes every linked session.
+All other credential types require fresh enrollment. Ordinary status/profile/reset
+operations cannot lift quarantine. The backfill precomputes username ownership
+and writes profiles and credentials in batches of at most 1,000 records; rehearse
+its write-blocking lock duration on a production-sized copy before rollout.
 
 `python -m preloop.models.identity_audit` reports rollout counts and conflict
 reasons without passwords, provider subjects or addresses. The CLI starts a

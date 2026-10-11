@@ -63,6 +63,8 @@ class Person(Base):
     )
     # Non-secret actionable reason when migration cannot prove canonical ownership.
     migration_conflict: Mapped[Optional[str]] = mapped_column(Text)
+    # Administrative ownership-evidence reference; never credentials or addresses.
+    migration_resolution: Mapped[Optional[str]] = mapped_column(Text)
 
     email_normalized: Mapped[str] = mapped_column(
         String(255),
