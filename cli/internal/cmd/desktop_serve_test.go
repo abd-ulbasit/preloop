@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -411,8 +412,8 @@ func TestDesktopEndpointIDIsStableAndKeepsManifest(t *testing.T) {
 		t.Fatalf("manifest = %s", data)
 	}
 	info, _ := os.Stat(manifestPath)
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v", info.Mode())
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v", info.Mode()) // Windows has no POSIX modes
 	}
 	// Re-running the installer keeps the endpoint identity.
 	if err := writeDesktopManifest(filepath.Dir(filepath.Dir(path)), "chromium", time.Unix(0, 0)); err != nil {
