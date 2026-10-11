@@ -11,8 +11,10 @@ import {
   SERVER_RUNNER_POOL,
   buildRunnerPoolGroups,
   describeNextRunnerPool,
+  isOnlineRunner,
   isSelectableToken,
   resolveAccountPoolLabel,
+  runnerPresence,
 } from './runner-pool';
 
 const OFFICE = {
@@ -145,6 +147,40 @@ describe('runner-pool options', () => {
     ]);
   });
 
+  it('labels runners with server presence and a heartbeat tooltip', () => {
+    const groups = buildRunnerPoolGroups({
+      runners: [
+        {
+          name: 'sleepy',
+          status: 'offline',
+          presence: 'asleep',
+          last_heartbeat: '2026-10-11T09:00:00Z',
+        },
+        { name: 'quiet', status: 'online', presence: 'idle' },
+      ],
+      context: 'flow',
+    });
+    const options =
+      groups.find((group) => group.label === 'Specific runner')?.options || [];
+    expect(options.map((option) => option.label)).to.deep.equal([
+      'quiet (idle)',
+      'sleepy (asleep)',
+    ]);
+    expect(options[1].title).to.contain('Last heartbeat:');
+    expect(options[0].title).to.equal('No heartbeat yet');
+  });
+
+  it('counts idle runners as reachable and asleep ones as not', () => {
+    expect(isOnlineRunner({ status: 'online', presence: 'idle' })).to.equal(
+      true
+    );
+    expect(isOnlineRunner({ status: 'online', presence: 'asleep' })).to.equal(
+      false
+    );
+    expect(isOnlineRunner({ status: 'busy' })).to.equal(true);
+    expect(runnerPresence({ status: 'whatever' })).to.equal('offline');
+  });
+
   it('treats a stored runner id as registered and selects that runner', () => {
     const groups = buildRunnerPoolGroups({
       runners: [{ ...OFFICE, id: 'runner-office-1' }],
@@ -161,6 +197,7 @@ describe('runner-pool options', () => {
     expect(runnerGroup?.options[0]).to.deep.equal({
       value: 'runner-office-1',
       label: 'office-mac (online)',
+      title: 'No heartbeat yet',
     });
   });
 

@@ -359,6 +359,61 @@ describe('RunnersView', () => {
     expect(element.shadowRoot?.textContent).to.contain('github.com');
   });
 
+  it('shows server presence with the last heartbeat as tooltip', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'offline',
+        presence: 'asleep',
+        presence_since: '2026-10-11T09:00:00Z',
+        last_heartbeat: '2026-10-11T08:59:50Z',
+      },
+    ]);
+    const badge = element.shadowRoot?.querySelector('sl-badge.presence');
+    expect(badge?.textContent?.trim()).to.equal('Asleep');
+    expect(badge?.getAttribute('title')).to.contain('Last heartbeat:');
+    expect(badge?.getAttribute('title')).to.contain('Asleep since');
+  });
+
+  it('updates presence when the account websocket pushes a transition', async () => {
+    const element = await renderWith([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        presence: 'online',
+        last_heartbeat: '2026-10-11T09:00:00Z',
+      },
+    ]);
+    const badge = () =>
+      element.shadowRoot?.querySelector('sl-badge.presence') as HTMLElement;
+    expect(badge().textContent?.trim()).to.equal('Online');
+    onRunnerMessage?.({
+      type: 'runner_updated',
+      payload: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'laptop',
+        status: 'online',
+        presence: 'idle',
+        presence_since: '2026-10-11T09:05:00Z',
+        last_heartbeat: '2026-10-11T09:05:00Z',
+      },
+    });
+    await element.updateComplete;
+    expect(badge().textContent?.trim()).to.equal('Idle');
+    expect(badge().getAttribute('variant')).to.equal('primary');
+  });
+
+  it('falls back to status when the server sends no presence', async () => {
+    const element = await renderWith([
+      { id: '11111111-1111-4111-8111-111111111111', name: 'old', status: 'busy' },
+    ]);
+    const badge = element.shadowRoot?.querySelector('sl-badge.presence');
+    expect(badge?.textContent?.trim()).to.equal('Busy');
+    expect(badge?.getAttribute('title')).to.equal('No heartbeat yet');
+  });
+
   it('badges an ephemeral runner only while it is connected', async () => {
     fetchStub = createFetchStub([
       {

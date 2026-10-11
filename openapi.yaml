@@ -37176,6 +37176,17 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time
@@ -37303,6 +37314,17 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time
@@ -42889,7 +42911,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

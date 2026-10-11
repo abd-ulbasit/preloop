@@ -26,7 +26,11 @@ import {
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
 import { confirmDialog } from '../../components/confirm-dialog';
 import { formatLocalDateTime, formatRelativeTime } from '../../utils/date';
-import { AUTO_RUNNER_POOL } from '../../utils/runner-pool';
+import {
+  AUTO_RUNNER_POOL,
+  presenceTooltip,
+  runnerPresence,
+} from '../../utils/runner-pool';
 import '../../components/preloop-runner-pool-select';
 import '../../components/capability-extension';
 import consoleStyles from '../../styles/console-styles.css?inline';
@@ -676,6 +680,8 @@ export class RunnersView extends LitElement {
         return 'success';
       case 'busy':
         return 'warning';
+      case 'idle':
+        return 'primary';
       default:
         return 'neutral';
     }
@@ -892,11 +898,14 @@ export class RunnersView extends LitElement {
                               <td>${this.renderHarnesses(row)}</td>
                               <td>
                                 <sl-badge
-                                  class="chip"
+                                  class="chip presence"
                                   pill
-                                  variant=${this.statusVariant(row.status)}
+                                  variant=${this.statusVariant(
+                                    runnerPresence(row)
+                                  )}
+                                  title=${presenceTooltip(row)}
                                 >
-                                  ${this.statusLabel(row.status)}
+                                  ${this.statusLabel(runnerPresence(row))}
                                 </sl-badge>
                                 ${
                                   /*
