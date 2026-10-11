@@ -829,16 +829,24 @@ async def desktop_endpoint_socket(websocket: WebSocket) -> None:
         return
 
     connection_id = uuid.uuid4().hex
+
+    def register(db: Session) -> dict[str, str]:
+        # Scalars only: the row is detached once _run_db closes its session.
+        endpoint = _register_endpoint(db, identity, reg, connection_id)
+        return {
+            "id": str(endpoint.id),
+            "endpoint_id": endpoint.endpoint_id,
+            "hostname": endpoint.hostname,
+        }
+
     try:
-        endpoint = await _run_db(
-            lambda db: _register_endpoint(db, identity, reg, connection_id)
-        )
+        endpoint = await _run_db(register)
     except HTTPException as exc:
         code, message = _detail_code(exc)
         await _send_error(websocket, code, message)
         await _close(websocket, broker.CLOSE_FORBIDDEN, code)
         return
-    endpoint_pk = str(endpoint.id)
+    endpoint_pk = endpoint["id"]
     bus = await broker.get_desktop_bus()
     subject = broker.endpoint_cmd_subject(endpoint_pk)
     # Evict any older socket of the same endpoint, on any pod.
@@ -858,13 +866,13 @@ async def desktop_endpoint_socket(websocket: WebSocket) -> None:
 
     unsubscribe = await bus.subscribe(subject, on_command)
     _ensure_sweeper()
-    logger.info("Desktop endpoint %s online (%s)", endpoint_pk, endpoint.hostname)
+    logger.info("Desktop endpoint %s online (%s)", endpoint_pk, endpoint["hostname"])
     try:
         await websocket.send_json(
             {
                 "type": "desktop.registered",
                 "id": endpoint_pk,
-                "endpoint_id": endpoint.endpoint_id,
+                "endpoint_id": endpoint["endpoint_id"],
                 "heartbeat_interval_seconds": broker.ENDPOINT_HEARTBEAT_SECONDS,
             }
         )

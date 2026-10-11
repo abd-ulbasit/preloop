@@ -385,8 +385,28 @@ def harness(app, db_session, test_user, monkeypatch):
     monkeypatch.setattr(settings, "desktop_views_enabled", True)
     broker.set_desktop_bus(broker.LocalDesktopBus())
 
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+
+    def assert_detached_safe(value):
+        # Production _run_db closes its session, so ORM rows must not leave
+        # it; the shared test session would otherwise hide that bug.
+        if isinstance(value, (tuple, list)):
+            for item in value:
+                assert_detached_safe(item)
+            return
+        try:
+            sa_inspect(value)
+        except NoInspectionAvailable:
+            return
+        if isinstance(value, models.User):
+            return  # detach_user() copies; the viewer lookup is stubbed here
+        raise AssertionError(f"ORM object {type(value).__name__} escaped _run_db")
+
     async def run_db(operation):
-        return operation(db_session)
+        result = operation(db_session)
+        assert_detached_safe(result)
+        return result
 
     monkeypatch.setattr(desktop, "_run_db", run_db)
     h = Harness(app, db_session, test_user, monkeypatch)
