@@ -316,3 +316,7 @@ export function nudgeMessage(nudge: UsageNudge): string {
       return `${whole(nudge.used)} of ${whole(nudge.limit)} ${nudge.unit}`;
   }
 }
+
+/** What the monthly analysis meter counts and what exhaustion changes. */
+export const ANALYSIS_QUOTA_EXPLANATION =
+  'Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running.';

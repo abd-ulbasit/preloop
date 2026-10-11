@@ -3,30 +3,28 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from preloop.services.analytics_detail_policy import should_degrade_gateway_analytics
 
 
 @pytest.mark.parametrize("decision", [False, True, None])
 def test_policy_decision_or_oss_default(decision: bool | None) -> None:
-    db = MagicMock()
     policy = None if decision is None else MagicMock(return_value=decision)
     with patch("preloop.plugins.get_plugin_manager") as manager:
         manager.return_value.get_service.return_value = policy
-        assert should_degrade_gateway_analytics(db, "account") is bool(decision)
+        assert should_degrade_gateway_analytics("account") is bool(decision)
     if policy is not None:
-        policy.assert_called_once_with(db, account_id="account")
-    db.rollback.assert_not_called()
+        policy.assert_called_once_with(account_id="account")
 
 
-def test_policy_error_preserves_callers_pending_transaction() -> None:
-    db = MagicMock()
+@pytest.mark.parametrize(
+    "error", [RuntimeError("unavailable"), SQLAlchemyError("query failed")]
+)
+def test_policy_error_cannot_poison_a_caller_transaction(error: Exception) -> None:
     with patch("preloop.plugins.get_plugin_manager") as manager:
-        manager.return_value.get_service.return_value = MagicMock(
-            side_effect=RuntimeError("unavailable")
-        )
-        assert should_degrade_gateway_analytics(db, "account") is False
-    db.rollback.assert_not_called()
+        manager.return_value.get_service.return_value = MagicMock(side_effect=error)
+        assert should_degrade_gateway_analytics("account") is False
 
 
 def test_over_quota_optimization_keeps_deterministic_results() -> None:

@@ -6,6 +6,7 @@ import { fetchWithAuth, getFeatures } from '../api';
 import { Router } from '../router';
 import { PLAN_PAGE_PATH } from '../utils/premium-features';
 import { billingStatusLabel } from '../utils/billing-status';
+import { ANALYSIS_QUOTA_EXPLANATION } from '../utils/usage-nudges';
 import type {
   BillingSummary,
   SeatSummary,
@@ -202,9 +203,7 @@ export class BillingSubscriptionDetails extends LitElement {
     return html`
       <div class="card">
         <div class="current-row">
-          <span
-            class="plan-name"
-            title="Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running."
+          <span class="plan-name" title=${ANALYSIS_QUOTA_EXPLANATION}
             >Analysis quota</span
           >
           <span class="quota-figures">

@@ -10680,7 +10680,7 @@ class OpenAIGatewayService:
         )
 
         ingest_degraded = not model_billing_is_hosted(ai_model) and (
-            should_degrade_gateway_analytics(self.db, str(self.auth_context.account_id))
+            should_degrade_gateway_analytics(str(self.auth_context.account_id))
         )
         gateway_subject = getattr(self.auth_context, "gateway_subject", None)
         usage_row = crud_api_usage.log_gateway_request(

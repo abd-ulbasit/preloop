@@ -56,6 +56,7 @@ from preloop.services.analytics_history import history_cutoff, require_session_h
 from preloop.services.account_governance_cache import (
     invalidate_account_governance_cache,
 )
+from preloop.services.analytics_detail_policy import should_degrade_gateway_analytics
 from preloop.services.builtin_tool_optimizer import (
     BUILTIN_USAGE_WINDOW_DAYS,
     UnusedBuiltinPartition,
@@ -84,7 +85,6 @@ from preloop.services.model_gateway_auth import (
     ModelGatewayAuthContext,
 )
 from preloop.services.optimization_gating import authorize_analysis_model
-from preloop.services.analytics_detail_policy import should_degrade_gateway_analytics
 from preloop.services.model_pricing import estimate_ai_model_usage_cost
 from preloop.services.model_runtime_resolver import resolve_ai_model_runtime
 from preloop.services.openai_gateway import OpenAIGatewayService
@@ -191,7 +191,7 @@ class SessionOptimizationService:
         # Optional analysis degrades to the deterministic analyzers; the
         # agent's upstream model traffic and governance are unaffected.
         quota_degraded = fast_model is not None and should_degrade_gateway_analytics(
-            self.db, str(account.id)
+            str(account.id)
         )
         if quota_degraded:
             fast_model = None

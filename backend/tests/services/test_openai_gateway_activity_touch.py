@@ -231,7 +231,10 @@ def test_runtime_session_summary_skips_recent_refresh():
 @pytest.mark.parametrize(
     "degraded,hosted", [(False, False), (True, False), (True, True)]
 )
-def test_gateway_request_recording_survives_activity_touch_timeout(degraded, hosted):
+@pytest.mark.parametrize("touch_times_out", [False, True])
+def test_gateway_request_recording_survives_activity_touch_timeout(
+    degraded: bool, hosted: bool, touch_times_out: bool
+) -> None:
     """A best-effort runtime-session touch must not fail a logged gateway request."""
     account_id = uuid4()
     user_id = uuid4()
@@ -312,15 +315,30 @@ def test_gateway_request_recording_survives_activity_touch_timeout(degraded, hos
         patch("preloop.services.openai_gateway.ModelGatewayEventEmitter") as emitter,
         patch("preloop.services.openai_gateway.GatewayUsageSearchService") as search,
         patch(
+            "preloop.services.openai_gateway.index_gateway_interaction"
+        ) as index_corpus,
+        patch(
             "preloop.services.openai_gateway.get_gateway_usage_index_queue"
         ) as index_queue,
+        patch.object(
+            service, "_maybe_refresh_runtime_session_summary"
+        ) as refresh_summary,
+        patch("preloop.services.openai_gateway.emit_account_event"),
+        patch("preloop.services.openai_gateway.build_account_event"),
+        patch(
+            "preloop.services.openai_gateway.crud_managed_agent.touch_last_seen_for_principal",
+            return_value=None,
+        ),
         patch(
             "preloop.services.openai_gateway.crud_runtime_session.touch_activity",
+            return_value=MagicMock(),
             side_effect=OperationalError(
                 "UPDATE runtime_session",
                 {},
                 Exception("statement timeout"),
-            ),
+            )
+            if touch_times_out
+            else None,
         ),
     ):
         service._record_gateway_request(
@@ -359,15 +377,24 @@ def test_gateway_request_recording_survives_activity_touch_timeout(degraded, hos
     assert recorded["total_tokens"] == 12
     assert recorded["status_code"] == 200
     if degraded:
+        index_corpus.assert_not_called()
         search.assert_not_called()
         index_queue.assert_not_called()
         event = emitter.return_value.emit_for_usage.call_args.kwargs
         assert event["request_payload"] is None
         assert event["response_payload"] is None
     else:
+        index_corpus.assert_called_once()
         search.return_value.build_index_document.assert_called_once()
         index_queue.return_value.submit.assert_called_once()
-    service.db.rollback.assert_called_once()
+    if touch_times_out:
+        service.db.rollback.assert_called_once()
+    else:
+        service.db.rollback.assert_not_called()
+    if degraded or touch_times_out:
+        refresh_summary.assert_not_called()
+    else:
+        refresh_summary.assert_called_once()
 
 
 @pytest.mark.parametrize(

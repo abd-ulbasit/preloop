@@ -3,6 +3,7 @@ import { customElement, state } from 'lit/decorators.js';
 import { getUsageNudges, getUserProfile, NO_USAGE_NUDGES } from '../api';
 import type { UsageNudge } from '../api';
 import {
+  ANALYSIS_QUOTA_EXPLANATION,
   bandFor,
   dismissNudge,
   loadNudgeDismissals,
@@ -187,7 +188,7 @@ export class UsageNudgeBanner extends LitElement {
                 class="message"
                 title=${
                   nudge.key === 'byok_ingest_tokens_monthly'
-                    ? 'Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running.'
+                    ? ANALYSIS_QUOTA_EXPLANATION
                     : ''
                 }
                 >${nudgeMessage(nudge)}</span
