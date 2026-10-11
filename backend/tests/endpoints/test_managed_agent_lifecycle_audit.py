@@ -1,0 +1,184 @@
+"""Durable operator history survives removal of a managed-agent registry row."""
+
+import inspect
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+import pytest
+
+from preloop.api.endpoints import account as endpoints
+from preloop.schemas.gateway_usage import ManagedAgentUpdateRequest
+
+
+@pytest.mark.asyncio
+async def test_removal_records_actor_and_revocation_before_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deletion and its audit record share a transaction and retain identity."""
+    account = SimpleNamespace(id=uuid4())
+    user = SimpleNamespace(id=uuid4())
+    agent = SimpleNamespace(
+        id=uuid4(),
+        display_name="Example Agent",
+        session_source_type="codex",
+        session_source_id="example-principal",
+        lifecycle_state="active",
+    )
+    db = MagicMock()
+    monkeypatch.setattr(
+        endpoints.crud_managed_agent, "get_for_account", lambda *a, **k: agent
+    )
+    monkeypatch.setattr(
+        endpoints.crud_api_key,
+        "deactivate_unbound_runtime_keys_for_principal",
+        lambda *a, **k: [object()],
+    )
+    monkeypatch.setattr(
+        endpoints.crud_api_key,
+        "deactivate_runtime_keys_for_managed_agent",
+        lambda *a, **k: [object(), object()],
+    )
+    audit = MagicMock()
+    remove = MagicMock()
+    monkeypatch.setattr(endpoints.crud_audit_log, "log_action", audit)
+    monkeypatch.setattr(endpoints.crud_managed_agent, "remove_registry_entry", remove)
+    monkeypatch.setattr(endpoints, "emit_account_event", lambda *a: None)
+    db.attach_mock(audit, "audit")
+    db.attach_mock(remove, "remove")
+
+    await inspect.unwrap(endpoints.delete_account_managed_agent)(
+        agent_id=str(agent.id),
+        account=account,
+        current_user=user,
+        db=db,
+    )
+
+    entry = audit.call_args.kwargs
+    assert entry["account_id"] == account.id
+    assert entry["user_id"] == user.id
+    assert entry["resource_id"] == str(agent.id)
+    assert entry["action"] == "managed_agent_removed"
+    assert entry["commit"] is False
+    assert entry["details"]["session_source_id"] == "example-principal"
+    assert entry["details"]["revoked_credentials"] == 3
+    assert entry["details"]["session_history_retained"] is True
+    assert entry["details"]["local_configuration_restored"] is False
+    assert [call[0] for call in db.mock_calls] == ["audit", "remove", "commit"]
+    remove.assert_called_once_with(db, agent=agent, commit=False)
+
+
+@pytest.mark.asyncio
+async def test_removal_audit_failure_does_not_commit_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable audit store must not produce an unaudited removal."""
+    agent = SimpleNamespace(
+        id=uuid4(),
+        display_name="Example Agent",
+        session_source_type="codex",
+        session_source_id="example-principal",
+        lifecycle_state="active",
+    )
+    db = MagicMock()
+    monkeypatch.setattr(
+        endpoints.crud_managed_agent, "get_for_account", lambda *a, **k: agent
+    )
+    monkeypatch.setattr(
+        endpoints.crud_api_key,
+        "deactivate_unbound_runtime_keys_for_principal",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        endpoints.crud_api_key,
+        "deactivate_runtime_keys_for_managed_agent",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        endpoints.crud_audit_log,
+        "log_action",
+        MagicMock(side_effect=RuntimeError("audit unavailable")),
+    )
+    remove = MagicMock()
+    monkeypatch.setattr(endpoints.crud_managed_agent, "remove_registry_entry", remove)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await inspect.unwrap(endpoints.delete_account_managed_agent)(
+            agent_id=str(agent.id),
+            account=SimpleNamespace(id=uuid4()),
+            current_user=SimpleNamespace(id=uuid4()),
+            db=db,
+        )
+    db.commit.assert_not_called()
+    remove.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,previous,next_state",
+    [
+        ("suspend", "active", "suspended"),
+        ("decommission", "active", "decommissioned"),
+        ("reenroll", "decommissioned", "active"),
+    ],
+)
+async def test_lifecycle_change_persists_actor_and_previous_state(
+    monkeypatch,
+    action,
+    previous,
+    next_state,
+):
+    """The audit record distinguishes offboarding, suspension and reenrollment."""
+    agent = SimpleNamespace(
+        id=uuid4(),
+        display_name="Example Agent",
+        session_source_type="codex",
+        session_source_id="example-principal",
+        lifecycle_state=previous,
+        lifecycle_reason="operator request",
+        owner_user_id=None,
+        runtime_session_id=None,
+    )
+    db = MagicMock()
+    account = SimpleNamespace(id=uuid4())
+    user = SimpleNamespace(id=uuid4())
+    monkeypatch.setattr(
+        endpoints.crud_managed_agent, "get_for_account", lambda *a, **k: agent
+    )
+
+    def update(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        agent.lifecycle_state = next_state
+        return agent
+
+    monkeypatch.setattr(endpoints.crud_managed_agent, "update_operator_state", update)
+    for method in (
+        "deactivate_runtime_keys_for_managed_agent",
+        "deactivate_unbound_runtime_keys_for_principal",
+        "reactivate_runtime_keys_for_managed_agent",
+    ):
+        monkeypatch.setattr(endpoints.crud_api_key, method, MagicMock())
+    monkeypatch.setattr(
+        endpoints.crud_runtime_session, "reopen_for_managed_agent", MagicMock()
+    )
+    summary = MagicMock()
+    monkeypatch.setattr(
+        endpoints,
+        "_build_managed_agent_detail_response",
+        lambda *a, **k: SimpleNamespace(agent=summary),
+    )
+    monkeypatch.setattr(endpoints, "emit_account_event", lambda *a: None)
+    audit = MagicMock()
+    monkeypatch.setattr(endpoints.crud_audit_log, "log_action", audit)
+    await inspect.unwrap(endpoints.update_account_managed_agent)(
+        agent_id=str(agent.id),
+        update=ManagedAgentUpdateRequest(lifecycle_action=action),
+        account=account,
+        current_user=user,
+        db=db,
+    )
+    entry = audit.call_args.kwargs
+    assert entry["user_id"] == user.id
+    assert entry["commit"] is False
+    assert entry["details"]["lifecycle_action"] == action
+    assert entry["details"]["previous_lifecycle_state"] == previous
+    assert entry["details"]["lifecycle_state"] == next_state

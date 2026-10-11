@@ -2665,6 +2665,8 @@ async def update_account_managed_agent(
             status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
         )
     prior_lifecycle_state = agent.lifecycle_state
+    previous_owner_user_id = str(agent.owner_user_id) if agent.owner_user_id else None
+    previous_display_name = agent.display_name
 
     set_owner = "owner_user_id" in update.model_fields_set
     set_display_name = "display_name" in update.model_fields_set
@@ -2779,6 +2781,31 @@ async def update_account_managed_agent(
             session_source_id=agent.session_source_id,
             commit=False,
         )
+    crud_audit_log.log_action(
+        db,
+        account_id=account.id,
+        user_id=current_user.id,
+        action="managed_agent_updated",
+        resource_type="managed_agent",
+        resource_id=agent_id,
+        status="success",
+        details={
+            "agent_id": agent_id,
+            "session_source_type": updated.session_source_type,
+            "session_source_id": updated.session_source_id,
+            "lifecycle_action": update.lifecycle_action,
+            "previous_lifecycle_state": prior_lifecycle_state,
+            "lifecycle_state": updated.lifecycle_state,
+            "lifecycle_reason": updated.lifecycle_reason,
+            "previous_display_name": previous_display_name,
+            "display_name": updated.display_name,
+            "previous_owner_user_id": previous_owner_user_id,
+            "owner_user_id": str(updated.owner_user_id)
+            if updated.owner_user_id
+            else None,
+        },
+        commit=False,
+    )
     db.commit()
     db.refresh(updated)
 
@@ -2844,20 +2871,40 @@ async def delete_account_managed_agent(
     # Several registry entries can share one runtime principal (repeated
     # onboards of the same local agent); a principal-wide sweep would also
     # deactivate sibling agents' durable credentials.
-    crud_api_key.deactivate_unbound_runtime_keys_for_principal(
+    legacy_keys = crud_api_key.deactivate_unbound_runtime_keys_for_principal(
         db,
         account_id=account.id,
         runtime_principal_type=agent.session_source_type,
         runtime_principal_id=agent.session_source_id,
         commit=False,
     )
-    crud_api_key.deactivate_runtime_keys_for_managed_agent(
+    bound_keys = crud_api_key.deactivate_runtime_keys_for_managed_agent(
         db,
         account_id=account.id,
         managed_agent_id=str(agent.id),
         commit=False,
     )
-    db.delete(agent)
+    crud_audit_log.log_action(
+        db,
+        account_id=account.id,
+        user_id=current_user.id,
+        action="managed_agent_removed",
+        resource_type="managed_agent",
+        resource_id=agent_id,
+        status="success",
+        details={
+            "agent_id": agent_id,
+            "display_name": agent.display_name,
+            "session_source_type": agent.session_source_type,
+            "session_source_id": agent.session_source_id,
+            "previous_lifecycle_state": agent.lifecycle_state,
+            "revoked_credentials": len(legacy_keys) + len(bound_keys),
+            "session_history_retained": True,
+            "local_configuration_restored": False,
+        },
+        commit=False,
+    )
+    crud_managed_agent.remove_registry_entry(db, agent=agent, commit=False)
     db.commit()
 
     emit_account_event(
