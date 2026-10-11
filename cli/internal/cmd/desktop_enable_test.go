@@ -225,3 +225,76 @@ func TestDesktopEnableDryRunMentionsTunnel(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopEnableReusesStoredCredentialForSameAgent(t *testing.T) {
+	var calls []string
+	opts := enableTestOptions(t, &calls, nil)
+	client := &fakeCredentialClient{token: "agt_one"}
+	opts.AgentID = "agent-123"
+	opts.Client = client
+	for i := 0; i < 2; i++ {
+		if err := runDesktopEnable(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(client.paths) != 1 {
+		t.Fatalf("minted %d credentials for one agent", len(client.paths))
+	}
+	client.token = "agt_two"
+	opts.Rotate = true
+	if err := runDesktopEnable(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	opts.Rotate = false
+	client.token = "agt_three"
+	opts.AgentID = "agent-456"
+	if err := runDesktopEnable(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.paths) != 3 {
+		t.Fatalf("rotate / new agent should mint: %v", client.paths)
+	}
+	token, _ := os.ReadFile(desktopTokenPath(opts.Install.HomeDir))
+	if string(token) != "agt_three\n" {
+		t.Fatalf("token = %q", token)
+	}
+	// A given key forgets the agent binding, so --agent mints again later.
+	opts.AgentKey = "agt_given"
+	if err := runDesktopEnable(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if storedDesktopCredentialFor(opts.Install.HomeDir, "agent-456") {
+		t.Fatal("a given key must not count as the agent's minted credential")
+	}
+}
+
+func TestInstallRuntimeDesktopBranches(t *testing.T) {
+	var installed, enabled int
+	origInstall, origEnable := runtimeDesktopInstaller, runtimeDesktopTunnelEnabler
+	runtimeDesktopInstaller = func(context.Context, desktopInstallOptions) error {
+		installed++
+		return nil
+	}
+	runtimeDesktopTunnelEnabler = func(context.Context, runtimeInstallSpec, desktopInstallOptions) error {
+		enabled++
+		return nil
+	}
+	t.Cleanup(func() { runtimeDesktopInstaller, runtimeDesktopTunnelEnabler = origInstall, origEnable })
+
+	// Deployment desktop stage: after onboarding, the tunnel must come up.
+	setInstallRuntimeFlags(t, map[string]string{"install-only": "true", "skip-install": "true", "desktop": "true"})
+	if err := runAgentsInstallRuntime(agentsInstallRuntimeCmd, []string{"hermes"}); err != nil {
+		t.Fatal(err)
+	}
+	if installed != 1 || enabled != 1 {
+		t.Fatalf("deployment stage: installed=%d enabled=%d", installed, enabled)
+	}
+
+	// Its failure fails the stage (reported as desktop: failed).
+	runtimeDesktopTunnelEnabler = func(context.Context, runtimeInstallSpec, desktopInstallOptions) error {
+		return errors.New("boom")
+	}
+	if err := runAgentsInstallRuntime(agentsInstallRuntimeCmd, []string{"hermes"}); err == nil {
+		t.Fatal("tunnel failure must fail the desktop stage")
+	}
+}

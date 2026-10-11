@@ -150,6 +150,13 @@ func (o desktopInstallOptions) osReleasePath() string {
 	return "/etc/os-release"
 }
 
+func (o desktopInstallOptions) output() io.Writer {
+	if o.Output != nil {
+		return o.Output
+	}
+	return os.Stdout
+}
+
 func (o desktopInstallOptions) now() time.Time {
 	if o.Now != nil {
 		return o.Now().UTC()
@@ -464,6 +471,9 @@ type desktopManifest struct {
 	// EndpointID is the stable desktop endpoint id written by
 	// `preloop desktop serve`; reinstalling keeps it (#870).
 	EndpointID string `json:"endpoint_id,omitempty"`
+	// DesktopAgentID is the managed agent the stored desktop credential is
+	// bound to, so re-running enable does not mint another one.
+	DesktopAgentID string `json:"desktop_agent_id,omitempty"`
 }
 
 type desktopVNCInfo struct {
@@ -479,8 +489,9 @@ func writeDesktopManifest(home, browser string, now time.Time) error {
 		_ = json.Unmarshal(data, &previous)
 	}
 	manifest := desktopManifest{
-		EndpointID: previous.EndpointID,
-		Display:    desktopDisplay,
+		EndpointID:     previous.EndpointID,
+		DesktopAgentID: previous.DesktopAgentID,
+		Display:        desktopDisplay,
 		VNC: desktopVNCInfo{
 			Host: desktopVNCHost,
 			Port: desktopVNCPort,

@@ -182,7 +182,7 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 	desktopOpts := desktopInstallOptions{Runtime: spec.kind, Output: os.Stdout}
 	if desktop {
 		// Unsupported desktops fail here, before the runtime installer runs.
-		if err := installDesktop(ctx, desktopOpts); err != nil {
+		if err := runtimeDesktopInstaller(ctx, desktopOpts); err != nil {
 			return err
 		}
 	}
@@ -201,7 +201,7 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 		if desktop && skipInstall {
 			// The deployment's desktop stage runs after onboarding: the
 			// agent exists, so the tunnel must come up or the stage fails.
-			return enableRuntimeDesktopTunnel(ctx, spec, desktopOpts)
+			return runtimeDesktopTunnelEnabler(ctx, spec, desktopOpts)
 		}
 		if desktop {
 			fmt.Fprintln(os.Stdout, "Desktop installed. After onboarding, run 'preloop desktop enable --agent <id>' to allow live views.") //nolint:errcheck
@@ -246,10 +246,17 @@ func runAgentsInstallRuntime(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if desktop {
-		return enableRuntimeDesktopTunnel(ctx, spec, desktopOpts)
+		return runtimeDesktopTunnelEnabler(ctx, spec, desktopOpts)
 	}
 	return nil
 }
+
+// Seams for the --desktop branches; tests replace them because the real
+// installer needs a Debian host and root.
+var (
+	runtimeDesktopInstaller     = installDesktop
+	runtimeDesktopTunnelEnabler = enableRuntimeDesktopTunnel
+)
 
 func runRuntimeInstallCommand(command []string, writer io.Writer) error {
 	if len(command) == 0 {
