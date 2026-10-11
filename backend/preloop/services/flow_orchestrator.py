@@ -59,6 +59,7 @@ from preloop.agents.verification import (
 from preloop.services.flow_failure_category import (
     FAILURE_CATEGORY_AGENT_NO_PROGRESS,
     FAILURE_CATEGORY_PUBLICATION_MISSING,
+    FAILURE_CATEGORY_RESULT_SCHEMA_INVALID,
     FAILURE_CATEGORY_MODEL_STREAM_IDLE,
     FAILURE_CATEGORY_TIMEOUT,
     FAILURE_CATEGORY_UNKNOWN,
@@ -988,6 +989,7 @@ class FlowExecutionOrchestrator:
         self._report_publication: Optional[Dict[str, Any]] = None
         # CRA persist-boundary decision from the last result.json capture.
         self._cra_persist_decision: Optional[Any] = None
+        self._result_schema_validation: Optional[Dict[str, Any]] = None
 
         # Execution metrics tracked during execution
         self.total_tokens: int = 0
@@ -4269,9 +4271,79 @@ class FlowExecutionOrchestrator:
             if archive:
                 artifact = extract_result_json(archive)
         sanitized = sanitize_captured_result(artifact)
-        return self._persist_cra_result_boundary(
+        persisted = self._persist_cra_result_boundary(
             sanitized, session_reference=session_reference
         )
+        self._check_result_schema(sanitized)
+        return persisted
+
+    def _check_result_schema(self, document: Optional[Dict[str, Any]]) -> None:
+        """Validate the captured result against the flow's schema (#868).
+
+        Stores the outcome on ``self._result_schema_validation`` for the
+        finalize step, which turns a SUCCEEDED run with an invalid document
+        into FAILED. A flow without a schema (or with the check off) stores
+        None, so nothing changes for it. A document the CRA validator claimed
+        is exempt: that validator already ran and owns the outcome.
+        """
+        from preloop.services.flow_result_schema import (
+            flow_result_schema,
+            validate_result_document,
+        )
+
+        self._result_schema_validation = None
+        schema = flow_result_schema(getattr(self, "flow", None))
+        if schema is None:
+            return
+        decision = getattr(self, "_cra_persist_decision", None)
+        validation = getattr(decision, "validation", None)
+        if validation is not None and not getattr(validation, "skipped", True):
+            return
+        outcome = validate_result_document(document, schema)
+        self._result_schema_validation = outcome
+        logger_ = getattr(self, "execution_logger", None)
+        if logger_ is not None:
+            logger_.log_milestone(
+                "result_schema_checked",
+                {
+                    "valid": outcome["valid"],
+                    "error_count": outcome["error_count"],
+                    "errors": outcome["errors"][:3],
+                },
+            )
+
+    def _apply_result_schema_gate(
+        self, final_status: str, agent_result: Dict[str, Any]
+    ) -> tuple[str, Dict[str, Any]]:
+        """Fail a SUCCEEDED run whose result does not match the flow schema.
+
+        Success means a recognised status or verdict AND, when the flow sets
+        a schema, a conforming document. Any other status is left alone: the
+        run already did not succeed, and its own category is the better one.
+        """
+        from preloop.services.flow_result_schema import schema_failure_message
+
+        validation = getattr(self, "_result_schema_validation", None)
+        if (
+            final_status != "SUCCEEDED"
+            or not isinstance(validation, dict)
+            or validation.get("valid") is not False
+        ):
+            return final_status, agent_result
+        message = schema_failure_message(validation)
+        self.execution_logger.log_milestone(
+            "result_schema_invalid",
+            {
+                "error_count": validation.get("error_count"),
+                "errors": (validation.get("errors") or [])[:3],
+            },
+        )
+        return "FAILED", {
+            **agent_result,
+            "status": "FAILED",
+            "error_message": message,
+            "failure_category": FAILURE_CATEGORY_RESULT_SCHEMA_INVALID,
+        }
 
     def _cra_prompt_text(self) -> Optional[str]:
         """Configured flow prompt used to detect an expected CRA result schema."""
@@ -9255,6 +9327,13 @@ class FlowExecutionOrchestrator:
                     "authenticated": False,
                 }
 
+            # A result that does not match the flow's result schema is not
+            # usable, so the run did not succeed (#868). The document is
+            # still stored below for the consumer to inspect.
+            final_status, agent_result = self._apply_result_schema_gate(
+                final_status, agent_result
+            )
+
             # A run configured to open a pull request that ends without one
             # is not a success: say why on the row and on the issue.
             missing_publication = self._missing_publication_reason(
@@ -9308,6 +9387,9 @@ class FlowExecutionOrchestrator:
                 actions_taken_summary=agent_result.get("actions_taken"),
                 mcp_usage_logs=agent_result.get("mcp_usage_logs"),
                 result=merged_result,
+                result_schema_validation=getattr(
+                    self, "_result_schema_validation", None
+                ),
                 end_time=datetime.now(timezone.utc),
                 tool_calls_count=self.tool_calls_count,
                 total_tokens=self.total_tokens,

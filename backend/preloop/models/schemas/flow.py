@@ -26,6 +26,10 @@ from preloop.services.backport_branches import (
     branch_component,
     validate_branch_name,
 )
+from preloop.services.flow_result_schema import (
+    ResultSchemaError,
+    check_result_schema,
+)
 from preloop.services.report_publication import (
     MAX_COMMIT_MESSAGE_LENGTH,
     MAX_PATH_LENGTH,
@@ -1653,6 +1657,25 @@ class FlowBase(BaseModel):
             "notifications."
         ),
     )
+    result_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional JSON Schema (draft 2020-12, at most 64 KiB) for the "
+            "result.json the agent writes. When set and validate_result is "
+            "true, a captured document that does not conform fails the "
+            "execution with failure_category result_schema_invalid; the "
+            "document is still stored. Null means no schema (no check). The "
+            "CRA security-audit presets keep their own validator and are "
+            "exempt."
+        ),
+    )
+    validate_result: bool = Field(
+        default=True,
+        description=(
+            "Apply result_schema to the captured result.json. Ignored when "
+            "result_schema is null."
+        ),
+    )
     # Per-run limits as the console's flow form edits them. They are stored
     # as agent_config.limits (max_usd / max_turns), which the model gateway
     # enforces, so they are excluded from model_dump() and never reach the
@@ -1697,6 +1720,17 @@ class FlowBase(BaseModel):
         if len(text) > 32768:
             raise ValueError("review_instructions must be at most 32768 characters")
         return text
+
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result_schema(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Reject an oversized or invalid JSON Schema at flow save (#868)."""
+        try:
+            return check_result_schema(value)
+        except ResultSchemaError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("agent_config")
     @classmethod

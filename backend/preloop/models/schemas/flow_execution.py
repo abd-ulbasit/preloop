@@ -270,12 +270,23 @@ class FlowExecutionBase(BaseModel):
             "succeed: one of runner_conflict, runner_error, model_transient, "
             "model_auth, provider_billing, model_quota (legacy, superseded "
             "by provider_billing), budget_exceeded, model_config, "
-            "no_confirmation, agent_no_progress, publication_missing, setup_failed, "
+            "no_confirmation, agent_no_progress, publication_missing, "
+            "result_schema_invalid (result.json does not match the flow "
+            "result schema), setup_failed, "
             "verification_failed, verification_blocked, tool_error, "
             "agent_error, model_stream_idle (timed out while the model "
             "stream was silent), timeout, cancelled, "
             "unknown. Null for successful or still-running executions, and "
             "for executions that predate this field."
+        ),
+    )
+    result_schema_validation: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Outcome of checking result.json against the flow result schema "
+            "at capture: {valid, errors: [{path, message}], error_count}. "
+            "Null when the flow sets no schema, the check is off, or the "
+            "flow is a CRA preset with its own validator."
         ),
     )
     queued_reason: Optional[str] = Field(
@@ -352,6 +363,7 @@ class FlowExecutionUpdate(BaseModel):
     agent_session_reference: Optional[str] = None
     error_message: Optional[str] = None
     failure_category: Optional[str] = None
+    result_schema_validation: Optional[Dict[str, Any]] = None
     tool_calls_count: Optional[int] = None
     total_tokens: Optional[int] = None
     estimated_cost: Optional[float] = None

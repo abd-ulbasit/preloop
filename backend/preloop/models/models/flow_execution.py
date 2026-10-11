@@ -212,6 +212,9 @@ class FlowExecution(Base):
     # without downloading the pack. The legal_hold field it carries is the
     # artifact's own flag, not a storage-layer object-lock claim.
     evidence_receipt = Column(JSONB, nullable=True)
+    # Capture-time result schema outcome (#868): {"valid", "errors",
+    # "error_count"}; null when the flow sets no schema or it was exempt.
+    result_schema_validation = Column(JSONB, nullable=True)
     # Derived legal-hold enforcement flag. The account-visible record (actor,
     # reason, release) is a legal_hold row; this column is what the retention
     # purge tests, in the same transaction, so a batch DELETE stays a single

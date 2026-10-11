@@ -1408,6 +1408,21 @@ def get_flow_execution_result(
         "status": execution.status,
         "result": execution.result,
         "evidence": public_evidence_status(execution),
+        # Capture-time check against the flow result schema (#868); null
+        # when the flow sets none.
+        "schema_validation": _public_schema_validation(execution),
+    }
+
+
+def _public_schema_validation(execution: Any) -> Optional[Dict[str, Any]]:
+    """``{valid, errors[]}`` from the stored result schema outcome, or None."""
+    stored = getattr(execution, "result_schema_validation", None)
+    if not isinstance(stored, dict) or not isinstance(stored.get("valid"), bool):
+        return None
+    return {
+        "valid": stored["valid"],
+        "errors": list(stored.get("errors") or []),
+        "error_count": int(stored.get("error_count") or 0),
     }
 
 

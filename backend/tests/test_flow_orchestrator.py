@@ -4882,3 +4882,128 @@ class TestMissingPublication:
 
         assert orchestrator.execution_log.status == "SUCCEEDED"
         assert "publication_missing" not in (orchestrator.execution_log.result or {})
+
+
+class TestResultSchemaGate:
+    """#868: a flow result schema is checked at capture; SUCCEEDED means usable."""
+
+    SCHEMA = {
+        "type": "object",
+        "required": ["status", "verdict"],
+        "properties": {"status": {"type": "string"}, "verdict": {"type": "string"}},
+    }
+
+    async def _run(self, db_session, test_flow, mock_nats_client, event_data, artifact):
+        executor = _confirmation_executor(artifact=artifact)
+        with patch(
+            "preloop.services.flow_orchestrator.create_executor_for_execution",
+            return_value=executor,
+        ):
+            orchestrator = FlowExecutionOrchestrator(
+                db=db_session,
+                flow_id=test_flow.id,
+                trigger_event_data=event_data,
+                nats_client=mock_nats_client,
+            )
+            orchestrator._agent_exec_started = True
+            await orchestrator.run()
+            return orchestrator
+
+    def _set_schema(self, db_session, flow, schema, validate=True):
+        flow.result_schema = schema
+        flow.validate_result = validate
+        db_session.add(flow)
+        db_session.flush()
+
+    @pytest.mark.asyncio
+    async def test_missing_required_field_fails_with_category(
+        self, db_session: Session, test_flow: Flow, mock_nats_client, event_data
+    ):
+        self._set_schema(db_session, test_flow, self.SCHEMA)
+        orchestrator = await self._run(
+            db_session, test_flow, mock_nats_client, event_data, {"status": "success"}
+        )
+
+        log = orchestrator.execution_log
+        assert log.status == "FAILED"
+        assert log.failure_category == "result_schema_invalid"
+        assert "$.verdict" in log.error_message
+        # The document is still persisted for the consumer to inspect.
+        assert log.result["status"] == "success"
+        assert log.result_schema_validation == {
+            "valid": False,
+            "errors": [
+                {"path": "$.verdict", "message": "'verdict' is a required property"}
+            ],
+            "error_count": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_conforming_document_succeeds(
+        self, db_session: Session, test_flow: Flow, mock_nats_client, event_data
+    ):
+        self._set_schema(db_session, test_flow, self.SCHEMA)
+        orchestrator = await self._run(
+            db_session,
+            test_flow,
+            mock_nats_client,
+            event_data,
+            {"status": "success", "verdict": "PASS"},
+        )
+
+        log = orchestrator.execution_log
+        assert log.status == "SUCCEEDED"
+        assert log.failure_category is None
+        assert log.result_schema_validation["valid"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("validate", [True, False])
+    async def test_no_schema_or_toggle_off_is_unchanged(
+        self,
+        db_session: Session,
+        test_flow: Flow,
+        mock_nats_client,
+        event_data,
+        validate: bool,
+    ):
+        schema = None if validate else self.SCHEMA
+        self._set_schema(db_session, test_flow, schema, validate=validate)
+        orchestrator = await self._run(
+            db_session, test_flow, mock_nats_client, event_data, {"status": "success"}
+        )
+
+        log = orchestrator.execution_log
+        assert log.status == "SUCCEEDED"
+        assert log.result_schema_validation is None
+
+    def test_cra_validated_document_is_exempt(self):
+        orchestrator = FlowExecutionOrchestrator.__new__(FlowExecutionOrchestrator)
+        orchestrator.flow = SimpleNamespace(
+            result_schema=self.SCHEMA, validate_result=True
+        )
+        orchestrator.execution_logger = MagicMock()
+        orchestrator._cra_persist_decision = SimpleNamespace(
+            validation=SimpleNamespace(skipped=False)
+        )
+        orchestrator._check_result_schema({"schema": "preloop.cra.vulnscan/v1"})
+        assert orchestrator._result_schema_validation is None
+
+        orchestrator._cra_persist_decision = SimpleNamespace(
+            validation=SimpleNamespace(skipped=True)
+        )
+        orchestrator._check_result_schema({"status": "success"})
+        assert orchestrator._result_schema_validation["valid"] is False
+
+    def test_gate_leaves_non_success_alone(self):
+        orchestrator = FlowExecutionOrchestrator.__new__(FlowExecutionOrchestrator)
+        orchestrator.execution_logger = MagicMock()
+        orchestrator._result_schema_validation = {
+            "valid": False,
+            "errors": [{"path": "$", "message": "x"}],
+            "error_count": 1,
+        }
+        result = {"status": "FAILED", "error_message": "timed out"}
+        assert orchestrator._apply_result_schema_gate("FAILED", result) == (
+            "FAILED",
+            result,
+        )
