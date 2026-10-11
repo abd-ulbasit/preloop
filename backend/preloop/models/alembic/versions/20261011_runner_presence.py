@@ -1,7 +1,7 @@
 """Store runner presence signals.
 
 Revision ID: 20261011_runner_presence
-Revises: 20261011_harness_inventory
+Revises: 20261011_runner_remote_sessions
 Create Date: 2026-10-11
 
 Issue #1506. The server derives runner presence (online, busy, idle, asleep,
@@ -16,7 +16,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "20261011_runner_presence"
-down_revision: Union[str, None] = "20261011_harness_inventory"
+down_revision: Union[str, None] = "20261011_runner_remote_sessions"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 # Alembic reads these module globals by name; keep a local reference so static

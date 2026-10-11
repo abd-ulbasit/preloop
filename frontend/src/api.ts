@@ -5059,6 +5059,44 @@ export interface HarnessInventory {
   entries: HarnessInventoryEntry[];
 }
 
+/** One model a harness can run, with how many eligible runners list it. */
+export interface HarnessModelOption {
+  id: string;
+  source: string;
+  runners_online: number;
+}
+
+/** One runner reporting a harness, for the optional runner pin. */
+export interface HarnessRunnerOption {
+  id: string;
+  name: string;
+  online: boolean;
+  eligible: boolean;
+  reason?: string | null;
+}
+
+/** A routable harness across the runners the caller may use (#1481). */
+export interface HarnessOption {
+  harness: string;
+  display_name: string;
+  agent_type: string;
+  billing: string;
+  models: HarnessModelOption[];
+  runners_online: number;
+  runners_total: number;
+  runners: HarnessRunnerOption[];
+}
+
+/** Harness + model choices for the flow editor, from runner inventories. */
+export async function getFlowHarnessOptions(): Promise<HarnessOption[]> {
+  const response = await fetchWithAuth('/api/v1/flows/harness-options');
+  if (!response.ok) {
+    throw new Error('Failed to fetch harness options');
+  }
+  const body = await response.json();
+  return Array.isArray(body?.harnesses) ? body.harnesses : [];
+}
+
 /** Raise or lower how many executions a runner may hold at once. */
 export async function updateRunnerConcurrency(
   runnerId: string,
@@ -5138,6 +5176,157 @@ export async function rotateRunnerToken(
     );
   }
   return response.json();
+}
+
+// Remote harness sessions on personal runners (#1483). The same endpoints
+// serve the mobile apps later.
+
+export interface RunnerSessionHarnessOption {
+  harness: string;
+  display_name: string;
+  session_mode: string;
+  models: Array<{ id: string; source: string }>;
+  available?: boolean;
+  unavailable_reason?: string | null;
+}
+
+export interface RunnerSessionDirectoryOption {
+  id: string;
+  label: string;
+  mode: string;
+  harnesses?: string[] | 'all';
+}
+
+export interface RunnerSessionCheckoutSource {
+  tracker_id: string;
+  tracker_name?: string | null;
+  provider: 'bitbucket_cloud' | 'github' | string;
+  repositories: Array<{ full_name: string; default_branch?: string | null }>;
+}
+
+export interface RunnerSessionOptions {
+  runner_id: string;
+  online: boolean;
+  sessions_available?: boolean;
+  harnesses: RunnerSessionHarnessOption[];
+  authorized_directories: RunnerSessionDirectoryOption[];
+  checkout_sources: RunnerSessionCheckoutSource[];
+  limits: {
+    max_concurrent: number;
+    active: number;
+    idle_timeout_seconds: number;
+  };
+}
+
+export type RunnerSessionWorkspace =
+  | { kind: 'authorized_directory'; id: string }
+  | {
+      kind: 'tracker_checkout';
+      tracker_id: string;
+      repository: string;
+      ref?: string | null;
+    };
+
+export interface RunnerSessionStartBody {
+  harness: string;
+  model?: string | null;
+  workspace: RunnerSessionWorkspace;
+  first_prompt?: string | null;
+  title?: string | null;
+}
+
+export interface RunnerSessionStarted {
+  session_id: string;
+  remote_session_id: string;
+  state: string;
+}
+
+/** A refusal from the remote session API, with its machine-readable code. */
+export class RunnerSessionApiError extends Error {
+  readonly code: string | null;
+  readonly status: number;
+
+  constructor(message: string, code: string | null, status: number) {
+    super(message);
+    this.name = 'RunnerSessionApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+async function runnerSessionRequest<T>(
+  path: string,
+  fallback: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetchWithAuth(path, init);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const code =
+      errorData?.detail && typeof errorData.detail.code === 'string'
+        ? errorData.detail.code
+        : null;
+    throw new RunnerSessionApiError(
+      extractErrorMessage(errorData, fallback),
+      code,
+      response.status
+    );
+  }
+  return response.json();
+}
+
+export function getRunnerSessionOptions(
+  runnerId: string
+): Promise<RunnerSessionOptions> {
+  return runnerSessionRequest(
+    `/api/v1/runners/${encodeURIComponent(runnerId)}/session-options`,
+    'Failed to load session options'
+  );
+}
+
+export function startRunnerSession(
+  runnerId: string,
+  body: RunnerSessionStartBody
+): Promise<RunnerSessionStarted> {
+  return runnerSessionRequest(
+    `/api/v1/runners/${encodeURIComponent(runnerId)}/sessions`,
+    'Failed to start the session',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export function sendRunnerSessionTurn(
+  sessionId: string,
+  text: string
+): Promise<{ turn_id: string; state: string }> {
+  return runnerSessionRequest(
+    `/api/v1/runner-sessions/${encodeURIComponent(sessionId)}/turns`,
+    'Failed to send the message',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }
+  );
+}
+
+export function stopRunnerSession(
+  sessionId: string,
+  mode: 'graceful' | 'kill' = 'graceful'
+): Promise<{ session_id: string; state: string }> {
+  return runnerSessionRequest(
+    `/api/v1/runner-sessions/${encodeURIComponent(sessionId)}/stop`,
+    'Failed to stop the session',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    }
+  );
 }
 
 export async function sendCommandToExecution(

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -151,6 +152,10 @@ type runnerState struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 	Name  string `json:"name"`
+	// AuthorizedDirectories is the operator's list of directories remote
+	// sessions may open (preloop runner dirs). Kept here so a token
+	// rotation or re-registration never drops it.
+	AuthorizedDirectories []authorizedDirectory `json:"authorized_directories,omitempty"`
 	// Harnesses holds per-harness switches, e.g.
 	// {"cursor_cli": {"enabled": false}}. Kept on rewrite.
 	Harnesses map[string]runnerHarnessConfig `json:"harnesses,omitempty"`
@@ -199,6 +204,19 @@ type runnerWSMessage struct {
 	HaltExecutionIDs []string         `json:"halt_execution_ids,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	RunnerID         string           `json:"runner_id,omitempty"`
+
+	// Remote session frames (session_start, session_turn, session_stop).
+	RemoteSessionID string              `json:"remote_session_id,omitempty"`
+	TurnID          string              `json:"turn_id,omitempty"`
+	Text            string              `json:"text,omitempty"`
+	Mode            string              `json:"mode,omitempty"`
+	Harness         string              `json:"harness,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	FirstPrompt     string              `json:"first_prompt,omitempty"`
+	Workspace       map[string]any      `json:"workspace,omitempty"`
+	Actor           *runnerSessionActor `json:"actor,omitempty"`
+	Limits          map[string]any      `json:"limits,omitempty"`
+
 	// InventoryWanted on an ack asks for the full harness inventory.
 	InventoryWanted bool `json:"inventory_wanted,omitempty"`
 }
@@ -266,6 +284,9 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Checkouts of sessions that did not survive the restart are garbage;
+	// a session restored from disk keeps its clone.
+	_ = cleanupSessionWorkspaces(liveSessionCheckouts())
 	// Unregister on every exit path an ephemeral process can take: a clean
 	// one-shot finish, a fatal server rejection, a panic. The signal handler
 	// below covers SIGTERM/SIGINT/SIGHUP; SIGKILL cannot be caught, which is
@@ -324,14 +345,15 @@ func loadOrRegisterRunner(
 		concurrency = config.DefaultRunnerConcurrency
 	}
 	req := map[string]any{
-		"harness_inventory":  runnerInventory.current(true),
-		"host_exec_profiles": hostExecAdvertisements(),
-		"name":               name,
-		"hostname":           hostname,
-		"os":                 runtime.GOOS,
-		"arch":               runtime.GOARCH,
-		"labels":             labels,
-		"concurrency":        concurrency,
+		"harness_inventory":      runnerInventory.current(true),
+		"host_exec_profiles":     hostExecAdvertisements(),
+		"authorized_directories": authorizedDirectoryAdvertisements(),
+		"name":                   name,
+		"hostname":               hostname,
+		"os":                     runtime.GOOS,
+		"arch":                   runtime.GOARCH,
+		"labels":                 labels,
+		"concurrency":            concurrency,
 	}
 	if runnerOnce.registersEphemeral() {
 		return registerEphemeralRunner(client, req)
@@ -340,14 +362,21 @@ func loadOrRegisterRunner(
 		req["runner_id"] = existing.ID
 		var resumed runnerAPIRecord
 		if err := client.Post("/api/v1/runners/register", req, &resumed); err == nil && resumed.ID != "" {
-			existing.ID = resumed.ID
-			if resumed.Name != "" {
-				existing.Name = resumed.Name
-			}
-			if resumed.Token != "" {
-				existing.Token = resumed.Token
-			}
-			_ = writeRunnerState(existing)
+			// Re-read under the lock: a `dirs add` during the register
+			// request must survive this write.
+			_ = updateRunnerState(func(current *runnerState) error {
+				current.ID = resumed.ID
+				current.Name = existing.Name
+				if resumed.Name != "" {
+					current.Name = resumed.Name
+				}
+				current.Token = existing.Token
+				if resumed.Token != "" {
+					current.Token = resumed.Token
+				}
+				existing = current
+				return nil
+			})
 			runnerInventory.markSent(registeredInventoryHash(req))
 			return existing, nil
 		}
@@ -358,12 +387,16 @@ func loadOrRegisterRunner(
 	if err := client.Post("/api/v1/runners/register", req, &created); err != nil {
 		return nil, fmt.Errorf("register runner: %w", err)
 	}
-	state := &runnerState{ID: created.ID, Token: created.Token, Name: created.Name}
-	if previous, err := readRunnerState(); err == nil {
-		// A fresh registration keeps the operator's harness switches.
-		state.Harnesses = previous.Harnesses
-	}
-	if err := writeRunnerState(state); err != nil {
+	var state *runnerState
+	// Directories authorized before the first registration (or after a
+	// stale identity was discarded) belong to this host, not to the runner
+	// row, so they survive a fresh registration, as do the operator's
+	// harness switches.
+	if err := updateRunnerState(func(current *runnerState) error {
+		current.ID, current.Token, current.Name = created.ID, created.Token, created.Name
+		state = current
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	runnerInventory.markSent(registeredInventoryHash(req))
@@ -529,6 +562,8 @@ func runnerForegroundLoop(
 	}
 
 	jobs := newRunnerJobs(concurrency)
+	jobs.sessions = newRunnerSessionManager(out)
+	defer jobs.sessions.shutdown()
 	backoff := runnerReconnectMin
 	connectedOnce := false
 
@@ -652,6 +687,13 @@ func runRunnerSession(
 	if err := writeRunnerJSON(conn, runnerHeartbeatMessage(jobs.concurrency)); err != nil {
 		return fmt.Errorf("initial heartbeat: %w", err)
 	}
+	// Remote sessions outlive the socket; tell this connection which are
+	// live so the server resumes delivery to them.
+	jobs.sessions.reportLive()
+	sendSessionFrame := func(msg map[string]any) error { return writeRunnerJSON(conn, msg) }
+	if err := jobs.sessions.flush(sendSessionFrame); err != nil {
+		return fmt.Errorf("session report: %w", err)
+	}
 
 	// Unacknowledged output has to be offered again on the new socket, for
 	// every held job and every outcome still waiting to be reported.
@@ -677,6 +719,7 @@ func runRunnerSession(
 		case <-interrupt:
 			fmt.Fprintf(out, "Unregistering...\n")
 			jobs.haltAll()
+			jobs.sessions.shutdown()
 			_ = writeRunnerJSON(conn, map[string]any{"type": "unregister"})
 			return nil
 		case <-logTicker.C:
@@ -699,7 +742,12 @@ func runRunnerSession(
 					return err
 				}
 			}
+		case <-jobs.sessions.notifyChan():
+			if err := jobs.sessions.flush(sendSessionFrame); err != nil {
+				return fmt.Errorf("session delivery: %w", err)
+			}
 		case <-ticker.C:
+			jobs.sessions.tick()
 			if !jobs.publicationActive() {
 				_ = cleanupPublicationRecovery(time.Now())
 			}
@@ -731,6 +779,9 @@ func runRunnerSession(
 				return err
 			}
 		case msg := <-incoming:
+			if jobs.sessions.handle(msg) {
+				continue
+			}
 			if msg.Type == "hello" {
 				logAcknowledgements = msg.LogAcknowledgements
 				// The echo is how a one-shot run learns whether this
@@ -1274,6 +1325,89 @@ func readRunnerState() (*runnerState, error) {
 	return &state, nil
 }
 
+// mergeRunnerStateDoc renders state over the current runner.json, keeping
+// the keys runnerState does not model (for example "sessions", written by
+// `preloop runner sessions`) and the per-harness keys other commands own.
+func mergeRunnerStateDoc(path string, state *runnerState) ([]byte, error) {
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]any{}
+	if err := json.Unmarshal(encoded, &known); err != nil {
+		return nil, err
+	}
+	doc := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &doc)
+	}
+	for _, key := range runnerStateKeys() {
+		delete(doc, key)
+	}
+	for key, value := range known {
+		doc[key] = value
+	}
+	return json.MarshalIndent(doc, "", "  ")
+}
+
+// runnerStateKeys are the top-level runner.json keys runnerState owns.
+func runnerStateKeys() []string {
+	t := reflect.TypeOf(runnerState{})
+	keys := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
+}
+
+// withRunnerStateLock runs fn holding the exclusive runner.json lock.
+func withRunnerStateLock(fn func() error) (err error) {
+	path, err := runnerStatePath()
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := lockFile.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	if err = lockOperatorNoteFile(lockFile); err != nil {
+		return err
+	}
+	defer unlockOperatorNoteFile(lockFile) //nolint:errcheck
+	return fn()
+}
+
+// updateRunnerState is a read-modify-write of runner.json under an
+// exclusive lock (runner.json.lock). Every writer that keeps fields it did
+// not change goes through it, so `preloop runner dirs`, a token rotation
+// and a registration cannot overwrite each other's change.
+func updateRunnerState(fn func(state *runnerState) error) error {
+	return withRunnerStateLock(func() error {
+		state, err := readRunnerState()
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			state = &runnerState{}
+		}
+		if err := fn(state); err != nil {
+			return err
+		}
+		return writeRunnerState(state)
+	})
+}
+
 func writeRunnerState(state *runnerState) error {
 	path, err := runnerStatePath()
 	if err != nil {
@@ -1282,11 +1416,14 @@ func writeRunnerState(state *runnerState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := mergeRunnerStateDoc(path, state)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// Atomic: the running runner re-reads this file on every heartbeat for
+	// the authorized directory list, and `preloop runner dirs` edits it
+	// from another process.
+	return writeFileAtomic(path, data, 0o600)
 }
 
 func runRunnerEnable(cmd *cobra.Command, args []string) error {
@@ -1478,8 +1615,15 @@ func rotateRunnerToken(client *api.Client, out io.Writer) error {
 	if rotated.Token == "" {
 		return errors.New("rotate runner token: the server returned no token")
 	}
-	state.Token = rotated.Token
-	if err := writeRunnerState(state); err != nil {
+	// Re-read under the lock: the state read before the request may be
+	// stale by now (a `dirs add` in between).
+	if err := updateRunnerState(func(current *runnerState) error {
+		if current.ID == "" {
+			current.ID, current.Name = state.ID, state.Name
+		}
+		current.Token = rotated.Token
+		return nil
+	}); err != nil {
 		// The old token is already dead, so say where the new one went.
 		return fmt.Errorf(
 			"the server rotated the token but writing runner.json failed: %w. "+
