@@ -38,7 +38,6 @@ from preloop.config import settings
 from preloop.models import models
 from preloop.models.crud import crud_audit_log, crud_desktop, crud_managed_agent
 from preloop.models.crud.desktop import endpoint_is_online
-from preloop.models.db.session import get_db_session
 from preloop.services import desktop_broker as broker
 from preloop.services.db_executor import run_db_async
 from preloop.utils.permissions import require_permission
@@ -305,6 +304,10 @@ def _ensure_sweeper() -> None:
 
 # ---------------------------------------------------------------------------
 # REST
+#
+# Routes take no request-scoped sync session: every handler authorizes inside
+# _run_db with _authorize_operator, which applies the same require_permission
+# check (control_managed_agent) on a short-lived worker session.
 
 
 class DesktopViewCreate(BaseModel):
@@ -437,14 +440,12 @@ def _own_view(
 
 
 @router.get("/desktop/endpoints")
-@require_permission(PERMISSION)
 async def list_desktop_endpoints(
     managed_agent_id: Optional[uuid.UUID] = Query(default=None),
     runner_id: Optional[uuid.UUID] = Query(default=None),
     runtime_session_id: Optional[uuid.UUID] = Query(default=None),
     state: Optional[str] = Query(default=None, pattern="^(online|offline)$"),
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Desktop endpoints in the caller's account, filtered by linkage."""
     _require_enabled()
@@ -480,12 +481,10 @@ async def list_desktop_endpoints(
 
 
 @router.post("/desktop/endpoints/{endpoint_id}/views", status_code=201)
-@require_permission(PERMISSION)
 async def create_desktop_view(
     endpoint_id: str,
     body: DesktopViewCreate,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Open a view-only desktop view on one endpoint."""
     _require_enabled()
@@ -503,12 +502,10 @@ async def create_desktop_view(
 
 
 @router.post("/agents/{agent_id}/desktop-views", status_code=201)
-@require_permission(PERMISSION)
 async def create_agent_desktop_view(
     agent_id: str,
     body: DesktopViewCreate,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Open a view on the most recently seen online desktop of an agent."""
     _require_enabled()
@@ -619,82 +616,68 @@ async def _release_control(user: models.User, view_id: str, *, reason: str) -> N
 
 
 @router.get("/desktop/views/{view_id}")
-@require_permission(PERMISSION)
 async def get_desktop_view(
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """State of one of the caller's desktop views."""
     return await _get_view(current_user, view_id)
 
 
 @router.get("/agents/{agent_id}/desktop-views/{view_id}")
-@require_permission(PERMISSION)
 async def get_agent_desktop_view(
     agent_id: str,
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Agent-scoped alias of ``GET /desktop/views/{view_id}``."""
     return await _get_view(current_user, view_id)
 
 
 @router.delete("/desktop/views/{view_id}", status_code=204)
-@require_permission(PERMISSION)
 async def delete_desktop_view(
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> None:
     """End a desktop view (idempotent)."""
     await _delete_view(current_user, view_id)
 
 
 @router.delete("/agents/{agent_id}/desktop-views/{view_id}", status_code=204)
-@require_permission(PERMISSION)
 async def delete_agent_desktop_view(
     agent_id: str,
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> None:
     """Agent-scoped alias of ``DELETE /desktop/views/{view_id}``."""
     await _delete_view(current_user, view_id)
 
 
 @router.post("/desktop/views/{view_id}/control")
-@require_permission(PERMISSION)
 async def request_desktop_control(
     view_id: str,
     body: DesktopControlRequest,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Take control of the desktop (self-confirmed with a reason)."""
     return await _grant_control(current_user, view_id, body.reason)
 
 
 @router.post("/agents/{agent_id}/desktop-views/{view_id}/control")
-@require_permission(PERMISSION)
 async def request_agent_desktop_control(
     agent_id: str,
     view_id: str,
     body: DesktopControlRequest,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> dict:
     """Agent-scoped alias of ``POST /desktop/views/{view_id}/control``."""
     return await _grant_control(current_user, view_id, body.reason)
 
 
 @router.post("/desktop/views/{view_id}/control/release", status_code=204)
-@require_permission(PERMISSION)
 async def release_desktop_control(
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> None:
     """Return the view to view-only."""
     await _release_control(current_user, view_id, reason="user")
@@ -703,12 +686,10 @@ async def release_desktop_control(
 @router.post(
     "/agents/{agent_id}/desktop-views/{view_id}/control/release", status_code=204
 )
-@require_permission(PERMISSION)
 async def release_agent_desktop_control(
     agent_id: str,
     view_id: str,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db_session),
 ) -> None:
     """Agent-scoped alias of ``POST /desktop/views/{view_id}/control/release``."""
     await _release_control(current_user, view_id, reason="user")
