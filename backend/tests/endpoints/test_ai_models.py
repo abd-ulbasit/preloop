@@ -1121,3 +1121,23 @@ def test_put_ai_model_sets_and_clears_codex_ws_override(
     assert response.status_code == 200, response.text
     _, kwargs = crud.update.call_args
     assert "codex_upstream_websocket" not in kwargs["obj_in"]["meta_data"]
+
+
+def test_put_ai_model_rejects_codex_ws_override_on_non_codex_model(
+    mock_account, mocker: MockerFixture
+):
+    client, crud, _, existing = _credential_payload_client(mock_account, mocker)
+    crud.get.return_value = mocker.MagicMock(
+        id=existing.id,
+        account_id=mock_account.account_id,
+        provider_name="openai",
+        meta_data={"gateway": {"enabled": True}},
+    )
+
+    response = client.put(
+        f"/api/v1/ai-models/{existing.id}", json={"codex_upstream_websocket": True}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "openai-codex" in response.json()["detail"]
+    crud.update.assert_not_called()
