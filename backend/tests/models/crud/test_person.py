@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import delete
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_person
 from preloop.models.crud.person import IdentityConflictError, IdentityUnavailableError
 
 
-def _member(db, *, username=None, email="jane@example.com", person=None):
+def _member(
+    db: Session,
+    *,
+    username: str | None = None,
+    email: str = "jane@example.com",
+    person: models.Person | None = None,
+) -> models.User:
     account = models.Account(organization_name="Example organization")
     db.add(account)
     db.flush()
@@ -30,7 +39,9 @@ def _member(db, *, username=None, email="jane@example.com", person=None):
     return user
 
 
-def test_linked_provisional_memberships_share_canonical_profile(db_session):
+def test_linked_provisional_memberships_share_canonical_profile(
+    db_session: Session,
+) -> None:
     first = _member(db_session, username="chosen-" + uuid.uuid4().hex)
     second = _member(db_session, person=first.person)
     profile = crud_person.profile_for_membership(db_session, membership_id=second.id)
@@ -55,7 +66,7 @@ def test_linked_provisional_memberships_share_canonical_profile(db_session):
     assert second.account_id != first.account_id
 
 
-def test_equal_provisional_email_never_merges(db_session):
+def test_equal_provisional_email_never_merges(db_session: Session) -> None:
     first = _member(db_session)
     second = _member(db_session)
     assert first.person_id != second.person_id
@@ -63,7 +74,9 @@ def test_equal_provisional_email_never_merges(db_session):
         crud_person.resolve_login(db_session, identifier="jane@example.com")
 
 
-def test_security_changes_revoke_each_membership_and_retire_passwords(db_session):
+def test_security_changes_revoke_each_membership_and_retire_passwords(
+    db_session: Session,
+) -> None:
     first = _member(db_session)
     second = _member(db_session, person=first.person)
     db_session.add(
@@ -101,7 +114,9 @@ def test_security_changes_revoke_each_membership_and_retire_passwords(db_session
         )
 
 
-def test_delete_primary_and_last_membership_retains_credentials(db_session):
+def test_delete_primary_and_last_membership_retains_credentials(
+    db_session: Session,
+) -> None:
     first = _member(db_session)
     second = _member(db_session, person=first.person)
     person_id = first.person_id
@@ -133,7 +148,9 @@ def test_delete_primary_and_last_membership_retains_credentials(db_session):
     assert db_session.get(models.WebAuthnCredential, passkey_id) is None
 
 
-def test_verification_address_bound_single_use_and_unrelated_conflict(db_session):
+def test_verification_address_bound_single_use_and_unrelated_conflict(
+    db_session: Session,
+) -> None:
     first = _member(db_session)
     second = _member(db_session)
     crud_person.verify_email(
@@ -161,7 +178,7 @@ def test_verification_address_bound_single_use_and_unrelated_conflict(db_session
         )
 
 
-def test_username_conflicts_and_email_change_verification(db_session):
+def test_username_conflicts_and_email_change_verification(db_session: Session) -> None:
     first = _member(db_session)
     second = _member(db_session, email="other@example.com")
     with pytest.raises(IdentityConflictError):
@@ -192,7 +209,7 @@ def test_username_conflicts_and_email_change_verification(db_session):
     )
 
 
-def test_provider_ownership_and_quarantine_fail_closed(db_session):
+def test_provider_ownership_and_quarantine_fail_closed(db_session: Session) -> None:
     first = _member(db_session)
     second = _member(db_session)
     crud_person.link_provider(
@@ -224,8 +241,8 @@ def test_provider_ownership_and_quarantine_fail_closed(db_session):
 
 
 def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
-    db_session, monkeypatch
-):
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     first = _member(db_session)
     second = _member(db_session)
     claimed = "canonical-" + uuid.uuid4().hex
@@ -234,7 +251,7 @@ def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
     original = first.person.username
     scalar = db_session.scalar
 
-    def concurrent_availability(statement, *args, **kwargs):
+    def concurrent_availability(statement: Any, *args: Any, **kwargs: Any) -> Any:
         # Emulate an ownership claim committing between the availability check
         # and our UPDATE. The actual unique index must still decide the race.
         sql = str(statement)
@@ -255,7 +272,9 @@ def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
     assert crud_person.get(db_session, id=second.person_id).username == claimed
 
 
-def test_revoke_identity_retires_opaque_tokens_codes_and_cli_sessions(db_session):
+def test_revoke_identity_retires_opaque_tokens_codes_and_cli_sessions(
+    db_session: Session,
+) -> None:
     first = _member(db_session)
     second = _member(db_session, person=first.person)
     access = models.OAuthMCPAccessToken(
@@ -295,7 +314,7 @@ def test_revoke_identity_retires_opaque_tokens_codes_and_cli_sessions(db_session
     assert db_session.get(models.OAuthMCPAuthorizationCode, code_id) is None
 
 
-def test_legacy_crud_update_writes_canonical_identity(db_session):
+def test_legacy_crud_update_writes_canonical_identity(db_session: Session) -> None:
     from preloop.models.crud import crud_user
 
     first = _member(db_session)
@@ -317,7 +336,9 @@ def test_legacy_crud_update_writes_canonical_identity(db_session):
     assert first.hashed_password is None
 
 
-def test_new_linked_membership_cannot_introduce_credentials(db_session):
+def test_new_linked_membership_cannot_introduce_credentials(
+    db_session: Session,
+) -> None:
     first = _member(db_session)
     account = models.Account(organization_name="Example secondary")
     db_session.add(account)
@@ -336,7 +357,9 @@ def test_new_linked_membership_cannot_introduce_credentials(db_session):
         db_session.expunge(second)
 
 
-def test_audit_transaction_enforces_read_only_database_access(db_engine):
+def test_audit_transaction_enforces_read_only_database_access(
+    db_engine: Engine,
+) -> None:
     from sqlalchemy import text
     from sqlalchemy.exc import DBAPIError
     from sqlalchemy.orm import Session
@@ -358,7 +381,9 @@ def test_audit_transaction_enforces_read_only_database_access(db_engine):
         db.rollback()
 
 
-def test_initial_oauth_identity_registers_provider_owner_and_provenance(db_session):
+def test_initial_oauth_identity_registers_provider_owner_and_provenance(
+    db_session: Session,
+) -> None:
     account = models.Account(organization_name="Example provider account")
     db_session.add(account)
     db_session.flush()
