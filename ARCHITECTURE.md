@@ -605,9 +605,13 @@ they do not constitute the global login identity.
 Passkey IDs, keys and counters stay unchanged. Their `person_id` owns access;
 nullable `user_id` records originating membership provenance. Current legacy
 passwords from already explicitly linked memberships are retained under the
-same Person in `PersonPasswordCredential`. This deliberately preserves those
-existing passwords across the backfill; it never recreates a password previously
-removed by consolidation. A canonical password reset retires all retained hashes
+same Person in `PersonPasswordCredential`; a nonprimary password differing from
+the validated primary, a nonprimary passkey, or a differing nonprimary provider
+subject quarantines the identity. These credentials previously authorized only
+a membership, so granting them global identity access requires fresh ownership
+proof. Preservation prevents data loss during operator repair and never recreates
+a credential previously removed by consolidation. New explicitly linked
+memberships cannot introduce identity credentials. A canonical password reset retires all retained hashes
 and clears membership password caches. Security changes increment both identity
 and membership token generations to support the existing JWT generation checks.
 They also revoke opaque OAuth access/refresh tokens and CLI sessions across

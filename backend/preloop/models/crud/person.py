@@ -107,6 +107,20 @@ class CRUDPerson:
         self._require_ready(person)
         return person
 
+    def lock_for_session(self, db: Session, *, membership_id: Any) -> models.Person:
+        """Lock an active canonical identity through one atomic credential/session write.
+
+        Callers must validate their proof after acquiring this lock and commit
+        token records in the same transaction. Account membership checks remain
+        the caller's responsibility.
+        """
+        owner = self.resolve_for_membership(db, membership_id=membership_id)
+        person = self._lock(db, owner.id)
+        self._require_ready(person)
+        if person.identity_status != "active":
+            raise IdentityUnavailableError("Identity is suspended")
+        return person
+
     @staticmethod
     def _require_ready(person: models.Person) -> None:
         if (
@@ -336,6 +350,7 @@ class CRUDPerson:
         person = self.get(db, id=person_id)
         if person is None:
             return []
+        self._require_ready(person)
         hashes = list(
             db.scalars(
                 select(models.PersonPasswordCredential.hashed_password).where(

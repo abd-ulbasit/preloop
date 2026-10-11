@@ -21,7 +21,7 @@ def _member(db, *, username=None, email="jane@example.com", person=None):
         username=username or uuid.uuid4().hex,
         email=email,
         full_name="Jane Doe",
-        hashed_password="synthetic-hash",
+        hashed_password=None if person is not None else "synthetic-hash",
         email_verified=False,
         person=person,
     )
@@ -315,3 +315,22 @@ def test_legacy_crud_update_writes_canonical_identity(db_session):
     )
     db_session.refresh(first)
     assert first.hashed_password is None
+
+
+def test_new_linked_membership_cannot_introduce_credentials(db_session):
+    first = _member(db_session)
+    account = models.Account(organization_name="Example secondary")
+    db_session.add(account)
+    db_session.flush()
+    second = models.User(
+        account_id=account.id,
+        person_id=first.person_id,
+        username=uuid.uuid4().hex,
+        email=first.email,
+        hashed_password="unproven-admin-password",
+    )
+    with db_session.begin_nested():
+        db_session.add(second)
+        with pytest.raises(ValueError, match="cannot introduce"):
+            db_session.flush()
+        db_session.expunge(second)

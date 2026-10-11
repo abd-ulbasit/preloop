@@ -145,6 +145,12 @@ def _verified_person_exists(session: Session, email: str) -> bool:
 
 def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
     if user.person_id is not None or user.person is not None:
+        if (
+            user.hashed_password is not None
+            or user.oauth_id is not None
+            or user.external_id is not None
+        ):
+            raise ValueError("Linked membership cannot introduce identity credentials")
         return
     email = normalize_email(user.email)
     verified = (

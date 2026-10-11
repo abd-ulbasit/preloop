@@ -62,6 +62,12 @@ def upgrade() -> None:
         if len({r["person_id"] for r in rows}) > 1
         for r in rows
     }
+    passkey_owners: dict[Any, set[Any]] = defaultdict(set)
+    for credential in bind.execute(
+        sa.text("SELECT user_id FROM webauthn_credential WHERE user_id IS NOT NULL")
+    ).mappings():
+        passkey_owners[credential["user_id"]].add(credential["user_id"])
+    provider_keys = {r["id"]: key for key, rows in providers.items() for r in rows}
     for person in bind.execute(sa.text("SELECT * FROM person ORDER BY id")).mappings():
         rows = users.get(person["id"], [])
         if person["username"] is not None or person["migration_conflict"] is not None:
@@ -79,6 +85,26 @@ def upgrade() -> None:
             (r for r in rows if r["id"] == person["primary_user_id"]),
             rows[0] if rows else None,
         )
+        if primary is not None:
+            if any(
+                r["id"] != primary["id"]
+                and r["hashed_password"]
+                and r["hashed_password"] != primary["hashed_password"]
+                for r in rows
+            ):
+                reasons.append("nonprimary_password_ownership_conflict")
+            if any(
+                r["id"] != primary["id"] and r["id"] in passkey_owners for r in rows
+            ):
+                reasons.append("nonprimary_passkey_ownership_conflict")
+            primary_provider = provider_keys.get(primary["id"])
+            if any(
+                r["id"] != primary["id"]
+                and r["id"] in provider_keys
+                and provider_keys[r["id"]] != primary_provider
+                for r in rows
+            ):
+                reasons.append("nonprimary_provider_ownership_conflict")
         if reasons:
             bind.execute(
                 sa.text(

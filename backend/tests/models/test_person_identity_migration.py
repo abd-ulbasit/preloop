@@ -65,7 +65,7 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
     # registration and two separate people claiming one OAuth subject.
     layout = [
         (0, "chosen-name", "p0@example.com", "hash-a", None),
-        (0, "membership-alias", "p0@example.com", "hash-b", None),
+        (0, "membership-alias", "p0@example.com", "hash-a", None),
         (1, "provisional-chosen", "p1@example.com", "hash-c", None),
         (1, "provisional-alias", "p1@example.com", None, None),
         (2, "unrelated-provisional", "p1@example.com", "hash-d", None),
@@ -96,6 +96,9 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
                 "subject": subject,
             },
         )
+    connection.execute(
+        text('UPDATE "user" SET last_login=now() WHERE id=:id'), {"id": memberships[2]}
+    )
     credential_id = uuid.uuid4()
     connection.execute(
         text(
@@ -113,7 +116,7 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
     }
     assert persons[people[0]]["username"] == "chosen-name"
     assert persons[people[0]]["hashed_password"] == "hash-a"
-    assert persons[people[1]]["username"] in {"provisional-chosen", "provisional-alias"}
+    assert persons[people[1]]["username"] == "provisional-chosen"
     assert persons[people[1]]["email_verified_at"] is None
     assert persons[people[2]]["id"] != persons[people[1]]["id"]
     assert (
@@ -130,7 +133,7 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
             {"id": people[0]},
         ).scalars()
     )
-    assert hashes == {"hash-b"}
+    assert hashes == set()
     assert (
         connection.execute(text("SELECT count(*) FROM person_auth_identity")).scalar()
         == 0
@@ -159,3 +162,58 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
     assert retained["user_id"] is None
     assert retained["person_id"] == people[0]
     connection.execute(text("SET LOCAL search_path TO public"))
+
+
+def test_competing_membership_credentials_are_preserved_but_quarantined(
+    db_session: Session,
+) -> None:
+    from preloop.models import models
+    from preloop.models.crud import crud_person
+    from preloop.models.crud.person import IdentityUnavailableError
+    import pytest
+
+    accounts = [models.Account(organization_name="Example") for _ in range(2)]
+    db_session.add_all(accounts)
+    db_session.flush()
+    source = models.User(
+        account_id=accounts[0].id,
+        username=uuid.uuid4().hex,
+        email="legacy@example.com",
+        hashed_password="primary-hash",
+    )
+    db_session.add(source)
+    db_session.flush()
+    sibling = models.User(
+        account_id=accounts[1].id,
+        person=source.person,
+        username=uuid.uuid4().hex,
+        email=source.email,
+    )
+    db_session.add(sibling)
+    db_session.flush()
+    # Represent legacy data created before canonical credentials existed.
+    sibling.hashed_password = "unproven-membership-hash"
+    source.person.username = None
+    source.person.email = None
+    source.person.hashed_password = None
+    db_session.flush()
+    connection = db_session.connection()
+    with Operations.context(MigrationContext.configure(connection)):
+        _revision("20261012_identity_backfill").upgrade()
+    db_session.expire_all()
+    person = db_session.get(models.Person, source.person_id)
+    assert person.identity_status == "quarantined"
+    assert person.migration_conflict == "nonprimary_password_ownership_conflict"
+    with pytest.raises(IdentityUnavailableError):
+        crud_person.credential_owner(db_session, membership_id=source.id)
+    with pytest.raises(IdentityUnavailableError):
+        crud_person.list_password_hashes(db_session, person_id=person.id)
+    preserved = set(
+        connection.execute(
+            text(
+                "SELECT hashed_password FROM person_password_credential WHERE person_id=:id"
+            ),
+            {"id": person.id},
+        ).scalars()
+    )
+    assert preserved == {"primary-hash", "unproven-membership-hash"}
