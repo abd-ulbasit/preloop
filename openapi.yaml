@@ -37056,6 +37056,15 @@ components:
             maxItems: 64
           - type: 'null'
           title: Host Exec Profiles
+        authorized_directories:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+            maxItems: 64
+          - type: 'null'
+          title: Authorized Directories
         harness_inventory:
           anyOf:
           - $ref: '#/components/schemas/HarnessInventory'
@@ -42889,7 +42898,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

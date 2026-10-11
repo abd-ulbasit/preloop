@@ -151,6 +151,10 @@ type runnerState struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 	Name  string `json:"name"`
+	// AuthorizedDirectories is the operator's list of directories remote
+	// sessions may open (preloop runner dirs). Kept here so a token
+	// rotation or re-registration never drops it.
+	AuthorizedDirectories []authorizedDirectory `json:"authorized_directories,omitempty"`
 	// Harnesses holds per-harness switches, e.g.
 	// {"cursor_cli": {"enabled": false}}. Kept on rewrite.
 	Harnesses map[string]runnerHarnessConfig `json:"harnesses,omitempty"`
@@ -266,6 +270,8 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// No remote session survives a restart: their checkouts are garbage.
+	_ = cleanupSessionWorkspaces(nil)
 	// Unregister on every exit path an ephemeral process can take: a clean
 	// one-shot finish, a fatal server rejection, a panic. The signal handler
 	// below covers SIGTERM/SIGINT/SIGHUP; SIGKILL cannot be caught, which is
@@ -324,14 +330,15 @@ func loadOrRegisterRunner(
 		concurrency = config.DefaultRunnerConcurrency
 	}
 	req := map[string]any{
-		"harness_inventory":  runnerInventory.current(true),
-		"host_exec_profiles": hostExecAdvertisements(),
-		"name":               name,
-		"hostname":           hostname,
-		"os":                 runtime.GOOS,
-		"arch":               runtime.GOARCH,
-		"labels":             labels,
-		"concurrency":        concurrency,
+		"harness_inventory":      runnerInventory.current(true),
+		"host_exec_profiles":     hostExecAdvertisements(),
+		"authorized_directories": authorizedDirectoryAdvertisements(),
+		"name":                   name,
+		"hostname":               hostname,
+		"os":                     runtime.GOOS,
+		"arch":                   runtime.GOARCH,
+		"labels":                 labels,
+		"concurrency":            concurrency,
 	}
 	if runnerOnce.registersEphemeral() {
 		return registerEphemeralRunner(client, req)
@@ -359,7 +366,11 @@ func loadOrRegisterRunner(
 		return nil, fmt.Errorf("register runner: %w", err)
 	}
 	state := &runnerState{ID: created.ID, Token: created.Token, Name: created.Name}
+	// Directories authorized before the first registration (or after a
+	// stale identity was discarded) belong to this host, not to the runner
+	// row, so they survive a fresh registration.
 	if previous, err := readRunnerState(); err == nil {
+		state.AuthorizedDirectories = previous.AuthorizedDirectories
 		// A fresh registration keeps the operator's harness switches.
 		state.Harnesses = previous.Harnesses
 	}
@@ -1286,7 +1297,10 @@ func writeRunnerState(state *runnerState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// Atomic: the running runner re-reads this file on every heartbeat for
+	// the authorized directory list, and `preloop runner dirs` edits it
+	// from another process.
+	return writeFileAtomic(path, data, 0o600)
 }
 
 func runRunnerEnable(cmd *cobra.Command, args []string) error {
