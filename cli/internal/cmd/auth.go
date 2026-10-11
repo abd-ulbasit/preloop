@@ -67,20 +67,23 @@ type UserInfo struct {
 	Username string `json:"username,omitempty"`
 }
 
-// fetchUserInfo reads the caller's profile. It tries the EE route first
-// and falls back to the OSS auth route when that returns 404, so self-host
-// OSS instances still deliver runner_policy.
+// fetchUserInfo reads the caller's profile from /api/v1/auth/users/me,
+// which OSS and EE both serve and which carries runner_policy. The EE-only
+// /api/v1/users/me is then read best effort to fill name and organization;
+// its errors are ignored so it can never hide the runner policy.
 func fetchUserInfo(client *api.Client, info *UserInfo) error {
-	err := client.Get(userInfoPath, info)
-	if err == nil {
-		return nil
-	}
-	if !api.IsStatus(err, http.StatusNotFound) {
-		return err
-	}
 	*info = UserInfo{}
 	if err := client.Get(authUserInfoPath, info); err != nil {
 		return err
+	}
+	var extra UserInfo
+	if err := client.Get(userInfoPath, &extra); err == nil {
+		if extra.Name != "" {
+			info.Name = extra.Name
+		}
+		if extra.Organization != "" {
+			info.Organization = extra.Organization
+		}
 	}
 	if info.Name == "" {
 		info.Name = info.FullName

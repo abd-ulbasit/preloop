@@ -439,7 +439,7 @@ func TestTokenLoginDoesNotInstallRunner(t *testing.T) {
 	testenv.SetTempHome(t)
 	installs := stubRunnerInstall(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userInfoPath {
+		if r.URL.Path != userInfoPath && r.URL.Path != authUserInfoPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -638,7 +638,7 @@ func TestRunRunnerSetupFetchesRequiredPolicy(t *testing.T) {
 	shortenRunnerOnlineWait(t)
 	installs := stubRunnerInstall(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userInfoPath {
+		if r.URL.Path != userInfoPath && r.URL.Path != authUserInfoPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -758,15 +758,12 @@ func saveRunnerSetupClient(t *testing.T, apiURL string) {
 func TestEffectiveRunnerLabelsWithoutConfigMarshalAsEmptyList(t *testing.T) {
 	testenv.SetTempHome(t)
 	got := effectiveRunnerLabels(nil)
-	data, err := json.Marshal(registerRequestLabels{Labels: got})
+	// Same shape loadOrRegisterRunner sends.
+	data, err := json.Marshal(map[string]any{"labels": got})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != `{"labels":[]}` {
 		t.Fatalf("labels marshal as %s, want []", data)
 	}
-}
-
-type registerRequestLabels struct {
-	Labels []string `json:"labels"`
 }
