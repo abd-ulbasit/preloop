@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261011_harness_routing"
-down_revision = "20261010_otlp_telemetry_ingest"
+down_revision = "20261011_harness_inventory"
 branch_labels = None
 depends_on = None
 

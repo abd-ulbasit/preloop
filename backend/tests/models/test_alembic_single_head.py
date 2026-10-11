@@ -335,6 +335,8 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert anthropic_import.down_revision == "20261010_gateway_idp"
     otlp_ingest = script.get_revision("20261010_otlp_telemetry_ingest")
     assert otlp_ingest.down_revision == "20261010_anthropic_import"
+    harness_inventory = script.get_revision("20261011_harness_inventory")
+    assert harness_inventory.down_revision == "20261010_otlp_telemetry_ingest"
     harness_routing = script.get_revision("20261011_harness_routing")
-    assert harness_routing.down_revision == "20261010_otlp_telemetry_ingest"
+    assert harness_routing.down_revision == "20261011_harness_inventory"
     assert script.get_heads() == ["20261011_harness_routing"]

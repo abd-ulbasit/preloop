@@ -5,7 +5,7 @@ Editions: OSS, Cloud, Enterprise. Unless stated otherwise, everything on this pa
 The Preloop CLI **is** the self-hosted runner on macOS: it registers with
 your control plane, holds an outbound WebSocket, leases flow executions, and
 runs them locally. On a Mac the primary execution mode is a
-[host execution profile](#host-execution-profiles-on-macos): the runner
+[host execution profile](#host-execution-profiles-on-macos-advanced-override): the runner
 starts a locally installed agent CLI (Cursor, Copilot CLI) under your own
 login. Docker execution also works when Docker Desktop (or another engine)
 is installed, but host profiles do not need it.
@@ -40,6 +40,33 @@ preloop login --headless                          # prints a URL, paste the code
 export PRELOOP_TOKEN=<account-api-token>
 ```
 
+## Install during login
+
+On a terminal, `preloop login` asks whether to install a runner as a
+background service. The default answer is no. The service is a launchd
+agent in your login session. It starts on login, connects outbound to the
+instance you just signed in to, can run flow executions on this machine,
+and reports installed agent harnesses (names, versions, signed in or not).
+It does not read or forward harness credentials. Remote sessions stay off
+until you enable them per harness.
+
+Consent wording (what the runner may see and do):
+<https://docs.preloop.ai/security/personal-runners/>.
+
+An account policy of `required` installs without a question and prints
+why. `forbidden` prints one line and does not install. Skip the step with
+`--no-runner` or `PRELOOP_NO_RUNNER=1`. Headless login, `--token`,
+`PRELOOP_TOKEN`, and a shell that is not a terminal never ask and never
+install. A service that is already installed is left as it is.
+
+Run the same step later with `preloop runner setup`. A decline is
+remembered in `~/.preloop/config.yaml` (`runner_prompt_answered_at`).
+`preloop login --force` asks again. Remove the service with
+`preloop runner disable`.
+
+The runner registers as the machine hostname with labels `personal`,
+`os:<os>` and `arch:<arch>`.
+
 ## 3. Run the runner in the foreground (first test)
 
 ```sh
@@ -71,7 +98,27 @@ a minimal environment.
 agent with `launchctl`. A LaunchAgent runs while you are logged in; a Mac
 that must run jobs with nobody logged in should use a Linux runner instead.
 
-## Host execution profiles on macOS
+## Harnesses are detected automatically
+
+The runner reports the agent harnesses installed for the user it runs as
+(Copilot CLI, Cursor CLI, Claude Code and others) and generates host
+execution profiles named `copilot` and `cursor` for Copilot CLI and Cursor
+CLI, so no profile file is needed. Sign in to the harness as that user, then
+check what the runner reports:
+
+```bash
+preloop runner inventory --refresh
+```
+
+Because harness logins live in the user's session (keychain, `~/.copilot`),
+run the runner as a LaunchAgent for that user, as installed by
+`preloop runner enable`. What is checked and what is never read is described
+in the [Linux quickstart](quickstart-linux.md#harnesses-are-detected-automatically).
+
+## Host execution profiles on macOS (advanced override)
+
+A hand-written profile replaces the generated one for the same harness or
+name. Use it to pin a working directory, map model aliases or grant tools.
 
 The profile file is `~/.preloop/runner-host-profiles.json` (or point
 `PRELOOP_RUNNER_HOST_PROFILES` at an absolute path):
@@ -99,7 +146,7 @@ The profile file is `~/.preloop/runner-host-profiles.json` (or point
 ```
 
 Everything in the
-[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-opt-in-private-only)
+[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-advanced-override-private-only)
 applies (profile validation, model mapping, prompt delivery, structured
 completion, injection rejection, process-group halt). macOS specifics:
 
