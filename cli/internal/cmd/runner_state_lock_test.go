@@ -83,6 +83,9 @@ func TestCredentialDirectoriesCannotBeAuthorized(t *testing.T) {
 		filepath.Join(home, ".ssh", "keys"),
 		filepath.Join(home, ".config", "gh"),
 		filepath.Join(home, ".copilot"),
+		filepath.Join(home, ".config", "gcloud"),
+		filepath.Join(home, ".local", "share", "keyrings"),
+		filepath.Join(home, "Library", "Keychains"),
 	} {
 		if err := refuseHomeDirectory(dir); err == nil {
 			t.Fatalf("%s must be refused", dir)
