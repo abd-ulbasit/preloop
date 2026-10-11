@@ -15,6 +15,7 @@ from fastapi import (
     Path,
     Query,
     Response,
+    Request,
     UploadFile,
     status,
 )
@@ -2649,6 +2650,7 @@ async def update_account_managed_agent(
     agent_id: str,
     update: ManagedAgentUpdateRequest,
     account: Annotated[Account, Depends(get_account_for_user)],
+    request: Request,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ):
@@ -2789,6 +2791,8 @@ async def update_account_managed_agent(
         resource_type="managed_agent",
         resource_id=agent_id,
         status="success",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
         details={
             "agent_id": agent_id,
             "session_source_type": updated.session_source_type,
@@ -2855,6 +2859,7 @@ async def update_account_managed_agent(
 async def delete_account_managed_agent(
     agent_id: str,
     account: Annotated[Account, Depends(get_account_for_user)],
+    request: Request,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ):
@@ -2892,6 +2897,8 @@ async def delete_account_managed_agent(
         resource_type="managed_agent",
         resource_id=agent_id,
         status="success",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
         details={
             "agent_id": agent_id,
             "display_name": agent.display_name,

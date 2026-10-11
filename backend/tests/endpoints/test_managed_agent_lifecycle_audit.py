@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
 
 from preloop.api.endpoints import account as endpoints
 from preloop.schemas.gateway_usage import ManagedAgentUpdateRequest
@@ -52,12 +53,21 @@ async def test_removal_records_actor_and_revocation_before_commit(
         agent_id=str(agent.id),
         account=account,
         current_user=user,
+        request=Request(
+            {
+                "type": "http",
+                "headers": [(b"user-agent", b"example-client/1.0")],
+                "client": ("192.0.2.1", 1234),
+            }
+        ),
         db=db,
     )
 
     entry = audit.call_args.kwargs
     assert entry["account_id"] == account.id
     assert entry["user_id"] == user.id
+    assert entry["user_agent"] == "example-client/1.0"
+    assert entry["ip_address"] == "192.0.2.1"
     assert entry["resource_id"] == str(agent.id)
     assert entry["action"] == "managed_agent_removed"
     assert entry["commit"] is False
@@ -107,6 +117,7 @@ async def test_removal_audit_failure_does_not_commit_deletion(
             agent_id=str(agent.id),
             account=SimpleNamespace(id=uuid4()),
             current_user=SimpleNamespace(id=uuid4()),
+            request=Request({"type": "http", "headers": []}),
             db=db,
         )
     db.commit.assert_not_called()
@@ -174,10 +185,19 @@ async def test_lifecycle_change_persists_actor_and_previous_state(
         update=ManagedAgentUpdateRequest(lifecycle_action=action),
         account=account,
         current_user=user,
+        request=Request(
+            {
+                "type": "http",
+                "headers": [(b"user-agent", b"example-client/1.0")],
+                "client": ("192.0.2.1", 1234),
+            }
+        ),
         db=db,
     )
     entry = audit.call_args.kwargs
     assert entry["user_id"] == user.id
+    assert entry["user_agent"] == "example-client/1.0"
+    assert entry["ip_address"] == "192.0.2.1"
     assert entry["commit"] is False
     assert entry["details"]["lifecycle_action"] == action
     assert entry["details"]["previous_lifecycle_state"] == previous
