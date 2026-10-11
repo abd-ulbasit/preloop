@@ -699,6 +699,19 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Changed
 
+- **`preloop agents onboard "Claude Desktop"` is the full onboarding.** It
+  adds the MCP bridge as before and then offers to install Desktop's direct
+  model route into this device's managed configuration (macOS managed
+  preferences via `sudo install`, `/etc/claude-desktop/managed-settings.json`
+  on Linux, machine policy via `reg import` on Windows), after naming the
+  destination in the preview and asking once. The credential helper's cache
+  is pre-seeded with the managed agent's credential so Desktop traffic is
+  attributed to the Claude Desktop agent. A managed configuration that is not
+  this Preloop's is never touched; declining or a failed privilege escalation
+  leaves the file staged under `~/.preloop/agents/claude-desktop/` with the
+  install command. Offboarding removes what onboarding installed. A routed
+  Desktop now reports `fully_onboarded`; `--model-route` keeps printing the
+  configuration for an MDM.
 - **Agents see their own models, not the whole account.** A managed agent's
   gateway credential is now offered exactly its configured models: the
   explicit allowlist under the agent's *Models & spend* when one is set,
