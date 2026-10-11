@@ -4759,7 +4759,7 @@ func runtimeExecutableFallbackPaths(command string) []string {
 		return nil
 	}
 	candidates := runtimeExecutableFallbackPathsFor(
-		runtime.GOOS, homeDir, os.Getenv("APPDATA"), command,
+		runtime.GOOS, homeDir, os.Getenv("APPDATA"), os.Getenv("LOCALAPPDATA"), command,
 	)
 	if runtime.GOOS == "windows" {
 		return candidates
