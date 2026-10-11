@@ -108,7 +108,9 @@ task `PreloopRunner-<your user name>` from that definition
 interactive session with least privilege, not as SYSTEM and not elevated,
 so the agent CLI logins in your profile stay visible to host execution
 profiles and remote sessions. Runner output is appended to
-`%USERPROFILE%\.preloop\runner.log`.
+`%USERPROFILE%\.preloop\runner.log`. The launcher pins `HOME` and
+`USERPROFILE` to the profile that ran `enable`, so the task always reads
+that profile's `.preloop\config.yaml`. Run `enable` again after changing it.
 
 `preloop runner stop`, `restart` and `disable` (alias `uninstall`) manage the
 task with `schtasks`. `preloop runner status` prints the context the runner

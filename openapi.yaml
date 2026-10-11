@@ -37747,6 +37747,23 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time
@@ -37874,6 +37891,23 @@ components:
             format: date-time
           - type: 'null'
           title: Harness Inventory Updated At
+        presence:
+          anyOf:
+          - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
+          - type: 'null'
+          title: Presence
+        presence_since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Presence Since
         created_at:
           type: string
           format: date-time

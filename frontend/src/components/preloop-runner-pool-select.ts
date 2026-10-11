@@ -220,6 +220,7 @@ export class PreloopRunnerPoolSelect extends LitElement {
                 <sl-option
                   value=${option.value}
                   ?disabled=${option.disabled === true}
+                  title=${option.title ?? nothing}
                 >
                   ${option.label}
                 </sl-option>

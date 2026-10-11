@@ -97,6 +97,19 @@ class FlowRunner(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    #: Presence (#1506). When the runner said ``going_to_sleep``; cleared by
+    #: the next heartbeat or reconnect. Set means "asleep" once it drops.
+    sleep_signaled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: OS idle time the runner last reported, in seconds; null when unknown.
+    os_idle_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    #: Last presence state the server derived, and since when.
+    presence_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    presence_since: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     account = relationship("Account")
     registered_by = relationship("User")
     assignments = relationship(
