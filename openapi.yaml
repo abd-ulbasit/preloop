@@ -19890,6 +19890,13 @@ components:
           - type: 'null'
           title: Updated At
           description: When this AI model row was last updated
+        unpriced:
+          type: boolean
+          title: Unpriced
+          description: Deployment-provided hosted model with no verified operator
+            tariff. Only returned to platform admins; hidden from everyone else because
+            requests to it are refused.
+          default: false
         credentials_status:
           anyOf:
           - type: string
@@ -42889,7 +42896,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

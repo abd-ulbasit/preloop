@@ -37,6 +37,7 @@ import {
   BILLING_SUBSCRIPTION_CHANGED,
   NO_USAGE_NUDGES,
   RATE_LIMIT_FALLBACK_MESSAGE,
+  getAIModels,
 } from './api.js';
 import {
   HISTORY_UNAVAILABLE_CODE,
@@ -292,6 +293,25 @@ describe('api', () => {
       expect(isSameOriginPath('/a\nb')).to.equal(false);
       expect(isSameOriginPath('http://x/')).to.equal(false);
       expect(isSameOriginPath(null)).to.equal(false);
+    });
+  });
+
+  describe('getAIModels', () => {
+    it('badges unpriced hosted models and leaves others alone', async () => {
+      fetchStub.resolves(
+        new Response(
+          JSON.stringify([
+            { id: 'a', name: 'Flash', provider_name: 'google', unpriced: true },
+            { id: 'b', name: 'Mine', provider_name: 'openai' },
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+      const models = await getAIModels();
+      expect(models.map((m) => m.name)).to.deep.equal([
+        'Flash (unpriced)',
+        'Mine',
+      ]);
     });
   });
 

@@ -347,6 +347,14 @@ class AIModelInDBBase(BaseModel):
     updated_at: Optional[datetime] = Field(
         None, description="When this AI model row was last updated"
     )
+    unpriced: bool = Field(
+        False,
+        description=(
+            "Deployment-provided hosted model with no verified operator "
+            "tariff. Only returned to platform admins; hidden from everyone "
+            "else because requests to it are refused."
+        ),
+    )
     credentials_status: Optional[str] = Field(
         None, description="Status of the model's credential secret"
     )
