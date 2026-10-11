@@ -309,6 +309,8 @@ test("spawn env registers an SDK session and records the final alias", async () 
     requests.push({url: String(url), body: JSON.parse(options.body)});
     return new Response(JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555", alias:"brief-2", parent_session_id:process.env.PRELOOP_PARENT_SESSION_ID}), {status:200});
   };
+  await fs.mkdir(path.join(home, ".preloop/sessions"), {recursive:true});
+  await fs.writeFile(path.join(home, ".preloop/sessions/thread-1.json"), JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555",alias:"brief-2",title_sent:true}));
   const { manager } = makeManager();
   try {
     await manager.sendMessage({text:"hello"});
@@ -317,6 +319,7 @@ test("spawn env registers an SDK session and records the final alias", async () 
     assert.equal(requests[0].body.parent_session_id, process.env.PRELOOP_PARENT_SESSION_ID);
     const file = JSON.parse(await fs.readFile(path.join(home, ".preloop/sessions/thread-1.json"), "utf8"));
     assert.equal(file.alias, "brief-2");
+    assert.equal(file.title_sent, true, "preserve the hook first-prompt marker");
   } finally {
     manager.stop(); globalThis.fetch = original.fetch;
     for (const [key, value] of [["HOME", original.home], ["PRELOOP_SESSION_ALIAS", original.alias], ["PRELOOP_PARENT_SESSION_ID", original.parent]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -342,6 +345,24 @@ test("registers a lazy native id before the first turn completes", async () => {
     assert.equal(calls,1,"alias must be registered while the worker is still running");
   } finally {
     release(); await running; manager.stop(); globalThis.fetch=original.fetch;
+    if(original.alias===undefined) delete process.env.PRELOOP_SESSION_ALIAS; else process.env.PRELOOP_SESSION_ALIAS=original.alias;
+  }
+});
+
+test("execution-scoped workers register with the execution credential", async () => {
+  const original = {alias:process.env.PRELOOP_SESSION_ALIAS, fetch:globalThis.fetch};
+  process.env.PRELOOP_SESSION_ALIAS = "brief-execution";
+  let authorization;
+  globalThis.fetch = async (_url, options) => {
+    authorization = options.headers.Authorization;
+    return new Response(JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555",alias:"brief-execution"}));
+  };
+  const {manager} = makeManager();
+  try {
+    await manager.sendMessage({text:"hello", startNewSession:true, metadata:{gateway:{api_url:"https://example.preloop.ai",base_url:"https://example.preloop.ai/openai/v1",api_key:"flow_synthetic",model:"gpt-test"}}});
+    assert.equal(authorization,"Bearer flow_synthetic");
+  } finally {
+    manager.stop(); globalThis.fetch=original.fetch;
     if(original.alias===undefined) delete process.env.PRELOOP_SESSION_ALIAS; else process.env.PRELOOP_SESSION_ALIAS=original.alias;
   }
 });

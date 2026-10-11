@@ -50,7 +50,7 @@ export class SessionRegistrar {
     try { existing = JSON.parse(await fs.readFile(destination, "utf8")); } catch { /* first registration */ }
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temporary, JSON.stringify({ ...result, external_session_id: sessionId, agent_kind: this.source, cwd }, null, 2) + "\n", { mode: 0o600 });
+      await fs.writeFile(temporary, JSON.stringify({ ...existing, ...result, external_session_id: sessionId, agent_kind: this.source, cwd }, null, 2) + "\n", { mode: 0o600 });
       await fs.rename(temporary, destination);
     } finally { await fs.rm(temporary, { force: true }); }
     if (existing.runtime_session_id !== result.runtime_session_id) process.stderr.write(`preloop runtime_session_id=${result.runtime_session_id}\n`);

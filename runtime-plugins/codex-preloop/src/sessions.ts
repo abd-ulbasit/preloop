@@ -83,6 +83,7 @@ type OwnedThread = {
   controller?: AbortController;
   lastActivity: number;
   cwd?: string;
+  registrar: SessionRegistrar;
   /** Prior turn on this thread. The next turn waits so two runs cannot overlap. */
   tail?: Promise<void>;
 };
@@ -311,9 +312,12 @@ export class SessionManager {
         thread,
         lastActivity: Date.now(),
         cwd: options.workingDirectory,
+        registrar: taskConfig.codex_employee_scoped
+          ? new SessionRegistrar({control_ws_url: taskConfig.control_ws_url, bearer_token: taskConfig.codex_gateway_api_key}, "codex")
+          : this.registrar,
       };
       this.remember(session);
-      await this.registrar.register(thread.id ?? undefined, options.workingDirectory);
+      await session.registrar.register(thread.id ?? undefined, options.workingDirectory);
     }
     if (params.commandId) this.commandSessions.set(params.commandId, session);
     const limits = params.metadata?.["run_limits"] as Record<string, number> | undefined;
@@ -363,14 +367,14 @@ export class SessionManager {
         }, timeoutMs);
         session.thread.run(text, { signal: controller.signal, onSessionStarted: async id => {
           this.remember(session);
-          await this.registrar.register(id, session.cwd);
+          await session.registrar.register(id, session.cwd);
         } }).then(
           (value) => resolve(value),
           (error: unknown) => reject(error),
         );
       });
       this.remember(session);
-      await this.registrar.register(session.thread.id ?? undefined, session.cwd);
+      await session.registrar.register(session.thread.id ?? undefined, session.cwd);
       return {
         reply_text: turn.finalResponse ?? "",
         session_id: session.thread.id ?? session.key,

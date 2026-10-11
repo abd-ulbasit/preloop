@@ -212,6 +212,8 @@ test("spawn env registers an SDK session and records the final alias", async () 
     requests.push({url: String(url), body: JSON.parse(options.body)});
     return new Response(JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555", alias:"brief-2", parent_session_id:process.env.PRELOOP_PARENT_SESSION_ID}), {status:200});
   };
+  await fs.mkdir(path.join(home, ".preloop/sessions"), {recursive:true});
+  await fs.writeFile(path.join(home, ".preloop/sessions/session-1.json"), JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555",alias:"brief-2",title_sent:true}));
   const { manager } = makeManager();
   try {
     await manager.sendMessage({text:"hello"});
@@ -220,6 +222,7 @@ test("spawn env registers an SDK session and records the final alias", async () 
     assert.equal(requests[0].body.parent_session_id, process.env.PRELOOP_PARENT_SESSION_ID);
     const file = JSON.parse(await fs.readFile(path.join(home, ".preloop/sessions/session-1.json"), "utf8"));
     assert.equal(file.alias, "brief-2");
+    assert.equal(file.title_sent, true, "preserve the hook first-prompt marker");
   } finally {
     manager.stop(); globalThis.fetch = original.fetch;
     for (const [key, value] of [["HOME", original.home], ["PRELOOP_SESSION_ALIAS", original.alias], ["PRELOOP_PARENT_SESSION_ID", original.parent]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
