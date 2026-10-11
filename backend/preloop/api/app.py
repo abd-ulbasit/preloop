@@ -424,6 +424,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             service_role,
         )
 
+    # End runner-hosted remote sessions whose runner stayed offline past the
+    # idle timeout (#1482). Idempotent, so every API replica may run it.
+    runner_session_sweeper = None
+    if not is_testing and is_api_role:
+        from preloop.services.runner_session_sweeper import (
+            get_runner_session_sweeper,
+        )
+
+        runner_session_sweeper = get_runner_session_sweeper()
+        await runner_session_sweeper.start()
+
     readiness_sweeper = None
     if not is_testing and is_api_role and settings.ticket_readiness_enabled:
         from preloop.services.readiness.scheduler import ReadinessSweeper
@@ -762,6 +773,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if readiness_sweeper:
         await readiness_sweeper.stop()
 
+    if not is_testing and runner_session_sweeper:
+        try:
+            await runner_session_sweeper.stop()
+        except Exception:
+            logger.error("Error stopping runner session sweeper", exc_info=True)
+
     if not is_testing and issue_cost_rebuild_sweeper:
         try:
             await issue_cost_rebuild_sweeper.stop()
@@ -924,6 +941,7 @@ def _register_control_plane_routes(
         pull_requests,
         retention,
         roles,
+        runner_sessions,
         runners,
         runtime_session_artifacts,
         runtime_session_browser_steps,
@@ -1242,6 +1260,17 @@ def _register_control_plane_routes(
         prefix="/api/v1",
         tags=["Runners"],
     )
+    app.include_router(
+        runner_sessions.router,
+        prefix="/api/v1",
+        tags=["Runner sessions"],
+    )
+    # #1482 persists sessions and talks to the runner for these routes.
+    from preloop.services.runner_session_api_service import (
+        RunnerRemoteSessionService,
+    )
+
+    runner_sessions.register_runner_session_service(RunnerRemoteSessionService())
 
     # Policies router for policy-as-code YAML import/export
     app.include_router(

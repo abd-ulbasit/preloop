@@ -22,8 +22,7 @@ const (
 	runnerSetupSkip          = "skip"
 
 	// runnerSetupManualCommand is the command printed when this process
-	// cannot finish the install. Windows without elevation prints it as
-	// its own line.
+	// cannot finish the install.
 	runnerSetupManualCommand = "preloop runner setup"
 
 	// personalRunnersConsentURL is the consent wording for a personal
@@ -145,7 +144,9 @@ run flow executions on this machine. It reports installed agent harnesses
 and never reads harness credentials. Remote sessions stay off until enabled
 per harness. Remove it with 'preloop runner disable'.
 
-On Windows, run this from an elevated PowerShell.`,
+On Windows the service is a logon task registered for your user only; it
+needs no elevation. When a device policy blocks task creation the error
+names the policy.`,
 	RunE: runRunnerSetup,
 }
 
@@ -298,10 +299,6 @@ func handleRunnerSetupSkip(req runnerSetupRequest, reason string) error {
 }
 
 func installRunnerFromSetup(req runnerSetupRequest) error {
-	if runnerInstallNeedsElevation() {
-		fmt.Fprintln(req.Out, runnerElevationMessage())
-		return nil
-	}
 	if err := config.SetRunnerLabels(personalRunnerLabels()); err != nil {
 		fmt.Fprintf(req.Out, "Could not save runner labels: %v\n", err)
 	}
@@ -381,12 +378,6 @@ func runnerDeclinedMessage(canDecide bool) string {
 		return "Runner not installed. Ask your account admin if this machine should run one."
 	}
 	return "Runner not installed. Install it later with: " + runnerSetupManualCommand
-}
-
-func runnerElevationMessage() string {
-	return "Windows needs an elevated prompt to install the Preloop runner service.\n" +
-		"Open an elevated PowerShell and run:\n" +
-		runnerSetupManualCommand
 }
 
 func oneLine(text string) string {
