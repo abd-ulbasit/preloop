@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func TestDesktopEnableMintsAgentCredentialAndEnablesTunnel(t *testing.T) {
 		t.Fatalf("token file = %q %v", token, err)
 	}
 	info, _ := os.Stat(desktopTokenPath(home))
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("token mode = %v", info.Mode())
 	}
 	unit, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", desktopTunnelService))
