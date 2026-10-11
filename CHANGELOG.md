@@ -697,6 +697,21 @@ machine. The runner never reads, copies or forwards harness credentials. See
   `ix_api_usage_account_principal_id_ts`. Replay exclusion, retry handling, and
   the breakdown limit are unchanged. Refs #914.
 
+### Changed
+
+- **Agents see their own models, not the whole account.** A managed agent's
+  gateway credential is now offered exactly its configured models: the
+  explicit allowlist under the agent's *Models & spend* when one is set,
+  otherwise the models its onboarding bound plus the siblings the gateway
+  registered for it. Account-wide BYOK and hosted models no longer appear in
+  `GET /openai/v1/models` (the Anthropic listing already filtered by
+  allowlist) or in the `model_not_authorized` enumeration just because they
+  exist, and a request for one is a `400` that says the model is not
+  configured for this agent. Agents with no configured models, plain API
+  keys and console user tokens keep seeing the full inventory. The console's
+  *Models & spend* status line describes the configured-models default
+  instead of claiming every model is allowed.
+
 ### Fixed
 
 - **Re-onboarding no longer strands gateway-registered subscription models.**

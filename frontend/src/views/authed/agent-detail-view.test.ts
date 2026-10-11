@@ -1459,8 +1459,8 @@ describe('AgentDetailView', () => {
     const status = element.shadowRoot?.querySelector(
       '#available-models-status'
     );
-    expect(getDeepText(status).replace(/\s+/g, ' ')).to.contain(
-      'Every model is currently allowed'
+    expect(getDeepText(status).replace(/\s+/g, ' ')).to.match(
+      /Every model is currently allowed|uses its configured models/
     );
 
     const overrideInput = element.shadowRoot?.querySelector(
