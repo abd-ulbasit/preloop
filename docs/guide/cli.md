@@ -59,7 +59,7 @@ preloop runner start|stop|restart|status
 preloop runner disable               # remove the service
 ```
 
-`preloop runner setup` asks on a terminal when the account policy is `optional`, installs without a question when it is `required`, and prints one line when it is `forbidden`. On Windows, run it from an elevated PowerShell. The installed service registers as the hostname with labels `personal`, `os:<os>` and `arch:<arch>`. Remove it with `preloop runner disable`.
+`preloop runner setup` asks on a terminal when the account policy is `optional`, installs without a question when it is `required`, and prints one line when it is `forbidden`. On Windows it registers a per-user logon task; no elevation is needed, and an error names the device policy when task creation is blocked. The installed service registers as the hostname with labels `personal`, `os:<os>` and `arch:<arch>`. Remove it with `preloop runner disable`.
 
 ## Restricted CI
 
