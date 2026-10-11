@@ -5,19 +5,22 @@ Use a database role with SELECT privileges for operational enforcement.
 """
 
 import json
+import os
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from preloop.models.crud import crud_person
-from preloop.models.db.session import get_db_session
 
 
 def main() -> None:
     """Print counts and actionable reasons without addresses or credentials."""
-    sessions = get_db_session()
-    db = next(sessions)
+    engine = create_engine(os.environ["DATABASE_URL"])
     try:
-        print(json.dumps(crud_person.audit(db), indent=2))
+        with Session(engine, autoflush=False) as db:
+            print(json.dumps(crud_person.audit(db, read_only=True), indent=2))
     finally:
-        sessions.close()
+        engine.dispose()
 
 
 if __name__ == "__main__":

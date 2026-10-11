@@ -5,9 +5,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from functools import wraps
+from typing import Any, Callable, TypeVar, TypedDict, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from preloop.models import models
@@ -45,6 +47,38 @@ class IdentityProfile:
     avatar_source: str | None
     identity_status: str
     auth_generation: int
+
+
+_Result = TypeVar("_Result")
+
+
+def _identity_write(method: Callable[..., _Result]) -> Callable[..., _Result]:
+    """Use a savepoint to translate ownership races without losing caller work."""
+
+    @wraps(method)
+    def wrapped(self: Any, db: Session, **kwargs: Any) -> _Result:
+        commit = kwargs.pop("commit", True)
+        try:
+            with db.begin_nested():
+                result = method(self, db, **kwargs, commit=False)
+        except IntegrityError as exc:
+            constraint = getattr(
+                getattr(exc.orig, "diag", None), "constraint_name", None
+            )
+            if constraint in {
+                "ix_person_username",
+                "uq_person_email_verified",
+                "uq_person_auth_subject",
+            }:
+                raise IdentityConflictError("Identity value is already owned") from None
+            raise
+        if commit:
+            db.commit()
+            if isinstance(result, (models.Person, models.PersonAuthIdentity)):
+                db.refresh(result)
+        return result
+
+    return wrapped
 
 
 class CRUDPerson:
@@ -92,8 +126,8 @@ class CRUDPerson:
         self._require_ready(person)
         return IdentityProfile(
             person_id=person.id,
-            username=person.username,
-            email=person.email,
+            username=cast(str, person.username),
+            email=cast(str, person.email),
             email_verified=person.email_verified_at is not None,
             full_name=person.full_name,
             avatar_url=person.avatar_url,
@@ -150,6 +184,26 @@ class CRUDPerson:
     @staticmethod
     def _bump(db: Session, person: models.Person) -> None:
         person.auth_generation += 1
+        memberships = select(models.User.id).where(models.User.person_id == person.id)
+        for token_type in (models.OAuthMCPAccessToken, models.OAuthMCPRefreshToken):
+            db.execute(
+                update(token_type)
+                .where(token_type.user_id.in_(memberships))
+                .values(is_revoked=True)
+            )
+        db.execute(
+            delete(models.OAuthMCPAuthorizationCode).where(
+                models.OAuthMCPAuthorizationCode.user_id.in_(memberships)
+            )
+        )
+        db.execute(
+            update(models.CliSession)
+            .where(
+                models.CliSession.user_id.in_(memberships),
+                models.CliSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(timezone.utc))
+        )
         db.execute(
             update(models.User)
             .where(models.User.person_id == person.id)
@@ -172,7 +226,7 @@ class CRUDPerson:
             update(models.User)
             .where(models.User.person_id == person.id)
             .values(
-                email=person.email,
+                email=cast(str, person.email),
                 email_verified=person.email_verified_at is not None,
                 full_name=person.full_name,
                 avatar_url=person.avatar_url,
@@ -180,6 +234,7 @@ class CRUDPerson:
             )
         )
 
+    @_identity_write
     def update_profile(
         self,
         db: Session,
@@ -240,6 +295,7 @@ class CRUDPerson:
         self._sync_profile(db, person)
         return self._finish(db, person, commit)
 
+    @_identity_write
     def verify_email(
         self,
         db: Session,
@@ -364,6 +420,7 @@ class CRUDPerson:
             )
         )
 
+    @_identity_write
     def link_provider(
         self,
         db: Session,
@@ -427,9 +484,12 @@ class CRUDPerson:
         if commit:
             db.commit()
 
-    def audit(self, db: Session) -> dict[str, Any]:
+    def audit(self, db: Session, *, read_only: bool = False) -> dict[str, Any]:
         """Read-only migration report, containing counts and non-secret conflict reasons."""
-        people = list(db.scalars(select(models.Person)))
+        if read_only:
+            db.execute(text("SET TRANSACTION READ ONLY"))
+        with db.no_autoflush:
+            people = list(db.scalars(select(models.Person)))
         conflicts = [
             {
                 "person_id": str(p.id),

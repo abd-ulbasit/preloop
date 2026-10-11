@@ -610,6 +610,9 @@ existing passwords across the backfill; it never recreates a password previously
 removed by consolidation. A canonical password reset retires all retained hashes
 and clears membership password caches. Security changes increment both identity
 and membership token generations to support the existing JWT generation checks.
+They also revoke opaque OAuth access/refresh tokens and CLI sessions across
+linked memberships and discard pending OAuth authorization codes. Account API
+keys retain their account-scoped semantics.
 Deleting a membership, its account, the former primary membership, or the last
 membership retains Person and login credentials. Explicit `delete_identity`
 requires zero remaining memberships and destroys the identity-owned credentials.
@@ -625,8 +628,9 @@ with non-secret reasons; operators must establish ownership before repairing
 canonical values. Unrelated provisional identities retain separate Person IDs.
 
 `python -m preloop.models.identity_audit` reports rollout counts and conflict
-reasons without passwords, provider subjects or addresses. Run it with a SELECT
-only database role to enforce a read-only audit. The old User profile columns
+reasons without passwords, provider subjects or addresses. The CLI starts a
+read-only database transaction and never initializes extensions. A SELECT only
+database role adds operational enforcement. The old User profile columns
 are temporary compatibility caches updated only by canonical operations; unique
 membership usernames remain legacy aliases. Old password readers work only
 before the first canonical password reset, which intentionally clears their

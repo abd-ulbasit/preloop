@@ -221,3 +221,97 @@ def test_provider_ownership_and_quarantine_fail_closed(db_session):
     assert report["quarantined"] >= 1
     assert "synthetic-hash" not in str(report)
     assert "hashed_password" not in first.person.to_dict()
+
+
+def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
+    db_session, monkeypatch
+):
+    first = _member(db_session)
+    second = _member(db_session)
+    claimed = "canonical-" + uuid.uuid4().hex
+    second.person.username = claimed
+    db_session.flush()
+    original = first.person.username
+    scalar = db_session.scalar
+
+    def concurrent_availability(statement, *args, **kwargs):
+        # Emulate an ownership claim committing between the availability check
+        # and our UPDATE. The actual unique index must still decide the race.
+        sql = str(statement)
+        if "person.username =" in sql and "person.id !=" in sql:
+            return None
+        return scalar(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "scalar", concurrent_availability)
+    with pytest.raises(IdentityConflictError, match="already owned"):
+        crud_person.update_profile(
+            db_session,
+            membership_id=first.id,
+            changes={"username": claimed},
+            commit=False,
+        )
+    db_session.refresh(first.person)
+    assert first.person.username == original
+    assert crud_person.get(db_session, id=second.person_id).username == claimed
+
+
+def test_revoke_identity_retires_opaque_tokens_codes_and_cli_sessions(db_session):
+    first = _member(db_session)
+    second = _member(db_session, person=first.person)
+    access = models.OAuthMCPAccessToken(
+        user_id=second.id,
+        account_id=second.account_id,
+        token_hash=uuid.uuid4().hex,
+        client_id="example-client",
+        scopes=[],
+    )
+    refresh = models.OAuthMCPRefreshToken(
+        user_id=first.id,
+        account_id=first.account_id,
+        token_hash=uuid.uuid4().hex,
+        client_id="example-client",
+        scopes=[],
+    )
+    code = models.OAuthMCPAuthorizationCode(
+        user_id=second.id,
+        account_id=second.account_id,
+        code_hash=uuid.uuid4().hex,
+        client_id="example-client",
+        redirect_uri="https://example.com/callback",
+        code_challenge="synthetic-challenge",
+        scopes=[],
+        expires_at=9999999999,
+    )
+    cli = models.CliSession(user_id=second.id, refresh_jti=uuid.uuid4().hex)
+    db_session.add_all([access, refresh, code, cli])
+    db_session.flush()
+    code_id = code.id
+    crud_person.revoke_sessions(db_session, person_id=first.person_id, commit=False)
+    db_session.refresh(access)
+    db_session.refresh(refresh)
+    db_session.refresh(cli)
+    assert access.is_revoked and refresh.is_revoked
+    assert cli.revoked_at is not None
+    assert db_session.get(models.OAuthMCPAuthorizationCode, code_id) is None
+
+
+def test_legacy_crud_update_writes_canonical_identity(db_session):
+    from preloop.models.crud import crud_user
+
+    first = _member(db_session)
+    second = _member(db_session, person=first.person)
+    crud_user.update(
+        db_session,
+        db_obj=second,
+        obj_in={"full_name": "Canonical Name", "hashed_password": "reset-hash"},
+    )
+    assert (
+        crud_person.profile_for_membership(db_session, membership_id=first.id).full_name
+        == "Canonical Name"
+    )
+    assert (
+        crud_person.credential_owner(db_session, membership_id=first.id).hashed_password
+        == "reset-hash"
+    )
+    db_session.refresh(first)
+    assert first.hashed_password is None

@@ -20,10 +20,8 @@ without knowing about the tree or about persons:
   that address yet; otherwise it is provisional. The hook never links a new
   row to an existing person: merging memberships is a decision for the
   membership service, which has to prove the address first;
-* a user row whose ``email_verified`` turns true verifies its provisional
-  person, on the same terms: only when no verified person holds the address
-  yet. If one does, the row stays provisional for the membership service to
-  merge.
+* existing identity changes and verification go through canonical CRUD.
+  A copied membership verification flag never proves ownership of a Person.
 """
 
 from __future__ import annotations
