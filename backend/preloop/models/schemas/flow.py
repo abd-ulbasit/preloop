@@ -1721,17 +1721,6 @@ class FlowBase(BaseModel):
             raise ValueError("review_instructions must be at most 32768 characters")
         return text
 
-    @field_validator("result_schema")
-    @classmethod
-    def validate_result_schema(
-        cls, value: Optional[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
-        """Reject an oversized or invalid JSON Schema at flow save (#868)."""
-        try:
-            return check_result_schema(value)
-        except ResultSchemaError as exc:
-            raise ValueError(str(exc)) from exc
-
     @field_validator("agent_config")
     @classmethod
     def validate_model_routing_config(cls, v):
@@ -1790,6 +1779,20 @@ class FlowBase(BaseModel):
         return self
 
 
+def _checked_result_schema(
+    value: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Reject an oversized or invalid JSON Schema at flow save (#868).
+
+    Applied on the write models only: a stored schema was checked when it was
+    saved, so reads (FlowResponse) do not re-validate it.
+    """
+    try:
+        return check_result_schema(value)
+    except ResultSchemaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 class FlowCreate(FlowBase):
     name: str
     # For webhook triggers, these can be None
@@ -1800,9 +1803,23 @@ class FlowCreate(FlowBase):
     allowed_mcp_servers: List[str] = []
     allowed_mcp_tools: List[Dict[str, Any]] = []
 
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result_schema(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Check the schema on save; see :func:`_checked_result_schema`."""
+        return _checked_result_schema(value)
+
 
 class FlowUpdate(FlowBase):
-    pass
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result_schema(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Check the schema on save; see :func:`_checked_result_schema`."""
+        return _checked_result_schema(value)
 
 
 class FlowResponse(FlowBase):

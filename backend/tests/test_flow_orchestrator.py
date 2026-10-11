@@ -5007,3 +5007,26 @@ class TestResultSchemaGate:
             "FAILED",
             result,
         )
+
+
+def test_merged_confirmation_artifact_is_rechecked_against_the_schema():
+    """Review on #1539: the nudge-completed document is the one validated."""
+    orchestrator = FlowExecutionOrchestrator.__new__(FlowExecutionOrchestrator)
+    orchestrator.flow = SimpleNamespace(
+        result_schema=TestResultSchemaGate.SCHEMA, validate_result=True
+    )
+    orchestrator.execution_logger = MagicMock()
+    orchestrator._cra_persist_decision = None
+    orchestrator._check_result_schema({"status": "success"})
+    assert orchestrator._result_schema_validation["valid"] is False
+
+    def fake_cra(artifact, session_reference=None):
+        orchestrator._cra_persist_decision = SimpleNamespace(
+            validation=SimpleNamespace(skipped=True)
+        )
+        return artifact
+
+    orchestrator._persist_cra_result_boundary = fake_cra
+    merged = {"status": "success", "verdict": "PASS"}
+    assert orchestrator._persist_merged_artifact(merged, "s") == merged
+    assert orchestrator._result_schema_validation["valid"] is True

@@ -135,3 +135,16 @@ def test_flow_create_and_update_reject_bad_schema_readably():
         "result_schema": None,
         "validate_result": False,
     }
+
+
+def test_flow_response_does_not_revalidate_a_stored_schema():
+    """Reads trust the schema checked at save (review on #1539)."""
+    import preloop.models.schemas.flow as flow_schemas
+
+    def checks_schema(model) -> bool:
+        validators = model.__pydantic_decorators__.field_validators.values()
+        return any("result_schema" in v.info.fields for v in validators)
+
+    assert not checks_schema(flow_schemas.FlowResponse)
+    assert checks_schema(flow_schemas.FlowCreate)
+    assert checks_schema(flow_schemas.FlowUpdate)

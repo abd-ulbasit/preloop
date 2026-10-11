@@ -4277,6 +4277,23 @@ class FlowExecutionOrchestrator:
         self._check_result_schema(sanitized)
         return persisted
 
+    def _persist_merged_artifact(
+        self,
+        artifact: Optional[Dict[str, Any]],
+        session_reference: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Re-run the capture checks on a document assembled after capture.
+
+        The confirmation round can complete result.json after the first
+        capture. The stored document and its result schema outcome must
+        describe the same document, so both checks run again here.
+        """
+        persisted = self._persist_cra_result_boundary(
+            artifact, session_reference=session_reference
+        )
+        self._check_result_schema(artifact)
+        return persisted
+
     def _check_result_schema(self, document: Optional[Dict[str, Any]]) -> None:
         """Validate the captured result against the flow's schema (#868).
 
@@ -6150,7 +6167,7 @@ class FlowExecutionOrchestrator:
                 if isinstance(result_artifact, dict)
                 else nudge_artifact
             )
-            merged_artifact = self._persist_cra_result_boundary(
+            merged_artifact = self._persist_merged_artifact(
                 merged_artifact, session_reference=session_reference
             )
 
