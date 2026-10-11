@@ -678,3 +678,9 @@ provenance. They remain manageable across eligible accounts and after that
 membership is removed. Reset, password change and sign-out-everywhere invalidate
 sessions across every membership without changing tenant permissions. Removing
 one membership leaves canonical credentials and other memberships intact.
+
+OAuth/SSO identities remain exempt from `REQUIRE_EMAIL_VERIFICATION` when a
+canonical PersonAuthIdentity provider credential exists. The exemption follows
+the Person across membership changes, never a mutable membership `user_source`
+flag, and does not itself mark the canonical email as verified. Local identities
+without a provider credential still require explicit email verification.

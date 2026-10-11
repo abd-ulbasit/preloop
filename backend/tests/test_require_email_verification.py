@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from preloop.api.auth import email_verification
 from preloop.api.auth.jwt import create_refresh_token, get_password_hash
 from preloop.config import settings
-from preloop.models.crud import crud_account, crud_user
+from preloop.models.crud import crud_account, crud_person, crud_user
 
 PASSWORD = "verify-me-please-1"
 
@@ -189,16 +189,34 @@ class TestSettingOn:
 
         assert response.status_code == 200, response.text
 
+    @pytest.mark.parametrize("source", ["oauth", "saml", "ldap", "ad"])
     def test_oauth_user_is_verified_by_construction(
-        self, db_session: Session, monkeypatch
+        self, db_session: Session, monkeypatch, source: str
     ):
         # The provider asserted the address. Gating an SSO identity on our own
         # verification email would lock out a whole instance's users.
         monkeypatch.setattr(settings, "require_email_verification", True)
-        user = _user(db_session, verified=False, source="oauth")
+        user = _user(db_session, verified=False, source=source)
+        crud_person.link_provider(
+            db_session,
+            person_id=user.person_id,
+            source=source,
+            provider="test-provider",
+            subject=uuid.uuid4().hex,
+        )
 
         assert email_verification.verification_required(user) is False
         email_verification.enforce_verified_email(user)
+        assert email_verification.verification_required(user, db_session) is False
+        email_verification.enforce_verified_email(user, db_session)
+
+    def test_membership_source_cannot_launder_local_identity(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "require_email_verification", True)
+        user = _user(db_session, verified=False)
+        crud_user.update(db_session, db_obj=user, obj_in={"user_source": "oauth"})
+        assert email_verification.verification_required(user, db_session) is True
 
     def test_local_unverified_user_is_gated(self, db_session: Session, monkeypatch):
         monkeypatch.setattr(settings, "require_email_verification", True)

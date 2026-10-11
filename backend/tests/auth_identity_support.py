@@ -23,6 +23,7 @@ def mock_identity_crud(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     users: dict[UUID, Any] = {}
     people: dict[UUID, SimpleNamespace] = {}
     crud = MagicMock()
+    crud.has_external_identity.return_value = False
 
     def owner(user: Any) -> SimpleNamespace | None:
         if user is None or not isinstance(getattr(user, "id", None), UUID):

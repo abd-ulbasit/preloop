@@ -72,7 +72,11 @@ from preloop.utils.agent_kind import (
     is_valid_agent_kind,
     normalize_agent_kind,
 )
-from preloop.utils.email import send_password_reset_email, send_verification_email
+from preloop.utils.email import (
+    EmailError,
+    send_password_reset_email,
+    send_verification_email,
+)
 from preloop.utils.tokens import (
     TokenError,
     create_email_verification_token,
@@ -910,7 +914,7 @@ def resend_verification(
             auth_generation=person.auth_generation,
         )
         background_tasks.add_task(
-            send_verification_email,
+            _send_verification_email_task,
             user_email=person.email,
             token=token,
             username=person.username,
@@ -923,20 +927,23 @@ def resend_verification(
 
 
 def _send_verification_email_task(
-    user_email: str, user_id: UUID, username: Optional[str] = None
+    user_email: str, token: str, username: Optional[str] = None
 ) -> None:
-    """Mint a verification token and mail it, swallowing sender failures.
-
-    Args:
-        user_email: Address to verify.
-        user_id: The row the link verifies.
-        username: That row's username, named in the message.
-    """
+    """Mail one canonical proof without aborting other background messages."""
     try:
-        token = create_email_verification_token(user_email, user_id=user_id)
         send_verification_email(user_email=user_email, token=token, username=username)
-    except Exception as error:
+    except EmailError as error:
         logger.error("Failed to resend verification email: %s", error)
+
+
+def _send_password_reset_email_task(
+    user_email: str, token: str, username: Optional[str] = None
+) -> None:
+    """Keep a transient sender failure local to this identity's reset message."""
+    try:
+        send_password_reset_email(user_email=user_email, token=token, username=username)
+    except EmailError as error:
+        logger.error("Failed to send password reset email: %s", error)
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
@@ -946,15 +953,11 @@ async def forgot_password(
     request: Request,
     db: Session = Depends(get_db_session),
 ) -> Dict[str, str]:
-    """Send a password reset email for every user row holding the address.
+    """Send one bound recovery proof per canonical identity at the address.
 
-    ``user.email`` is not unique: an address invited into a second account
-    holds a second row there, with its own password. This never chooses one
-    of them. Every row holding the address gets its own message, whose link
-    is bound to that row and names its username, so the person resets the
-    account they mean by following that account's link. Each link goes to
-    the address its own row holds, the inbox that row already trusts for a
-    reset, so no row is reachable from an inbox it does not name.
+    Explicitly linked memberships share one message. Independent provisional
+    people sharing an address receive separate messages naming their chosen
+    usernames; account selectors cannot reroute an identity proof.
 
     Args:
         reset_data: Password reset request with email.
@@ -975,7 +978,7 @@ async def forgot_password(
             auth_generation=person.auth_generation,
         )
         background_tasks.add_task(
-            send_password_reset_email,
+            _send_password_reset_email_task,
             user_email=person.email,
             token=token,
             username=person.username,
@@ -1031,11 +1034,7 @@ async def reset_password(
 
 
 async def _landing_row(user: UserModel, db: Session) -> UserModel:
-    """The row a password sign-in lands on (the checked row unless H1 says).
-
-    Without a registered login row selector this returns ``user`` without
-    leaving the event loop or touching the database.
-    """
+    """Select an eligible membership and always gate its identity off the loop."""
     from preloop.api.loop_safety import run_db_off_loop
 
     def select_and_gate() -> UserModel:
@@ -1412,9 +1411,9 @@ def change_current_user_password(
     passwords: PasswordChangeRequest,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
-):
+) -> None:
     """Change current user's password."""
-    person = crud_person.credential_owner(db, membership_id=current_user.id)
+    person = require_active_identity(db, current_user, lock=True)
     if not any(
         verify_password(passwords.current_password, password_hash)
         for password_hash in crud_person.list_password_hashes(db, person_id=person.id)
@@ -1425,7 +1424,6 @@ def change_current_user_password(
         membership_id=current_user.id,
         hashed_password=get_password_hash(passwords.new_password),
     )
-    return {"message": "Password changed successfully"}
 
 
 def _is_account_admin(db: Session, current_user: UserModel) -> bool:

@@ -23,6 +23,7 @@ from preloop.models.crud import (
     crud_account,
     crud_ai_model,
     crud_flow,
+    crud_person,
     crud_user,
 )
 from preloop.models.schemas.flow import FlowCreate
@@ -62,7 +63,13 @@ def anon_client(db_session: Session) -> Iterator[TestClient]:
         yield client
 
 
-def _password_user(db: Session, email: str | None = None) -> models.User:
+def _password_user(
+    db: Session,
+    email: str | None = None,
+    *,
+    verified: bool = True,
+    person_id: uuid.UUID | None = None,
+) -> models.User:
     unique = uuid.uuid4().hex[:8]
     account = crud_account.create(
         db, obj_in={"organization_name": f"Org {unique}", "is_active": True}
@@ -75,9 +82,12 @@ def _password_user(db: Session, email: str | None = None) -> models.User:
             "email": email or f"hook{unique}@example.com",
             "full_name": "Hook User",
             "is_active": True,
-            "email_verified": True,
-            "hashed_password": get_password_hash(PASSWORD),
+            "email_verified": verified,
+            "hashed_password": get_password_hash(PASSWORD)
+            if person_id is None
+            else None,
             "user_source": "local",
+            **({"person_id": person_id} if person_id is not None else {}),
         },
     )
 
@@ -116,7 +126,9 @@ def test_h1_sign_in_lands_on_the_selected_row(
     db_session: Session, anon_client: TestClient, form: bool
 ) -> None:
     checked = _password_user(db_session)
-    landing = _password_user(db_session)
+    landing = _password_user(
+        db_session, email=checked.email, person_id=checked.person_id
+    )
 
     def sign_in():
         if form:
@@ -142,7 +154,7 @@ def test_h1_sign_in_lands_on_the_selected_row(
     assert selector.row_calls == [(checked.id, "login")]
 
 
-def test_h1_reset_link_acts_on_the_selected_row(
+def test_h1_reset_link_preserves_its_canonical_owner(
     db_session: Session, anon_client: TestClient
 ) -> None:
     named = _password_user(db_session)
@@ -157,13 +169,19 @@ def test_h1_reset_link_acts_on_the_selected_row(
     )
 
     assert response.status_code == 200, response.text
-    assert selector.row_calls == [(named.id, "reset_password")]
+    assert selector.row_calls == []
     db_session.expire_all()
     assert verify_password(
-        "a-brand-new-pass-2", crud_user.get(db_session, id=landing.id).hashed_password
+        "a-brand-new-pass-2",
+        crud_person.credential_owner(
+            db_session, membership_id=named.id
+        ).hashed_password,
     )
     assert verify_password(
-        PASSWORD, crud_user.get(db_session, id=named.id).hashed_password
+        PASSWORD,
+        crud_person.credential_owner(
+            db_session, membership_id=landing.id
+        ).hashed_password,
     )
 
 
@@ -173,10 +191,9 @@ def test_h1_link_cannot_move_to_a_row_with_another_address(
 ) -> None:
     """A link proves one address, so the selector cannot aim it elsewhere."""
     named = _password_user(db_session)
-    elsewhere = _password_user(db_session)
-    elsewhere.email_verified = False
-    db_session.flush()
-    account_hooks.register_login_row_selector(_Selector(elsewhere))
+    elsewhere = _password_user(db_session, verified=False)
+    selector = _Selector(elsewhere)
+    account_hooks.register_login_row_selector(selector)
 
     if purpose == "verify_email":
         token = create_email_verification_token(named.email, user_id=named.id)
@@ -188,22 +205,25 @@ def test_h1_link_cannot_move_to_a_row_with_another_address(
             json={"token": token, "new_password": "a-brand-new-pass-2"},
         )
 
-    assert response.status_code == 400, response.text
+    assert response.status_code == 200, response.text
+    assert selector.row_calls == []
     db_session.expire_all()
     untouched = crud_user.get(db_session, id=elsewhere.id)
     assert untouched.email_verified is False
-    assert verify_password(PASSWORD, untouched.hashed_password)
+    assert verify_password(
+        PASSWORD,
+        crud_person.credential_owner(
+            db_session, membership_id=untouched.id
+        ).hashed_password,
+    )
 
 
-def test_h1_address_requests_mail_only_the_selected_rows(
+def test_h1_address_requests_mail_each_canonical_person(
     db_session: Session, anon_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     email = f"shared{uuid.uuid4().hex[:8]}@example.com"
-    _password_user(db_session, email=email)
-    second = _password_user(db_session, email=email)
-    for row in crud_user.list_by_email(db_session, email=email):
-        row.email_verified = False
-    db_session.flush()
+    first = _password_user(db_session, email=email, verified=False)
+    second = _password_user(db_session, email=email, verified=False)
     resets: list[Any] = []
     verifications: list[Any] = []
     monkeypatch.setattr(
@@ -230,12 +250,15 @@ def test_h1_address_requests_mail_only_the_selected_rows(
         == 200
     )
 
-    assert selector.email_calls == [
-        (email, "forgot_password", 2),
-        (email, "resend_verification", 2),
-    ]
-    assert [kwargs["username"] for _args, kwargs in resets] == [second.username]
-    assert [kwargs["username"] for _args, kwargs in verifications] == [second.username]
+    assert selector.email_calls == []
+    assert {kwargs["username"] for _args, kwargs in resets} == {
+        first.username,
+        second.username,
+    }
+    assert {kwargs["username"] for _args, kwargs in verifications} == {
+        first.username,
+        second.username,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -63,9 +63,46 @@ from preloop.utils.tokens import (
     hash_onboarding_claim_token,
     verify_user_token,
 )
+from preloop.utils.email import EmailError
 
 PASSWORD = "initial-password-example"
 NEW_PASSWORD = "recovered-password-example"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["verification", "recovery"])
+async def test_mail_failure_does_not_abort_another_identity(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, purpose: str
+) -> None:
+    """One SMTP outage cannot drop the next canonical identity's bound message."""
+    first, _child = memberships(db_session)
+    second, _other_child = memberships(db_session)
+    crud_person.update_profile(
+        db_session, membership_id=second.id, changes={"email": first.email}
+    )
+    attempted: list[str] = []
+
+    def sender(*, user_email: str, token: str, username: str) -> None:
+        attempted.append(username)
+        if len(attempted) == 1:
+            raise EmailError("synthetic transient SMTP failure")
+
+    tasks = BackgroundTasks()
+    if purpose == "verification":
+        monkeypatch.setattr("preloop.api.auth.router.send_verification_email", sender)
+        resend_verification(
+            EmailVerificationResendRequest(email=first.email),
+            tasks,
+            request(),
+            db_session,
+        )
+    else:
+        monkeypatch.setattr("preloop.api.auth.router.send_password_reset_email", sender)
+        await forgot_password(
+            PasswordResetRequest(email=first.email), tasks, request(), db_session
+        )
+    await tasks()
+    assert set(attempted) == {first.username, second.username}
 
 
 def request() -> Request:

@@ -13,6 +13,7 @@ import jwt
 import pytest
 import uuid
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator
 from unittest.mock import patch, MagicMock
 
 from fastapi import FastAPI
@@ -51,10 +52,13 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def identity_crud(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+def identity_crud(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMock]:
     from tests.auth_identity_support import mock_identity_crud
+    from preloop.api.auth.email_verification import reset_resend_rate_limit
 
-    return mock_identity_crud(monkeypatch)
+    reset_resend_rate_limit()
+    yield mock_identity_crud(monkeypatch)
+    reset_resend_rate_limit()
 
 
 @pytest.fixture

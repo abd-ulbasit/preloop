@@ -421,6 +421,20 @@ class CRUDPerson:
             self._bump(db, person)
         return self._finish(db, person, commit)
 
+    def has_external_identity(self, db: Session, *, person_id: Any) -> bool:
+        """Whether a canonical provider credential supplies the SSO exemption."""
+        return (
+            db.scalar(
+                select(models.PersonAuthIdentity.id)
+                .where(
+                    models.PersonAuthIdentity.person_id == person_id,
+                    models.PersonAuthIdentity.source != "local",
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
     def get_by_provider(
         self, db: Session, *, source: str, provider: str, subject: str
     ) -> models.Person | None:
