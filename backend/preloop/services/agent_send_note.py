@@ -145,6 +145,8 @@ def send_note_from_agent(
             policy evaluation used, so a grant consults API-key-scoped
             rules under the same subject chain. Target identity is not
             copied here.
+        alias: Target one active session by its write-once spawn alias,
+            preferring the caller's runtime principal.
         external_session_id: Target named by the harness's own session id
             (the Claude Code ``session_id``), resolved inside the account.
         children: ``"latest"`` or ``"all"``: the live runs the calling

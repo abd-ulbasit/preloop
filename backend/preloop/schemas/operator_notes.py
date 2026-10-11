@@ -74,7 +74,8 @@ class OperatorNoteCreate(BaseModel):
         ]
         if sum(1 for target in targets if target is not None) != 1:
             raise ValueError(
-                "Name exactly one of agent_id, runtime_session_id, execution_id"
+                "Name exactly one of agent_id, runtime_session_id, execution_id, "
+                "alias, external_session_id, children"
             )
         if self.children and not self.parent_session_id:
             raise ValueError("children requires parent_session_id")
