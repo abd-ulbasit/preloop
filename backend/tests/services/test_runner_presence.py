@@ -10,7 +10,6 @@ from preloop.services.runner_presence import (
     OFFLINE_AFTER,
     derive_presence,
     derive_state,
-    is_reachable,
     parse_idle_seconds,
 )
 
@@ -54,20 +53,6 @@ def _runner(**overrides):
 )
 def test_derive_state_table(overrides, expected) -> None:
     assert derive_state(_runner(**overrides), NOW) == expected
-
-
-@pytest.mark.parametrize(
-    "state, reachable",
-    [
-        ({}, True),
-        ({"free_slots": 0}, True),
-        ({"os_idle_seconds": IDLE}, True),
-        ({"sleep_signaled_at": FRESH}, False),
-        ({"status": "offline"}, False),
-    ],
-)
-def test_reachable(state, reachable) -> None:
-    assert is_reachable(_runner(**state), NOW) is reachable
 
 
 def test_since_keeps_stored_start_for_same_state() -> None:

@@ -13,17 +13,18 @@ States:
   said ``going_to_sleep``.
 * ``offline``: heartbeats stopped without a sleep signal.
 
-Only ``online``, ``busy`` and ``idle`` runners are reachable; routing skips
-``asleep`` and ``offline``.
+Routing (``find_matching`` and ``claim_free_slot``) skips ``asleep`` and
+``offline`` runners in SQL with the same rules.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 from preloop.models.crud.flow_runner import ONLINE_HEARTBEAT_TTL
+from preloop.models.schemas.flow_runner import RunnerPresenceState
 
 #: Interval the runner CLI sends heartbeats at.
 HEARTBEAT_INTERVAL = timedelta(seconds=15)
@@ -32,24 +33,23 @@ OFFLINE_AFTER = ONLINE_HEARTBEAT_TTL
 #: Reported OS idle time at or above this marks a reachable runner ``idle``.
 IDLE_AFTER = timedelta(minutes=5)
 
-PRESENCE_ONLINE = "online"
-PRESENCE_BUSY = "busy"
-PRESENCE_IDLE = "idle"
-PRESENCE_ASLEEP = "asleep"
-PRESENCE_OFFLINE = "offline"
-PRESENCE_STATES = (
+PRESENCE_ONLINE: Final = "online"
+PRESENCE_BUSY: Final = "busy"
+PRESENCE_IDLE: Final = "idle"
+PRESENCE_ASLEEP: Final = "asleep"
+PRESENCE_OFFLINE: Final = "offline"
+PRESENCE_STATES: Final = (
     PRESENCE_ONLINE,
     PRESENCE_BUSY,
     PRESENCE_IDLE,
     PRESENCE_ASLEEP,
     PRESENCE_OFFLINE,
 )
-REACHABLE_STATES = frozenset({PRESENCE_ONLINE, PRESENCE_BUSY, PRESENCE_IDLE})
 
 
 @dataclass(frozen=True)
 class Presence:
-    state: str
+    state: RunnerPresenceState
     since: Optional[datetime]
 
 
@@ -68,7 +68,7 @@ def parse_idle_seconds(value: Any) -> Optional[int]:
     return int(min(value, 10**9))
 
 
-def derive_state(runner: Any, now: Optional[datetime] = None) -> str:
+def derive_state(runner: Any, now: Optional[datetime] = None) -> RunnerPresenceState:
     """Presence state for ``runner`` at ``now`` from its stored signals."""
     now = now or datetime.now(timezone.utc)
     heartbeat = _aware(getattr(runner, "last_heartbeat", None))
@@ -113,7 +113,3 @@ def derive_presence(runner: Any, now: Optional[datetime] = None) -> Presence:
         heartbeat = _aware(getattr(runner, "last_heartbeat", None))
         return Presence(state, heartbeat or stored_since)
     return Presence(state, now)
-
-
-def is_reachable(runner: Any, now: Optional[datetime] = None) -> bool:
-    return derive_state(runner, now) in REACHABLE_STATES

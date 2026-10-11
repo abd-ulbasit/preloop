@@ -180,3 +180,30 @@ def test_schema_presence_literal_matches_service_states() -> None:
     from preloop.services.runner_presence import PRESENCE_STATES
 
     assert set(get_args(RunnerPresenceState)) == set(PRESENCE_STATES)
+
+
+def test_rest_runner_response_carries_presence(
+    db_session: Session, ws_runner: models.FlowRunner, test_user: models.User
+) -> None:
+    """The runners API (`_to_response`) exposes presence and presence_since."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from preloop.api.auth import get_current_active_user
+    from preloop.models.db.session import get_db_session as get_db
+
+    ws_runner.last_heartbeat = datetime.now(timezone.utc)
+    db_session.commit()
+    crud_flow_runner.set_presence_signals(db_session, ws_runner, sleeping=True)
+    app = FastAPI()
+    app.include_router(runners.router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[get_current_active_user] = lambda: test_user
+    with TestClient(app) as client:
+        detail = client.get(f"/api/v1/runners/{ws_runner.id}")
+        listed = client.get("/api/v1/runners")
+    assert detail.status_code == 200, detail.text
+    row = next(r for r in listed.json() if r["id"] == str(ws_runner.id))
+    for body in (detail.json(), row):
+        assert body["presence"] == "asleep"
+        assert body["presence_since"] is not None
