@@ -166,6 +166,23 @@ class RunnerRegisterRequest(BaseModel):
     host_exec_profiles: Optional[List[HostExecProfileAdvertisement]] = Field(
         default_factory=list, max_length=64
     )
+    #: Directories the operator authorized for remote sessions, as
+    #: ``{id, label, mode, harnesses}``. Paths never leave the host; the
+    #: list is bounded by ``normalize_authorized_directories`` before it is
+    #: stored. Registration always resets the stored list to what this
+    #: process sent: a runner that omits the field (it predates remote
+    #: sessions) advertises none.
+    authorized_directories: Optional[List[Dict[str, Any]]] = Field(
+        default=None, max_length=64
+    )
+
+    @field_validator("labels", mode="before")
+    @classmethod
+    def accept_null_labels(cls, value: Any) -> Any:
+        """Map JSON null to an empty list: configs from before #1479 have no labels."""
+        if value is None:
+            return []
+        return value
 
     @field_validator("host_exec_profiles", mode="before")
     @classmethod
@@ -199,6 +216,10 @@ class RunnerRegisterRequest(BaseModel):
     concurrency: Optional[int] = Field(None, ge=1, le=MAX_RUNNER_CONCURRENCY)
 
 
+#: Server-derived runner presence (#1506); see services/runner_presence.py.
+RunnerPresenceState = Literal["online", "busy", "idle", "asleep", "offline"]
+
+
 class RunnerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -229,6 +250,10 @@ class RunnerResponse(BaseModel):
     #: Last published harness inventory; null means "inventory unknown".
     harness_inventory: Optional[HarnessInventory] = None
     harness_inventory_updated_at: Optional[datetime] = None
+    #: Server-derived presence (#1506): online, busy, idle, asleep or offline.
+    presence: Optional[RunnerPresenceState] = None
+    #: When the current presence state began.
+    presence_since: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

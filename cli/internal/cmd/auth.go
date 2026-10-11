@@ -34,6 +34,9 @@ const (
 	tokenPath     = "/oauth/token"
 	revokePath    = "/oauth/revoke"
 	userInfoPath  = "/api/v1/users/me"
+	// authUserInfoPath is served by OSS and EE. userInfoPath is EE-only
+	// (rbac plugin) but carries name and organization.
+	authUserInfoPath = "/api/v1/auth/users/me"
 
 	cliOAuthClientID       = "cli"
 	manualOAuthRedirectURI = "urn:ietf:wg:oauth:2.0:oob"
@@ -58,6 +61,37 @@ type UserInfo struct {
 	// RunnerPolicy is the account runner install policy. Nil when the
 	// server omits the field. Callers treat nil as optional.
 	RunnerPolicy *runnerPolicy `json:"runner_policy,omitempty"`
+	// FullName and Username come from the OSS auth route, which has no
+	// name field.
+	FullName string `json:"full_name,omitempty"`
+	Username string `json:"username,omitempty"`
+}
+
+// fetchUserInfo reads the caller's profile from /api/v1/auth/users/me,
+// which OSS and EE both serve and which carries runner_policy. The EE-only
+// /api/v1/users/me is then read best effort to fill name and organization;
+// its errors are ignored so it can never hide the runner policy.
+func fetchUserInfo(client *api.Client, info *UserInfo) error {
+	*info = UserInfo{}
+	if err := client.Get(authUserInfoPath, info); err != nil {
+		return err
+	}
+	var extra UserInfo
+	if err := client.Get(userInfoPath, &extra); err == nil {
+		if extra.Name != "" {
+			info.Name = extra.Name
+		}
+		if extra.Organization != "" {
+			info.Organization = extra.Organization
+		}
+	}
+	if info.Name == "" {
+		info.Name = info.FullName
+	}
+	if info.Name == "" {
+		info.Name = info.Username
+	}
+	return nil
 }
 
 // authCmd represents the auth command group.
@@ -307,7 +341,7 @@ func runTokenLogin(token string) error {
 
 	client := api.NewClientWithToken(apiURL, token)
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		if err := config.SetTokens(token, ""); err != nil {
 			return fmt.Errorf("failed to save token: %w", err)
 		}
@@ -388,7 +422,7 @@ func currentVerifiedLoginIdentity() *UserInfo {
 		}
 	}
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		return nil
 	}
 	return &userInfo
@@ -546,7 +580,7 @@ func finishOAuthLogin(baseURL, code, redirectURI string, headless bool) error {
 
 	client := api.NewClientWithToken(baseURL, tokenResp.AccessToken)
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		if err := config.SetTokens(tokenResp.AccessToken, tokenResp.RefreshToken); err != nil {
 			return fmt.Errorf("failed to save tokens: %w", err)
 		}
@@ -556,6 +590,8 @@ func finishOAuthLogin(baseURL, code, redirectURI string, headless bool) error {
 
 		fmt.Println("\nSuccessfully authenticated!")
 		fmt.Printf("API URL: %s\n", baseURL)
+		// The runner policy may be forbidden; without it, do not offer.
+		fmt.Fprintf(os.Stderr, "Warning: could not read account info (%v); skipping the runner offer. Run 'preloop runner setup' later.\n", err)
 		return nil
 	}
 
@@ -813,7 +849,7 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	var userInfo UserInfo
-	if err := client.Get(userInfoPath, &userInfo); err != nil {
+	if err := fetchUserInfo(client, &userInfo); err != nil {
 		fmt.Println("Authenticated (token may be invalid or server unreachable)")
 		fmt.Printf("  API URL: %s\n", cfg.APIURL)
 		fmt.Printf("  Error:   %v\n", err)

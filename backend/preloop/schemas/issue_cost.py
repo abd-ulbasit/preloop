@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -51,6 +51,10 @@ class IssueCostExecutionRow(BaseModel):
     flow_id: UUID
     flow_name: str
     status: str
+    failure_category: Optional[str] = Field(
+        None,
+        description="The execution's failure_category; null unless it failed.",
+    )
     link: str = Field(
         ...,
         description=(
@@ -64,6 +68,21 @@ class IssueCostExecutionRow(BaseModel):
     total_tokens: int = 0
     start_time: datetime
     end_time: Optional[datetime] = None
+    billing_mode: Optional[str] = Field(
+        None,
+        description=(
+            "seat for a Copilot or Cursor host run on the runner user's own "
+            "seat (not metered by the gateway), metered or unknown; null for "
+            "a gateway run."
+        ),
+    )
+
+
+BILLING_MODE_ROW_DESCRIPTION = (
+    "How the issue's runs were billed: seat when every run used a runner "
+    "user's own Copilot or Cursor seat (not metered by the gateway), metered "
+    "when none did, mixed otherwise. Seat runs contribute no estimated_cost."
+)
 
 
 class IssueCostRow(BaseModel):
@@ -107,6 +126,24 @@ class IssueCostRow(BaseModel):
     total_tokens: int
     run_count: int
     failed_run_count: int
+    billing_mode: str = Field("metered", description=BILLING_MODE_ROW_DESCRIPTION)
+    billing_label: Optional[str] = Field(
+        None,
+        description=(
+            "Console and export wording for seat runs: "
+            "'Seat (not metered by gateway)'. Null when no run used a seat."
+        ),
+    )
+    seat_run_count: int = Field(
+        0, description="Runs that used a runner user's own seat."
+    )
+    premium_requests: Optional[float] = Field(
+        None,
+        description=(
+            "Copilot premium requests the CLI reported for the seat runs; "
+            "null when none were reported."
+        ),
+    )
     first_event_at: Optional[datetime] = Field(
         None,
         description=(
@@ -225,6 +262,14 @@ class IssueCostRow(BaseModel):
 
     execution_ids: Optional[List[UUID]] = Field(
         None, description="Contributing execution ids (JSON export only)."
+    )
+    failure_categories: Optional[Dict[str, int]] = Field(
+        None,
+        description=(
+            "Failed runs of this issue by failure_category, for example "
+            "result_schema_invalid for a run whose result.json did not match "
+            "the flow result schema (exports only)."
+        ),
     )
 
 

@@ -23,6 +23,21 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 **MCP tools** resolve first-wins with shadow warnings and an optional
 `tool_prefix`, and backend CI runs as **18 duration-balanced shards**.
 
+**Personal runners** (wave 1) put your own machine and your own agent seats
+behind Preloop. Sign in with `preloop login` on a terminal, accept the prompt,
+and the CLI installs a runner as a background service on Linux, macOS or
+Windows. The Runners page then lists the agent harnesses installed on that
+machine (Copilot CLI, Cursor CLI, Claude Code, Codex CLI and others) with
+their login state, models and governance. Copilot and Cursor flows can route
+by harness to a runner whose user is signed in, so they run on that user's
+seat and are labelled "Seat (not metered by gateway)" in cost exports. From the
+console, **New session** starts a GitHub Copilot CLI session on your own
+machine, in a directory you authorized or a fresh checkout of a GitHub or
+Bitbucket Cloud repository, after you enabled sessions for Copilot on that
+machine. The runner never reads, copies or forwards harness credentials. See
+`docs/guide/runners/remote-sessions.md` and the threat model in
+`docs/security/personal-runners.md`.
+
 ### Breaking or behavior changes
 
 - Model gateway budget denials return `429` with a provider-shaped body and
@@ -44,6 +59,14 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 
 ### Security
 
+- Personal runners have a threat model with numbered controls T1 to T12:
+  per-harness opt-in on the host, who may start a session, the host notice,
+  workspace containment, short-lived clone credentials, harness credentials
+  never touched, mandatory approval hook, limits, kill switch, audit event
+  names and revocation. It also states what leaves the machine and what wave 1
+  does not stop (an uninstalled or unenrolled machine). See
+  `docs/security/personal-runners.md`
+  ([#1491](https://github.com/preloop/preloop/pull/1491)).
 - WebSocket execution commands now require authentication, the
   `execute_flows` permission, and account ownership.
 - Scorecard's vulnerable-dependency list is reduced by moving patched
@@ -66,6 +89,111 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 
 ### Added
 
+- **Install a personal runner at login.** After an interactive
+  `preloop login`, the CLI offers to install a runner as a background service
+  (systemd user unit, launchd agent or Windows logon scheduled task). The
+  default answer is no and a decline is remembered; `preloop login --force`
+  asks again and `preloop runner setup` runs the step on demand. The prompt is
+  skipped for `--token`, `PRELOOP_TOKEN`, headless login, `--no-runner`,
+  `PRELOOP_NO_RUNNER=1`, a non-terminal and an already installed service. The
+  runner registers as the hostname with labels `personal`, `os:<goos>` and
+  `arch:<goarch>`, and login waits up to 30 seconds for it to come online and
+  prints the harnesses it found. A failed install or a slow start never fails
+  login and prints `preloop runner setup`.
+  `GET /api/v1/users/me` returns `runner_policy` (`optional`, `required`,
+  `forbidden`); open source always answers `optional`, and the Enterprise
+  runner policy plugin can require or forbid a runner (#1479).
+- **Harness inventory on runners.** A runner reports the agent harnesses on its
+  host on register and, when the inventory changes, on heartbeat: Copilot CLI
+  and Cursor CLI from the binary on `PATH`, Claude Code, Codex CLI, OpenCode,
+  Gemini CLI, Claude Desktop and VS Code Copilot from `preloop agents
+  discover`. Each entry has login state and source (presence of an env token
+  or a stored login, never the value), account host, governance (from the
+  Preloop hooks file), billing and models. No credential store is opened. The
+  server stores the report in `flow_runners.harness_inventory`, audits
+  `runner.harness_inventory_changed`, and shows version and account host only
+  to the runner owner and account admins. The Runners page has a Harnesses
+  column, and `preloop runner inventory [--refresh] [--json]` prints it.
+  `harnesses.<id>.enabled` in `~/.preloop/runner.json` turns a harness off.
+  The runner also generates conservative `copilot` and `cursor` host execution
+  profiles; a hand-written profile for the same harness wins. The runner
+  quickstarts lead with "Harnesses are detected automatically", and
+  `docs/guide/agent-discovery-reporting.md` lists the fields
+  ([#1492](https://github.com/preloop/preloop/pull/1492),
+  [#1518](https://github.com/preloop/preloop/pull/1518)).
+- **Route Copilot and Cursor flows by harness.** `agent_config.harness`
+  (`copilot_cli` or `cursor_cli`) routes a flow to any eligible runner instead
+  of a hand-named host profile: same account, harness enabled and signed in,
+  model listed, runner online. `runner_id` pins one runner (only its
+  registrant or an account admin may save that); an unpinned flow uses
+  runners in its `runner_pool` or registered by an account admin, so a
+  member's personal runner only takes flows that name it.
+  `harness_fallback` is `queue` (default, fails with `queue_timeout` after
+  `harness_queue_timeout_seconds`, default 1800), `fail`, or
+  `fallback_server`, which reruns on the server pool with the hosted Codex
+  harness and `fallback_model_identifier`. A flow pinned by
+  `host_exec_profile` routes exactly as before. New execution columns
+  `routing_reason` (`no_runner_with_harness`, `harness_signed_out`,
+  `harness_disabled`, `model_not_available`, `runner_offline`,
+  `owner_has_no_runner`, `queue_timeout`, `fell_back_to_server`) and
+  `billing_mode` (`seat`, `metered`, `unknown`). Per-issue cost rollups and
+  CSV/JSON exports gain `billing_mode`, `billing_label`, `seat_run_count` and
+  `premium_requests` (new CSV columns are appended last). The flow editor has
+  a "Route by harness" switch backed by `GET /api/v1/flows/harness-options`.
+  See "Run flows on your team's Copilot seats" in `docs/guide/copilot-cli.md`
+  ([#1522](https://github.com/preloop/preloop/pull/1522)).
+- **GitHub Copilot CLI remote sessions on a personal runner.** The host user
+  turns sessions on per harness with `preloop runner sessions enable
+  copilot_cli` (consent text, default no); only the host can enable them, and
+  `disable` ends live sessions. Each turn is one `copilot -p` process: turn 1
+  uses a runner-minted `--session-id`, later turns `--resume`, always with
+  `--no-remote` and `--no-ask-user`, the host profile's tool rules, the
+  host-exec environment allowlist (`COPILOT_PROVIDER_*` and
+  `COPILOT_ALLOW_ALL` removed) and the Preloop approval hook, which is
+  required. The host sees a log line and a desktop notification naming who
+  started the session. Limits come from `~/.preloop/runner.json`: 2
+  concurrent sessions, 30 minutes idle, 8 hours maximum. Sessions survive a
+  websocket reconnect and a runner restart within the idle timeout; an
+  offline runner ends them with `runner_offline`. The account kill switch
+  (`flows` or `tools`) ends live sessions and refuses new ones. Every step is
+  audited as `runner_session.start_requested`, `.started`, `.rejected`,
+  `.turn_sent` (length, never the text), `.stop_requested` and `.ended`. Live
+  sessions appear in **Sessions**, and `preloop sessions attach` sends a typed
+  line as the next turn. Migration `20261011_runner_remote_sessions`
+  ([#1523](https://github.com/preloop/preloop/pull/1523)).
+- **Workspaces for remote sessions.** The server never names a path on the
+  machine. A session uses either an authorized directory, added on the host
+  with `preloop runner dirs add|remove|list` and referenced by id, or a fresh
+  checkout of a tracker repository. Directories are stored as their realpath
+  and checked again on every use; roots, the home directory, credential
+  directories (SSH, cloud CLI, harness logins, the Preloop config) and
+  symlink or junction escapes are refused with `workspace_not_authorized`,
+  and a git tree with uncommitted changes with `workspace_dirty` unless the
+  runner owner allows it. A checkout clones into
+  `~/.preloop/host-workspaces/sessions/<id>/` with a short-lived credential:
+  a GitHub App installation token for that one repository with
+  `contents: read`, or the Bitbucket Cloud managed OAuth token. Pasted
+  tokens, app passwords and GitLab or Jira trackers are refused with a named
+  code. The credential reaches git only through `GIT_ASKPASS` from runner
+  memory (a pipe on Unix, a user-only named pipe on Windows), is never
+  stored or written to `.git/config`, and its minting is audited as
+  `runner_session.checkout_credential_minted` without the token. The
+  checkout is deleted when the session ends
+  ([#1521](https://github.com/preloop/preloop/pull/1521)).
+- **Start a session from the console.** The Sessions page has a **New
+  session** button, and so does each runner on the Runners page (not
+  ephemeral CI runners; disabled while the runner is offline).
+  The dialog picks runner, agent (harnesses that are not ready are shown with
+  the reason), model, workspace and first message; on success the new
+  session opens in the session view with its live view, notes and approvals.
+  Only the runner's owner and account admins may start a session
+  (`runner:session_start`; others get `not_runner_owner`). Refusals carry a
+  code such as `runner_offline`, `harness_not_enabled_for_sessions`,
+  `harness_signed_out`, `max_concurrent_reached` or `turn_in_progress`, shown
+  as a sentence. API: `GET /api/v1/runners/{id}/session-options`,
+  `POST|GET /api/v1/runners/{id}/sessions`,
+  `POST /api/v1/runner-sessions/{id}/turns` and `.../stop`
+  ([#1519](https://github.com/preloop/preloop/pull/1519)).
 - **Consecutive-failure flow alerts.** A flow emails and pushes its account's
   owners after N failed runs in a row (per-flow
   `notifications.on_failure.alert_after_consecutive_failures`, default 3). The
@@ -571,6 +699,25 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
 
 ### Fixed
 
+- **Windows runner runs as a per-user logon task without elevation**
+  (#1513): `preloop runner enable` (and the login prompt) register the task
+  from an XML definition with a logon trigger scoped to the user and an
+  interactive, least-privilege principal, which a standard account may
+  create; the "open an elevated PowerShell" step is gone. The definition
+  drops the `schtasks` defaults that stopped the runner after 72 hours or
+  on battery power, keeps it running while the screen is locked, and ends
+  it at sign-out (the runner reports offline). Task names carry the user
+  (`PreloopRunner-<user>`) so a second user on the machine gets a separate
+  task and runner identity; a 0.17.0 task is still found and upgraded. A
+  refused registration names the cause (`task_creation_prohibited_by_policy`
+  with the Group Policy key, `task_creation_denied` with the `schtasks`
+  command an administrator can run for the user,
+  `task_scheduler_unavailable`), and `preloop runner status` prints the
+  context the runner runs in. Harness binaries are resolved explicitly under
+  the task's registry `PATH`: npm global, winget links, pnpm, Volta, the
+  Copilot standalone install, `~/.local/bin`, scoop, and
+  `%ProgramFiles%\nodejs` / `%NVM_SYMLINK%` for the `node.exe` that
+  unwraps npm shims.
 - **Checkpoint failures name the HTTP status and reason** (#1331): a refused
   workspace capture, restore or evidence upload used to log only
   `PRELOOP_CHECKPOINT failed HTTPError`. The marker now carries
@@ -782,9 +929,37 @@ open-source half of ABAC; the evaluator ships in Enterprise), same-named
   so a resume cannot wait on a person. Any other value, including the
   preset default `exec`, is unchanged.
 
+### Known limits
+
+- Personal runners install as a per-user service (systemd user unit, launchd
+  agent, logon scheduled task). A system-context service is planned (#1488).
+- Cursor CLI reports `auto` as its only model; probing the account's models
+  is planned. Runtime hints (signed out after a failed run, observed models)
+  reset when the runner restarts.
+- A harness is turned off with the `runner.json` key; there is no
+  `preloop runner harnesses` command yet.
+- Remote sessions support GitHub Copilot CLI only. Each turn is a separate
+  process that resumes the session: the console shows a turn's result and its
+  tool calls and approvals, not tokens as they stream, and the agent cannot
+  ask a question in the middle of a turn (it ends the turn and you answer
+  with the next one). Stopping a running turn kills the process; the next
+  turn resumes. The streaming ACP mode and Cursor, Claude Code, Codex and
+  OpenCode sessions are planned (#1489), as is a web terminal (#1490).
+- Approvals raised by the Copilot approval hook during a remote session
+  appear on the hook's own session in **Sessions**, not on the remote
+  session's timeline.
+- `read_only` authorized directories are refused, because Copilot CLI has no
+  read-only mode. Sessions cannot push; flows keep using host-exec
+  publication. A checkout start that reaches the runner later through a
+  heartbeat has no credential and ends with `checkout_failed`.
+- Harness routing decides `fallback_server` when the run starts; a runner
+  that goes away mid-run does not fall back. Sharing a personal runner with a
+  team is planned.
+- Remote sessions have no iOS or Android UI yet; the API is ready.
+
 ### Pull requests by area
 
-Every pull request merged to `main` between `v0.16.0` and this release (325).
+Every pull request merged to `main` between `v0.16.0` and this release (335).
 
 #### Gateway
 
@@ -1039,6 +1214,19 @@ Every pull request merged to `main` between `v0.16.0` and this release (325).
 - Copilot host feedback continuation on the originating runner (#1069, part 2) ([#1466](https://github.com/preloop/preloop/pull/1466))
 - Document VS Code Copilot Chat manual BYOK ([#1470](https://github.com/preloop/preloop/pull/1470))
 - Let restricted CI credentials reach the webhook subscription handlers ([#1471](https://github.com/preloop/preloop/pull/1471))
+
+#### Personal runners
+
+- Personal runners threat model and controls (T1-T12) ([#1491](https://github.com/preloop/preloop/pull/1491))
+- Harness inventory and remote session wire contracts ([#1492](https://github.com/preloop/preloop/pull/1492))
+- Publish and show the harness inventory ([#1518](https://github.com/preloop/preloop/pull/1518))
+- Offer a personal runner install after login ([#1520](https://github.com/preloop/preloop/pull/1520))
+- Workspace policy and short-lived checkouts for remote sessions ([#1521](https://github.com/preloop/preloop/pull/1521))
+- Harness-aware routing and seat cost label ([#1522](https://github.com/preloop/preloop/pull/1522))
+- Runner-hosted Copilot CLI remote sessions ([#1523](https://github.com/preloop/preloop/pull/1523))
+- Start a remote session from the console ([#1519](https://github.com/preloop/preloop/pull/1519))
+- Windows runner as a per-user logon task without elevation ([#1533](https://github.com/preloop/preloop/pull/1533))
+- Drop a duplicate harness inventory type so the CLI compiles ([#1534](https://github.com/preloop/preloop/pull/1534))
 
 #### Security
 
