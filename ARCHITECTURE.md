@@ -599,6 +599,10 @@ Core `crud_person` resolves a membership's explicit Person link, returns a typed
 namespace: provider must include issuer/tenant where subjects are not global.
 The legacy schema did not capture LDAP/AD/SAML issuer; their migrated provider
 namespace is `legacy-account:<account_id>`, pending an explicitly proven relink.
+New and migrated OAuth login links use source `oauth_<provider>` with the
+stored provider label and `oauth_id` (falling back to legacy `external_id`).
+Initial identity creation registers that link atomically and preserves the
+originating membership; explicitly linked memberships cannot claim new subjects.
 OAuth integration grants remain account scoped and retain their account cascade;
 they do not constitute the global login identity.
 

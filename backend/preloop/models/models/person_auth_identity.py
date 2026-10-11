@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+if TYPE_CHECKING:
+    from .person import Person
+    from .user import User
 
 
 class PersonAuthIdentity(Base):
@@ -27,6 +31,10 @@ class PersonAuthIdentity(Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     origin_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL")
+    )
+    person: Mapped["Person"] = relationship("Person", foreign_keys=[person_id])
+    origin_user: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[origin_user_id]
     )
     __table_args__ = (
         UniqueConstraint(
