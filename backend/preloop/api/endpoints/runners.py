@@ -54,6 +54,7 @@ from preloop.services.harness_inventory import (
     redact_harness_inventory,
     viewer_is_account_admin,
 )
+from preloop.services.runner_presence import derive_presence, parse_idle_seconds
 from preloop.services.runner_service import (
     derive_execution_runner,
     emit_runner_deleted,
@@ -214,6 +215,17 @@ def _evict_live_runner_from_worker(
         )
 
 
+def _refresh_presence(db: Session, runner: FlowRunner) -> bool:
+    """Derive presence (#1506) and store it; True when the state changed."""
+    presence = derive_presence(runner)
+    return crud_flow_runner.record_presence(
+        db,
+        runner,
+        state=presence.state,
+        since=presence.since or datetime.now(timezone.utc),
+    )
+
+
 def _to_response(
     row: FlowRunner,
     db: Optional[Session] = None,
@@ -221,6 +233,9 @@ def _to_response(
     viewer_is_admin: Optional[bool] = None,
 ) -> schemas.RunnerResponse:
     data = schemas.RunnerResponse.model_validate(row)
+    presence = derive_presence(row)
+    data.presence = presence.state
+    data.presence_since = presence.since
     if db is not None and row.registered_by_user_id:
         user = crud_user.get(db, id=row.registered_by_user_id)
         if user is not None:
@@ -752,6 +767,9 @@ async def runner_ws(
             controller.execution_id = assignment.execution_id
             controller.nonce = state["nonce"]
     crud_flow_runner.touch_heartbeat(db, runner, status="online")
+    # Reconnecting means the machine is awake again.
+    crud_flow_runner.set_presence_signals(db, runner, sleeping=False)
+    _refresh_presence(db, runner)
     hello: Dict[str, Any] = {
         "type": "hello",
         "runner_id": runner_key,
@@ -902,10 +920,19 @@ async def runner_ws(
                     db, runner, status="busy" if runner.free_slots <= 0 else "online"
                 )
                 db.refresh(runner)
+                # Presence (#1506): a heartbeat means awake; OS idle time is
+                # optional and only replaced when the runner sends it.
+                presence_signals: Dict[str, Any] = {"sleeping": False}
+                if "os_idle_seconds" in raw:
+                    presence_signals["os_idle_seconds"] = parse_idle_seconds(
+                        raw.get("os_idle_seconds")
+                    )
+                crud_flow_runner.set_presence_signals(db, runner, **presence_signals)
+                presence_changed = _refresh_presence(db, runner)
                 reply: Dict[str, Any] = {"type": "ack", "concurrency": runner.capacity}
                 if inventory_wanted:
                     reply["inventory_wanted"] = True
-                if inventory_changed:
+                if inventory_changed or presence_changed:
                     emit_runner_updated(runner, db)
                 heartbeat_jobs = []
                 halts = []
@@ -1170,6 +1197,17 @@ async def runner_ws(
                 await websocket.send_json({"type": "ack"})
                 continue
 
+            if msg_type == "going_to_sleep":
+                # Presence (#1506): the host is about to suspend. Stored so
+                # the drop that follows reads as asleep, not offline, and so
+                # routing stops sending it new work right away.
+                crud_flow_runner.set_presence_signals(db, runner, sleeping=True)
+                if _refresh_presence(db, runner):
+                    emit_runner_updated(runner, db)
+                release_transaction(db)
+                await websocket.send_json({"type": "ack"})
+                continue
+
             await websocket.send_json({"type": "error", "error": f"unknown {msg_type}"})
     except WebSocketDisconnect:
         db.rollback()
@@ -1195,6 +1233,7 @@ async def runner_ws(
             ):
                 row = crud_flow_runner.get_fresh(db, runner_id=runner_id)
                 if row:
+                    _refresh_presence(db, row)
                     emit_runner_updated(row, db)
 
 

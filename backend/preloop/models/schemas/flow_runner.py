@@ -229,6 +229,10 @@ class RunnerResponse(BaseModel):
     #: Last published harness inventory; null means "inventory unknown".
     harness_inventory: Optional[HarnessInventory] = None
     harness_inventory_updated_at: Optional[datetime] = None
+    #: Server-derived presence (#1506): online, busy, idle, asleep or offline.
+    presence: Optional[str] = None
+    #: When the current presence state began.
+    presence_since: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
