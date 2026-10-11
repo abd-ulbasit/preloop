@@ -44,6 +44,13 @@ ENDPOINT_HEARTBEAT_SECONDS = 20
 ENDPOINT_SILENCE_SECONDS = 60
 #: Larger frames are split before publishing; NATS defaults to a 1 MB payload.
 BUS_CHUNK_BYTES = 512 * 1024
+#: Per-subscriber queue depth of the in-process bus (at most 32 MiB queued at
+#: 512 KiB chunks). A full queue makes ``publish`` wait, so a stalled viewer
+#: slows the host leg instead of growing memory.
+LOCAL_BUS_QUEUE_SIZE = 64
+#: NATS buffers at most this much per subscription; beyond it NATS drops the
+#: slow consumer's messages (the view's RFB stream breaks and is reopened).
+NATS_PENDING_BYTES_LIMIT = 32 * 1024 * 1024
 MAX_CUT_TEXT_BYTES = 1024 * 1024
 
 # Close codes (contract-870).
@@ -256,13 +263,13 @@ Unsubscribe = Callable[[], Awaitable[None]]
 
 
 class LocalDesktopBus:
-    """In-process pub/sub with per-subscriber ordered delivery."""
+    """In-process pub/sub with ordered, bounded per-subscriber delivery."""
 
     def __init__(self) -> None:
         self._subs: dict[str, list[asyncio.Queue[Optional[bytes]]]] = defaultdict(list)
 
     async def subscribe(self, subject: str, handler: Handler) -> Unsubscribe:
-        queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
+        queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(LOCAL_BUS_QUEUE_SIZE)
         self._subs[subject].append(queue)
 
         async def pump() -> None:
@@ -283,14 +290,14 @@ class LocalDesktopBus:
                 subs.remove(queue)
             if not subs:
                 self._subs.pop(subject, None)
-            queue.put_nowait(None)
+            task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
         return unsubscribe
 
     async def publish(self, subject: str, data: bytes) -> None:
         for queue in list(self._subs.get(subject, [])):
-            queue.put_nowait(data)
+            await queue.put(data)
 
 
 class NatsDesktopBus:
@@ -303,7 +310,9 @@ class NatsDesktopBus:
         async def callback(msg: Any) -> None:
             await handler(msg.data)
 
-        sub = await self._client.subscribe(subject, cb=callback)
+        sub = await self._client.subscribe(
+            subject, cb=callback, pending_bytes_limit=NATS_PENDING_BYTES_LIMIT
+        )
 
         async def unsubscribe() -> None:
             try:
