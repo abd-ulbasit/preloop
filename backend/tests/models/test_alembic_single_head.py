@@ -347,4 +347,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert result_schema.down_revision == "20261011_runner_presence"
     audit_outbox = script.get_revision("20261011_audit_outbox")
     assert audit_outbox.down_revision == "20261011_flow_result_schema"
-    assert script.get_heads() == ["20261011_audit_outbox"]
+    desktop_views = script.get_revision("20261011_desktop_views")
+    assert desktop_views.down_revision == "20261011_audit_outbox"
+    assert script.get_heads() == ["20261011_desktop_views"]
