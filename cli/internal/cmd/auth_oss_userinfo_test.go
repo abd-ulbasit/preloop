@@ -3,9 +3,9 @@ package cmd
 import (
 	"encoding/json"
 	"io"
-	"os"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
