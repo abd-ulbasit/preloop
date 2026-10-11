@@ -492,6 +492,36 @@ async def test_runner_ws_applies_session_frames_and_delivers_turns(
     assert not any(m.get("type") == "error" for m in sent)
 
 
+@pytest.mark.asyncio
+async def test_runner_ws_connect_replay_enforces_kill_switch(
+    db_session, runner, test_user, monkeypatch
+):
+    """A start written before the halt is not replayed on connect (T10)."""
+    row = _start(db_session, runner, test_user)
+    sent: List[Dict[str, Any]] = []
+
+    async def receive_json() -> Dict[str, Any]:
+        raise WebSocketDisconnect()
+
+    async def send_json(payload: Dict[str, Any]) -> None:
+        sent.append(payload)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_json = AsyncMock(side_effect=send_json)
+    websocket.receive_json = AsyncMock(side_effect=receive_json)
+    monkeypatch.setattr(runners, "_authenticate_runner", lambda *args: runner)
+    monkeypatch.setattr(runners, "emit_runner_updated", MagicMock())
+    monkeypatch.setattr(runners, "flows_or_tools_halted", lambda db, account_id: True)
+
+    await runners.runner_ws(websocket, runner.id, db_session)
+
+    assert not any(m.get("type") == "session_start" for m in sent)
+    db_session.refresh(row)
+    assert not row.is_live
+    assert row.end_reason == "killed_by_kill_switch"
+
+
 def test_kill_switch_activation_endpoint_stops_sessions(
     db_session, runner, test_user, monkeypatch
 ):
@@ -596,6 +626,29 @@ def test_lost_completion_of_a_queued_turn_is_released_by_redelivery_reply(
     db_session.refresh(row)
     assert row.pending_turn is None and row.active_turn_id is None
     svc.queue_turn(db_session, row, actor=test_user, text="and the next")
+
+
+def test_queue_turn_rechecks_the_locked_row(db_session, runner, test_user):
+    """A turn another request queued meanwhile is seen through the row lock."""
+    from sqlalchemy import update
+
+    row = _start(db_session, runner, test_user)
+    svc.pending_runner_messages(db_session, runner)
+    svc.apply_runner_session_message(db_session, runner, _state(row, "idle"))
+    db_session.refresh(row)
+    # Another request wins the race; this row object is stale.
+    db_session.execute(
+        update(models.RunnerRemoteSession)
+        .where(models.RunnerRemoteSession.id == row.id)
+        .values(pending_turn={"turn_id": "other", "text": "first"})
+        .execution_options(synchronize_session=False)
+    )
+    assert row.pending_turn is None
+    with pytest.raises(svc.RunnerSessionError) as excinfo:
+        svc.queue_turn(db_session, row, actor=test_user, text="second")
+    assert excinfo.value.code == "turn_in_progress"
+    db_session.refresh(row)
+    assert row.pending_turn == {"turn_id": "other", "text": "first"}
 
 
 def test_turn_done_for_unknown_turn_is_ignored(db_session, runner, test_user):

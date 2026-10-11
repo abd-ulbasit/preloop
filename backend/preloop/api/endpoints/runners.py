@@ -828,9 +828,9 @@ async def runner_ws(
     release_transaction(db)
     await websocket.send_json(hello)
     # Remote session commands written while the runner was away (or by a
-    # replica that does not hold this socket).
-    for session_message in pending_runner_messages(db, runner):
-        await websocket.send_json(session_message)
+    # replica that does not hold this socket). Same path as every heartbeat,
+    # so the account kill switch is enforced before anything is replayed.
+    await _deliver_session_messages(db, websocket, runner)
 
     try:
         while True:

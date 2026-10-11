@@ -66,6 +66,22 @@ class CRUDRunnerRemoteSession(CRUDBase[RunnerRemoteSession]):
             .first()
         )
 
+    def lock(
+        self, db: Session, *, remote_session_id: Any
+    ) -> Optional[RunnerRemoteSession]:
+        """Re-read one session with a row lock (``SELECT ... FOR UPDATE``).
+
+        Held until the caller commits, so a check-then-set on the row (one
+        turn at a time) cannot race another request.
+        """
+        return (
+            db.query(self.model)
+            .filter(self.model.id == remote_session_id)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+
     def get_by_runtime_session(
         self, db: Session, *, account_id: Any, runtime_session_id: Any
     ) -> Optional[RunnerRemoteSession]:

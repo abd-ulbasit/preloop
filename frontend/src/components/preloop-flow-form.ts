@@ -2634,13 +2634,16 @@ export class PreloopFlowForm extends LitElement {
                         data-harness-queue-timeout
                         min="1"
                         max="1440"
+                        step="1"
                         placeholder="30"
                         .value=${String(timeoutMinutes)}
                         @sl-input=${(event: Event) => {
                           const raw = (event.target as HTMLInputElement).value;
                           this.setHarnessRoutingKey(
                             'harness_queue_timeout_seconds',
-                            raw === '' ? null : Number(raw) * 60
+                            // Whole minutes: a fractional entry would
+                            // fail the integer-seconds check on save.
+                            raw === '' ? null : Math.round(Number(raw)) * 60
                           );
                         }}
                       ></sl-input>`

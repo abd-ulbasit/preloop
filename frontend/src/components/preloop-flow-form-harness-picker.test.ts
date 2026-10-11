@@ -179,6 +179,29 @@ describe('PreloopFlowForm harness + model picker', () => {
     expect(config.host_exec_profile).to.equal('copilot-review');
   });
 
+  it('stores whole minutes for a fractional queue timeout', async () => {
+    const element = await mount({
+      name: 'Review on seats',
+      prompt_template: 'review',
+      agent_type: 'copilot',
+      agent_config: {
+        harness: 'copilot_cli',
+        runner_id: LAPTOP,
+        harness_fallback: 'queue',
+      },
+    });
+    const input = element.shadowRoot!.querySelector(
+      '[data-harness-queue-timeout]'
+    ) as HTMLInputElement;
+    expect(input).to.exist;
+    // 1.1 * 60 is 66.00000000000001 in floating point.
+    input.value = '1.1';
+    input.dispatchEvent(new CustomEvent('sl-input'));
+    await element.updateComplete;
+    const config = (element as any).composedAgentConfig();
+    expect(config.harness_queue_timeout_seconds).to.equal(60);
+  });
+
   it('drops harness keys when the flow moves to a container harness', async () => {
     const element = await mount({
       name: 'Review',

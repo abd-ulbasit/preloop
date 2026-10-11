@@ -798,3 +798,97 @@ func TestRunnerStateWritesKeepSessionSettings(t *testing.T) {
 		t.Fatalf("sessions settings were dropped: %v", doc)
 	}
 }
+
+// blockingResolver holds a start in workspace preparation until released.
+func blockingResolver(h *sessionHarness) (chan struct{}, chan struct{}) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	h.m.runAsync = func(f func()) { go f() }
+	h.m.resolveWorkspace = func(ctx context.Context, id string, spec *sessionWorkspaceSpec, opts sessionWorkspaceOptions) (*sessionWorkspace, error) {
+		close(entered)
+		<-release
+		return resolveSessionWorkspace(ctx, id, spec, opts)
+	}
+	return entered, release
+}
+
+func TestRunnerSessionStartPreparesWorkspaceWithoutTheLock(t *testing.T) {
+	h := newSessionHarness(t, true)
+	entered, release := blockingResolver(h)
+	h.m.handle(startMsg(sessTestID))
+	<-entered
+	// The socket loop keeps working while the workspace is prepared: the
+	// outbox drains and other frames are handled.
+	done := make(chan []map[string]any)
+	go func() { done <- h.drain() }()
+	select {
+	case msgs := <-done:
+		if findMsg(msgs, isState("starting")) == nil {
+			t.Fatalf("want a starting state while preparing, got %v", msgs)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the manager lock is held during workspace preparation")
+	}
+	// The reserved slot counts against the limit (default 2): a redelivery
+	// of the same start is ignored rather than started twice.
+	h.m.handle(startMsg(sessTestID))
+	close(release)
+	h.waitFor(isState("idle"))
+	h.m.mu.Lock()
+	hosted := len(h.m.sessions)
+	h.m.mu.Unlock()
+	if hosted != 1 {
+		t.Fatalf("sessions = %d, want 1", hosted)
+	}
+}
+
+func TestRunnerSessionStopWhileStartingEndsIt(t *testing.T) {
+	h := newSessionHarness(t, true)
+	entered, release := blockingResolver(h)
+	h.m.handle(startMsg(sessTestID))
+	<-entered
+	h.m.handle(runnerWSMessage{Type: "session_stop", RemoteSessionID: sessTestID, Mode: "kill"})
+	close(release)
+	msg := findMsg(h.waitFor(isState("ended")), isState("ended"))
+	if msg == nil || msg["end_reason"] != runnerSessionEndStoppedByActor {
+		t.Fatalf("want ended/stopped_by_actor, got %v", msg)
+	}
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if len(h.m.sessions) != 0 || len(h.m.starting) != 0 {
+		t.Fatalf("a stopped start must not be hosted: %v %v", h.m.sessions, h.m.starting)
+	}
+}
+
+func TestRunnerSessionFlushNeverDropsAnUnsentFrame(t *testing.T) {
+	h := newSessionHarness(t, true)
+	h.m.mu.Lock()
+	h.m.enqueue(map[string]any{"type": "session_event", "n": 0})
+	h.m.enqueue(map[string]any{"type": "session_state", "n": 1})
+	h.m.mu.Unlock()
+	var sent []any
+	_ = h.m.flush(func(msg map[string]any) error {
+		sent = append(sent, msg["n"])
+		if msg["n"] == 0 {
+			// An overflowing enqueue during the send evicts the in-flight
+			// frame; popping by position would drop frame 1 unsent.
+			h.m.mu.Lock()
+			h.m.evictOne("session_event")
+			h.m.mu.Unlock()
+		}
+		return nil
+	})
+	if len(sent) != 2 || sent[1] != 1 {
+		t.Fatalf("sent = %v, want [0 1]", sent)
+	}
+}
+
+func TestRunnerSessionsEnableRefreshesTheInventory(t *testing.T) {
+	testenv.SetTempHome(t)
+	before := harnessInventoryMarkerTime()
+	if err := setHarnessSessionsEnabled("copilot_cli", true); err != nil {
+		t.Fatal(err)
+	}
+	if after := harnessInventoryMarkerTime(); !after.After(before) {
+		t.Fatalf("enable must touch the inventory marker (before %v, after %v)", before, after)
+	}
+}
