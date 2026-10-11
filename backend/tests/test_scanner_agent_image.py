@@ -186,3 +186,27 @@ def test_smoke_runs_trivy_offline_from_the_baked_db() -> None:
     assert "--network none" in text
     assert "--skip-db-update --skip-java-db-update" in text
     assert (SCANNER / "fixtures" / "vulnerable" / "requirements.txt").is_file()
+
+
+def test_latest_moves_on_stable_tags_only() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    push = next(
+        s
+        for s in workflow["jobs"]["scanner-image"]["steps"]
+        if s.get("name") == "Build and push"
+    )
+    tags = [line for line in push["with"]["tags"].splitlines() if line]
+    assert tags[0] == "${{ env.IMAGE }}:${{ github.ref_name }}"
+    assert tags[1] == (
+        "${{ !contains(github.ref_name, '-') && "
+        "format('{0}:latest', env.IMAGE) || '' }}"
+    )
+
+
+def test_pull_requests_touching_the_recipe_build_and_smoke() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers["pull_request"]["paths"]) == {
+        "environments/scanner/**",
+        ".github/workflows/publish-scanner-image.yml",
+    }

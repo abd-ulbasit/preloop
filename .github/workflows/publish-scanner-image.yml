@@ -3,7 +3,8 @@
 # Publishing is gated on version tags only (the same rule as release.yml):
 # a v* tag push builds linux/amd64 and linux/arm64, pushes
 # ghcr.io/preloop/preloop-codex-scanner and prints the published digest to
-# the job summary. The daily schedule and manual runs are dry runs: they
+# the job summary. The daily schedule, manual runs and pull requests that
+# touch the recipe are dry runs: they
 # resolve the current advisory database digest, build, smoke the image with
 # --network none and print what would be published, without pushing.
 #
@@ -19,6 +20,11 @@ on:
   schedule:
     - cron: '17 4 * * *'
   workflow_dispatch:
+  # Pull requests that touch the recipe build and smoke it (never push).
+  pull_request:
+    paths:
+      - 'environments/scanner/**'
+      - '.github/workflows/publish-scanner-image.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -85,9 +91,11 @@ jobs:
           push: true
           build-args: |
             TRIVY_DB_REPOSITORY=${{ steps.db.outputs.ref }}
+          # latest moves on a stable tag only (no pre-release suffix), as in
+          # release.yml.
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+            ${{ !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
 
       - name: Record digest
         env:
