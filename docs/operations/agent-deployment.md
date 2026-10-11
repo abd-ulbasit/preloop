@@ -195,7 +195,11 @@ vncviewer 127.0.0.1:5901
 The CLI listens on `127.0.0.1` only, uses the same view and the same checks as
 the console, and ends the view when the VNC client disconnects or on Ctrl-C.
 
-Opening a view needs the `control_managed_agent` permission (the one that
-guards agent takeover) in the agent's account, checked when the view is
-created and again when the viewer connects. API replicas join the two halves
+Permissions: opening a view (console or `preloop agents desktop`) needs
+`control_managed_agent` (the one that guards agent takeover) in the agent's
+account, checked when the view is created and again when the viewer connects.
+`preloop agents desktop` also lists agents to resolve a name, which needs
+`view_agents`. `preloop desktop enable --agent` creates an agent credential,
+which needs `manage_agents`; re-running it reuses the stored credential for
+the same agent (`--rotate-credential` mints a new one). API replicas join the two halves
 of a view over NATS, so no sticky routing is required.
