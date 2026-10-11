@@ -135,11 +135,15 @@ def test_delete_primary_and_last_membership_retains_credentials(
         crud_person.credential_owner(db_session, membership_id=second.id).id
         == person_id
     )
-    assert db_session.get(models.WebAuthnCredential, passkey_id).user_id is None
+    retained_key = db_session.get(models.WebAuthnCredential, passkey_id)
+    assert retained_key is not None and retained_key.user_id is None
     db_session.execute(delete(models.User).where(models.User.id == second.id))
     db_session.expire_all()
-    assert db_session.get(models.Person, person_id).hashed_password == "synthetic-hash"
-    assert db_session.get(models.WebAuthnCredential, passkey_id).person_id == person_id
+    retained_person = db_session.get(models.Person, person_id)
+    assert retained_person is not None
+    assert retained_person.hashed_password == "synthetic-hash"
+    retained_key = db_session.get(models.WebAuthnCredential, passkey_id)
+    assert retained_key is not None and retained_key.person_id == person_id
     crud_person.set_password(
         db_session, person_id=person_id, hashed_password="retained-reset", commit=False
     )
@@ -240,6 +244,127 @@ def test_provider_ownership_and_quarantine_fail_closed(db_session: Session) -> N
     assert "hashed_password" not in first.person.to_dict()
 
 
+def test_quarantine_repair_requires_proof_reference_and_retires_disputed_credentials(
+    db_session: Session,
+) -> None:
+    first = _member(db_session)
+    second = _member(db_session, person=first.person)
+    person = first.person
+    passkey = models.WebAuthnCredential(
+        user_id=second.id,
+        person_id=person.id,
+        credential_id=uuid.uuid4().hex,
+        public_key="disputed-key",
+    )
+    provider = crud_person.link_provider(
+        db_session,
+        person_id=person.id,
+        source="oauth_example",
+        provider="example",
+        subject=uuid.uuid4().hex,
+        commit=False,
+    )
+    legacy_password = models.PersonPasswordCredential(
+        person_id=person.id, origin_user_id=second.id, hashed_password="disputed-hash"
+    )
+    cli = models.CliSession(user_id=second.id, refresh_jti=uuid.uuid4().hex)
+    db_session.add_all([passkey, legacy_password, cli])
+    person.identity_status = "quarantined"
+    person.migration_conflict = "nonprimary_password_ownership_conflict"
+    db_session.flush()
+    credential_ids = (passkey.id, provider.id, legacy_password.id)
+    repair: dict[str, Any] = {
+        "person_id": person.id,
+        "username": first.username,
+        "email": "repaired@example.com",
+        "hashed_password": "fresh-hash",
+        "ownership_reference": "operator-ticket-194",
+        "discard_credentials": True,
+        "commit": False,
+    }
+    with pytest.raises(IdentityUnavailableError):
+        crud_person.set_status(
+            db_session, person_id=person.id, status="active", commit=False
+        )
+    with pytest.raises(ValueError, match="retiring"):
+        crud_person.repair_conflict(
+            db_session, **(repair | {"discard_credentials": False})
+        )
+    with pytest.raises(ValueError, match="reference"):
+        crud_person.repair_conflict(
+            db_session, **(repair | {"ownership_reference": " "})
+        )
+    assert person.identity_status == "quarantined"
+    crud_person.repair_conflict(db_session, **repair)
+    assert person.identity_status == "active"
+    assert person.migration_conflict is None
+    assert person.migration_resolution == "operator-ticket-194"
+    assert person.email_verified_at is None
+    assert crud_person.list_password_hashes(db_session, person_id=person.id) == [
+        "fresh-hash"
+    ]
+    for credential_type, credential_id in zip(
+        (
+            models.WebAuthnCredential,
+            models.PersonAuthIdentity,
+            models.PersonPasswordCredential,
+        ),
+        credential_ids,
+        strict=True,
+    ):
+        assert db_session.get(credential_type, credential_id) is None
+    db_session.refresh(first)
+    db_session.refresh(second)
+    db_session.refresh(cli)
+    assert (
+        first.auth_generation == second.auth_generation == person.auth_generation == 1
+    )
+    assert first.email == second.email == "repaired@example.com"
+    assert first.hashed_password is None and second.hashed_password is None
+    assert cli.revoked_at is not None
+
+
+@pytest.mark.parametrize("username_kind", ["canonical", "membership_alias"])
+def test_quarantine_repair_conflict_keeps_credentials_and_transaction_usable(
+    db_session: Session,
+    username_kind: str,
+) -> None:
+    first = _member(db_session)
+    other = _member(db_session)
+    other.person.username = "canonical-" + uuid.uuid4().hex
+    link = crud_person.link_provider(
+        db_session,
+        person_id=first.person_id,
+        source="oauth_example",
+        provider="example",
+        subject=uuid.uuid4().hex,
+        commit=False,
+    )
+    link_id = link.id
+    first.person.identity_status = "quarantined"
+    first.person.migration_conflict = "synthetic_conflict"
+    db_session.flush()
+    with pytest.raises(IdentityConflictError):
+        crud_person.repair_conflict(
+            db_session,
+            person_id=first.person_id,
+            username=(
+                other.person.username
+                if username_kind == "canonical"
+                else other.username
+            ),
+            email="repaired@example.com",
+            hashed_password="fresh-hash",
+            ownership_reference="operator-ticket-194",
+            discard_credentials=True,
+            commit=False,
+        )
+    assert first.person.identity_status == "quarantined"
+    assert first.person.hashed_password == "synthetic-hash"
+    assert db_session.get(models.PersonAuthIdentity, link_id) is not None
+    assert crud_person.get(db_session, id=other.person_id) is other.person
+
+
 def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -269,7 +394,8 @@ def test_username_ownership_race_is_domain_conflict_with_usable_transaction(
         )
     db_session.refresh(first.person)
     assert first.person.username == original
-    assert crud_person.get(db_session, id=second.person_id).username == claimed
+    claimed_person = crud_person.get(db_session, id=second.person_id)
+    assert claimed_person is not None and claimed_person.username == claimed
 
 
 def test_revoke_identity_retires_opaque_tokens_codes_and_cli_sessions(
@@ -401,6 +527,7 @@ def test_initial_oauth_identity_registers_provider_owner_and_provenance(
     owner = crud_person.get_by_provider(
         db_session, source="oauth_github", provider="github", subject=subject
     )
+    assert owner is not None
     assert owner.id == user.person_id
     from sqlalchemy import select
 
@@ -409,5 +536,6 @@ def test_initial_oauth_identity_registers_provider_owner_and_provenance(
             models.PersonAuthIdentity.person_id == owner.id
         )
     )
+    assert link is not None
     assert link.origin_user_id == user.id
     assert link.subject == subject

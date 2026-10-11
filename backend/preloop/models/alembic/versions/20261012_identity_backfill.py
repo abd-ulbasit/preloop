@@ -16,6 +16,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import UUID, insert
 
 revision = "20261012_identity_backfill"
 down_revision = "20261012_identity_schema"
@@ -73,7 +74,16 @@ def upgrade() -> None:
     ).mappings():
         passkey_owners[credential["user_id"]].add(credential["user_id"])
     provider_keys = {r["id"]: key for key, rows in providers.items() for r in rows}
-    for person in bind.execute(sa.text("SELECT * FROM person ORDER BY id")).mappings():
+    people = list(bind.execute(sa.text("SELECT * FROM person ORDER BY id")).mappings())
+    claimed_names = {
+        person["username"]: person["id"]
+        for person in people
+        if person["username"] is not None
+    }
+    profile_updates: list[dict[str, Any]] = []
+    quarantines: list[dict[str, Any]] = []
+    passwords: list[dict[str, Any]] = []
+    for person in people:
         rows = users.get(person["id"], [])
         if person["username"] is not None or person["migration_conflict"] is not None:
             continue
@@ -91,13 +101,8 @@ def upgrade() -> None:
             rows[0] if rows else None,
         )
         if primary is not None:
-            existing_name_owner = bind.execute(
-                sa.text(
-                    "SELECT id FROM person WHERE username=:name AND id<>:person_id"
-                ),
-                {"name": primary["username"], "person_id": person["id"]},
-            ).first()
-            if existing_name_owner is not None:
+            existing_name_owner = claimed_names.get(primary["username"])
+            if existing_name_owner is not None and existing_name_owner != person["id"]:
                 reasons.append("canonical_username_claimed_by_another_person")
             if any(
                 r["id"] != primary["id"]
@@ -119,18 +124,12 @@ def upgrade() -> None:
             ):
                 reasons.append("nonprimary_provider_ownership_conflict")
         if reasons:
-            bind.execute(
-                sa.text(
-                    "UPDATE person SET identity_status='quarantined', migration_conflict=:reason WHERE id=:id"
-                ),
+            quarantines.append(
                 {"id": person["id"], "reason": ";".join(reasons)},
             )
         elif primary is not None:
-            bind.execute(
-                sa.text("""UPDATE person SET username=:username,email=:email,full_name=:full_name,
-                avatar_url=:avatar_url,avatar_source=:avatar_source,hashed_password=:hashed_password,
-                auth_generation=:auth_generation,primary_user_id=:primary_user_id
-                WHERE id=:id AND username IS NULL"""),
+            claimed_names[primary["username"]] = person["id"]
+            profile_updates.append(
                 {
                     key: primary[key]
                     for key in (
@@ -151,10 +150,7 @@ def upgrade() -> None:
                 or row["hashed_password"] != primary["hashed_password"]
                 or reasons
             ):
-                bind.execute(
-                    sa.text("""INSERT INTO person_password_credential
-                    (id,person_id,origin_user_id,hashed_password) VALUES (:id,:person_id,:origin_user_id,:hashed_password)
-                    ON CONFLICT (person_id,hashed_password) DO NOTHING"""),
+                passwords.append(
                     {
                         "id": uuid.uuid4(),
                         "person_id": person["id"],
@@ -162,15 +158,12 @@ def upgrade() -> None:
                         "hashed_password": row["hashed_password"],
                     },
                 )
+    provider_links: list[dict[str, Any]] = []
     for (source, provider, subject), rows in providers.items():
         if len({r["person_id"] for r in rows}) != 1:
             continue
         origin = rows[0]
-        bind.execute(
-            sa.text("""INSERT INTO person_auth_identity
-            (id,person_id,origin_user_id,source,provider,subject)
-            VALUES (:id,:person_id,:origin_user_id,:source,:provider,:subject)
-            ON CONFLICT (source,provider,subject) DO NOTHING"""),
+        provider_links.append(
             {
                 "id": uuid.uuid4(),
                 "person_id": origin["person_id"],
@@ -180,6 +173,51 @@ def upgrade() -> None:
                 "subject": subject,
             },
         )
+    # Batch profiles and use explicit multi-values credential inserts. Plain
+    # psycopg executemany can still issue one server round trip per inserted row.
+    for statement, records in (
+        (
+            "UPDATE person SET identity_status='quarantined', migration_conflict=:reason WHERE id=:id",
+            quarantines,
+        ),
+        (
+            """UPDATE person SET username=:username,email=:email,full_name=:full_name,
+            avatar_url=:avatar_url,avatar_source=:avatar_source,hashed_password=:hashed_password,
+            auth_generation=:auth_generation,primary_user_id=:primary_user_id
+            WHERE id=:id AND username IS NULL""",
+            profile_updates,
+        ),
+    ):
+        for start in range(0, len(records), 1000):
+            bind.execute(sa.text(statement), records[start : start + 1000])
+    for table_name, fields, conflict_columns, records in (
+        (
+            "person_password_credential",
+            ["hashed_password"],
+            ["person_id", "hashed_password"],
+            passwords,
+        ),
+        (
+            "person_auth_identity",
+            ["source", "provider", "subject"],
+            ["source", "provider", "subject"],
+            provider_links,
+        ),
+    ):
+        table = sa.table(
+            table_name,
+            *(
+                sa.column(name, UUID(as_uuid=True))
+                for name in ("id", "person_id", "origin_user_id")
+            ),
+            *(sa.column(name, sa.String()) for name in fields),
+        )
+        for start in range(0, len(records), 1000):
+            bind.execute(
+                insert(table)
+                .values(records[start : start + 1000])
+                .on_conflict_do_nothing(index_elements=conflict_columns)
+            )
     op.execute(
         'UPDATE webauthn_credential c SET person_id=u.person_id FROM "user" u WHERE c.user_id=u.id AND c.person_id IS NULL'
     )

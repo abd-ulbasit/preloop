@@ -436,6 +436,90 @@ class CRUDPerson:
         )
 
     @_identity_write
+    def repair_conflict(
+        self,
+        db: Session,
+        *,
+        person_id: Any,
+        username: str,
+        email: str,
+        hashed_password: str,
+        ownership_reference: str,
+        discard_credentials: bool,
+        commit: bool = True,
+    ) -> models.Person:
+        """Repair a quarantine after an administrator independently proves ownership.
+
+        The authorized caller must supply a non-secret ownership-evidence reference
+        and explicitly accept retiring every disputed password, passkey and provider
+        link. This is not a self-service reset or an ownership proof by itself. The
+        address remains unverified and other credentials need fresh enrollment.
+        """
+        if not discard_credentials:
+            raise ValueError("Quarantine repair requires retiring disputed credentials")
+        if not username or not normalize_email(email) or not hashed_password:
+            raise ValueError(
+                "Repair requires a complete canonical profile and password"
+            )
+        if not ownership_reference.strip():
+            raise ValueError("Repair requires an ownership-evidence reference")
+        person = self._lock(db, person_id)
+        if person.identity_status != "quarantined":
+            raise IdentityConflictError("Identity is not quarantined")
+        if (
+            db.scalar(
+                select(models.User.id).where(
+                    models.User.username == username, models.User.person_id != person.id
+                )
+            )
+            is not None
+        ):
+            raise IdentityConflictError("Username is unavailable")
+        if (
+            db.scalar(
+                select(models.Person.id).where(
+                    models.Person.email_normalized == normalize_email(email),
+                    models.Person.id != person.id,
+                    models.Person.email_verified_at.is_not(None),
+                )
+            )
+            is not None
+        ):
+            raise IdentityConflictError("Verified address belongs to another identity")
+        for credential_type in (
+            models.PersonAuthIdentity,
+            models.WebAuthnCredential,
+        ):
+            db.execute(
+                delete(credential_type).where(credential_type.person_id == person.id)
+            )
+        db.execute(
+            update(models.User)
+            .where(models.User.person_id == person.id)
+            .values(
+                oauth_id=None,
+                external_id=None,
+                oauth_provider=None,
+                user_source="local",
+            )
+        )
+        person.username = username
+        person.email = email
+        person.email_normalized = normalize_email(email)
+        person.email_verified_at = None
+        person.full_name = None
+        person.avatar_url = None
+        person.avatar_source = None
+        person.migration_resolution = ownership_reference.strip()
+        person.migration_conflict = None
+        person.identity_status = "active"
+        self.set_password(
+            db, person_id=person.id, hashed_password=hashed_password, commit=False
+        )
+        self._sync_profile(db, person)
+        return self._finish(db, person, False)
+
+    @_identity_write
     def link_provider(
         self,
         db: Session,
@@ -480,9 +564,6 @@ class CRUDPerson:
         )
         db.add(link)
         db.flush()
-        if commit:
-            db.commit()
-            db.refresh(link)
         return link
 
     def delete_identity(

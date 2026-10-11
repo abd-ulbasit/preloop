@@ -6,10 +6,11 @@ import importlib.util
 import uuid
 from pathlib import Path
 from types import ModuleType
+from typing import Any, cast
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import text
+from sqlalchemy import Table, event, inspect, text
 from sqlalchemy.orm import Session
 
 
@@ -111,6 +112,17 @@ def test_legacy_backfill_conflicts_provisional_primary_and_restart(
         _revision("20261012_identity_schema").upgrade()
         _revision("20261012_identity_backfill").upgrade()
         _revision("20261012_identity_backfill").upgrade()
+    from preloop.models import models
+
+    for model in (models.PersonAuthIdentity, models.PersonPasswordCredential):
+        assert not any(
+            index["column_names"] == ["id"]
+            for index in inspect(connection).get_indexes(model.__tablename__)
+        )
+        assert not any(
+            [column.name for column in index.columns] == ["id"]
+            for index in cast(Table, model.__table__).indexes
+        )
     persons = {
         row["id"]: row
         for row in connection.execute(text("SELECT * FROM person")).mappings()
@@ -199,10 +211,34 @@ def test_competing_membership_credentials_are_preserved_but_quarantined(
     source.person.hashed_password = None
     db_session.flush()
     connection = db_session.connection()
-    with Operations.context(MigrationContext.configure(connection)):
-        _revision("20261012_identity_backfill").upgrade()
+    writes: list[tuple[str, bool, int]] = []
+
+    def capture_batch(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        writes.append((statement, executemany, len(parameters)))
+
+    event.listen(connection, "before_cursor_execute", capture_batch)
+    try:
+        with Operations.context(MigrationContext.configure(connection)):
+            _revision("20261012_identity_backfill").upgrade()
+    finally:
+        event.remove(connection, "before_cursor_execute", capture_batch)
+    assert any(
+        "INSERT INTO person_password_credential" in statement
+        and not batch
+        and count == 8
+        for statement, batch, count in writes
+    )
+    assert not any("WHERE username=:name" in statement for statement, _, _ in writes)
     db_session.expire_all()
     person = db_session.get(models.Person, source.person_id)
+    assert person is not None
     assert person.identity_status == "quarantined"
     assert person.migration_conflict == "nonprimary_password_ownership_conflict"
     with pytest.raises(IdentityUnavailableError):
