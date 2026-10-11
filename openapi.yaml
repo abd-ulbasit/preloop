@@ -37179,6 +37179,12 @@ components:
         presence:
           anyOf:
           - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
           - type: 'null'
           title: Presence
         presence_since:
@@ -37317,6 +37323,12 @@ components:
         presence:
           anyOf:
           - type: string
+            enum:
+            - online
+            - busy
+            - idle
+            - asleep
+            - offline
           - type: 'null'
           title: Presence
         presence_since:
@@ -42911,6 +42923,7 @@ components:
           - type: number
             minimum: 0.0
           - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

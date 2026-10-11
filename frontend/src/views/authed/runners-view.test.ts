@@ -407,7 +407,11 @@ describe('RunnersView', () => {
 
   it('falls back to status when the server sends no presence', async () => {
     const element = await renderWith([
-      { id: '11111111-1111-4111-8111-111111111111', name: 'old', status: 'busy' },
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'old',
+        status: 'busy',
+      },
     ]);
     const badge = element.shadowRoot?.querySelector('sl-badge.presence');
     expect(badge?.textContent?.trim()).to.equal('Busy');

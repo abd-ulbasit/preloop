@@ -147,3 +147,36 @@ def test_routing_skips_asleep_and_offline(
     ws_runner.last_heartbeat = datetime.now(timezone.utc) - timedelta(minutes=5)
     db_session.commit()
     assert matched() == []
+
+
+def test_claim_free_slot_refuses_asleep_runner(
+    db_session: Session, ws_runner: models.FlowRunner
+) -> None:
+    ws_runner.last_heartbeat = datetime.now(timezone.utc)
+    db_session.commit()
+    assert crud_flow_runner.claim_free_slot(db_session, runner_id=ws_runner.id)
+    db_session.rollback()
+    crud_flow_runner.set_presence_signals(db_session, ws_runner, sleeping=True)
+    assert crud_flow_runner.claim_free_slot(db_session, runner_id=ws_runner.id) is None
+
+
+def test_quiet_heartbeat_signals_do_not_write(
+    db_session: Session, ws_runner: models.FlowRunner, monkeypatch
+) -> None:
+    commits = MagicMock(wraps=db_session.commit)
+    monkeypatch.setattr(db_session, "commit", commits)
+    crud_flow_runner.set_presence_signals(db_session, ws_runner, sleeping=False)
+    assert commits.call_count == 0
+    crud_flow_runner.set_presence_signals(db_session, ws_runner, os_idle_seconds=30)
+    assert commits.call_count == 1
+    crud_flow_runner.set_presence_signals(db_session, ws_runner, os_idle_seconds=30)
+    assert commits.call_count == 1
+
+
+def test_schema_presence_literal_matches_service_states() -> None:
+    from typing import get_args
+
+    from preloop.models.schemas.flow_runner import RunnerPresenceState
+    from preloop.services.runner_presence import PRESENCE_STATES
+
+    assert set(get_args(RunnerPresenceState)) == set(PRESENCE_STATES)

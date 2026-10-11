@@ -199,6 +199,10 @@ class RunnerRegisterRequest(BaseModel):
     concurrency: Optional[int] = Field(None, ge=1, le=MAX_RUNNER_CONCURRENCY)
 
 
+#: Server-derived runner presence (#1506); see services/runner_presence.py.
+RunnerPresenceState = Literal["online", "busy", "idle", "asleep", "offline"]
+
+
 class RunnerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -230,7 +234,7 @@ class RunnerResponse(BaseModel):
     harness_inventory: Optional[HarnessInventory] = None
     harness_inventory_updated_at: Optional[datetime] = None
     #: Server-derived presence (#1506): online, busy, idle, asleep or offline.
-    presence: Optional[str] = None
+    presence: Optional[RunnerPresenceState] = None
     #: When the current presence state began.
     presence_since: Optional[datetime] = None
     created_at: datetime

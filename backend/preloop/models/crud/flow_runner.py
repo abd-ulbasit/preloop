@@ -495,6 +495,9 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
             .filter(
                 FlowRunner.id == runner_id,
                 FlowRunner.status.in_(("online", "busy")),
+                # Presence (#1506): asleep runners take no new work, even
+                # when a caller holds a runner id from before the signal.
+                FlowRunner.sleep_signaled_at.is_(None),
             )
             .populate_existing()
             .with_for_update(skip_locked=True)
@@ -1069,12 +1072,21 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
         ``sleeping=True`` records ``going_to_sleep``; ``False`` clears it
         (any later heartbeat or reconnect means the machine woke up).
         """
+        changed = False
         if sleeping is True:
             runner.sleep_signaled_at = datetime.now(timezone.utc)
-        elif sleeping is False:
+            changed = True
+        elif sleeping is False and getattr(runner, "sleep_signaled_at", None):
             runner.sleep_signaled_at = None
-        if os_idle_seconds is not _UNSET:
+            changed = True
+        if os_idle_seconds is not _UNSET and (
+            getattr(runner, "os_idle_seconds", None) != os_idle_seconds
+        ):
             runner.os_idle_seconds = os_idle_seconds
+            changed = True
+        if not changed:
+            # The common heartbeat: nothing new, no extra write.
+            return runner
         db.add(runner)
         db.commit()
         db.refresh(runner)
