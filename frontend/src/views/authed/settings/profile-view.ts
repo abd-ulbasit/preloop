@@ -6,6 +6,9 @@ import {
   updateUserProfile,
   uploadAvatar,
   deleteAvatar,
+  resendVerificationEmail,
+  invalidateUserProfileCache,
+  type UserProfile,
 } from '../../../api';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
@@ -17,13 +20,7 @@ import '../../../components/view-header';
 export class ProfileView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state()
-  private user: {
-    username: string;
-    email: string;
-    full_name?: string | null;
-    avatar_url?: string | null;
-    avatar_source?: string | null;
-  } | null = null;
+  private user: UserProfile | null = null;
 
   @state()
   private fullName = '';
@@ -33,6 +30,10 @@ export class ProfileView extends LitElement {
 
   @state()
   private avatarMessage = '';
+
+  @state() private verificationMessage = '';
+  @state() private sendingVerification = false;
+  @state() private refreshingVerification = false;
 
   async connectedCallback() {
     super.connectedCallback();
@@ -56,6 +57,42 @@ export class ProfileView extends LitElement {
       this.updateProfileMessage = 'Profile updated successfully.';
     } catch (error) {
       this.updateProfileMessage = 'Failed to update profile.';
+    }
+  }
+
+  private async resendVerification() {
+    if (!this.user || this.sendingVerification) return;
+    this.sendingVerification = true;
+    this.verificationMessage = '';
+    try {
+      this.verificationMessage = await resendVerificationEmail(this.user.email);
+    } catch (error) {
+      this.verificationMessage =
+        error instanceof Error
+          ? error.message
+          : 'Failed to send verification email.';
+    } finally {
+      this.sendingVerification = false;
+    }
+  }
+
+  private async refreshVerification() {
+    if (this.refreshingVerification) return;
+    this.refreshingVerification = true;
+    this.verificationMessage = '';
+    try {
+      invalidateUserProfileCache();
+      this.user = await getUserProfile();
+      this.verificationMessage = this.user.email_verified
+        ? 'Your email address is verified.'
+        : 'Your email address is still awaiting verification. Open the link in your verification email, then check again.';
+    } catch (error) {
+      this.verificationMessage =
+        error instanceof Error
+          ? error.message
+          : 'Failed to check verification status.';
+    } finally {
+      this.refreshingVerification = false;
     }
   }
 
@@ -165,6 +202,45 @@ export class ProfileView extends LitElement {
                   .value="${this.user?.email || ''}"
                   readonly
                 ></sl-input>
+                ${
+                  this.user
+                    ? html`<div class="email-verification">
+                        <p>
+                          Email status:
+                          <strong
+                            >${this.user.email_verified ? 'Verified' : 'Not verified'}</strong
+                          >
+                        </p>
+                        ${
+                          !this.user.email_verified
+                            ? html`<p>
+                                  Open the link in your verification email to
+                                  verify this address.
+                                </p>
+                                <sl-button
+                                  type="button"
+                                  data-testid="resend-verification"
+                                  ?loading=${this.sendingVerification}
+                                  ?disabled=${this.sendingVerification}
+                                  @click=${this.resendVerification}
+                                  >Resend verification email</sl-button
+                                >
+                                <sl-button
+                                  type="button"
+                                  data-testid="refresh-verification"
+                                  ?loading=${this.refreshingVerification}
+                                  ?disabled=${this.refreshingVerification}
+                                  @click=${this.refreshVerification}
+                                  >Check verification status</sl-button
+                                >`
+                            : ''
+                        }
+                        <p role="status" aria-live="polite">
+                          ${this.verificationMessage}
+                        </p>
+                      </div>`
+                    : ''
+                }
                 <sl-input
                   label="Full Name"
                   .value="${this.fullName}"
@@ -198,6 +274,11 @@ export class ProfileView extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 1rem;
+      }
+
+      .email-verification sl-button {
+        width: auto;
+        margin: 0 0.5rem 0.5rem 0;
       }
 
       .avatar-section {

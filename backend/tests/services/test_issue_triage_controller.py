@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.models.crud import crud_issue_lifecycle
 from preloop.models.crud.base import CRUDBase
-from preloop.schemas.issue_triage import IssueTriageApply
+from preloop.schemas.issue_triage import IssueTriageApply, IssueTriageResult
 from preloop.services import issue_triage_controller as controller
 from preloop.services.issue_triage import get_context
 from tests.services.test_issue_triage_controller_review import (
@@ -22,6 +22,38 @@ from tests.services.test_issue_triage_controller_review import (
     _committed_rig,
     _rig,
 )
+
+
+def test_pinned_stale_failure_tells_the_model_to_stop() -> None:
+    """A raised stale_issue is partial or failed, not only a conflict.
+
+    The recheck after label creation raises ValueError("stale_issue"), and
+    apply_triage turns that into a partial result whose next_action still
+    says to fetch fresh context. A pinned run cannot use that revision.
+    """
+    partial = IssueTriageResult(
+        status="partial",
+        reason="stale_issue",
+        next_action="Inspect the updated issue and receipt, then fetch fresh context.",
+    )
+    controller._stop_pinned_stale_retry(object(), partial)
+    assert partial.next_action == controller._PINNED_STALE_STOP
+
+    other = IssueTriageResult(
+        status="failed",
+        reason="provider_request_failed",
+        next_action="Inspect the updated issue and receipt, then fetch fresh context.",
+    )
+    controller._stop_pinned_stale_retry(object(), other)
+    assert other.next_action.startswith("Inspect")
+
+    unpinned = IssueTriageResult(
+        status="conflict",
+        reason="stale_issue",
+        next_action="Refresh triage context and re-evaluate.",
+    )
+    controller._stop_pinned_stale_retry(None, unpinned)
+    assert unpinned.next_action.startswith("Refresh")
 
 
 @pytest.mark.asyncio
@@ -159,6 +191,9 @@ async def test_newer_edit_has_own_claim_and_old_output_cannot_overwrite_it(
     assert newer.id != execution.id and not reused
     result = await _apply(rig, execution, request)
     assert result.status == "conflict" and result.reason == "stale_issue"
+    assert result.next_action is not None
+    assert "Stop without writing" in result.next_action
+    assert "get_issue" in result.next_action
     assert rig.provider.operations == []
     assert "New human acceptance" in rig.provider.issue.body
     refreshed = request.model_copy(
@@ -166,6 +201,11 @@ async def test_newer_edit_has_own_claim_and_old_output_cannot_overwrite_it(
             "expected_revision": (await get_context(rig.provider)).expected_revision
         }
     )
+    with pytest.raises(
+        controller.TriageControllerError, match="triage_execution_revision_mismatch"
+    ) as mismatch:
+        await _apply(rig, execution, refreshed)
+    assert "Stop without writing" in str(mismatch.value)
     assert (await _apply(rig, newer, refreshed)).status == "updated"
 
 

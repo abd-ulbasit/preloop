@@ -53,6 +53,12 @@ from .account_signing_key import (
     SIGNING_ALGORITHM_ED25519,
     AccountSigningKey,
 )
+from .audit_outbox import (
+    AUDIT_OUTBOX_DELIVERED,
+    AUDIT_OUTBOX_FAILED,
+    AUDIT_OUTBOX_PENDING,
+    AuditOutbox,
+)
 from .audit_chain import (
     GENESIS_HASH,
     AuditChainCheckpoint,
@@ -161,6 +167,10 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "AUDIT_OUTBOX_DELIVERED",
+    "AUDIT_OUTBOX_FAILED",
+    "AUDIT_OUTBOX_PENDING",
+    "AuditOutbox",
     "CallbackKeyBinding",
     "CallbackReceipt",
     "ChatConnection",

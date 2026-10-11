@@ -266,6 +266,16 @@ class AIModelUpdate(BaseModel):
     is_default: Optional[bool] = None
     model_parameters: Optional[Dict] = None
     meta_data: Optional[Dict] = None
+    codex_upstream_websocket: Optional[bool] = Field(
+        None,
+        description=(
+            "openai-codex models only: per-model override for the Codex upstream "
+            "WebSocket transport, stored as meta_data.codex_upstream_websocket. "
+            "true/false wins over the account override and the global "
+            "CODEX_UPSTREAM_WEBSOCKET setting; null removes the override. "
+            "Merged into the stored meta_data, so other keys are kept."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_credentials(self):

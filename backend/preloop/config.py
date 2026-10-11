@@ -737,7 +737,9 @@ class Settings(BaseSettings):
             "when the thread just grew (#1454). Clients still talk HTTP and "
             "every gateway hook still sees the full body. Off = the HTTP path. "
             "An account can override this either way with the boolean "
-            "'codex_upstream_websocket' key in its meta_data."
+            "'codex_upstream_websocket' key in its meta_data, and an "
+            "openai-codex model's own 'codex_upstream_websocket' meta_data "
+            "key overrides both (#1524)."
         ),
     )
     codex_upstream_websocket_max_sockets: int = Field(
