@@ -69,11 +69,18 @@ updates:
   # by the follow-up commit on the same PR) with the uv command recorded at
   # the top of each .txt file. The "requirements resolve" job in ci.yml is the
   # backstop for anything that still slips through.
+  #
+  # environments/scanner/fixtures/vulnerable/requirements.txt is excluded for
+  # a different reason. It pins Django 2.2.0 and requests 2.19.0 so the
+  # scanner image smoke test can find known vulnerabilities with networking
+  # disabled. A patched bump (Django 5.2.17, requests 2.33.0) makes
+  # publish-scanner-image.yml fail with zero findings.
   - package-ecosystem: pip
     directory: /
     exclude-paths:
       - requirements/**
       - .github/requirements/**
+      - environments/scanner/fixtures/vulnerable/**
     schedule:
       interval: weekly
       day: monday
