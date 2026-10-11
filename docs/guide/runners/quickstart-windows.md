@@ -5,7 +5,7 @@ Editions: OSS, Cloud, Enterprise. Unless stated otherwise, everything on this pa
 The Preloop CLI **is** the self-hosted runner on Windows too: it registers
 with your control plane, holds an outbound WebSocket, leases flow executions,
 and runs them locally. On a Windows developer laptop the primary execution
-mode is a [host execution profile](#host-execution-profiles-on-windows): the
+mode is a [host execution profile](#host-execution-profiles-on-windows-advanced-override): the
 runner starts a locally installed agent CLI (Cursor, Copilot CLI) under your
 own login. Docker execution also works when a Docker engine is available
 (Docker Desktop runs the same Linux agent containers), but it is not required
@@ -43,6 +43,42 @@ preloop login --headless                            # prints a URL, paste the co
 $env:PRELOOP_TOKEN = '<account-api-token>'
 ```
 
+## Install during login
+
+On a terminal, `preloop login` asks whether to install a runner as a
+background service. The default answer is no. The service is the
+`PreloopRunner` scheduled task, running as your user. It starts at logon,
+connects outbound to the instance you just signed in to, can run flow
+executions on this machine, and reports installed agent harnesses (names,
+versions, signed in or not). It does not read or forward harness
+credentials. Remote sessions stay off until you enable them per harness.
+
+Installing the task needs an elevated PowerShell. When the login is not
+elevated, login still succeeds and prints this command on its own line:
+
+```text
+preloop runner setup
+```
+
+Run that command from an elevated PowerShell.
+
+Consent wording (what the runner may see and do):
+<https://docs.preloop.ai/security/personal-runners/>.
+
+An account policy of `required` installs without a question and prints
+why. `forbidden` prints one line and does not install. Skip the step with
+`--no-runner` or `PRELOOP_NO_RUNNER=1`. Headless login, `--token`,
+`PRELOOP_TOKEN`, and a shell that is not a terminal never ask and never
+install. A service that is already installed is left as it is.
+
+Run the same step later with `preloop runner setup`. A decline is
+remembered in `%USERPROFILE%\.preloop\config.yaml`
+(`runner_prompt_answered_at`). `preloop login --force` asks again. Remove
+the service with `preloop runner disable`.
+
+The runner registers as the machine hostname with labels `personal`,
+`os:<os>` and `arch:<arch>`.
+
 ## 3. Run the runner in the foreground (first test)
 
 ```powershell
@@ -78,7 +114,30 @@ The task starts at logon, not at boot: host execution runs under your
 interactive login by design. A machine that must run jobs with nobody logged
 in should use a Linux runner or a dedicated service account.
 
-## Host execution profiles on Windows
+## Harnesses are detected automatically
+
+The runner reports the agent harnesses installed for the user it runs as
+(Copilot CLI, Cursor CLI, Claude Code and others) and generates host
+execution profiles named `copilot` and `cursor` for Copilot CLI and Cursor
+CLI, so no profile file is needed. Sign in to the harness as that user (for
+Copilot CLI: `copilot login`, or set `COPILOT_GITHUB_TOKEN` for the runner
+user), then check what the runner reports:
+
+```powershell
+preloop runner inventory --refresh
+```
+
+The Copilot login record is read from `%USERPROFILE%\.copilot\config.json`
+(or `%COPILOT_HOME%\config.json`); only its host is read. To turn a harness
+off, add `"harnesses": {"cursor_cli": {"enabled": false}}` to
+`%USERPROFILE%\.preloop\runner.json`. What is checked and what is never
+read is described in the
+[Linux quickstart](quickstart-linux.md#harnesses-are-detected-automatically).
+
+## Host execution profiles on Windows (advanced override)
+
+A hand-written profile replaces the generated one for the same harness or
+name. Use it to pin a working directory, map model aliases or grant tools.
 
 The profile file is `%USERPROFILE%\.preloop\runner-host-profiles.json` (or
 point `PRELOOP_RUNNER_HOST_PROFILES` at an absolute path):
@@ -106,7 +165,7 @@ point `PRELOOP_RUNNER_HOST_PROFILES` at an absolute path):
 ```
 
 Everything in the
-[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-opt-in-private-only)
+[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-advanced-override-private-only)
 applies (profile validation, model mapping, prompt delivery, structured
 completion, injection rejection). Windows specifics:
 

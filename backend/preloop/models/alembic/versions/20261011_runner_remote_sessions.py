@@ -1,7 +1,7 @@
 """Runner remote sessions: harness sessions hosted by personal runners.
 
 Revision ID: 20261011_runner_remote_sessions
-Revises: 20261010_otlp_telemetry_ingest
+Revises: 20261011_harness_inventory
 Create Date: 2026-10-11
 
 Issue #1482. One row per remote session a runner hosts (the
@@ -18,7 +18,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20261011_runner_remote_sessions"
-down_revision: Union[str, None] = "20261010_otlp_telemetry_ingest"
+down_revision: Union[str, None] = "20261011_harness_inventory"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 # Alembic reads these module globals by name; keep a local reference so static
