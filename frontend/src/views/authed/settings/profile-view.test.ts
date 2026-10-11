@@ -16,18 +16,43 @@ describe('ProfileView', () => {
     });
   }
 
-  function createFetchStub(opts: { profileFails?: boolean } = {}) {
+  function createFetchStub(
+    opts: {
+      profileFails?: boolean;
+      verified?: boolean;
+      resendStatus?: number;
+    } = {}
+  ) {
     return sinon
       .stub(window, 'fetch')
       .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
 
+        if (
+          url.includes('/api/v1/auth/resend-verification') &&
+          method === 'POST'
+        ) {
+          return jsonResponse(
+            opts.resendStatus === 429
+              ? {
+                  detail:
+                    'Too many verification emails requested. Wait a few minutes and try again.',
+                }
+              : {
+                  message:
+                    'If that address needs verifying, a new verification email is on its way.',
+                },
+            opts.resendStatus || 200
+          );
+        }
+
         if (url.includes('/api/v1/auth/users/me') && method === 'GET') {
           if (opts.profileFails) {
             return jsonResponse({ detail: 'boom' }, 500);
           }
           return jsonResponse({
+            email_verified: opts.verified ?? false,
             username: 'alice',
             email: 'alice@example.com',
             full_name: 'Alice Example',
@@ -36,6 +61,7 @@ describe('ProfileView', () => {
 
         if (url.includes('/api/v1/auth/users/me') && method === 'PUT') {
           return jsonResponse({
+            email_verified: opts.verified ?? false,
             username: 'alice',
             email: 'alice@example.com',
             full_name: 'Updated Name',
@@ -148,5 +174,112 @@ describe('ProfileView', () => {
     expect((element as any).updateProfileMessage).to.contain(
       'Failed to update profile'
     );
+  });
+  it('shows verified status without resend controls', async () => {
+    fetchStub = createFetchStub({ verified: true });
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(
+      () => !!element.shadowRoot?.querySelector('.email-verification')
+    );
+    expect(
+      element.shadowRoot?.querySelector('.email-verification')?.textContent
+    ).to.contain('Verified');
+    expect(
+      element.shadowRoot?.querySelector('[data-testid="resend-verification"]')
+    ).not.to.exist;
+  });
+
+  it('resends verification to the profile email and shows confirmation', async () => {
+    fetchStub = createFetchStub();
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.querySelector(
+          '[data-testid="resend-verification"]'
+        )
+    );
+    expect(
+      element.shadowRoot?.querySelector('.email-verification')?.textContent
+    ).to.contain('Not verified');
+    (
+      element.shadowRoot?.querySelector(
+        '[data-testid="resend-verification"]'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.textContent?.includes(
+          'a new verification email is on its way'
+        )
+    );
+    const call = fetchStub
+      .getCalls()
+      .find((c) => String(c.args[0]).includes('/resend-verification'));
+    expect(JSON.parse(call?.args[1]?.body as string)).to.deep.equal({
+      email: 'alice@example.com',
+    });
+  });
+
+  it('shows rate limit errors and allows retrying', async () => {
+    fetchStub = createFetchStub({ resendStatus: 429 });
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.querySelector(
+          '[data-testid="resend-verification"]'
+        )
+    );
+    (
+      element.shadowRoot?.querySelector(
+        '[data-testid="resend-verification"]'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.textContent?.includes(
+          'Too many verification emails'
+        )
+    );
+    expect(
+      element.shadowRoot
+        ?.querySelector('[data-testid="resend-verification"]')
+        ?.hasAttribute('disabled')
+    ).to.be.false;
+  });
+
+  it('refreshes verification status after following the email link', async () => {
+    fetchStub = createFetchStub();
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.querySelector(
+          '[data-testid="refresh-verification"]'
+        )
+    );
+    fetchStub.restore();
+    fetchStub = createFetchStub({ verified: true });
+    (
+      element.shadowRoot?.querySelector(
+        '[data-testid="refresh-verification"]'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.textContent?.includes(
+          'Your email address is verified.'
+        )
+    );
+    expect(
+      element.shadowRoot?.querySelector('[data-testid="resend-verification"]')
+    ).not.to.exist;
+    expect(fetchStub.called).to.be.true;
   });
 });

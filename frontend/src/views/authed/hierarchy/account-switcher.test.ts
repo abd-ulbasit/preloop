@@ -306,6 +306,10 @@ describe('account-switcher', () => {
       el.shadowRoot!.querySelector('sl-dialog.new-account [role="alert"]')
         ?.textContent
     ).to.contain('Verify your email address');
+    expect(
+      el.shadowRoot!.querySelector('a[href="/console/settings/profile"]')
+        ?.textContent
+    ).to.contain('resend the email');
     expect(dialog.open).to.equal(true);
     expect(navigated).to.eql([]);
     expect(

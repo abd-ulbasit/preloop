@@ -24,7 +24,7 @@ Sign up, verify your email, and log in to the console.
 
 Preloop sends a message with the subject **"Verify your Preloop account"** from `hello@preloop.ai` (self-hosted: the address in `SMTP_FROM`). Click **Verify your email** in the message.
 
-If the message does not arrive, check your spam folder. Logging in with an unverified address shows a **Send a new verification email** button.
+If the message does not arrive, check your spam folder. When sign-in requires verification, the login page offers **Send a new verification email**. If you are already signed in, **Settings > Profile** shows your email verification status and offers **Resend verification email**. After opening the link in your email, click **Check verification status** to refresh it.
 
 ---
 

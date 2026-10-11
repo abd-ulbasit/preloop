@@ -185,7 +185,17 @@ export class AccountSwitcher extends LitElement {
         ></sl-input>
         ${
           this.createError
-            ? html`<p class="dialog-error" role="alert">${this.createError}</p>`
+            ? html`<p class="dialog-error" role="alert">${this.createError}</p>
+                ${
+                  this.createError.includes('Verify your email address')
+                    ? html`<p>
+                        <a href="/console/settings/profile"
+                          >Check email verification or resend the email in
+                          Profile settings</a
+                        >
+                      </p>`
+                    : nothing
+                }`
             : nothing
         }
       </form>
