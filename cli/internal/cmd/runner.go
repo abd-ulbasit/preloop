@@ -361,14 +361,21 @@ func loadOrRegisterRunner(
 		req["runner_id"] = existing.ID
 		var resumed runnerAPIRecord
 		if err := client.Post("/api/v1/runners/register", req, &resumed); err == nil && resumed.ID != "" {
-			existing.ID = resumed.ID
-			if resumed.Name != "" {
-				existing.Name = resumed.Name
-			}
-			if resumed.Token != "" {
-				existing.Token = resumed.Token
-			}
-			_ = writeRunnerState(existing)
+			// Re-read under the lock: a `dirs add` during the register
+			// request must survive this write.
+			_ = updateRunnerState(func(current *runnerState) error {
+				current.ID = resumed.ID
+				current.Name = existing.Name
+				if resumed.Name != "" {
+					current.Name = resumed.Name
+				}
+				current.Token = existing.Token
+				if resumed.Token != "" {
+					current.Token = resumed.Token
+				}
+				existing = current
+				return nil
+			})
 			runnerInventory.markSent(registeredInventoryHash(req))
 			return existing, nil
 		}
@@ -379,16 +386,16 @@ func loadOrRegisterRunner(
 	if err := client.Post("/api/v1/runners/register", req, &created); err != nil {
 		return nil, fmt.Errorf("register runner: %w", err)
 	}
-	state := &runnerState{ID: created.ID, Token: created.Token, Name: created.Name}
+	var state *runnerState
 	// Directories authorized before the first registration (or after a
 	// stale identity was discarded) belong to this host, not to the runner
-	// row, so they survive a fresh registration.
-	if previous, err := readRunnerState(); err == nil {
-		state.AuthorizedDirectories = previous.AuthorizedDirectories
-		// A fresh registration keeps the operator's harness switches.
-		state.Harnesses = previous.Harnesses
-	}
-	if err := writeRunnerState(state); err != nil {
+	// row, so they survive a fresh registration, as do the operator's
+	// harness switches.
+	if err := updateRunnerState(func(current *runnerState) error {
+		current.ID, current.Token, current.Name = created.ID, created.Token, created.Name
+		state = current
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	runnerInventory.markSent(registeredInventoryHash(req))
@@ -1317,6 +1324,44 @@ func readRunnerState() (*runnerState, error) {
 	return &state, nil
 }
 
+// updateRunnerState is a read-modify-write of runner.json under an
+// exclusive lock (runner.json.lock). Every writer that keeps fields it did
+// not change goes through it, so `preloop runner dirs`, a token rotation
+// and a registration cannot overwrite each other's change.
+func updateRunnerState(fn func(state *runnerState) error) (err error) {
+	path, err := runnerStatePath()
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := lockFile.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
+	if err = lockOperatorNoteFile(lockFile); err != nil {
+		return err
+	}
+	defer unlockOperatorNoteFile(lockFile) //nolint:errcheck
+	state, err := readRunnerState()
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		state = &runnerState{}
+	}
+	if err = fn(state); err != nil {
+		return err
+	}
+	return writeRunnerState(state)
+}
+
 func writeRunnerState(state *runnerState) error {
 	path, err := runnerStatePath()
 	if err != nil {
@@ -1524,8 +1569,15 @@ func rotateRunnerToken(client *api.Client, out io.Writer) error {
 	if rotated.Token == "" {
 		return errors.New("rotate runner token: the server returned no token")
 	}
-	state.Token = rotated.Token
-	if err := writeRunnerState(state); err != nil {
+	// Re-read under the lock: the state read before the request may be
+	// stale by now (a `dirs add` in between).
+	if err := updateRunnerState(func(current *runnerState) error {
+		if current.ID == "" {
+			current.ID, current.Name = state.ID, state.Name
+		}
+		current.Token = rotated.Token
+		return nil
+	}); err != nil {
 		// The old token is already dead, so say where the new one went.
 		return fmt.Errorf(
 			"the server rotated the token but writing runner.json failed: %w. "+
