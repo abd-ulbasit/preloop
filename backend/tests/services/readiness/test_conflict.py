@@ -17,8 +17,9 @@ async def docker_for_fixture() -> Any:
     """Docker-specific regressions skip only when their isolated runtime is absent."""
     try:
         docker = aiodocker.Docker()
-    except (AssertionError, OSError, ValueError):
-        # aiodocker asserts when no socket, context, or DOCKER_HOST exists.
+    except (AssertionError, aiodocker.DockerError, OSError, ValueError):
+        # aiodocker asserts when no socket, context, or DOCKER_HOST exists,
+        # and raises DockerError for an unusable or invalid Docker context.
         pytest.skip("Pinned local Docker readiness fixture runtime unavailable")
     try:
         await docker.system.info()
@@ -30,13 +31,21 @@ async def docker_for_fixture() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_missing_docker_daemon_skips(monkeypatch: Any) -> None:
-    """A host with no Docker daemon skips instead of failing the suite."""
+@pytest.mark.parametrize(
+    "constructor_error",
+    [AssertionError, aiodocker.DockerError, OSError, ValueError],
+)
+async def test_missing_docker_daemon_skips(
+    monkeypatch: Any, constructor_error: type[BaseException]
+) -> None:
+    """A host whose Docker client cannot be built skips instead of failing."""
 
-    def _no_daemon(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError
+    def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        if constructor_error is aiodocker.DockerError:
+            raise aiodocker.DockerError(0, "invalid docker context")
+        raise constructor_error()
 
-    monkeypatch.setattr(aiodocker, "Docker", _no_daemon)
+    monkeypatch.setattr(aiodocker, "Docker", _unavailable)
     with pytest.raises(pytest.skip.Exception):
         await docker_for_fixture()
 
