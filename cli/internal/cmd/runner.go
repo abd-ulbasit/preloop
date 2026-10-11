@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -1366,15 +1367,7 @@ func removeRunnerService() error {
 	case "linux":
 		return os.Remove(systemdUserUnitPath())
 	case "windows":
-		if err := exec.Command("schtasks", "/Delete", "/TN", "PreloopRunner", "/F").Run(); err != nil {
-			return err
-		}
-		if scriptPath, pathErr := windowsRunnerTaskScriptPath(); pathErr == nil {
-			if err := os.Remove(scriptPath); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-		}
-		return nil
+		return removeWindowsScheduledTask()
 	default:
 		return fmt.Errorf("service install is not implemented on %s", runtime.GOOS)
 	}
@@ -1389,7 +1382,8 @@ func runnerServiceIsInstalled() bool {
 		_, err := os.Stat(systemdUserUnitPath())
 		return err == nil
 	case "windows":
-		return exec.Command("schtasks", "/Query", "/TN", "PreloopRunner").Run() == nil
+		_, _, ok := findWindowsRunnerTask()
+		return ok
 	default:
 		return false
 	}
@@ -1658,6 +1652,17 @@ func windowsRunnerTaskScriptPath() (string, error) {
 	return filepath.Join(dir, "runner-task.ps1"), nil
 }
 
+// windowsRunnerTaskXMLPath is the task definition next to the launcher. It
+// stays on disk after registration so an administrator can register the
+// same task for this user when a policy blocks the user from doing it.
+func windowsRunnerTaskXMLPath() (string, error) {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "runner-task.xml"), nil
+}
+
 // windowsRunnerTaskScript renders the launcher. Paths are single-quoted for
 // PowerShell (embedded single quotes doubled), and *>> appends every output
 // stream to the log.
@@ -1668,9 +1673,48 @@ func windowsRunnerTaskScript(bin, logPath string) string {
 	return "& " + quote(bin) + " runner fg *>> " + quote(logPath) + "\n"
 }
 
-// writeWindowsScheduledTask registers a logon task for the current user.
-// Running as the user (not SYSTEM) keeps the operator's agent CLI logins
-// visible to host execution profiles.
+// windowsPowerShellPath is the Windows PowerShell the task runs; the full
+// path keeps the task independent of the PATH the Task Scheduler builds.
+func windowsPowerShellPath() string {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	return filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
+// Windows task hooks. Variables so tests drive enable, disable and status
+// without schtasks or a real user account.
+var (
+	// runWindowsSchtasks runs schtasks with args and returns its decoded
+	// combined output.
+	runWindowsSchtasks = func(args ...string) (string, error) {
+		raw, err := exec.Command("schtasks", args...).CombinedOutput()
+		return decodeWindowsTaskOutput(raw), err
+	}
+	// windowsLogonTaskIdentity is the principal (DOMAIN\user) the task runs
+	// as and the per-user task name.
+	windowsLogonTaskIdentity = func() (string, string) {
+		username := ""
+		if current, err := user.Current(); err == nil {
+			username = current.Username
+		}
+		if username == "" {
+			username = os.Getenv("USERNAME")
+		}
+		machine := os.Getenv("USERDOMAIN")
+		if machine == "" {
+			machine, _ = os.Hostname()
+		}
+		return windowsLogonTaskUser(username, machine)
+	}
+)
+
+// writeWindowsScheduledTask registers the logon task for the current user
+// from an XML definition (see runner_logon_task.go): a standard user can
+// do that without elevation, and the task runs as the user (not SYSTEM)
+// in the interactive session, so the operator's harness logins stay
+// visible to host execution and remote sessions.
 func writeWindowsScheduledTask(bin string, out io.Writer) error {
 	scriptPath, err := windowsRunnerTaskScriptPath()
 	if err != nil {
@@ -1684,26 +1728,104 @@ func writeWindowsScheduledTask(bin string, out io.Writer) error {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		return err
 	}
-	cmd := exec.Command(
-		"schtasks",
-		"/Create",
-		"/TN", "PreloopRunner",
-		"/TR", fmt.Sprintf(
-			`powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"`,
-			scriptPath,
-		),
-		"/SC", "ONLOGON",
-		"/RL", "LIMITED",
-		"/F",
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf(
-			"schtasks: %w (%s); creating a logon task may require an elevated prompt",
-			err, strings.TrimSpace(string(output)),
-		)
+	userID, taskName := windowsLogonTaskIdentity()
+	home, _ := os.UserHomeDir()
+	xmlPath, err := windowsRunnerTaskXMLPath()
+	if err != nil {
+		return err
 	}
-	fmt.Fprintf(out, "Installed scheduled task PreloopRunner (logs: %s)\n", logPath)
+	definition := windowsLogonTaskXML(windowsLogonTaskSpec{
+		Name:       taskName,
+		UserID:     userID,
+		PowerShell: windowsPowerShellPath(),
+		ScriptPath: scriptPath,
+		WorkingDir: home,
+	})
+	if err := os.WriteFile(xmlPath, encodeUTF16LEWithBOM(definition), 0o600); err != nil {
+		return err
+	}
+	output, err := runWindowsSchtasks("/Create", "/TN", taskName, "/XML", xmlPath, "/F")
+	if err != nil {
+		return windowsLogonTaskCreateError(taskName, xmlPath, output, err, windowsTaskCreationPolicy())
+	}
+	// A task registered by 0.17.0 under the shared name would start a second
+	// runner for this user at logon. Another user's task under that name is
+	// not ours to delete, and the attempt fails harmlessly.
+	if taskName != windowsLegacyLogonTaskName {
+		_, _ = runWindowsSchtasks("/Delete", "/TN", windowsLegacyLogonTaskName, "/F")
+	}
+	fmt.Fprintf(
+		out,
+		"Installed logon task %s for %s: runs in your interactive session without admin rights (logs: %s)\n",
+		taskName, userID, logPath,
+	)
 	return nil
+}
+
+// findWindowsRunnerTask locates this user's runner task: the per-user name
+// first, then the 0.17.0 shared name when its principal is this user (a
+// shared-name task owned by another user is not this runner).
+func findWindowsRunnerTask() (string, windowsTaskDefinition, bool) {
+	userID, taskName := windowsLogonTaskIdentity()
+	names := []string{taskName}
+	if taskName != windowsLegacyLogonTaskName {
+		names = append(names, windowsLegacyLogonTaskName)
+	}
+	for _, name := range names {
+		output, err := runWindowsSchtasks("/Query", "/TN", name, "/XML", "ONE")
+		if err != nil {
+			continue
+		}
+		def, err := parseWindowsTaskXML([]byte(output))
+		if err != nil {
+			// The task exists but the definition did not parse: it is still
+			// a task under our name.
+			def = windowsTaskDefinition{}
+		}
+		if name == windowsLegacyLogonTaskName && def.UserID != "" && !strings.EqualFold(def.UserID, userID) {
+			continue
+		}
+		return name, def, true
+	}
+	return taskName, windowsTaskDefinition{}, false
+}
+
+func removeWindowsScheduledTask() error {
+	name, _, found := findWindowsRunnerTask()
+	output, err := runWindowsSchtasks("/Delete", "/TN", name, "/F")
+	if err != nil && found {
+		err = fmt.Errorf("schtasks /Delete %s: %w (%s)", name, err, strings.TrimSpace(output))
+	}
+	if err != nil {
+		return err
+	}
+	for _, pathFn := range []func() (string, error){windowsRunnerTaskScriptPath, windowsRunnerTaskXMLPath} {
+		if path, pathErr := pathFn(); pathErr == nil {
+			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+				return removeErr
+			}
+		}
+	}
+	return nil
+}
+
+// windowsRunnerServiceState is the install: line on Windows plus the
+// context lines: which user and session the runner runs in, and what lock,
+// sign-out and a second user mean for it.
+func windowsRunnerServiceState() string {
+	name, def, found := findWindowsRunnerTask()
+	if !found {
+		return fmt.Sprintf("not installed (logon task %s; create it with preloop runner enable)", name)
+	}
+	status := ""
+	if output, err := runWindowsSchtasks("/Query", "/TN", name, "/FO", "CSV", "/NH"); err == nil {
+		status = windowsTaskStatusFromCSV(output)
+	}
+	first := "task " + name
+	if status != "" {
+		first += " (" + status + ")"
+	}
+	return strings.Join(append([]string{first}, windowsRunnerContextLines(name, def)...), "\n")
 }
 
 func runnerServiceControl(action string) error {
@@ -1726,14 +1848,22 @@ func runnerServiceControl(action string) error {
 			return exec.Command("systemctl", "--user", action, unit).Run()
 		}
 	case "windows":
+		name, _, _ := findWindowsRunnerTask()
+		run := func(verb string) error {
+			output, err := runWindowsSchtasks(verb, "/TN", name)
+			if err != nil {
+				return fmt.Errorf("schtasks %s %s: %w (%s)", verb, name, err, strings.TrimSpace(output))
+			}
+			return nil
+		}
 		switch action {
 		case "start":
-			return exec.Command("schtasks", "/Run", "/TN", "PreloopRunner").Run()
+			return run("/Run")
 		case "stop":
-			return exec.Command("schtasks", "/End", "/TN", "PreloopRunner").Run()
+			return run("/End")
 		case "restart":
-			_ = exec.Command("schtasks", "/End", "/TN", "PreloopRunner").Run()
-			return exec.Command("schtasks", "/Run", "/TN", "PreloopRunner").Run()
+			_ = run("/End")
+			return run("/Run")
 		}
 	}
 	return fmt.Errorf("service %s is not implemented on %s", action, runtime.GOOS)
@@ -1754,11 +1884,7 @@ func runnerServiceState() string {
 		}
 		return strings.TrimSpace(string(out))
 	case "windows":
-		out, err := exec.Command("schtasks", "/Query", "/TN", "PreloopRunner").CombinedOutput()
-		if err != nil {
-			return "not installed"
-		}
-		return strings.TrimSpace(string(out))
+		return windowsRunnerServiceState()
 	default:
 		return "unsupported"
 	}
