@@ -50,6 +50,13 @@ client = TestClient(app)
 # ============================================================================
 
 
+@pytest.fixture(autouse=True)
+def identity_crud(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from tests.auth_identity_support import mock_identity_crud
+
+    return mock_identity_crud(monkeypatch)
+
+
 @pytest.fixture
 def db_session_mock():
     from preloop.models.db.session import get_db_session
@@ -77,7 +84,7 @@ def db_session_mock():
 
 
 @pytest.fixture
-def mock_user():
+def mock_user(identity_crud):
     """Create a mock user with all required attributes."""
     user = MagicMock(spec=User)
     user.id = uuid.uuid4()
@@ -90,6 +97,7 @@ def mock_user():
     user.full_name = "Test User"
     user.email_verified = True
     user.auth_generation = 0
+    identity_crud.register_membership(user)
     return user
 
 
@@ -290,13 +298,15 @@ class TestPasswordValidation:
 
         assert verify_password("wrongpassword", hashed) is False
 
-    def test_password_change_wrong_current(self, db_session_mock):
+    def test_password_change_wrong_current(self, db_session_mock, identity_crud):
         """Test password change with wrong current password."""
         from preloop.api.auth.jwt import get_current_active_user
         from preloop.models.db.session import get_db_session
 
         mock_user = MagicMock(spec=User)
+        mock_user.id = uuid.uuid4()
         mock_user.hashed_password = get_password_hash("currentpassword")
+        identity_crud.register_membership(mock_user)
         mock_user.is_active = True
 
         app.dependency_overrides[get_current_active_user] = lambda: mock_user
@@ -1114,9 +1124,10 @@ class TestOnboardingFlows:
             assert first.status_code == 200
             # The successful claim clears the stored fingerprint in the same
             # update that sets the password.
-            assert (
-                mock_crud.update.call_args.kwargs["obj_in"]["onboarding_claim_hash"]
-                is None
+            mock_crud.consume_onboarding_claim.assert_called_once_with(
+                db_session_mock,
+                user_id=mock_user.id,
+                expected_hash=hash_onboarding_claim_token(token),
             )
 
             # Replay the identical link against the now-claimed account.
@@ -1185,12 +1196,14 @@ class TestOnboardingFlows:
             )
 
             assert response.status_code == 200
-            updates = mock_crud.update.call_args.kwargs["obj_in"]
+            from preloop.api.auth.router import crud_person
+
+            updates = crud_person.update_profile.call_args.kwargs["changes"]
 
         assert updates["full_name"] == "Bobbie Tables"
-        assert updates["email_verified"] is True
+        assert mock_user.email_verified is True
         assert updates["username"] == "newusername"
-        assert updates["hashed_password"] != "NEEDS_RESET"
+        assert mock_user.hashed_password != "NEEDS_RESET"
 
     def test_complete_onboarding_keeps_the_name_when_none_is_sent(
         self, db_session_mock
@@ -1214,7 +1227,9 @@ class TestOnboardingFlows:
             )
 
             assert response.status_code == 200
-            updates = mock_crud.update.call_args.kwargs["obj_in"]
+            from preloop.api.auth.router import crud_person
+
+            updates = crud_person.update_profile.call_args.kwargs["changes"]
 
         assert "full_name" not in updates
         assert "email_verified" not in updates
@@ -1288,7 +1303,7 @@ class TestOnboardingFlows:
             )
 
         assert response.status_code == 400
-        assert "Username is already taken" in response.json()["detail"]
+        assert "no longer valid" in response.json()["detail"]
 
     def test_complete_onboarding_keep_same_username(self, db_session_mock):
         """Test onboarding succeeds when keeping the same username."""
@@ -1346,7 +1361,14 @@ class TestEmailVerification:
         assert "Email verified successfully" in response.json()["message"]
         # Written through the CRUD layer, which is the only path allowed to
         # touch a row (and the only one the capacity hooks see).
-        assert mock_crud.update.call_args.kwargs["obj_in"] == {"email_verified": True}
+        from preloop.api.auth.router import crud_person
+
+        crud_person.verify_email.assert_called_once_with(
+            db_session_mock,
+            person_id=mock_user.person_id,
+            expected_email=mock_user.email,
+            expected_generation=0,
+        )
 
     def test_verify_email_invalid_token(self, db_session_mock):
         """Test email verification with invalid token."""
@@ -1377,8 +1399,8 @@ class TestEmailVerification:
                 json={"token": "valid_token"},
             )
 
-        assert response.status_code == 404
-        assert response.json()["detail"] == "User not found"
+        assert response.status_code == 400
+        assert "no longer valid" in response.json()["detail"]
 
 
 # ============================================================================
@@ -1396,7 +1418,7 @@ class TestPasswordReset:
         mock_user.email = "test@example.com"
 
         with (
-            patch("preloop.api.auth.router.crud_user") as mock_crud,
+            patch("preloop.api.auth.router.crud_person") as mock_crud,
             patch(
                 "preloop.api.auth.router.create_password_reset_token"
             ) as mock_create_token,
@@ -1405,6 +1427,8 @@ class TestPasswordReset:
             ) as mock_send_email,
         ):
             mock_user.username = "testuser"
+            mock_user.identity_status = "active"
+            mock_user.auth_generation = 0
             mock_crud.list_by_email.return_value = [mock_user]
             mock_create_token.return_value = "reset_token"
 
@@ -1416,7 +1440,7 @@ class TestPasswordReset:
         assert response.status_code == 200
         # The link is bound to the row, and the message names it.
         mock_create_token.assert_called_once_with(
-            "test@example.com", user_id=mock_user.id
+            "test@example.com", person_id=mock_user.id, auth_generation=0
         )
         mock_send_email.assert_called_once_with(
             user_email="test@example.com", token="reset_token", username="testuser"
@@ -1504,8 +1528,8 @@ class TestPasswordReset:
                 },
             )
 
-        assert response.status_code == 404
-        assert response.json()["detail"] == "User not found"
+        assert response.status_code == 400
+        assert "no longer valid" in response.json()["detail"]
 
 
 # ============================================================================

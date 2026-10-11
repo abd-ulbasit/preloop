@@ -23,6 +23,8 @@ from preloop.api.auth.jwt import (
 from preloop.api.auth.router import (
     _authenticate_user_sync,
     _person_for_token,
+    OnboardingRequest,
+    complete_onboarding,
     forgot_password,
     resend_verification,
     reset_password,
@@ -57,6 +59,8 @@ from preloop.utils.tokens import (
     TokenError,
     create_email_verification_token,
     create_password_reset_token,
+    create_onboarding_claim_token,
+    hash_onboarding_claim_token,
     verify_user_token,
 )
 
@@ -427,3 +431,43 @@ def test_password_reset_invalidates_outstanding_passkey_registration(
     assert (
         crud_webauthn_credential.list_for_person(db_session, person_id=person.id) == []
     )
+
+
+@pytest.mark.asyncio
+async def test_onboarding_claim_consumption_and_canonical_password_are_atomic(
+    db_session: Session,
+) -> None:
+    """A valid claim sets one canonical password and cannot be replayed."""
+    source, child = memberships(db_session)
+    person = crud_person.set_password(
+        db_session, person_id=source.person_id, hashed_password="NEEDS_RESET"
+    )
+    token = create_onboarding_claim_token(
+        email=person.email,
+        account_id=str(source.account_id),
+        checkout_session_id="synthetic-checkout",
+    )
+    crud_user.update(
+        db_session,
+        db_obj=source,
+        obj_in={"onboarding_claim_hash": hash_onboarding_claim_token(token)},
+    )
+    body = OnboardingRequest(
+        email=person.email,
+        username=f"claimed-{uuid.uuid4().hex}",
+        password=NEW_PASSWORD,
+        full_name="Claimed Person",
+        claim_token=token,
+    )
+    result = await complete_onboarding(body, db_session)
+    assert result["access_token"] and result["refresh_token"]
+    db_session.refresh(source)
+    assert source.onboarding_claim_hash is None
+    person = crud_person.credential_owner(db_session, membership_id=child.id)
+    assert person.username == body.username and person.full_name == "Claimed Person"
+    assert person.email_verified_at is not None
+    assert verify_password(NEW_PASSWORD, person.hashed_password)
+    assert child.hashed_password is None
+    with pytest.raises(HTTPException) as replay:
+        await complete_onboarding(body, db_session)
+    assert replay.value.status_code == 400

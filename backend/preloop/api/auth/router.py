@@ -2344,11 +2344,8 @@ async def complete_onboarding(
             changes=profile_changes,
             commit=False,
         )
-        crud_user.update(
-            session,
-            db_obj=user,
-            obj_in={"onboarding_claim_hash": None},
-            commit=False,
+        crud_user.consume_onboarding_claim(
+            session, user_id=user.id, expected_hash=stored_hash
         )
         crud_person.set_password(
             session,
