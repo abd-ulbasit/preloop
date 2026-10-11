@@ -470,10 +470,10 @@ func isVolumeRoot(path string) bool {
 
 // secretHomeDirs are directories below the home directory that hold
 // credentials (keys, cloud CLI tokens, OS secret stores, harness logins);
-// extend it when a new credential store becomes common: the Preloop config directory (runner.json with the runner
-// token, config.yaml with the user's OAuth tokens) is checked separately
-// because it can be moved. A harness session must never be pointed at them,
-// not even read_only.
+// extend the list when a new credential store becomes common. The Preloop
+// config directory (runner.json with the runner token, config.yaml with the
+// user's OAuth tokens) is checked separately because it can be moved. A
+// harness session must never be pointed at them, not even read_only.
 var secretHomeDirs = []string{
 	// Keys and signing.
 	".ssh", ".gnupg",
