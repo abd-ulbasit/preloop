@@ -58,7 +58,9 @@ func TestEnsureDiscoveredRemoteServersWarnsOnUnhealthyImports(t *testing.T) {
 }
 
 func TestImportedMCPServerWarningDoesNotWarnForHealthyServer(t *testing.T) {
-	if warning := importedMCPServerWarning("example", mcpServerResponse{Status: "active"}); warning != "" {
-		t.Fatalf("healthy server warning: %q", warning)
+	for _, lastError := range []string{"", "historical tool transport failure"} {
+		if warning := importedMCPServerWarning("example", mcpServerResponse{Status: "active", LastError: lastError}); warning != "" {
+			t.Fatalf("healthy server with historical error %q warned: %q", lastError, warning)
+		}
 	}
 }

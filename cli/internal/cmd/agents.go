@@ -5164,7 +5164,7 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 // importedMCPServerWarning distinguishes registration from a usable connection.
 // Do not echo last_error: older servers can store raw credential-bearing URLs.
 func importedMCPServerWarning(name string, server mcpServerResponse) string {
-	if server.Status == "error" || server.LastError != "" {
+	if server.Status == "error" || (server.Status != "active" && server.LastError != "") {
 		return fmt.Sprintf("MCP server %q is registered, but Preloop could not connect or discover its tools. Check connectivity and authentication in the console, then rescan. Localhost servers must be reachable from the Preloop host; locally cached sign-ins may require reconnecting in Preloop.", name)
 	}
 	return ""
