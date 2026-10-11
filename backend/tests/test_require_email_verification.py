@@ -15,6 +15,7 @@ the person setting the password is the person who completed it.
 """
 
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException, status
@@ -65,11 +66,12 @@ def _clean_rate_limit():
 
 
 @pytest.fixture
-def anon_client(db_session: Session) -> TestClient:
+def anon_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """A client with no authenticated user: these endpoints are anonymous."""
     from preloop.api.app import create_app
     from preloop.models.db.session import get_db_session
 
+    monkeypatch.setattr("preloop.api.auth.router.send_verification_email", MagicMock())
     app = create_app()
     app.dependency_overrides[get_db_session] = lambda: db_session
     with TestClient(app) as client:
