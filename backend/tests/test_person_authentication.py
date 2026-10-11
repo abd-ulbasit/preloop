@@ -379,3 +379,19 @@ def test_passkey_signin_survives_origin_membership_removal(
             req,
             db_session,
         )
+
+
+def test_login_selection_prefers_history_then_primary_over_iteration_order(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Equal creation timestamps cannot change the default landing membership."""
+    source, child = memberships(db_session, verified=True)
+    person = crud_person.resolve_for_membership(db_session, membership_id=source.id)
+    monkeypatch.setattr(
+        crud_person, "list_memberships", lambda db, *, person_id: [child, source]
+    )
+    assert login_membership(db_session, person).id == source.id
+    person.last_active_user_id = child.id
+    assert login_membership(db_session, person).id == child.id
+    child.is_active = False
+    assert login_membership(db_session, person).id == source.id

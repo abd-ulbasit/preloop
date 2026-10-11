@@ -47,6 +47,9 @@ def login_membership(db: Session, person: models.Person) -> models.User | None:
     for candidate in candidates:
         if candidate.id == person.last_active_user_id:
             return candidate
+    for candidate in candidates:
+        if candidate.id == person.primary_user_id:
+            return candidate
     return candidates[0] if candidates else None
 
 
