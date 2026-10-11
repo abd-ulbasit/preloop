@@ -68,6 +68,7 @@ from .attention_dismissal import (
     CRUDAttentionDismissal,
     crud_attention_dismissal,
 )
+from . import audit_outbox as crud_audit_outbox
 from .audit_log import CRUDAuditLog
 from .base import CRUDBase
 from .budget import (
@@ -367,6 +368,7 @@ __all__ = [
     "crud_gateway_identity_provider",
     "crud_api_usage",
     "crud_audit_log",
+    "crud_audit_outbox",
     "crud_comment",
     "crud_ai_model",
     "crud_secret_reference",
