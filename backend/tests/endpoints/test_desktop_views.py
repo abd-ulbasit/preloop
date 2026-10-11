@@ -362,7 +362,10 @@ class Harness:
         self.db.expire_all()
         return (
             self.db.query(models.AuditLog)
-            .filter(models.AuditLog.action == action)
+            .filter(
+                models.AuditLog.action == action,
+                models.AuditLog.account_id == self.user.account_id,
+            )
             .order_by(models.AuditLog.timestamp)
             .all()
         )
