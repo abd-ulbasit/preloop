@@ -334,3 +334,25 @@ def test_new_linked_membership_cannot_introduce_credentials(db_session):
         with pytest.raises(ValueError, match="cannot introduce"):
             db_session.flush()
         db_session.expunge(second)
+
+
+def test_audit_transaction_enforces_read_only_database_access(db_engine):
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.orm import Session
+
+    with Session(db_engine, autoflush=False) as db:
+        report = crud_person.audit(db, read_only=True)
+        assert {
+            "memberships",
+            "passkeys",
+            "provider_links",
+            "retained_without_memberships",
+        } <= report.keys()
+        with pytest.raises(DBAPIError, match="read-only"):
+            db.execute(
+                text(
+                    "INSERT INTO person(id,email_normalized) VALUES (gen_random_uuid(),'readonly@example.com')"
+                )
+            )
+        db.rollback()

@@ -217,3 +217,42 @@ def test_competing_membership_credentials_are_preserved_but_quarantined(
         ).scalars()
     )
     assert preserved == {"primary-hash", "unproven-membership-hash"}
+
+
+def test_canonical_username_conflict_is_quarantined_without_aborting(
+    db_session: Session,
+) -> None:
+    from preloop.models import models
+
+    accounts = [models.Account(organization_name="Example") for _ in range(2)]
+    db_session.add_all(accounts)
+    db_session.flush()
+    source = models.User(
+        account_id=accounts[0].id,
+        username=uuid.uuid4().hex,
+        email="source@example.com",
+        hashed_password="source-hash",
+    )
+    existing = models.User(
+        account_id=accounts[1].id,
+        username=uuid.uuid4().hex,
+        email="existing@example.com",
+    )
+    db_session.add_all([source, existing])
+    db_session.flush()
+    supplied_username = source.username
+    source.person.username = None
+    source.person.email = None
+    source.person.hashed_password = None
+    db_session.flush()
+    existing.person.username = supplied_username
+    db_session.flush()
+    with Operations.context(MigrationContext.configure(db_session.connection())):
+        _revision("20261012_identity_backfill").upgrade()
+    db_session.expire_all()
+    assert source.person.identity_status == "quarantined"
+    assert (
+        source.person.migration_conflict
+        == "canonical_username_claimed_by_another_person"
+    )
+    assert existing.person.username == supplied_username

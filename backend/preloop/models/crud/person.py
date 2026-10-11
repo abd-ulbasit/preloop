@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, TypeVar, TypedDict, cast
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -505,19 +505,47 @@ class CRUDPerson:
             db.execute(text("SET TRANSACTION READ ONLY"))
         with db.no_autoflush:
             people = list(db.scalars(select(models.Person)))
-        conflicts = [
-            {
-                "person_id": str(p.id),
-                "reason": p.migration_conflict or "missing_canonical_profile",
+            counts = {
+                "memberships": db.scalar(select(func.count()).select_from(models.User)),
+                "passkeys": db.scalar(
+                    select(func.count()).select_from(models.WebAuthnCredential)
+                ),
+                "provider_links": db.scalar(
+                    select(func.count()).select_from(models.PersonAuthIdentity)
+                ),
+                "preserved_password_records": db.scalar(
+                    select(func.count()).select_from(models.PersonPasswordCredential)
+                ),
+                "retained_without_memberships": db.scalar(
+                    select(func.count())
+                    .select_from(models.Person)
+                    .where(
+                        ~select(models.User.id)
+                        .where(models.User.person_id == models.Person.id)
+                        .exists()
+                    )
+                ),
             }
-            for p in people
-            if p.identity_status == "quarantined" or not p.username or not p.email
-        ]
+        conflicts = []
+        for person in people:
+            reason = person.migration_conflict
+            if not reason and (not person.username or not person.email):
+                reason = "missing_canonical_profile"
+            if not reason and normalize_email(person.email) != person.email_normalized:
+                reason = "canonical_email_normalization_mismatch"
+            if reason or person.identity_status == "quarantined":
+                conflicts.append(
+                    {
+                        "person_id": str(person.id),
+                        "reason": reason or "quarantined_without_reason",
+                    }
+                )
         return {
             "persons": len(people),
             "ready": len(people) - len(conflicts),
-            "quarantined": len(conflicts),
+            "quarantined": sum(p.identity_status == "quarantined" for p in people),
             "conflicts": conflicts,
+            **counts,
         }
 
 

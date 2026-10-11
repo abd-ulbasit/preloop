@@ -86,6 +86,14 @@ def upgrade() -> None:
             rows[0] if rows else None,
         )
         if primary is not None:
+            existing_name_owner = bind.execute(
+                sa.text(
+                    "SELECT id FROM person WHERE username=:name AND id<>:person_id"
+                ),
+                {"name": primary["username"], "person_id": person["id"]},
+            ).first()
+            if existing_name_owner is not None:
+                reasons.append("canonical_username_claimed_by_another_person")
             if any(
                 r["id"] != primary["id"]
                 and r["hashed_password"]
