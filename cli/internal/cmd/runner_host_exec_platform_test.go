@@ -42,43 +42,62 @@ func TestHostExecBinaryBaseStripsWindowsExtensions(t *testing.T) {
 func TestRuntimeExecutableFallbackPathsPerOS(t *testing.T) {
 	home := filepath.Join("home", "jane")
 	appData := filepath.Join(home, "AppData", "Roaming")
+	localAppData := filepath.Join(home, "AppData", "Local")
 	cases := []struct {
-		goos    string
-		appData string
-		command string
-		want    []string
-		absent  []string
+		goos         string
+		appData      string
+		localAppData string
+		command      string
+		want         []string
+		absent       []string
 	}{
 		{
-			goos:    "windows",
-			appData: appData,
-			command: "copilot",
+			// The logon task starts the runner with the registry PATH, not
+			// the shell profile's, so every per-user install location is
+			// tried explicitly: npm global, winget portable links, pnpm,
+			// Volta, the Copilot standalone install, ~/.local/bin, scoop.
+			goos:         "windows",
+			appData:      appData,
+			localAppData: localAppData,
+			command:      "copilot",
 			want: []string{
 				filepath.Join(appData, "npm", "copilot.exe"),
 				filepath.Join(appData, "npm", "copilot.cmd"),
+				filepath.Join(localAppData, "Microsoft", "WinGet", "Links", "copilot.exe"),
+				filepath.Join(localAppData, "pnpm", "copilot.cmd"),
+				filepath.Join(localAppData, "Volta", "bin", "copilot.exe"),
 				filepath.Join(home, ".copilot", "bin", "copilot.exe"),
 				filepath.Join(home, ".local", "bin", "copilot.exe"),
+				filepath.Join(home, "scoop", "shims", "copilot.exe"),
 			},
 		},
 		{
 			// A command that already names a runnable extension is not
 			// expanded again.
-			goos:    "windows",
-			appData: appData,
-			command: "cursor-agent.cmd",
+			goos:         "windows",
+			appData:      appData,
+			localAppData: localAppData,
+			command:      "cursor-agent.cmd",
 			want: []string{
 				filepath.Join(appData, "npm", "cursor-agent.cmd"),
+				filepath.Join(localAppData, "Microsoft", "WinGet", "Links", "cursor-agent.cmd"),
 			},
 			absent: []string{
 				filepath.Join(appData, "npm", "cursor-agent.cmd.exe"),
 			},
 		},
 		{
-			// No APPDATA still searches the user-profile locations.
+			// No APPDATA or LOCALAPPDATA still searches the user-profile
+			// locations and never produces a relative candidate.
 			goos:    "windows",
 			command: "copilot",
 			want: []string{
 				filepath.Join(home, ".copilot", "bin", "copilot.exe"),
+				filepath.Join(home, ".local", "bin", "copilot.exe"),
+			},
+			absent: []string{
+				filepath.Join("npm", "copilot.exe"),
+				filepath.Join("Microsoft", "WinGet", "Links", "copilot.exe"),
 			},
 		},
 		{
@@ -110,7 +129,7 @@ func TestRuntimeExecutableFallbackPathsPerOS(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		got := runtimeExecutableFallbackPathsFor(tc.goos, home, tc.appData, tc.command)
+		got := runtimeExecutableFallbackPathsFor(tc.goos, home, tc.appData, tc.localAppData, tc.command)
 		listed := strings.Join(got, "\n")
 		for _, want := range tc.want {
 			if !contains(got, want) {
@@ -139,10 +158,24 @@ func TestHostExecSystemSearchDirs(t *testing.T) {
 	if !contains(darwin, "/opt/homebrew/bin") || !contains(darwin, "/usr/local/bin") {
 		t.Fatalf("darwin dirs = %v", darwin)
 	}
-	for _, goos := range []string{"linux", "windows"} {
-		if got := hostExecSystemSearchDirs(goos); len(got) != 0 {
-			t.Fatalf("%s dirs = %v, want none", goos, got)
-		}
+	if got := hostExecSystemSearchDirs("linux"); len(got) != 0 {
+		t.Fatalf("linux dirs = %v, want none", got)
+	}
+	// Windows: the Node.js MSI prefix (node.exe for unwrapping npm shims)
+	// and the nvm-windows symlink, from the environment the runner has.
+	env := map[string]string{
+		"ProgramFiles": `C:\Program Files`,
+		"NVM_SYMLINK":  `C:\nvm4w\nodejs`,
+	}
+	got := hostExecSystemSearchDirsFor("windows", func(name string) string { return env[name] })
+	if !contains(got, filepath.Join(`C:\Program Files`, "nodejs")) || !contains(got, `C:\nvm4w\nodejs`) {
+		t.Fatalf("windows dirs = %v", got)
+	}
+	if got := hostExecSystemSearchDirsFor("windows", func(string) string { return "" }); len(got) != 0 {
+		t.Fatalf("windows dirs without the variables = %v, want none", got)
+	}
+	if got := hostExecSystemSearchDirsFor("darwin", func(string) string { return "" }); !contains(got, "/opt/homebrew/bin") {
+		t.Fatalf("darwin dirs via For = %v", got)
 	}
 }
 
@@ -526,11 +559,28 @@ func TestResolveWindowsCmdShimCommandPrefersBundledNode(t *testing.T) {
 // host-exec-only search directories, which the PATH override cannot hide.
 func nodeOnSystemSearchDirs() bool {
 	for _, dir := range hostExecSystemSearchDirs(runtime.GOOS) {
-		if _, err := os.Stat(filepath.Join(dir, "node")); err == nil {
-			return true
+		for _, candidate := range systemSearchCandidates(runtime.GOOS, dir, "node") {
+			if _, err := os.Stat(candidate); err == nil {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func TestSystemSearchCandidatesExpandWindowsExtensions(t *testing.T) {
+	got := systemSearchCandidates("windows", `C:\Program Files\nodejs`, "node")
+	if !contains(got, filepath.Join(`C:\Program Files\nodejs`, "node.exe")) ||
+		!contains(got, filepath.Join(`C:\Program Files\nodejs`, "node.cmd")) {
+		t.Fatalf("windows candidates = %v", got)
+	}
+	if got := systemSearchCandidates("windows", `C:\x`, "node.exe"); len(got) != 1 {
+		t.Fatalf("explicit extension expanded again: %v", got)
+	}
+	if got := systemSearchCandidates("darwin", "/opt/homebrew/bin", "node"); len(got) != 1 ||
+		got[0] != filepath.Join("/opt/homebrew/bin", "node") {
+		t.Fatalf("posix candidates = %v", got)
+	}
 }
 
 func TestHostExecExecutableShapeError(t *testing.T) {

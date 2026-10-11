@@ -793,6 +793,7 @@ func cloneJobWithPrompt(job map[string]any, prompt string) map[string]any {
 func runnerHeartbeatMessage(concurrency int) map[string]any {
 	msg := publicationHeartbeat()
 	msg["host_exec_profiles"] = hostExecAdvertisements()
+	msg["authorized_directories"] = authorizedDirectoryAdvertisements()
 	runnerInventory.addToHeartbeat(msg)
 	// Re-assert ephemeral on every handshake and heartbeat. Registration
 	// already set it, but a row that predates the flag (or a reconnect to a
