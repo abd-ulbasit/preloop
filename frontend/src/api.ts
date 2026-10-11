@@ -3961,20 +3961,7 @@ export async function getAIModels(): Promise<AIModel[]> {
   if (!response.ok) {
     throw new Error('Failed to fetch AI models');
   }
-  const models: AIModel[] = await response.json();
-  return models.map(withUnpricedBadge);
-}
-
-export const UNPRICED_BADGE = '(unpriced)';
-
-/**
- * Badge a hosted model the operator has not priced. The server only returns
- * these rows to platform admins; marking the name keeps every picker honest
- * without each one knowing about tariffs.
- */
-export function withUnpricedBadge(model: AIModel): AIModel {
-  if (!model.unpriced || model.name.endsWith(UNPRICED_BADGE)) return model;
-  return { ...model, name: `${model.name} ${UNPRICED_BADGE}` };
+  return response.json();
 }
 
 export async function getAIModel(modelId: string): Promise<AIModel> {

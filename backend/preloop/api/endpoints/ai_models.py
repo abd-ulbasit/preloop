@@ -288,7 +288,9 @@ def list_ai_models(
         db, account_id=current_user.account_id, resource_type="ai_model"
     )
     visible = filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*models, *shared])
-    return _apply_tariff_visibility(visible, is_admin=bool(current_user.is_superuser))
+    return _apply_tariff_visibility(
+        visible, is_admin=getattr(current_user, "is_superuser", False) is True
+    )
 
 
 def _apply_tariff_visibility(

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from preloop.api.endpoints.ai_models import _apply_tariff_visibility
 from preloop.models import models
@@ -87,3 +90,44 @@ def test_admin_list_keeps_unpriced_rows_marked() -> None:
     assert rows[1].unpriced is True
     assert rows[1].id == unpriced.id
     assert AIModelRead.model_validate(priced).unpriced is False
+
+
+def test_hook_failure_fails_open() -> None:
+    meter = MagicMock()
+    meter.selectable.side_effect = RuntimeError("ledger down")
+    with _with_meter(meter):
+        assert hosted_model_selectable(_hosted(False))
+
+
+@pytest.mark.parametrize("superuser", [False, True])
+def test_list_endpoint_applies_tariff_visibility(superuser: bool, mocker) -> None:
+    from fastapi.testclient import TestClient
+
+    from preloop.api.app import create_app
+    from preloop.api.auth import get_current_active_user
+    from preloop.models.db.session import get_db_session
+
+    priced, unpriced = _hosted(True), _hosted(False)
+    priced.name, unpriced.name = "Priced", "Unpriced"
+    for m in (priced, unpriced):
+        m.created_at = m.updated_at
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_by_account.return_value = [priced, unpriced]
+    mocker.patch(
+        "preloop.models.crud.resource_share.crud_resource_share.public_list",
+        return_value=[],
+    )
+    user = SimpleNamespace(
+        id=uuid4(), account_id=uuid4(), is_superuser=superuser, permissions=None
+    )
+    app = create_app()
+    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_current_active_user] = lambda: user
+    with _with_meter(_meter()):
+        res = TestClient(app).get("/api/v1/ai-models")
+    assert res.status_code == 200, res.text
+    rows = {r["name"]: r["unpriced"] for r in res.json()}
+    if superuser:
+        assert rows == {"Priced": False, "Unpriced": True}
+    else:
+        assert rows == {"Priced": False}

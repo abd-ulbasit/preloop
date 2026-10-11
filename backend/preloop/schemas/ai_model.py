@@ -350,9 +350,9 @@ class AIModelInDBBase(BaseModel):
     unpriced: bool = Field(
         False,
         description=(
-            "Deployment-provided hosted model with no verified operator "
-            "tariff. Only returned to platform admins; hidden from everyone "
-            "else because requests to it are refused."
+            "True only in the platform-admin list response, for a "
+            "deployment-provided hosted model with no verified operator "
+            "tariff; such rows are omitted for everyone else."
         ),
     )
     credentials_status: Optional[str] = Field(
