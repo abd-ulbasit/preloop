@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import (
     APIRouter,
@@ -546,6 +546,39 @@ def list_ai_model_interactions(
     )
 
 
+# Same key the gateway reads (openai_gateway.CODEX_UPSTREAM_WS_ACCOUNT_SETTING).
+CODEX_UPSTREAM_WS_SETTING = "codex_upstream_websocket"
+
+
+def _apply_codex_ws_override(db_model: Any, obj_in: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold ``codex_upstream_websocket`` into ``meta_data`` (#1524).
+
+    The flag merges into the meta_data being written (the request's, or the
+    stored one when the request carries none), so setting it never drops
+    other keys such as the gateway block. ``None`` removes the override.
+    """
+    obj_in = dict(obj_in)
+    value = obj_in.pop("codex_upstream_websocket")
+    provider = (
+        str(obj_in.get("provider_name") or db_model.provider_name or "").strip().lower()
+    )
+    if provider != "openai-codex" and value is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="codex_upstream_websocket applies only to openai-codex models",
+        )
+    base = obj_in.get("meta_data")
+    if not isinstance(base, dict):
+        base = db_model.meta_data if isinstance(db_model.meta_data, dict) else {}
+    meta = dict(base)
+    if value is None:
+        meta.pop(CODEX_UPSTREAM_WS_SETTING, None)
+    else:
+        meta[CODEX_UPSTREAM_WS_SETTING] = value
+    obj_in["meta_data"] = meta
+    return obj_in
+
+
 @router.put(
     "/ai-models/{model_id}",
     response_model=AIModelRead,
@@ -564,11 +597,14 @@ def update_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
 
+    obj_in = ai_model_in.dict(exclude_unset=True)
+    if "codex_upstream_websocket" in obj_in:
+        obj_in = _apply_codex_ws_override(db_model, obj_in)
     try:
         updated_model = crud_ai_model.update(
             db=db,
             db_obj=db_model,
-            obj_in=ai_model_in.dict(exclude_unset=True),
+            obj_in=obj_in,
         )
     except ValueError as exc:
         raise HTTPException(

@@ -20298,6 +20298,16 @@ components:
             type: object
           - type: 'null'
           title: Meta Data
+        codex_upstream_websocket:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Codex Upstream Websocket
+          description: 'openai-codex models only: per-model override for the Codex
+            upstream WebSocket transport, stored as meta_data.codex_upstream_websocket.
+            true/false wins over the account override and the global CODEX_UPSTREAM_WEBSOCKET
+            setting; null removes the override. Merged into the stored meta_data,
+            so other keys are kept.'
       type: object
       title: AIModelUpdate
       description: Schema for updating an existing AIModel entry. All fields are optional.
@@ -30762,6 +30772,25 @@ components:
             - absent
           - type: 'null'
           title: Cache Detail Source
+        transport:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Transport
+        ws_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ws Mode
+        ws_override_source:
+          anyOf:
+          - type: string
+            enum:
+            - model
+            - account
+            - global
+          - type: 'null'
+          title: Ws Override Source
         excerpt:
           type: string
           title: Excerpt
