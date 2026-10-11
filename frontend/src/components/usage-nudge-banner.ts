@@ -183,7 +183,15 @@ export class UsageNudgeBanner extends LitElement {
           (nudge) => html`
             <div class="row" data-nudge=${nudge.key}>
               <span class="icon" aria-hidden="true">&#9432;</span>
-              <span class="message">${nudgeMessage(nudge)}</span>
+              <span
+                class="message"
+                title=${
+                  nudge.key === 'byok_ingest_tokens_monthly'
+                    ? 'Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running.'
+                    : ''
+                }
+                >${nudgeMessage(nudge)}</span
+              >
               <a class="plans" href=${nudgeLink(nudge.key)}>See plans</a>
               <button
                 class="dismiss"

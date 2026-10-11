@@ -202,7 +202,11 @@ export class BillingSubscriptionDetails extends LitElement {
     return html`
       <div class="card">
         <div class="current-row">
-          <span class="plan-name">Analysis quota</span>
+          <span
+            class="plan-name"
+            title="Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running."
+            >Analysis quota</span
+          >
           <span class="quota-figures">
             ${this._formatTokens(quota.used_tokens)} of
             ${this._formatTokens(quota.quota_tokens)} tokens

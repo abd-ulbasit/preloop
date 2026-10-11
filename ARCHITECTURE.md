@@ -583,3 +583,11 @@ connection waits. Unsupported routes, builtin tools and asynchronous approval
 replay deny. Legacy authentication and upstream grant introspection keep their
 existing behavior. Real concurrency regressions use independent transactions and
 private schemas in the isolated CI PostgreSQL database.
+
+Optional deployments may register `analytics_detail_policy` to reduce derived
+gateway analytics after a monthly quota is exhausted. The post-response path
+keeps token/cost accounting, audit and session activity, marks affected rows
+with `meta_data.ingest_degraded`, and omits content search, content-derived
+summaries and tool enrichment. LLM session optimization falls back to its
+deterministic analyzers. With no registered policy, OSS retains full detail.
+The policy never changes forwarded requests or governance decisions.

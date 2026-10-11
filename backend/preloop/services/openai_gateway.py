@@ -10675,6 +10675,13 @@ class OpenAIGatewayService:
             api_equivalent_cost = estimated_cost
             estimated_cost = 0.0
             cost_source = "subscription"
+        from preloop.services.analytics_detail_policy import (
+            should_degrade_gateway_analytics,
+        )
+
+        ingest_degraded = not model_billing_is_hosted(ai_model) and (
+            should_degrade_gateway_analytics(self.db, str(self.auth_context.account_id))
+        )
         gateway_subject = getattr(self.auth_context, "gateway_subject", None)
         usage_row = crud_api_usage.log_gateway_request(
             self.db,
@@ -10766,7 +10773,8 @@ class OpenAIGatewayService:
                     if self._last_context_optimization
                     else None
                 ),
-                "tools_meta": self._last_tools_meta,
+                "tools_meta": None if ingest_degraded else self._last_tools_meta,
+                "ingest_degraded": ingest_degraded,
                 "upstream_credential_type": self._last_upstream_credential_type,
                 "rate_limit": rate_limit_meta,
                 "purpose": ((request_payload or {}).get("metadata") or {}).get(
@@ -10930,8 +10938,8 @@ class OpenAIGatewayService:
         try:
             ModelGatewayEventEmitter(self.db).emit_for_usage(
                 usage=usage_row,
-                request_payload=request_payload,
-                response_payload=response_payload,
+                request_payload=None if ingest_degraded else request_payload,
+                response_payload=None if ingest_degraded else response_payload,
             )
         except Exception as exc:
             # Bookkeeping must never turn a successful model call into a 502.
@@ -10941,41 +10949,42 @@ class OpenAIGatewayService:
             # request. Log the exception TYPE only; the payload that triggered
             # this can contain customer content.
             self._rollback_activity_recording(exc, context="gateway activity event")
-        try:
-            # Build the bounded document here, write it elsewhere. Building
-            # reads the payloads once and keeps none of them, so the bodies
-            # of a large response stop being referenced by indexing as soon
-            # as this returns; the database write happens on the queue's own
-            # worker with its own session (issue #670).
-            index_document = GatewayUsageSearchService().build_index_document(
+        if not ingest_degraded:
+            try:
+                # Build the bounded document here, write it elsewhere. Building
+                # reads the payloads once and keeps none of them, so the bodies
+                # of a large response stop being referenced by indexing as soon
+                # as this returns; the database write happens on the queue's own
+                # worker with its own session (issue #670).
+                index_document = GatewayUsageSearchService().build_index_document(
+                    usage=usage_row,
+                    request_payload=request_payload,
+                    response_payload=response_payload,
+                )
+                if index_document is not None:
+                    get_gateway_usage_index_queue().submit(index_document)
+            except Exception:
+                logger.exception(
+                    "Automatic gateway interaction indexing failed for usage %s",
+                    usage_row.id,
+                )
+            # Session search corpus. Separate from the gateway document above: it
+            # is chunked, session scoped and has its own kill switch. The write is
+            # inline on this request's session (commit=True) on purpose: the
+            # chunks share a transaction boundary with the usage row that was
+            # just recorded, and a queue worker would need a second session plus
+            # a copy of the already-derived text. That is the opposite of the
+            # gateway document path (#670/#686), which builds here and writes on
+            # a worker so indexing costs the request nothing but a submit. The
+            # writer swallows its own failures, so there is nothing to catch
+            # here.
+            index_gateway_interaction(
+                self.db,
                 usage=usage_row,
                 request_payload=request_payload,
                 response_payload=response_payload,
+                commit=True,
             )
-            if index_document is not None:
-                get_gateway_usage_index_queue().submit(index_document)
-        except Exception:
-            logger.exception(
-                "Automatic gateway interaction indexing failed for usage %s",
-                usage_row.id,
-            )
-        # Session search corpus. Separate from the gateway document above: it
-        # is chunked, session scoped and has its own kill switch. The write is
-        # inline on this request's session (commit=True) on purpose: the
-        # chunks share a transaction boundary with the usage row that was
-        # just recorded, and a queue worker would need a second session plus
-        # a copy of the already-derived text. That is the opposite of the
-        # gateway document path (#670/#686), which builds here and writes on
-        # a worker so indexing costs the request nothing but a submit. The
-        # writer swallows its own failures, so there is nothing to catch
-        # here.
-        index_gateway_interaction(
-            self.db,
-            usage=usage_row,
-            request_payload=request_payload,
-            response_payload=response_payload,
-            commit=True,
-        )
         try:
             runtime_session = None
             if usage_row.runtime_session_id:
@@ -10988,13 +10997,14 @@ class OpenAIGatewayService:
                     commit=True,
                 )
                 if runtime_session is not None:
-                    self._maybe_refresh_runtime_session_summary(
-                        runtime_session=runtime_session,
-                        usage=usage_row,
-                        request_payload=request_payload,
-                        response_payload=response_payload,
-                        observed_at=observed_at,
-                    )
+                    if not ingest_degraded:
+                        self._maybe_refresh_runtime_session_summary(
+                            runtime_session=runtime_session,
+                            usage=usage_row,
+                            request_payload=request_payload,
+                            response_payload=response_payload,
+                            observed_at=observed_at,
+                        )
                     emit_account_event(
                         build_account_event(
                             account_id=str(self.auth_context.account_id),

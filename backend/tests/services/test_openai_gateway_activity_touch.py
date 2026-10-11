@@ -228,7 +228,10 @@ def test_runtime_session_summary_skips_recent_refresh():
     service.db.execute.assert_not_called()
 
 
-def test_gateway_request_recording_survives_activity_touch_timeout():
+@pytest.mark.parametrize(
+    "degraded,hosted", [(False, False), (True, False), (True, True)]
+)
+def test_gateway_request_recording_survives_activity_touch_timeout(degraded, hosted):
     """A best-effort runtime-session touch must not fail a logged gateway request."""
     account_id = uuid4()
     user_id = uuid4()
@@ -283,6 +286,14 @@ def test_gateway_request_recording_survives_activity_touch_timeout():
 
     with (
         patch(
+            "preloop.services.analytics_detail_policy.should_degrade_gateway_analytics",
+            return_value=degraded,
+        ) as detail_policy,
+        patch(
+            "preloop.services.openai_gateway.model_billing_is_hosted",
+            return_value=hosted,
+        ),
+        patch(
             "preloop.services.openai_gateway.resolve_ai_model_runtime",
             return_value=SimpleNamespace(
                 model_gateway_model_alias="preloop/openai/gpt-test",
@@ -296,7 +307,7 @@ def test_gateway_request_recording_survives_activity_touch_timeout():
         patch(
             "preloop.services.openai_gateway.crud_api_usage.log_gateway_request",
             return_value=usage_row,
-        ),
+        ) as log_usage,
         patch("preloop.services.openai_gateway.log_model_gateway_request") as log_audit,
         patch("preloop.services.openai_gateway.ModelGatewayEventEmitter") as emitter,
         patch("preloop.services.openai_gateway.GatewayUsageSearchService") as search,
@@ -340,8 +351,22 @@ def test_gateway_request_recording_survives_activity_touch_timeout():
 
     log_audit.assert_called_once()
     emitter.return_value.emit_for_usage.assert_called_once()
-    search.return_value.build_index_document.assert_called_once()
-    index_queue.return_value.submit.assert_called_once()
+    if hosted:
+        detail_policy.assert_not_called()
+    degraded = degraded and not hosted
+    recorded = log_usage.call_args.kwargs
+    assert recorded["meta_data"]["ingest_degraded"] is degraded
+    assert recorded["total_tokens"] == 12
+    assert recorded["status_code"] == 200
+    if degraded:
+        search.assert_not_called()
+        index_queue.assert_not_called()
+        event = emitter.return_value.emit_for_usage.call_args.kwargs
+        assert event["request_payload"] is None
+        assert event["response_payload"] is None
+    else:
+        search.return_value.build_index_document.assert_called_once()
+        index_queue.return_value.submit.assert_called_once()
     service.db.rollback.assert_called_once()
 
 
