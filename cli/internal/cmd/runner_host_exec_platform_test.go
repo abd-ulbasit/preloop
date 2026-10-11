@@ -431,7 +431,12 @@ func TestWindowsRunnerTaskScriptQuotesPaths(t *testing.T) {
 	script := windowsRunnerTaskScript(
 		`C:\Program Files\Preloop\preloop.exe`,
 		`C:\Users\o'hara\.preloop\runner.log`,
+		`C:\Users\o'hara`,
 	)
+	if !strings.Contains(script, `$env:HOME = 'C:\Users\o''hara'`) ||
+		!strings.Contains(script, `$env:USERPROFILE = 'C:\Users\o''hara'`) {
+		t.Fatalf("home not pinned: %q", script)
+	}
 	if !strings.Contains(script, `& 'C:\Program Files\Preloop\preloop.exe' runner fg`) {
 		t.Fatalf("script = %q", script)
 	}
@@ -450,6 +455,7 @@ func TestLaunchdPlistBodyHasLogsAndPath(t *testing.T) {
 		"<key>StandardErrorPath</key><string>/Users/jane/.preloop/runner.log</string>",
 		"/opt/homebrew/bin",
 		"/Users/jane/.local/bin",
+		"<key>HOME</key>\n    <string>/Users/jane</string>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("plist missing %q in:\n%s", want, body)
@@ -672,5 +678,15 @@ func TestCopilotApprovalHookKeysPerOS(t *testing.T) {
 		if _, ok := entry[copilotApprovalHookKeys(goos)[0]]; !ok {
 			t.Fatalf("%s onboarding entry %v not under the checked key", goos, entry)
 		}
+	}
+}
+
+func TestSystemdUserUnitPinsHome(t *testing.T) {
+	body := systemdUserUnitBody("/home/jane/bin/preloop", "/home/jane")
+	if !strings.Contains(body, `Environment="HOME=/home/jane"`) {
+		t.Fatalf("unit missing HOME pin:\n%s", body)
+	}
+	if !strings.Contains(body, "ExecStart=/home/jane/bin/preloop runner fg") {
+		t.Fatalf("unit ExecStart:\n%s", body)
 	}
 }

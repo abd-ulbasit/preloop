@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -1568,7 +1569,10 @@ func xmlEscape(value string) string {
 	).Replace(value)
 }
 
-// launchdPlistBody renders the LaunchAgent. The agent runs in the user's
+// launchdPlistBody renders the LaunchAgent. HOME is pinned to the
+// installing user's home: launchd otherwise uses the login HOME, so a
+// service installed from another HOME would read a different ~/.preloop
+// (#1531). The agent runs in the user's
 // login session so the operator's local agent CLI logins stay visible.
 // launchd starts agents with a minimal PATH, so the common Homebrew and
 // local-bin locations are appended for the runner's child processes.
@@ -1596,10 +1600,12 @@ func launchdPlistBody(bin, logPath, home string) string {
   <dict>
     <key>PATH</key>
     <string>%s</string>
+    <key>HOME</key>
+    <string>%s</string>
   </dict>
 </dict>
 </plist>
-`, xmlEscape(bin), xmlEscape(logPath), xmlEscape(logPath), xmlEscape(path))
+`, xmlEscape(bin), xmlEscape(logPath), xmlEscape(logPath), xmlEscape(path), xmlEscape(home))
 }
 
 func writeLaunchdPlist(bin string, out io.Writer) error {
@@ -1626,18 +1632,8 @@ func writeSystemdUserUnit(bin string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := fmt.Sprintf(`[Unit]
-Description=Preloop self-hosted runner
-After=network-online.target
-
-[Service]
-ExecStart=%s runner fg
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-`, bin)
+	home, _ := os.UserHomeDir()
+	body := systemdUserUnitBody(bin, home)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err
 	}
@@ -1645,6 +1641,25 @@ WantedBy=default.target
 	_ = exec.Command("systemctl", "--user", "enable", "preloop-runner.service").Run()
 	fmt.Fprintf(out, "Installed %s\n", path)
 	return nil
+}
+
+// systemdUserUnitBody renders the user unit. HOME is pinned to the
+// installing user's home so the service reads the same ~/.preloop config
+// the install used, never another profile's (#1531).
+func systemdUserUnitBody(bin, home string) string {
+	return fmt.Sprintf(`[Unit]
+Description=Preloop self-hosted runner
+After=network-online.target
+
+[Service]
+Environment=%s
+ExecStart=%s runner fg
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, strconv.Quote("HOME="+home), bin)
 }
 
 // windowsRunnerTaskScriptPath is the PowerShell launcher the scheduled task
@@ -1661,11 +1676,15 @@ func windowsRunnerTaskScriptPath() (string, error) {
 // windowsRunnerTaskScript renders the launcher. Paths are single-quoted for
 // PowerShell (embedded single quotes doubled), and *>> appends every output
 // stream to the log.
-func windowsRunnerTaskScript(bin, logPath string) string {
+// HOME and USERPROFILE are pinned to the installing user's home so the
+// task reads the same config the install used (#1531).
+func windowsRunnerTaskScript(bin, logPath, home string) string {
 	quote := func(s string) string {
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
-	return "& " + quote(bin) + " runner fg *>> " + quote(logPath) + "\n"
+	return "$env:HOME = " + quote(home) + "\n" +
+		"$env:USERPROFILE = " + quote(home) + "\n" +
+		"& " + quote(bin) + " runner fg *>> " + quote(logPath) + "\n"
 }
 
 // writeWindowsScheduledTask registers a logon task for the current user.
@@ -1680,7 +1699,8 @@ func writeWindowsScheduledTask(bin string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	script := windowsRunnerTaskScript(bin, logPath)
+	home, _ := os.UserHomeDir()
+	script := windowsRunnerTaskScript(bin, logPath, home)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		return err
 	}

@@ -103,7 +103,9 @@ preloop runner status
 `PreloopRunner` to run it at logon. The task runs **as your user**, not as
 SYSTEM, so the agent CLI logins in your profile stay visible to host
 execution profiles. Runner output is appended to
-`%USERPROFILE%\.preloop\runner.log`.
+`%USERPROFILE%\.preloop\runner.log`. The launcher pins `HOME` and
+`USERPROFILE` to the profile that ran `enable`, so the task always reads
+that profile's `.preloop\config.yaml`. Run `enable` again after changing it.
 
 `preloop runner stop`, `restart` and `disable` (alias `uninstall`) manage the
 task with `schtasks`. Creating a logon task may require an elevated
