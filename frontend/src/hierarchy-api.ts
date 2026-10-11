@@ -45,6 +45,17 @@ export function isConflict(error: unknown): error is ConflictError {
   return error instanceof ConflictError;
 }
 
+/** Legacy account-creation refusal from servers predating structured codes. */
+const LEGACY_EMAIL_NOT_VERIFIED_MESSAGE =
+  'Verify your email address before creating an account';
+
+export class EmailNotVerifiedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmailNotVerifiedError';
+  }
+}
+
 type NotFoundMeaning = 'capability-off' | 'not-found';
 
 async function request<T>(
@@ -68,7 +79,15 @@ async function request<T>(
   if (response.status === 409) throw new ConflictError();
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(extractErrorMessage(body, fallback));
+    const message = extractErrorMessage(body, fallback);
+    if (
+      response.status === 403 &&
+      (body?.detail?.code === 'email_not_verified' ||
+        body?.detail === LEGACY_EMAIL_NOT_VERIFIED_MESSAGE)
+    ) {
+      throw new EmailNotVerifiedError(message);
+    }
+    throw new Error(message);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
