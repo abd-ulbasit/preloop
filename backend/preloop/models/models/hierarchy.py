@@ -33,12 +33,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, List
 
-from sqlalchemy import event, inspect, select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from .account import Account
 from .person import Person, normalize_email
 from .user import User
+from .webauthn_credential import WebAuthnCredential
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,14 @@ def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
         claimed.add(email)
     person = Person(
         id=uuid.uuid4(),
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        avatar_source=user.avatar_source,
+        hashed_password=user.hashed_password,
+        identity_status="active",
+        auth_generation=user.auth_generation or 0,
         email_normalized=email,
         email_verified_at=datetime.now(timezone.utc) if verified else None,
     )
@@ -166,36 +175,20 @@ def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
     session.add(person)
 
 
-def _verify_person(session: Session, user: User, claimed: set[str]) -> None:
-    if True not in inspect(user).attrs.email_verified.history.added:
-        return
-    with session.no_autoflush:
-        person = user.person
-    if person is None or person.email_verified_at is not None:
-        return
-    email = normalize_email(user.email)
-    if email in claimed or _verified_person_exists(session, email):
-        return
-    claimed.add(email)
-    # A provisional person holds exactly this one row, so its address follows
-    # the row's current email.
-    person.email_normalized = email
-    person.email_verified_at = datetime.now(timezone.utc)
-
-
 @event.listens_for(Session, "before_flush")
 def _fill_hierarchy_defaults(
     session: Session, flush_context: Any, instances: Any
 ) -> None:
     """Give new accounts and users the hierarchy columns they must carry."""
     claimed: set[str] = set()
-    # Rows that already exist claim their address before new rows do, so the
-    # older, first-verified membership keeps the verified person.
-    for obj in list(session.dirty):
-        if isinstance(obj, User):
-            _verify_person(session, obj, claimed)
     for obj in list(session.new):
         if isinstance(obj, Account):
             _fill_account(obj)
         elif isinstance(obj, User):
             _fill_person(session, obj, claimed)
+        elif isinstance(obj, WebAuthnCredential) and obj.person_id is None:
+            with session.no_autoflush:
+                owner = obj.user or session.get(User, obj.user_id)
+            if owner is None:
+                raise ValueError("Passkey needs an explicit identity owner")
+            obj.person_id = owner.person_id or owner.person.id

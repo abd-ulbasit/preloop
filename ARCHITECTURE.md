@@ -583,3 +583,56 @@ connection waits. Unsupported routes, builtin tools and asynchronous approval
 replay deny. Legacy authentication and upstream grant introspection keep their
 existing behavior. Real concurrency regressions use independent transactions and
 private schemas in the isolated CI PostgreSQL database.
+
+## Canonical person identities
+
+`Person` owns the chosen username, address and verification, shared name/avatar,
+password, global suspension status and identity security generation. Existing
+`User.id` values remain account membership IDs. Their account, role, team, API
+key and historical actor bindings remain unchanged. Membership `is_active`
+revokes one account's access; `Person.identity_status = suspended` suspends the
+human globally. There is no transient User proxy and no account ID mutation.
+
+Core `crud_person` resolves a membership's explicit Person link, returns a typed
+`IdentityProfile`, updates canonical profile fields and resolves credentials.
+`PersonAuthIdentity` owns login subjects in a `(source, provider, subject)`
+namespace: provider must include issuer/tenant where subjects are not global.
+The legacy schema did not capture LDAP/AD/SAML issuer; their migrated provider
+namespace is `legacy-account:<account_id>`, pending an explicitly proven relink.
+OAuth integration grants remain account scoped and retain their account cascade;
+they do not constitute the global login identity.
+
+Passkey IDs, keys and counters stay unchanged. Their `person_id` owns access;
+nullable `user_id` records originating membership provenance. Current legacy
+passwords from already explicitly linked memberships are retained under the
+same Person in `PersonPasswordCredential`. This deliberately preserves those
+existing passwords across the backfill; it never recreates a password previously
+removed by consolidation. A canonical password reset retires all retained hashes
+and clears membership password caches. Security changes increment both identity
+and membership token generations to support the existing JWT generation checks.
+Deleting a membership, its account, the former primary membership, or the last
+membership retains Person and login credentials. Explicit `delete_identity`
+requires zero remaining memberships and destroys the identity-owned credentials.
+A retained verified identity continues claiming its verified address.
+
+The identity expand/backfill revisions are staged and additive. Drain credential
+writers for both revisions, then deploy canonical authentication and profile
+consumers together before resuming writes. A valid primary membership supplies
+its chosen username verbatim; a missing/stale pointer falls back deterministically
+by most recent login, creation time and ID. No suffix stripping or email merge
+occurs. Conflicting linked addresses or provider claims quarantine the identities
+with non-secret reasons; operators must establish ownership before repairing
+canonical values. Unrelated provisional identities retain separate Person IDs.
+
+`python -m preloop.models.identity_audit` reports rollout counts and conflict
+reasons without passwords, provider subjects or addresses. Run it with a SELECT
+only database role to enforce a read-only audit. The old User profile columns
+are temporary compatibility caches updated only by canonical operations; unique
+membership usernames remain legacy aliases. Old password readers work only
+before the first canonical password reset, which intentionally clears their
+cache. These are rollout compatibility columns, not independent writable identity
+stores. Arbitrary legacy writers must be retired at cutover; ORM changes to a
+membership's verification flag no longer verify a Person. Credential backfill
+cannot safely be reversed into membership cascades; downgrade refuses and rollback
+uses a forward repair. Membership expansion policy and enterprise endpoints stay
+in EE; core identity ownership and retention need no plugin registration.
