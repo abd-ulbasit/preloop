@@ -717,3 +717,128 @@ def test_transport_failure_recovers_before_output(failure_type: str) -> None:
         assert _call(service, ai_model) == {"ok": True}
     assert backend.completion.call_count == 2
     assert service._last_upstream_retry_count == 1
+
+
+@pytest.mark.parametrize("status", [503, 429, 401])
+def test_codex_http_retries_only_transient_handshake_errors(status: int) -> None:
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    service, ai_model, _ = _service_and_model()
+    ai_model.provider_name = "openai-codex"
+    credentials = SimpleNamespace(value="oauth-token", payload={"account_id": "acct-1"})
+    failure = HTTPError(
+        "https://example.com/responses",
+        status,
+        "upstream error",
+        {"Retry-After": "1"},
+        BytesIO(b"temporarily unavailable"),
+    )
+    response = MagicMock()
+    response.__enter__.return_value = response
+    with (
+        patch.object(
+            service, "_resolve_openai_codex_credentials", return_value=credentials
+        ),
+        patch.object(service, "_codex_upstream_ws_enabled", return_value=False),
+        patch.object(
+            service, "_aggregate_codex_sse_stream", return_value={"id": "resp-1"}
+        ),
+        patch(
+            "preloop.services.openai_gateway.urllib_request.urlopen",
+            side_effect=[failure, response],
+        ) as open_request,
+        patch("preloop.services.openai_gateway._sleep_before_upstream_retry") as sleep,
+    ):
+        if status == 401:
+            with pytest.raises(ModelGatewayAPIError):
+                service._create_openai_codex_response(ai_model, {"input": []})
+            assert open_request.call_count == 1
+            assert service._last_upstream_retry_count == 0
+            sleep.assert_not_called()
+        else:
+            assert service._create_openai_codex_response(ai_model, {"input": []}) == {
+                "id": "resp-1"
+            }
+            assert open_request.call_count == 2
+            assert service._last_upstream_retry_count == 1
+            sleep.assert_called_once_with(1.0)
+
+
+def test_codex_http_does_not_retry_response_body_failure() -> None:
+    from urllib.error import URLError
+
+    service, ai_model, _ = _service_and_model()
+    ai_model.provider_name = "openai-codex"
+    credentials = SimpleNamespace(value="oauth-token", payload={"account_id": "acct-1"})
+    response = MagicMock()
+    with (
+        patch.object(
+            service, "_resolve_openai_codex_credentials", return_value=credentials
+        ),
+        patch.object(service, "_codex_upstream_ws_enabled", return_value=False),
+        patch.object(
+            service,
+            "_aggregate_codex_sse_stream",
+            side_effect=URLError("connection reset"),
+        ),
+        patch(
+            "preloop.services.openai_gateway.urllib_request.urlopen",
+            return_value=response,
+        ) as open_request,
+        patch("preloop.services.openai_gateway._sleep_before_upstream_retry") as sleep,
+    ):
+        with pytest.raises(ModelGatewayAPIError):
+            service._create_openai_codex_response(ai_model, {"input": []})
+        assert open_request.call_count == 1
+        assert service._last_upstream_retry_count == 0
+        sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_kind", ["http", "network"])
+def test_codex_http_transient_failure_exhausts_bounded_retries(
+    failure_kind: str,
+) -> None:
+    from io import BytesIO
+    from urllib.error import HTTPError, URLError
+
+    service, ai_model, _ = _service_and_model()
+    ai_model.provider_name = "openai-codex"
+    credentials = SimpleNamespace(value="oauth-token", payload={"account_id": "acct-1"})
+    failures = [
+        HTTPError(
+            "https://example.com/responses",
+            503,
+            "unavailable",
+            {},
+            BytesIO(b"connection refused"),
+        )
+        if failure_kind == "http"
+        else URLError("connection refused")
+        for _ in range(3)
+    ]
+    with (
+        patch.object(
+            service, "_resolve_openai_codex_credentials", return_value=credentials
+        ),
+        patch.object(service, "_codex_upstream_ws_enabled", return_value=False),
+        patch(
+            "preloop.services.openai_gateway.urllib_request.urlopen",
+            side_effect=failures,
+        ) as open_request,
+        patch(
+            "preloop.services.openai_gateway._upstream_retry_max_attempts",
+            return_value=3,
+        ),
+        patch("preloop.services.openai_gateway._sleep_before_upstream_retry") as sleep,
+    ):
+        with pytest.raises(ModelGatewayAPIError) as exc:
+            service._create_openai_codex_response(ai_model, {"input": []})
+        assert exc.value.error_class == (
+            "upstream_overloaded" if failure_kind == "http" else "network"
+        )
+        assert open_request.call_count == 3
+        assert sleep.call_count == 2
+        assert service._last_upstream_retry_count == 2
+    if failure_kind == "http":
+        assert all(failure.closed for failure in failures)

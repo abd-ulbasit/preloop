@@ -5609,11 +5609,35 @@ class OpenAIGatewayService:
             headers=headers,
             method="POST",
         )
+
+        def _open_response() -> Any:
+            try:
+                return urllib_request.urlopen(req, timeout=600)
+            except urllib_error.HTTPError as exc:
+                # Keep the real status, body and Retry-After for classification;
+                # normalize and notify only after the retry budget is exhausted.
+                try:
+                    detail = exc.read().decode("utf-8", "ignore")
+                finally:
+                    exc.close()
+                raise self._openai_passthrough_raw_error(
+                    exc.code, detail, httpx.Headers(exc.headers or {})
+                ) from exc
+
+        # Only the handshake can be replayed safely. Once a body is opened,
+        # aggregation stays outside the retry boundary to avoid duplicate turns.
+        response = self._run_with_upstream_retries(
+            "openai", _open_response, ai_model=ai_model
+        )
         try:
-            with urllib_request.urlopen(req, timeout=600) as response:
-                self._capture_rate_limit_headers(getattr(response, "headers", None))
-                self._capture_codex_turn_state(getattr(response, "headers", None))
-                return self._aggregate_codex_sse_stream(response)
+            with response as stream_response:
+                self._capture_rate_limit_headers(
+                    getattr(stream_response, "headers", None)
+                )
+                self._capture_codex_turn_state(
+                    getattr(stream_response, "headers", None)
+                )
+                return self._aggregate_codex_sse_stream(stream_response)
         except urllib_error.HTTPError as exc:
             self._capture_rate_limit_headers(getattr(exc, "headers", None))
             detail = exc.read().decode("utf-8", "ignore")
