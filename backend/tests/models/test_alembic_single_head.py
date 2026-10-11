@@ -341,4 +341,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert harness_routing.down_revision == "20261011_harness_inventory"
     runner_sessions = script.get_revision("20261011_runner_remote_sessions")
     assert runner_sessions.down_revision == "20261011_harness_routing"
-    assert script.get_heads() == ["20261011_runner_remote_sessions"]
+    result_schema = script.get_revision("20261011_flow_result_schema")
+    assert result_schema.down_revision == "20261011_runner_remote_sessions"
+    assert script.get_heads() == ["20261011_flow_result_schema"]
