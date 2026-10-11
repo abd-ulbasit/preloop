@@ -187,7 +187,12 @@ page is unchanged.
     `pr_url`, `pr_opened_at_source`, `estimate_hours`,
     `estimate_hours_source`, `estimate_points`, `estimate_points_source`,
     then the appended `cost_coverage`, `known_cost_run_count`,
-    `unknown_cost_run_count`, `attributed_cost_usd`.
+    `unknown_cost_run_count`, `attributed_cost_usd`, then the readiness
+    columns and, last, `failure_categories`: failed runs of the issue per
+    `failure_category` as `category:count` pairs joined by `;` (for example
+    `result_schema_invalid:2;timeout:1`). The JSON export carries the same
+    counts as a `failure_categories` object, and execution drill-down rows
+    carry each run's `failure_category`.
     Blank means unknown, never zero. The JSON export's `issues[]` objects
     carry the same fields (null for unknown) plus `execution_ids`. Estimate
     sources are `jira:timeoriginalestimate`, `gitlab:time_estimate`,

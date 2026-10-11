@@ -1432,6 +1432,61 @@ async def test_get_flow_execution_result(mock_account: Account, mocker: MockerFi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (None, None),
+        (
+            {
+                "valid": False,
+                "errors": [
+                    {"path": "$.verdict", "message": "'verdict' is a required property"}
+                ],
+                "error_count": 1,
+            },
+            {
+                "valid": False,
+                "errors": [
+                    {"path": "$.verdict", "message": "'verdict' is a required property"}
+                ],
+                "error_count": 1,
+            },
+        ),
+        (
+            {"valid": True, "errors": [], "error_count": 0},
+            {"valid": True, "errors": [], "error_count": 0},
+        ),
+    ],
+)
+async def test_get_flow_execution_result_reports_schema_validation(
+    mock_account: Account, mocker: MockerFixture, stored, expected
+):
+    """#868: the result endpoint says whether the document matched the schema."""
+    execution_id = uuid.uuid4()
+    mock_crud_flow_execution = mocker.patch(
+        "preloop.api.endpoints.flows.crud_flow_execution",
+        new_callable=MagicMock,
+    )
+    execution = MagicMock()
+    execution.id = execution_id
+    execution.status = "FAILED" if stored and not stored["valid"] else "SUCCEEDED"
+    execution.result = {"status": "success"}
+    execution.evidence_receipt = None
+    execution.evidence_archive = None
+    execution.result_schema_validation = stored
+    mock_crud_flow_execution.get.return_value = execution
+
+    result = await maybe_await(
+        flows.get_flow_execution_result(
+            db=MagicMock(), execution_id=execution_id, current_user=mock_account
+        )
+    )
+
+    assert result["result"] == {"status": "success"}
+    assert result["schema_validation"] == expected
+
+
+@pytest.mark.asyncio
 async def test_get_flow_execution_result_uses_persisted_receipt_not_inspect(
     mock_account: Account, mocker: MockerFixture
 ):
