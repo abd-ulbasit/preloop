@@ -1628,11 +1628,14 @@ func writeLaunchdPlist(bin string, out io.Writer) error {
 }
 
 func writeSystemdUserUnit(bin string, out io.Writer) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
 	path := systemdUserUnitPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	home, _ := os.UserHomeDir()
 	body := systemdUserUnitBody(bin, home)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err

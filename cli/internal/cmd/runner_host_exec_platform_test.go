@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -688,5 +689,26 @@ func TestSystemdUserUnitPinsHome(t *testing.T) {
 	}
 	if !strings.Contains(body, "ExecStart=/home/jane/bin/preloop runner fg") {
 		t.Fatalf("unit ExecStart:\n%s", body)
+	}
+}
+
+func TestServiceHomePinEscapesMetacharacters(t *testing.T) {
+	unit := systemdUserUnitBody("/home/jane/bin/preloop", `/home/jane "doe"`)
+	if !strings.Contains(unit, `Environment="HOME=/home/jane \"doe\""`) {
+		t.Fatalf("unit HOME not quoted:\n%s", unit)
+	}
+	plist := launchdPlistBody("/bin/preloop", "/tmp/runner.log", "/Users/a&b <c>")
+	if !strings.Contains(plist, "<key>HOME</key>\n    <string>/Users/a&amp;b &lt;c&gt;</string>") {
+		t.Fatalf("plist HOME not escaped:\n%s", plist)
+	}
+}
+
+func TestWriteSystemdUserUnitFailsWithoutHome(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("UserHomeDir uses other variables here")
+	}
+	t.Setenv("HOME", "")
+	if err := writeSystemdUserUnit("/bin/preloop", io.Discard); err == nil {
+		t.Fatal("expected an error when HOME is unset")
 	}
 }
