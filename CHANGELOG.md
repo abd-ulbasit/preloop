@@ -40,6 +40,15 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Breaking or behavior changes
 
+- **Runner upgrade action:** `accept_untagged` defaults to `false` for both new
+  and existing runners. To keep sending unpinned flows to existing private
+  runners after upgrading, open **Runners** and enable **Untagged jobs** on
+  each intended runner. Otherwise auto routing falls back to hosted compute
+  (or fails where hosted compute is unavailable). Explicit pool tags, runner
+  pins, and native harness/profile selections remain eligible. Upgrade older
+  runner CLIs too: an omitted Docker capability is treated as unavailable.
+  Native host profiles, including Git-based Copilot publication, do not need Docker.
+
 - Model gateway budget denials return `429` with a provider-shaped body and
   `retry-after` on `/openai/v1`, `/anthropic/v1` and `/gemini/v1beta`,
   instead of `403`. Policy denials stay `403`. Integrations that match `403`

@@ -107,7 +107,7 @@ def is_host_exec_agent_type(agent_type: Any) -> bool:
         agent_type: Flow or lease agent type.
 
     Returns:
-        True for ``cursor`` and ``copilot``.
+        True for ``cursor``, ``copilot`` and ``devin``.
     """
     return _normalized_agent_type(agent_type) in HOST_EXEC_AGENT_TYPES
 
@@ -119,7 +119,8 @@ def host_exec_harness(agent_type: Any) -> Optional[str]:
         agent_type: Flow or lease agent type.
 
     Returns:
-        ``cursor_cli`` or ``copilot_cli``, or None for other agent types.
+        ``cursor_cli``, ``copilot_cli`` or ``devin_cli``, or None for
+        other agent types.
     """
     return HOST_EXEC_HARNESSES.get(_normalized_agent_type(agent_type))
 
@@ -176,12 +177,12 @@ def host_exec_harness_selector(agent_type: Any, agent_config: Any) -> Optional[s
     route exactly as before).
 
     Args:
-        agent_type: Flow agent type (``copilot`` or ``cursor``).
+        agent_type: Flow agent type (``copilot``, ``cursor`` or ``devin``).
         agent_config: Flow agent configuration.
 
     Returns:
-        ``copilot_cli`` / ``cursor_cli``, or None for profile-pinned and
-        non-host flows.
+        ``copilot_cli`` / ``cursor_cli`` / ``devin_cli``, or None for
+        profile-pinned and non-host flows.
     """
     config = _unwrapped_config(agent_config)
     raw = config.get("harness")
@@ -405,7 +406,8 @@ def runner_has_host_exec_profile(
         name: Profile name from the flow.
         model_identifier: Model alias the profile must advertise, if set.
         agent_type: Host-exec agent type. The profile must advertise the
-            matching harness capability (``cursor_cli`` or ``copilot_cli``).
+            matching harness capability (``cursor_cli``, ``copilot_cli``
+            or ``devin_cli``).
         require_publication: The lease publishes; the profile must also
             advertise ``host_publication``. Older runners never do.
         require_continuation: The lease resumes a Copilot session; the

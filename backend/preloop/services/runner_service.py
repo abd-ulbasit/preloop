@@ -298,11 +298,7 @@ def validate_runner_capabilities(
 
     agent_type = getattr(flow, "agent_type", None)
     agent_config = getattr(flow, "agent_config", None)
-    from preloop.services.host_exec_publication import host_publication_requested
-
-    if host_exec_effective_profile(
-        agent_type, agent_config
-    ) and not host_publication_requested(getattr(flow, "git_clone_config", None)):
+    if host_exec_effective_profile(agent_type, agent_config):
         return
     pool = resolve_runner_pool(flow, execution_context, db=db)
     if not pool or pool.lower() == AUTO_RUNNER_POOL:

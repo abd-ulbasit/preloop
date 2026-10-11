@@ -1150,7 +1150,9 @@ def runner_labels(row: FlowRunner) -> List[str]:
         "vscode_copilot",
     }
     labels = {
-        label for label in (row.labels or []) if label.lower() not in capability_labels
+        str(label)
+        for label in (row.labels or [])
+        if str(label).lower() not in capability_labels
     }
     if (getattr(row, "capabilities", None) or {}).get("docker_available") is True:
         labels.add("docker")

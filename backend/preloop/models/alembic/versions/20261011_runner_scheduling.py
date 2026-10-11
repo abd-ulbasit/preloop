@@ -15,6 +15,9 @@ depends_on = None
 
 def upgrade() -> None:
     """Default to accepting only tagged work, with the runner unpaused."""
+    # Existing rows also opt out of untagged jobs, as required by the new
+    # scheduling default. Operators must enable the console toggle to keep
+    # routing unpinned flows to these runners after upgrading.
     for name in ("paused", "accept_untagged"):
         op.add_column(
             "flow_runner",

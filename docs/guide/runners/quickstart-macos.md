@@ -31,6 +31,10 @@ The LaunchAgent includes `~/.docker/bin` and Docker Desktop's application bin di
 
 Installed, enabled and signed-in agents add tags such as `cursor_cli`, `copilot_cli`, `devin_cli`, `codex_cli`, `claude_code` and `opencode`. Presence of a tag does not change how that adapter executes: container adapters still require `docker`. In **Runners**, **Pause runner** stops new work while current jobs finish. **Untagged jobs** is off by default; enable it to accept jobs without a pool tag or native harness/profile selection.
 
+### Upgrading existing runners
+
+The migration also sets **Untagged jobs** to off for existing runners. To keep receiving unpinned flows, enable that toggle in **Runners** on each intended runner after upgrading. Without it, auto routing uses hosted compute, or fails if hosted compute is unavailable. Explicit tags, runner pins, and native harness/profile selections continue to select private runners. Upgrade the runner CLI so it can report Docker availability; older clients that omit it cannot receive container jobs. Native profiles, including Git-based Copilot publication, work without Docker.
+
 ## 1. Install the CLI
 
 ```sh

@@ -5099,7 +5099,7 @@ export async function getFlowHarnessOptions(): Promise<HarnessOption[]> {
   return Array.isArray(body?.harnesses) ? body.harnesses : [];
 }
 
-/** Raise or lower how many executions a runner may hold at once. */
+/** Pause new work or opt a runner into untagged jobs. */
 export async function updateRunnerScheduling(
   runnerId: string,
   settings: { paused?: boolean; accept_untagged?: boolean }
@@ -5121,6 +5121,7 @@ export async function updateRunnerScheduling(
   return response.json();
 }
 
+/** Raise or lower how many executions a runner may hold at once. */
 export async function updateRunnerConcurrency(
   runnerId: string,
   concurrency: number

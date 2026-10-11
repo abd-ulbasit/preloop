@@ -704,25 +704,50 @@ def test_default_runner_does_not_capture_untagged_work(
     assert resolve_runner_pool(flow, {}, db=MagicMock()) is None
 
 
-def test_native_publication_requires_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("pool", ["workstation", "auto"])
+def test_native_publication_does_not_require_docker(
+    monkeypatch: pytest.MonkeyPatch, pool: str
+) -> None:
     from preloop.services.runner_service import (
-        RunnerCapabilityError,
+        runner_accepts_job,
         validate_runner_capabilities,
     )
 
     flow = SimpleNamespace(
         account_id=uuid4(),
-        runner_pool="workstation",
+        runner_pool=pool,
         agent_type="copilot",
         agent_config={"host_exec_profile": "copilot"},
         git_clone_config={"create_pull_request": True},
     )
-    monkeypatch.setattr(
-        crud_flow_runner,
-        "find_matching",
-        lambda *args, **kwargs: [
-            SimpleNamespace(capabilities={"docker_available": False})
-        ],
+    runner = SimpleNamespace(
+        capabilities={"docker_available": False}, paused=False, accept_untagged=False
     )
-    with pytest.raises(RunnerCapabilityError, match="working Docker daemon"):
-        validate_runner_capabilities(MagicMock(), flow, {})
+    monkeypatch.setattr(
+        crud_flow_runner, "find_matching", lambda *args, **kwargs: [runner]
+    )
+    validate_runner_capabilities(MagicMock(), flow, {})
+    assert runner_accepts_job(
+        runner,
+        pool,
+        {
+            "host_exec_profile": "copilot",
+            "host_exec_publication": {"publication_mode": "legacy"},
+        },
+    )
+    assert not runner_accepts_job(runner, pool, {"_publication": True})
+
+
+def test_runner_labels_coerce_legacy_json_values() -> None:
+    from preloop.models.crud.flow_runner import runner_labels
+
+    runner = SimpleNamespace(
+        id=uuid4(),
+        name="legacy",
+        labels=[1, None, "office", "Docker"],
+        capabilities={},
+        harness_inventory={},
+    )
+    assert runner_labels(runner) == ["1", "None", "office"]
+    assert runner_matches_pool(runner, "1")
+    assert not runner_matches_pool(runner, "docker")
