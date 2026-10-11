@@ -5,7 +5,7 @@ Editions: OSS, Cloud, Enterprise. Unless stated otherwise, everything on this pa
 The Preloop CLI **is** the self-hosted runner on Windows too: it registers
 with your control plane, holds an outbound WebSocket, leases flow executions,
 and runs them locally. On a Windows developer laptop the primary execution
-mode is a [host execution profile](#host-execution-profiles-on-windows): the
+mode is a [host execution profile](#host-execution-profiles-on-windows-advanced-override): the
 runner starts a locally installed agent CLI (Cursor, Copilot CLI) under your
 own login. Docker execution also works when a Docker engine is available
 (Docker Desktop runs the same Linux agent containers), but it is not required
@@ -43,6 +43,44 @@ preloop login --headless                            # prints a URL, paste the co
 $env:PRELOOP_TOKEN = '<account-api-token>'
 ```
 
+## Install during login
+
+On a terminal, `preloop login` asks whether to install a runner as a
+background service. The default answer is no. The service is a scheduled
+task named `PreloopRunner-<your user name>`, registered for your user
+only and running as your user. It starts at logon, connects outbound to
+the instance you just signed in to, can run flow executions on this
+machine, and reports installed agent harnesses (names, versions, signed
+in or not). It does not read or forward harness credentials. Remote
+sessions stay off until you enable them per harness.
+
+No elevation is needed: a standard (non-admin) account registers the task
+for itself. If a device policy blocks task creation, the install prints an
+error that names the policy (see [Task creation blocked by
+policy](#task-creation-blocked-by-policy)) and this command, which you can
+run later:
+
+```text
+preloop runner setup
+```
+
+Consent wording (what the runner may see and do):
+<https://docs.preloop.ai/security/personal-runners/>.
+
+An account policy of `required` installs without a question and prints
+why. `forbidden` prints one line and does not install. Skip the step with
+`--no-runner` or `PRELOOP_NO_RUNNER=1`. Headless login, `--token`,
+`PRELOOP_TOKEN`, and a shell that is not a terminal never ask and never
+install. A service that is already installed is left as it is.
+
+Run the same step later with `preloop runner setup`. A decline is
+remembered in `%USERPROFILE%\.preloop\config.yaml`
+(`runner_prompt_answered_at`). `preloop login --force` asks again. Remove
+the service with `preloop runner disable`.
+
+The runner registers as the machine hostname with labels `personal`,
+`os:<os>` and `arch:<arch>`.
+
 ## 3. Run the runner in the foreground (first test)
 
 ```powershell
@@ -63,22 +101,125 @@ preloop runner status
 ```
 
 `enable` writes a PowerShell launcher to
-`%USERPROFILE%\.preloop\runner-task.ps1` and registers the scheduled task
-`PreloopRunner` to run it at logon. The task runs **as your user**, not as
-SYSTEM, so the agent CLI logins in your profile stay visible to host
-execution profiles. Runner output is appended to
-`%USERPROFILE%\.preloop\runner.log`.
+`%USERPROFILE%\.preloop\runner-task.ps1`, a task definition to
+`%USERPROFILE%\.preloop\runner-task.xml`, and registers the scheduled
+task `PreloopRunner-<your user name>` from that definition
+(`schtasks /Create /XML`). The task runs **as your user** in your
+interactive session with least privilege, not as SYSTEM and not elevated,
+so the agent CLI logins in your profile stay visible to host execution
+profiles and remote sessions. Runner output is appended to
+`%USERPROFILE%\.preloop\runner.log`. The launcher pins `HOME` and
+`USERPROFILE` to the profile that ran `enable`, so the task always reads
+that profile's `.preloop\config.yaml`. Run `enable` again after changing it.
 
 `preloop runner stop`, `restart` and `disable` (alias `uninstall`) manage the
-task with `schtasks`. Creating a logon task may require an elevated
-PowerShell prompt depending on the machine's policy; the error from
-`schtasks` says so explicitly.
+task with `schtasks`. `preloop runner status` prints the context the runner
+runs in:
+
+```text
+install: task PreloopRunner-jane (Running)
+context: logon task PreloopRunner-jane runs as DESKTOP-1\jane in the interactive session, least privilege (no admin rights)
+lock: keeps running while the screen is locked
+sign-out: ends with the session; the runner reports offline until the next logon
+other users: each Windows user gets a separate task and runner identity
+```
+
+What the task definition guarantees, and what the `schtasks /SC ONLOGON`
+default task of CLI 0.17.0 did not:
+
+- **No elevation.** The logon trigger is scoped to your user and the
+  principal is your interactive token at least privilege, which a standard
+  user may register. An unscoped "any user" logon trigger needs
+  administrator rights, which is why older installs asked for an elevated
+  prompt.
+- **No time limit.** The default 72 hour execution limit is off
+  (`PT0S`); the runner keeps running until sign-out.
+- **Battery does not matter.** The task starts and keeps running on
+  battery power.
+- **Lock keeps the runner online.** Locking the screen or letting the
+  machine idle does not end the session; the task has no "stop on idle
+  end" condition.
+- **Sign-out takes it offline.** Signing out ends your interactive session
+  and the runner with it. The runner says goodbye to the control plane on
+  the way out, so the console shows it `offline` immediately; if Windows
+  kills it first, the runner shows offline after the 45 second heartbeat
+  grace. It comes back at your next logon. Fast user switching behaves
+  like a lock for your session: the runner keeps running in the
+  background while another user is active.
+- **Each user has their own runner.** The task name carries the user
+  name, so a second user on the same machine runs `preloop runner enable`
+  and gets a separate task and a separate runner identity
+  (`%USERPROFILE%\.preloop\runner.json` is per user). One user cannot see
+  or stop another user's task.
+- **Restart on failure.** If the runner process exits with an error, the
+  Task Scheduler restarts it up to three times, one minute apart.
+
+A task registered by CLI 0.17.0 under the shared name `PreloopRunner` is
+still found by `status`, `stop` and `disable` when it belongs to you.
+`status` prints an `upgrade:` line for it; re-run `preloop runner enable`
+to replace it with the per-user task (the old one is removed).
 
 The task starts at logon, not at boot: host execution runs under your
 interactive login by design. A machine that must run jobs with nobody logged
 in should use a Linux runner or a dedicated service account.
 
-## Host execution profiles on Windows
+### Task creation blocked by policy
+
+When the Task Scheduler refuses the registration, `preloop runner enable`
+(and the login prompt) print one of these errors instead of asking for an
+elevated prompt:
+
+| Error | Meaning | What to do |
+| --- | --- | --- |
+| `task_creation_prohibited_by_policy` | The Group Policy "Prohibit New Task Creation" (`HKLM\SOFTWARE\Policies\Microsoft\Windows\Task Scheduler5.0\Task Creation` = 1) is set on this device. | Ask your administrator to exempt the device, or run the runner from a terminal with `preloop runner fg`. |
+| `task_creation_denied` | Windows answered "Access is denied" without that policy: a different device policy or a hardened Task Scheduler folder blocks task creation for your account. | An administrator can register the written definition for you: `schtasks /Create /TN "PreloopRunner-<user>" /XML "%USERPROFILE%\.preloop\runner-task.xml" /F`. The task still runs as you. Or use `preloop runner fg`. |
+| `task_scheduler_unavailable` | The Task Scheduler service (`Schedule`) is stopped or disabled. | Ask your administrator to enable it, or use `preloop runner fg`. |
+| `task_creation_failed` | Any other `schtasks` failure; the output is included. | Report it with the output, use the administrator command above or `preloop runner fg`. |
+
+### What the task sees
+
+The task starts with the environment Windows builds for your account from
+the registry (user and machine variables), not with what a PowerShell
+profile adds, and the launcher runs `-NoProfile`. In practice:
+
+- `PATH` additions made through System Properties, `setx`, or an
+  installer (Node.js, winget, the Preloop installer) are visible.
+  Additions made only in `$PROFILE` are not; the runner compensates by
+  resolving harness binaries explicitly (next section).
+- `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_HOME` and
+  `GH_HOST` are visible when set as user environment variables; the
+  runner only checks whether the token variables exist and never reads
+  their values.
+- `%USERPROFILE%`, `%APPDATA%` and `%LOCALAPPDATA%` point at your
+  profile, so the Copilot login record under `%USERPROFILE%\.copilot`
+  and the Windows Credential Manager entries of your account are the
+  same ones your interactive shell uses. The runner reads only the host
+  name from the login record and never opens the credential store.
+
+## Harnesses are detected automatically
+
+The runner reports the agent harnesses installed for the user it runs as
+(Copilot CLI, Cursor CLI, Claude Code and others) and generates host
+execution profiles named `copilot` and `cursor` for Copilot CLI and Cursor
+CLI, so no profile file is needed. Sign in to the harness as that user (for
+Copilot CLI: `copilot login`, or set `COPILOT_GITHUB_TOKEN` for the runner
+user), then check what the runner reports:
+
+```powershell
+preloop runner inventory --refresh
+```
+
+The Copilot login record is read from `%USERPROFILE%\.copilot\config.json`
+(or `%COPILOT_HOME%\config.json`); only its host is read. To turn a harness
+off, add `"harnesses": {"cursor_cli": {"enabled": false}}` to
+`%USERPROFILE%\.preloop\runner.json`. What is checked and what is never
+read is described in the
+[Linux quickstart](quickstart-linux.md#harnesses-are-detected-automatically).
+
+## Host execution profiles on Windows (advanced override)
+
+A hand-written profile replaces the generated one for the same harness or
+name. Use it to pin a working directory, map model aliases or grant tools.
 
 The profile file is `%USERPROFILE%\.preloop\runner-host-profiles.json` (or
 point `PRELOOP_RUNNER_HOST_PROFILES` at an absolute path):
@@ -106,14 +247,21 @@ point `PRELOOP_RUNNER_HOST_PROFILES` at an absolute path):
 ```
 
 Everything in the
-[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-opt-in-private-only)
+[Linux host execution profile section](quickstart-linux.md#host-execution-profiles-advanced-override-private-only)
 applies (profile validation, model mapping, prompt delivery, structured
 completion, injection rejection). Windows specifics:
 
 - **Executable detection.** The runner resolves `cursor-agent` / `agent` and
   `copilot` through `PATH` (respecting `PATHEXT`, so `.exe` and `.cmd` shims
-  are found), then through `%APPDATA%\npm`, `%USERPROFILE%\.copilot\bin` and
-  `%USERPROFILE%\.local\bin`, trying `.exe`, `.cmd`, `.bat` and `.com`.
+  are found), then explicitly through the per-user install locations, in
+  this order: `%APPDATA%\npm` (npm global), `%LOCALAPPDATA%\Microsoft\WinGet\Links`
+  (winget), `%LOCALAPPDATA%\pnpm`, `%LOCALAPPDATA%\Volta\bin`,
+  `%USERPROFILE%\.copilot\bin` (Copilot standalone installer),
+  `%USERPROFILE%\.local\bin` and `%USERPROFILE%\scoop\shims`, trying
+  `.exe`, `.cmd`, `.bat` and `.com`. `node.exe` for shim unwrapping is also
+  looked for in `%ProgramFiles%\nodejs` and `%NVM_SYMLINK%`. This is what
+  keeps discovery and sessions working under the logon task, whose `PATH`
+  lacks anything a shell profile adds.
 - **npm `.cmd` shims are unwrapped.** An npm-installed CLI such as
   `@github/copilot` is a `copilot.cmd` batch shim. Batch files receive their
   command line through `cmd.exe`, which cannot safely carry arbitrary prompt
@@ -181,6 +329,8 @@ completion, injection rejection). Windows specifics:
 | `copilot_not_installed` in the execution log | Install with `npm install -g @github/copilot` as the runner user, or put `copilot.exe` on `PATH`. |
 | `copilot_not_logged_in` | Run `copilot` once and `/login` as the runner user, or set `COPILOT_GITHUB_TOKEN` in the environment the runner (or its scheduled task) starts with; `COPILOT_*`, `GH_*` and `GITHUB_TOKEN` reach Copilot jobs without `pass_env`. |
 | `host_exec_batch_argument_unsafe` | The CLI resolved to a bare batch script. Install the native `.exe`, or install via npm so the shim can be unwrapped to `node.exe`. |
-| `schtasks: ... Access is denied` on `runner enable` | Run the command from an elevated PowerShell prompt once. The task itself still runs as your user. |
+| `task_creation_denied` or `task_creation_prohibited_by_policy` on `runner enable` | No elevation is involved; a device policy blocks task creation. See [Task creation blocked by policy](#task-creation-blocked-by-policy). |
+| `runner status` shows `upgrade: the task stops the runner after PT72H` | The task was registered by CLI 0.17.0. Re-run `preloop runner enable` to replace it with the per-user task. |
+| The runner is offline after signing in on a second account | Each account needs its own `preloop login` and `preloop runner enable`; the task and runner identity are per user. |
 | A stopped execution leaves processes behind | Report it: halt uses `taskkill /T /F` and should kill the whole tree. `runner.log` records the runner side. |
 | Docker flows report `docker is not available` | Host profiles do not need Docker. For the Docker harness, install Docker Desktop and make sure `docker info` succeeds as the runner user. |

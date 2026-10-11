@@ -248,6 +248,7 @@ nav:
           - Product evidence: guide/flows/product-evidence.md
           - Transcript evaluation: guide/flows/transcript-evaluation.md
           - "Scanner binaries: decision note": guide/flows/scanner-binaries-decision.md
+          - Scanner agent image: guide/flows/scanner-image.md
       - Trigger from CI: guide/flows/ci-trigger.md
       - GitHub Actions: guide/flows/github-actions.md
       - Restricted CI setup: guide/flows/restricted-ci.md
@@ -261,6 +262,7 @@ nav:
       - Linux quickstart: guide/runners/quickstart-linux.md
       - macOS quickstart: guide/runners/quickstart-macos.md
       - Windows quickstart: guide/runners/quickstart-windows.md
+      - Remote sessions and workspaces: guide/runners/remote-sessions.md
       - Deploy agents onto Linux hosts: operations/agent-deployment.md
       - Runner smoke test: guide/runners/staging-smoke.md
 

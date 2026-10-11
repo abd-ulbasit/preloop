@@ -1,3 +1,5 @@
+import { formatLocalDateTime } from './date';
+
 export const SERVER_RUNNER_POOL = 'server';
 export const AUTO_RUNNER_POOL = 'auto';
 
@@ -20,6 +22,8 @@ export interface RunnerPoolOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Hover text; for a runner, its last heartbeat. */
+  title?: string;
 }
 
 export interface RunnerPoolGroup {
@@ -32,6 +36,44 @@ export interface RunnerPoolSource {
   name?: string | null;
   labels?: string[] | null;
   status?: string | null;
+  /** Server-derived presence (#1506); absent on older control planes. */
+  presence?: string | null;
+  presence_since?: string | null;
+  last_heartbeat?: string | null;
+}
+
+/** Presence states the server derives from heartbeats (#1506). */
+export type RunnerPresence = 'online' | 'busy' | 'idle' | 'asleep' | 'offline';
+
+const REACHABLE_PRESENCE = new Set(['online', 'busy', 'idle']);
+
+/**
+ * The runner's presence. The server derives it; a control plane that
+ * predates presence only sends ``status``, which maps onto online, busy and
+ * offline.
+ */
+export function runnerPresence(runner: RunnerPoolSource): RunnerPresence {
+  const presence = (runner.presence || '').toLowerCase();
+  if (['online', 'busy', 'idle', 'asleep', 'offline'].includes(presence)) {
+    return presence as RunnerPresence;
+  }
+  const status = (runner.status || '').toLowerCase();
+  return status === 'online' || status === 'busy' ? status : 'offline';
+}
+
+/** Hover text naming the last heartbeat and when the state began. */
+export function presenceTooltip(runner: RunnerPoolSource): string {
+  const parts = [
+    runner.last_heartbeat
+      ? `Last heartbeat: ${formatLocalDateTime(runner.last_heartbeat)}`
+      : 'No heartbeat yet',
+  ];
+  if (runner.presence && runner.presence_since) {
+    const state = runnerPresence(runner);
+    const label = state.charAt(0).toUpperCase() + state.slice(1);
+    parts.push(`${label} since ${formatLocalDateTime(runner.presence_since)}`);
+  }
+  return parts.join('. ');
 }
 
 export interface BuildRunnerPoolGroupsArgs {
@@ -51,8 +93,7 @@ function poolKey(value?: string | null): string {
 }
 
 export function isOnlineRunner(runner: RunnerPoolSource): boolean {
-  const status = (runner.status || '').toLowerCase();
-  return status === 'online' || status === 'busy';
+  return REACHABLE_PRESENCE.has(runnerPresence(runner));
 }
 
 export function isSelectableToken(value: string): boolean {
@@ -238,7 +279,8 @@ function collectRunnerRows(
       currentKey && id && id.toLowerCase() === currentKey ? id : name;
     return {
       value,
-      label: `${name} (${isOnlineRunner(runner) ? 'online' : 'offline'})`,
+      label: `${name} (${runnerPresence(runner)})`,
+      title: presenceTooltip(runner),
     };
   });
 }

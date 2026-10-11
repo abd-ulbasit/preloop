@@ -26,6 +26,10 @@ from preloop.services.backport_branches import (
     branch_component,
     validate_branch_name,
 )
+from preloop.services.flow_result_schema import (
+    ResultSchemaError,
+    check_result_schema,
+)
 from preloop.services.report_publication import (
     MAX_COMMIT_MESSAGE_LENGTH,
     MAX_PATH_LENGTH,
@@ -1653,6 +1657,25 @@ class FlowBase(BaseModel):
             "notifications."
         ),
     )
+    result_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional JSON Schema (draft 2020-12, at most 64 KiB) for the "
+            "result.json the agent writes. When set and validate_result is "
+            "true, a captured document that does not conform fails the "
+            "execution with failure_category result_schema_invalid; the "
+            "document is still stored. Null means no schema (no check). The "
+            "CRA security-audit presets keep their own validator and are "
+            "exempt."
+        ),
+    )
+    validate_result: bool = Field(
+        default=True,
+        description=(
+            "Apply result_schema to the captured result.json. Ignored when "
+            "result_schema is null."
+        ),
+    )
     # Per-run limits as the console's flow form edits them. They are stored
     # as agent_config.limits (max_usd / max_turns), which the model gateway
     # enforces, so they are excluded from model_dump() and never reach the
@@ -1736,6 +1759,27 @@ class FlowBase(BaseModel):
         return validate_callable_flows_shape(v)
 
     @model_validator(mode="after")
+    def validate_harness_selector(self):
+        """Validate the harness routing keys of agent_config (contract B).
+
+        ``harness`` must map to ``agent_type`` (copilot_cli -> copilot,
+        cursor_cli -> cursor); ``harness_fallback`` is queue,
+        fallback_server (with ``fallback_model_identifier``) or fail;
+        ``harness_queue_timeout_seconds`` is 60..86400. An update without
+        ``agent_type`` is checked by the endpoint against the stored flow.
+        """
+        if isinstance(self, FlowResponse) or not isinstance(self.agent_config, dict):
+            return self
+        if self.agent_type is None:
+            return self
+        from preloop.services.host_exec import harness_selector_config_error
+
+        error = harness_selector_config_error(self.agent_type, self.agent_config)
+        if error:
+            raise ValueError(error)
+        return self
+
+    @model_validator(mode="after")
     def fold_limit_fields_into_agent_config(self):
         """Store max_budget / max_iterations as agent_config.limits keys.
 
@@ -1756,6 +1800,20 @@ class FlowBase(BaseModel):
         return self
 
 
+def _checked_result_schema(
+    value: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Reject an oversized or invalid JSON Schema at flow save (#868).
+
+    Applied on the write models only: a stored schema was checked when it was
+    saved, so reads (FlowResponse) do not re-validate it.
+    """
+    try:
+        return check_result_schema(value)
+    except ResultSchemaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 class FlowCreate(FlowBase):
     name: str
     # For webhook triggers, these can be None
@@ -1766,9 +1824,23 @@ class FlowCreate(FlowBase):
     allowed_mcp_servers: List[str] = []
     allowed_mcp_tools: List[Dict[str, Any]] = []
 
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result_schema(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Check the schema on save; see :func:`_checked_result_schema`."""
+        return _checked_result_schema(value)
+
 
 class FlowUpdate(FlowBase):
-    pass
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result_schema(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Check the schema on save; see :func:`_checked_result_schema`."""
+        return _checked_result_schema(value)
 
 
 class FlowResponse(FlowBase):
@@ -1943,3 +2015,40 @@ class RunPresetResponse(BaseModel):
     flow_created: bool
     execution_url: Optional[str] = None
     results: Optional[List[RunPresetItemResult]] = None
+
+
+class HarnessModelOption(BaseModel):
+    """One model a harness can run on the caller's runners."""
+
+    id: str
+    source: str
+    runners_online: int = 0
+
+
+class HarnessRunnerOption(BaseModel):
+    """One runner reporting the harness (for the ``runner_id`` pin)."""
+
+    id: UUID
+    name: str
+    online: bool
+    eligible: bool
+    reason: Optional[str] = None
+
+
+class HarnessOption(BaseModel):
+    """One routable harness across the runners the caller may use."""
+
+    harness: str
+    display_name: str
+    agent_type: str
+    billing: str
+    models: List[HarnessModelOption] = Field(default_factory=list)
+    runners_online: int = 0
+    runners_total: int = 0
+    runners: List[HarnessRunnerOption] = Field(default_factory=list)
+
+
+class HarnessOptionsResponse(BaseModel):
+    """``GET /api/v1/flows/harness-options`` (contract B editor endpoint)."""
+
+    harnesses: List[HarnessOption] = Field(default_factory=list)

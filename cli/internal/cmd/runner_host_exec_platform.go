@@ -87,20 +87,32 @@ func isExecutableFileInfo(path string, info os.FileInfo) bool {
 
 // runtimeExecutableFallbackPathsFor lists per-OS install locations checked
 // after PATH. Every candidate lives under the user's own profile, which
-// keeps agent discovery hermetic. Windows candidates come from the npm
-// global prefix under %APPDATA%, the Copilot CLI standalone install under
-// %USERPROFILE%\.copilot, and ~/.local/bin, each tried with every runnable
-// extension.
-func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, command string) []string {
+// keeps agent discovery hermetic. Windows candidates are resolved
+// explicitly because the per-user logon task (#1513) starts the runner
+// with the PATH from the registry, not from a shell profile: the npm
+// global prefix under %APPDATA%, winget's portable-package links, pnpm and
+// Volta under %LOCALAPPDATA%, the Copilot CLI standalone install under
+// %USERPROFILE%\.copilot, ~/.local/bin (Claude Code, Cursor CLI) and scoop
+// shims, each tried with every runnable extension.
+func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, localAppData, command string) []string {
 	if goos == "windows" {
-		bases := make([]string, 0, 3)
+		bases := make([]string, 0, 8)
 		if appData != "" {
 			bases = append(bases, filepath.Join(appData, "npm", command))
+		}
+		if localAppData != "" {
+			bases = append(
+				bases,
+				filepath.Join(localAppData, "Microsoft", "WinGet", "Links", command),
+				filepath.Join(localAppData, "pnpm", command),
+				filepath.Join(localAppData, "Volta", "bin", command),
+			)
 		}
 		bases = append(
 			bases,
 			filepath.Join(homeDir, ".copilot", "bin", command),
 			filepath.Join(homeDir, ".local", "bin", command),
+			filepath.Join(homeDir, "scoop", "shims", command),
 		)
 		out := make([]string, 0, len(bases)*len(windowsExecutableExtensions))
 		for _, base := range bases {
@@ -129,8 +141,26 @@ func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, command string) [
 // not join general agent discovery, where a system-wide install would
 // shadow per-user state.
 func hostExecSystemSearchDirs(goos string) []string {
-	if goos == "darwin" {
+	return hostExecSystemSearchDirsFor(goos, os.Getenv)
+}
+
+// hostExecSystemSearchDirsFor is hostExecSystemSearchDirs with the
+// environment injected. On Windows the Node.js MSI prefix and the
+// nvm-windows symlink hold node.exe, which unwrapping an npm .cmd shim
+// needs even when the logon task's PATH lacks them.
+func hostExecSystemSearchDirsFor(goos string, getenv func(string) string) []string {
+	switch goos {
+	case "darwin":
 		return []string{"/opt/homebrew/bin", "/usr/local/bin"}
+	case "windows":
+		var dirs []string
+		if programFiles := strings.TrimSpace(getenv("ProgramFiles")); programFiles != "" {
+			dirs = append(dirs, filepath.Join(programFiles, "nodejs"))
+		}
+		if nvm := strings.TrimSpace(getenv("NVM_SYMLINK")); nvm != "" {
+			dirs = append(dirs, nvm)
+		}
+		return dirs
 	}
 	return nil
 }
@@ -144,14 +174,30 @@ func resolveHostExecRuntimeExecutable(command string) (string, error) {
 	}
 	if filepath.Base(command) == command {
 		for _, dir := range hostExecSystemSearchDirs(runtime.GOOS) {
-			candidate := filepath.Join(dir, command)
-			if info, statErr := os.Stat(candidate); statErr == nil &&
-				isExecutableFileInfo(candidate, info) {
-				return candidate, nil
+			for _, candidate := range systemSearchCandidates(runtime.GOOS, dir, command) {
+				if info, statErr := os.Stat(candidate); statErr == nil &&
+					isExecutableFileInfo(candidate, info) {
+					return candidate, nil
+				}
 			}
 		}
 	}
 	return "", err
+}
+
+// systemSearchCandidates expands a bare command name inside a system search
+// directory: as is on POSIX, and with every runnable extension on Windows
+// when the name carries none (node -> node.exe, node.cmd, ...).
+func systemSearchCandidates(goos, dir, command string) []string {
+	base := filepath.Join(dir, command)
+	if goos != "windows" || isWindowsExecutableName(base) {
+		return []string{base}
+	}
+	out := make([]string, 0, len(windowsExecutableExtensions))
+	for _, ext := range windowsExecutableExtensions {
+		out = append(out, base+ext)
+	}
+	return out
 }
 
 // windowsCmdShimScriptRe matches the Node script reference inside an
