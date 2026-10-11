@@ -143,5 +143,59 @@ The socket must be loopback only: `127.0.0.1:5900` (x11vnc 0.9.16 on Ubuntu
 --screenshot` should write a screenshot, and `preloop agents status <runtime>
 --json` reports `desktop.installed` when `~/.preloop/desktop.json` exists.
 
-Access brokering is not available yet. Reaching this display from outside the
-host is a later change.
+### Live desktop view
+
+Operators watch the display from the console, next to the agent's timeline,
+through a brokered live view. No inbound port is opened on the host: the
+host keeps one outbound connection to Preloop and relays the screen only
+while a view is open. The API must run with `PRELOOP_DESKTOP_VIEWS_ENABLED=true`
+(off by default).
+
+**Host side.** With `desktop: true` the deployment's desktop step also creates
+a desktop credential bound to the deployed agent, stores it in
+`~/.preloop/desktop/token` (mode `0600`), and enables the systemd user unit
+`preloop-desktop-tunnel.service`, which runs `preloop desktop serve`. The
+endpoint registers the host (a stable id kept in `~/.preloop/desktop.json`,
+hostname, display) and heartbeats. When a view opens it connects to the local
+x11vnc, does the VNC password handshake itself and hands Preloop a stream that
+needs no password: the VNC password never leaves the host and never reaches
+the browser. A failed tunnel step reports `desktop: failed`.
+
+On a host that already runs an agent (Debian or Ubuntu), enable the same
+thing after the fact:
+
+```sh
+preloop desktop enable --agent <agent-id>
+```
+
+`--agent` creates the desktop credential with your login, so the desktop shows
+up on that agent's page and on its sessions. Without a login, pass an existing
+agent key with `--agent-key` or `PRELOOP_DESKTOP_TOKEN`. `--dry-run` prints
+the steps. Check the tunnel with `systemctl --user status
+preloop-desktop-tunnel`.
+
+**Console.** An agent with an online desktop shows a **Desktop** tab, and its
+live sessions show a **Live desktop** button. A view is view only: keyboard,
+mouse and clipboard input are dropped by the API, not just by the browser.
+"Request control" (if you have the permission) forwards input for at most 10
+minutes after you confirm with a reason. One viewer per desktop at a time; a
+second operator is told who holds it. Views last 15 minutes by default
+(`PRELOOP_DESKTOP_VIEW_MAX_SECONDS` caps them, default 60 minutes) and close
+after 120 seconds without viewer traffic. Opening, ending, and taking or
+releasing control are audit events. Nothing is recorded: no frames, no
+screenshots.
+
+**Native VNC client.** From an operator machine:
+
+```sh
+preloop agents desktop <agent> --port 5901
+vncviewer 127.0.0.1:5901
+```
+
+The CLI listens on `127.0.0.1` only, uses the same view and the same checks as
+the console, and ends the view when the VNC client disconnects or on Ctrl-C.
+
+Opening a view needs the `control_managed_agent` permission (the one that
+guards agent takeover) in the agent's account, checked when the view is
+created and again when the viewer connects. API replicas join the two halves
+of a view over NATS, so no sticky routing is required.
