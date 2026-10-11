@@ -274,48 +274,61 @@ describe('account-switcher', () => {
     expect(switches).to.equal(2);
   });
 
-  it('keeps the dialog open with the reason when the server refuses', async () => {
-    const { el, navigated } = await render([m('acc-root', 'Root')]);
-    api!.restore();
-    api = mockApi({
-      capabilities: ['multi_account'],
-      routes: [
-        {
-          method: 'POST',
-          path: '/api/v1/me/accounts',
-          status: 403,
-          body: {
-            detail: 'Verify your email address before creating an account',
+  for (const detail of [
+    'Verify your email address before creating an account',
+    {
+      code: 'email_not_verified',
+      message: 'Confirm your address to continue.',
+    },
+    'Account creation is disabled',
+  ]) {
+    it(`keeps the dialog open with the reason when the server refuses: ${JSON.stringify(detail)}`, async () => {
+      const { el, navigated } = await render([m('acc-root', 'Root')]);
+      api!.restore();
+      api = mockApi({
+        capabilities: ['multi_account'],
+        routes: [
+          {
+            method: 'POST',
+            path: '/api/v1/me/accounts',
+            status: 403,
+            body: {
+              detail,
+            },
           },
-        },
-      ],
+        ],
+      });
+      const dialog = await openNewAccount(el);
+      await typeName(el, 'Side project');
+      (
+        el.shadowRoot!.querySelector(
+          '[data-testid="create-account"]'
+        ) as HTMLElement
+      ).click();
+      await waitUntil(
+        () =>
+          el.shadowRoot!.querySelector('sl-dialog.new-account [role="alert"]'),
+        'no error shown'
+      );
+      expect(
+        el.shadowRoot!.querySelector('sl-dialog.new-account [role="alert"]')
+          ?.textContent
+      ).to.contain(typeof detail === 'string' ? detail : detail.message);
+      const recovery = el.shadowRoot!.querySelector(
+        'a[href="/console/settings/profile"]'
+      );
+      if (detail === 'Account creation is disabled') {
+        expect(recovery).not.to.exist;
+      } else {
+        expect(recovery?.textContent).to.contain('resend the email');
+      }
+      expect(dialog.open).to.equal(true);
+      expect(navigated).to.eql([]);
+      expect(
+        api!.calls.some((c) => c.path === '/api/v1/auth/switch-account')
+      ).to.equal(false);
     });
-    const dialog = await openNewAccount(el);
-    await typeName(el, 'Side project');
-    (
-      el.shadowRoot!.querySelector(
-        '[data-testid="create-account"]'
-      ) as HTMLElement
-    ).click();
-    await waitUntil(
-      () =>
-        el.shadowRoot!.querySelector('sl-dialog.new-account [role="alert"]'),
-      'no error shown'
-    );
-    expect(
-      el.shadowRoot!.querySelector('sl-dialog.new-account [role="alert"]')
-        ?.textContent
-    ).to.contain('Verify your email address');
-    expect(
-      el.shadowRoot!.querySelector('a[href="/console/settings/profile"]')
-        ?.textContent
-    ).to.contain('resend the email');
-    expect(dialog.open).to.equal(true);
-    expect(navigated).to.eql([]);
-    expect(
-      api!.calls.some((c) => c.path === '/api/v1/auth/switch-account')
-    ).to.equal(false);
-  });
+  }
 
   it('lists accounts grouped by tree with the current one checked', async () => {
     const { el } = await render([

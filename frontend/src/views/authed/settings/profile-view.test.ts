@@ -282,4 +282,30 @@ describe('ProfileView', () => {
     ).not.to.exist;
     expect(fetchStub.called).to.be.true;
   });
+  it('reports when the email still awaits verification after refreshing', async () => {
+    fetchStub = createFetchStub();
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.querySelector(
+          '[data-testid="refresh-verification"]'
+        )
+    );
+    (
+      element.shadowRoot?.querySelector(
+        '[data-testid="refresh-verification"]'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(
+      () =>
+        !!element.shadowRoot?.textContent?.includes(
+          'still awaiting verification'
+        )
+    );
+    expect(
+      element.shadowRoot?.querySelector('[data-testid="resend-verification"]')
+    ).to.exist;
+  });
 });

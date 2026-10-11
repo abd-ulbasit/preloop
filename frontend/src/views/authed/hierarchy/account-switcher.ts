@@ -13,6 +13,7 @@ import { isCapabilityOff } from '../../../capabilities';
 import { showToast } from '../../../components/confirm-dialog';
 import {
   createRootAccount,
+  EmailNotVerifiedError,
   getMemberships,
   lastUsedAccounts,
   switchAccount,
@@ -66,6 +67,7 @@ export class AccountSwitcher extends LitElement {
   @state() private newAccountName = '';
   @state() private creating = false;
   @state() private createError = '';
+  @state() private verificationRequired = false;
   /**
    * The account this dialog already created. A failed switch after a
    * successful create retries only the switch: running the create again
@@ -120,6 +122,7 @@ export class AccountSwitcher extends LitElement {
   private openNewAccount = () => {
     this.newAccountName = '';
     this.createError = '';
+    this.verificationRequired = false;
     this.createdAccountId = '';
     this.newAccountDialog?.show();
   };
@@ -133,6 +136,7 @@ export class AccountSwitcher extends LitElement {
     }
     this.creating = true;
     this.createError = '';
+    this.verificationRequired = false;
     try {
       if (!this.createdAccountId) {
         const created = await createRootAccount(name);
@@ -146,6 +150,8 @@ export class AccountSwitcher extends LitElement {
       await switchAccount(this.createdAccountId, this.navigate);
       this.newAccountDialog?.hide();
     } catch (error) {
+      this.verificationRequired =
+        !this.createdAccountId && error instanceof EmailNotVerifiedError;
       this.createError = this.createdAccountId
         ? `The account was created, but switching to it failed: ${
             error instanceof Error ? error.message : 'unknown error'
@@ -187,7 +193,7 @@ export class AccountSwitcher extends LitElement {
           this.createError
             ? html`<p class="dialog-error" role="alert">${this.createError}</p>
                 ${
-                  this.createError.includes('Verify your email address')
+                  this.verificationRequired
                     ? html`<p>
                         <a href="/console/settings/profile"
                           >Check email verification or resend the email in
