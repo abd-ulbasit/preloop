@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from preloop.api.auth import get_current_active_user
+from preloop.api.managed_credentials import is_managed_execution_credential
 from preloop.config import settings
 from preloop.models import models
 from preloop.models.crud import crud_audit_log, crud_desktop, crud_managed_agent
@@ -87,12 +88,14 @@ def _desktop_permission(*, current_user: models.User, db: Session) -> bool:
 
 
 def _is_machine_credential(user: Any) -> bool:
-    """Runtime and agent credentials must not open operator views."""
+    """Runner execution, agent and runtime-session keys never open views."""
     api_key = getattr(user, "_auth_api_key", None)
     if api_key is None:
         return False
+    if is_managed_execution_credential(user):
+        return True
     context = api_key.context_data if isinstance(api_key.context_data, dict) else {}
-    return bool(context.get("managed_agent_id") or context.get("runtime_session_id"))
+    return bool(context.get("runtime_session_id"))
 
 
 def _authorize_operator(db: Session, user: models.User) -> None:
@@ -135,9 +138,8 @@ def _holder(db: Session, view: models.DesktopView) -> dict:
 
 
 def _endpoint_json(
-    db: Session, endpoint: models.DesktopEndpoint, now: datetime
+    endpoint: models.DesktopEndpoint, now: datetime, active: Optional[dict]
 ) -> dict:
-    active = crud_desktop.active_view(db, endpoint_pk=endpoint.id)
     return {
         "id": str(endpoint.id),
         "endpoint_id": endpoint.endpoint_id,
@@ -147,7 +149,23 @@ def _endpoint_json(
         "runner_id": _str(endpoint.runner_id),
         "state": "online" if endpoint_is_online(endpoint, now) else "offline",
         "last_seen_at": _iso(endpoint.last_seen_at),
-        "active_view": _holder(db, active) if active else None,
+        "active_view": active,
+    }
+
+
+def _active_holders(db: Session, endpoints: list[models.DesktopEndpoint]) -> dict:
+    """endpoint pk -> holder, in one query for all endpoints."""
+    rows = crud_desktop.active_views_with_usernames(
+        db, endpoint_pks=[endpoint.id for endpoint in endpoints]
+    )
+    return {
+        view.endpoint_pk: {
+            "view_id": str(view.id),
+            "user_id": str(view.user_id),
+            "username": username,
+            "since": _iso(view.created_at),
+        }
+        for view, username in rows
     }
 
 
@@ -335,13 +353,25 @@ async def _create_view(
         if not endpoint_is_online(endpoint, now):
             raise _error(409, "desktop_not_available", "The desktop is offline")
         if body.runtime_session_id is not None:
-            runtime_session = crud_desktop.session_link_filters(
+            linked = crud_desktop.session_link_filters(
                 db,
                 account_id=user.account_id,
                 runtime_session_id=body.runtime_session_id,
             )
-            if runtime_session is None:
+            if linked is None:
                 raise _error(404, "runtime_session_not_found", "Session not found")
+            linked_pks = {
+                row.id
+                for row in crud_desktop.list_endpoints(
+                    db, account_id=user.account_id, **linked
+                )
+            }
+            if endpoint.id not in linked_pks:
+                raise _error(
+                    422,
+                    "runtime_session_not_linked",
+                    "That session is not linked to this desktop",
+                )
         recent = crud_desktop.count_recent_views(
             db, user_id=user.id, since=now - timedelta(hours=1)
         )
@@ -438,11 +468,11 @@ async def list_desktop_endpoints(
             )
             filters["api_key_ids"] = linked["api_key_ids"]
         now = _now()
+        endpoints = crud_desktop.list_endpoints(db, account_id=account_id, **filters)
+        holders = _active_holders(db, endpoints)
         rows = [
-            _endpoint_json(db, endpoint, now)
-            for endpoint in crud_desktop.list_endpoints(
-                db, account_id=account_id, **filters
-            )
+            _endpoint_json(endpoint, now, holders.get(endpoint.id))
+            for endpoint in endpoints
         ]
         return [row for row in rows if state is None or row["state"] == state]
 

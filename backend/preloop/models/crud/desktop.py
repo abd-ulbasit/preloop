@@ -247,6 +247,30 @@ class CRUDDesktop:
             .first()
         )
 
+    def active_views_with_usernames(
+        self, db: Session, *, endpoint_pks: list[Any]
+    ) -> List[tuple[DesktopView, Optional[str]]]:
+        """Newest open view per endpoint, joined with the holder's username."""
+        if not endpoint_pks:
+            return []
+        rows = (
+            db.query(DesktopView, models.User.username)
+            .outerjoin(models.User, models.User.id == DesktopView.user_id)
+            .filter(
+                DesktopView.endpoint_pk.in_(endpoint_pks),
+                DesktopView.state.in_(OPEN_STATES),
+            )
+            .order_by(DesktopView.created_at.desc())
+            .all()
+        )
+        seen: set[Any] = set()
+        out: List[tuple[DesktopView, Optional[str]]] = []
+        for view, username in rows:
+            if view.endpoint_pk not in seen:
+                seen.add(view.endpoint_pk)
+                out.append((view, username))
+        return out
+
     def lock_endpoint(self, db: Session, *, pk: Any) -> Optional[DesktopEndpoint]:
         """Row lock serializing view creation on one endpoint (busy rule)."""
         return (

@@ -219,3 +219,109 @@ def test_local_bus_delivers_in_order_and_unsubscribes() -> None:
     got = asyncio.run(run())
     assert [len(g) for g in got] == [broker.BUS_CHUNK_BYTES, 5, 3]
     assert got[-1] == b"end"
+
+
+def test_local_bus_backpressures_a_stalled_subscriber() -> None:
+    """A stalled viewer must slow the producer, not grow memory."""
+
+    async def run() -> tuple[int, bool]:
+        bus = broker.LocalDesktopBus()
+        release = asyncio.Event()
+
+        async def stalled(_: bytes) -> None:
+            await release.wait()
+
+        unsubscribe = await bus.subscribe("s", stalled)
+        sent = 0
+        blocked = False
+        for _ in range(broker.LOCAL_BUS_QUEUE_SIZE * 4):
+            try:
+                await asyncio.wait_for(bus.publish("s", b"x"), 0.05)
+            except asyncio.TimeoutError:
+                blocked = True
+                break
+            sent += 1
+        release.set()
+        await unsubscribe()
+        return sent, blocked
+
+    sent, blocked = asyncio.run(run())
+    assert blocked
+    assert sent <= broker.LOCAL_BUS_QUEUE_SIZE + 1
+
+
+class FakeNatsSub:
+    def __init__(self) -> None:
+        self.unsubscribed = False
+
+    async def unsubscribe(self) -> None:
+        self.unsubscribed = True
+
+
+class FakeNats:
+    """In-memory stand-in for a connected nats-py client."""
+
+    def __init__(self) -> None:
+        self.is_connected = True
+        self.subs: list[tuple[str, object, FakeNatsSub, dict]] = []
+        self.published: list[tuple[str, bytes]] = []
+
+    async def subscribe(self, subject: str, cb=None, **kwargs):  # type: ignore[no-untyped-def]
+        sub = FakeNatsSub()
+        self.subs.append((subject, cb, sub, kwargs))
+        return sub
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        self.published.append((subject, payload))
+        for sub_subject, cb, sub, _ in list(self.subs):
+            if sub_subject == subject and not sub.unsubscribed:
+
+                class Msg:
+                    data = payload
+
+                await cb(Msg())  # type: ignore[misc]
+
+
+def test_nats_bus_wires_subscribe_publish_and_unsubscribe() -> None:
+    async def run() -> tuple[FakeNats, list[bytes]]:
+        client = FakeNats()
+        bus = broker.NatsDesktopBus(client)
+        got: list[bytes] = []
+
+        async def handler(data: bytes) -> None:
+            got.append(data)
+
+        unsubscribe = await bus.subscribe("desktop.view.v.to_viewer", handler)
+        await broker.publish_bytes(bus, "desktop.view.v.to_viewer", b"rfb")
+        await unsubscribe()
+        await bus.publish("desktop.view.v.to_viewer", b"late")
+        return client, got
+
+    client, got = asyncio.run(run())
+    assert got == [b"rfb"]
+    subject, _, sub, kwargs = client.subs[0]
+    assert subject == "desktop.view.v.to_viewer" and sub.unsubscribed
+    assert kwargs["pending_bytes_limit"] == broker.NATS_PENDING_BYTES_LIMIT
+
+
+def test_get_desktop_bus_prefers_connected_nats(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from preloop.sync.services import event_bus
+
+    client = FakeNats()
+
+    async def connected():  # type: ignore[no-untyped-def]
+        return client
+
+    broker.set_desktop_bus(None)
+    monkeypatch.setattr(event_bus, "get_nats_client", connected)
+    bus = asyncio.run(broker.get_desktop_bus())
+    assert isinstance(bus, broker.NatsDesktopBus)
+
+    client.is_connected = False
+    assert asyncio.run(broker.get_desktop_bus()) is broker._local_bus
+
+    async def missing():  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(event_bus, "get_nats_client", missing)
+    assert asyncio.run(broker.get_desktop_bus()) is broker._local_bus
