@@ -1458,7 +1458,13 @@ func effectiveRunnerLabels(flag []string) []string {
 	if len(flag) > 0 {
 		return flag
 	}
-	return config.RunnerLabels()
+	// Never nil: configs written before #1479 have no runner.labels, and
+	// a nil slice marshals as null, which the register endpoint rejects.
+	labels := config.RunnerLabels()
+	if labels == nil {
+		return []string{}
+	}
+	return labels
 }
 
 // Service hooks. Variables so tests can drive disable and rotate-token
