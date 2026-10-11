@@ -249,6 +249,7 @@ nav:
           - Transcript evaluation: guide/flows/transcript-evaluation.md
           - "Scanner binaries: decision note": guide/flows/scanner-binaries-decision.md
           - Scanner agent image: guide/flows/scanner-image.md
+          - "Portfolio review: PRD": prd/portfolio-review-flow.md
       - Trigger from CI: guide/flows/ci-trigger.md
       - GitHub Actions: guide/flows/github-actions.md
       - Restricted CI setup: guide/flows/restricted-ci.md
