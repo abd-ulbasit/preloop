@@ -775,8 +775,9 @@ type localEnrollmentState struct {
 	// cleanup can be retried even after its model credential has been deleted.
 	OffboardArchived bool `json:"offboard_archived,omitempty"`
 	// ClaudeDesktopModelRoutePath is the OS managed configuration the
-	// default onboarding installed for Claude Desktop model routing, so
-	// offboarding knows to remove it.
+	// default onboarding installed for Claude Desktop model routing;
+	// offboarding removes that path (removeClaudeDesktopModelRoute) rather
+	// than recomputing it.
 	ClaudeDesktopModelRoutePath string `json:"claude_desktop_model_route_path,omitempty"`
 	// CodexOAuthSyncedLastRefresh is the auth.json or Keychain last_refresh
 	// value last pushed for this enrollment. The Codex permission hook
@@ -2551,7 +2552,11 @@ func executeOffboard(agent AgentConfig, autoApprove bool, modelRemovalPolicy, se
 			// The default onboarding installed Desktop's model route into the
 			// OS managed configuration; take it out again, or Desktop keeps
 			// asking the credential helper for a key after the agent is gone.
-			removeClaudeDesktopModelRoute(os.Stdin, os.Stdout, strings.TrimRight(client.BaseURL(), "/"), autoApprove)
+			recordedPath := ""
+			if state != nil {
+				recordedPath = state.ClaudeDesktopModelRoutePath
+			}
+			removeClaudeDesktopModelRoute(os.Stdin, os.Stdout, strings.TrimRight(client.BaseURL(), "/"), recordedPath, autoApprove)
 		}
 		if state != nil {
 			if _, err := restoreAgentFromBackup(agent, state); err != nil {

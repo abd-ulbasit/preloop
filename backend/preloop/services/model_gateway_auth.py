@@ -573,14 +573,3 @@ def _principal_authorized_model_ids(
     if configured_ids and not collect_subject_model_allowlists(db, auth_context):
         authorized &= configured_ids
     return frozenset(authorized)
-
-    bindings = crud_managed_agent_ai_model_binding.list_for_agent(
-        db,
-        account_id=str(auth_context.account_id),
-        agent_id=managed_agent_id,
-    )
-    for binding in bindings:
-        bound_model_id = str(binding.ai_model_id)
-        if bound_model_id in bound_ids:
-            authorized.add(bound_model_id)
-    return frozenset(authorized)

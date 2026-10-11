@@ -263,7 +263,7 @@ func TestClaudeDesktopOffboardRemovesOnlyOurRoute(t *testing.T) {
 	if err := os.WriteFile(dest, []byte(renderDesktopPlist([]desktopSetting{{"bootstrapUrl", "https://gw.example/user/bootstrap"}})), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	removeClaudeDesktopModelRoute(strings.NewReader("\n"), &strings.Builder{}, "https://preloop.example", true)
+	removeClaudeDesktopModelRoute(strings.NewReader("\n"), &strings.Builder{}, "https://preloop.example", "", true)
 	if len(*calls) != 0 {
 		t.Fatalf("foreign config must not be removed: %v", *calls)
 	}
@@ -277,12 +277,42 @@ func TestClaudeDesktopOffboardRemovesOnlyOurRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	removeClaudeDesktopModelRoute(strings.NewReader("\n"), &out, "https://preloop.example", false)
+	removeClaudeDesktopModelRoute(strings.NewReader("\n"), &out, "https://preloop.example", "", false)
 	if len(*calls) != 1 || (*calls)[0][0] != "rm" || (*calls)[0][len((*calls)[0])-1] != dest {
 		t.Fatalf("expected rm of %s, got %v", dest, *calls)
 	}
 	if !strings.Contains(out.String(), "Remove the Claude Desktop managed configuration") {
 		t.Fatalf("offboard must ask before touching the admin-owned file: %s", out.String())
+	}
+
+	// The path recorded at onboard time wins over the recomputed one, so the
+	// file written then is the file removed now even if $USER changed.
+	*calls = nil
+	claudeDesktopCurrentUser = func() string { return "someone-else" }
+	removeClaudeDesktopModelRoute(strings.NewReader("\n"), &strings.Builder{}, "https://preloop.example", dest, true)
+	if len(*calls) != 1 || (*calls)[0][len((*calls)[0])-1] != dest {
+		t.Fatalf("expected rm of the recorded path %s, got %v", dest, *calls)
+	}
+}
+
+func TestClaudeDesktopManagedConfigDestinationRejectsUnsafeUserNames(t *testing.T) {
+	_, _ = stubClaudeDesktopDevice(t, "macos")
+	for _, user := range []string{"", ".", "..", "../../tmp/x", "a/b", `a\b`, " alice/", "alice/.."} {
+		if _, ok := claudeDesktopManagedConfigDestination("macos", user); ok {
+			t.Fatalf("user %q must not produce a privileged install path", user)
+		}
+	}
+	for _, user := range []string{"alice", "bob.smith", "svc-account_1"} {
+		dest, ok := claudeDesktopManagedConfigDestination("macos", user)
+		if !ok || !strings.HasSuffix(dest, filepath.Join(user, claudeDesktopPreferenceDomain+".plist")) {
+			t.Fatalf("user %q: ok=%v dest=%s", user, ok, dest)
+		}
+	}
+	// An unsafe $USER means no install, not an install somewhere else.
+	claudeDesktopCurrentUser = func() string { return "../../tmp/x" }
+	result := applyClaudeDesktopModelRoute(strings.NewReader("\n"), &strings.Builder{}, "https://preloop.example", true)
+	if result.Outcome != claudeDesktopRouteUnsupportedOS || result.Routed() {
+		t.Fatalf("unexpected result: %#v", result)
 	}
 }
 

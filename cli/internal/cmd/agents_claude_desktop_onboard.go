@@ -114,7 +114,11 @@ func defaultClaudeDesktopRunPrivileged(args []string, interactive bool) error {
 func claudeDesktopManagedConfigDestination(goos, user string) (string, bool) {
 	switch goos {
 	case "macos":
-		if strings.TrimSpace(user) == "" {
+		// The user name comes from $USER and ends up in a root-owned
+		// install path, so it must be a single path element: no separators,
+		// no "." / "..", nothing that filepath.Join would fold away.
+		user = strings.TrimSpace(user)
+		if !isSafeManagedPrefsUserName(user) {
 			return "", false
 		}
 		return filepath.Join(claudeDesktopMacManagedPrefsRoot, user, claudeDesktopPreferenceDomain+".plist"), true
@@ -124,6 +128,17 @@ func claudeDesktopManagedConfigDestination(goos, user string) (string, bool) {
 		return claudeDesktopWindowsPolicyKey, true
 	}
 	return "", false
+}
+
+// isSafeManagedPrefsUserName accepts only a plain account short name.
+func isSafeManagedPrefsUserName(user string) bool {
+	if user == "" || user == "." || user == ".." || len(user) > 255 {
+		return false
+	}
+	if strings.ContainsAny(user, `/\`) || strings.ContainsRune(user, 0) {
+		return false
+	}
+	return filepath.Base(user) == user && filepath.Clean(user) == user
 }
 
 // claudeDesktopDeviceRouteArtifact is the single direct-route artifact for
@@ -419,11 +434,21 @@ func seedClaudeDesktopGatewayCredential(client *api.Client, credential *managedA
 // configuration pointing elsewhere is left alone) and the helper's cached
 // credential. Failures are reported, not fatal: the credential itself is
 // revoked server-side by the offboard.
-func removeClaudeDesktopModelRoute(input io.Reader, output io.Writer, preloopURL string, autoApprove bool) {
+//
+// recordedPath is the destination the onboarding recorded in the local
+// enrollment state; it wins over the recomputed one so the file written then
+// is the file removed now, even if $USER differs between the two runs.
+func removeClaudeDesktopModelRoute(input io.Reader, output io.Writer, preloopURL, recordedPath string, autoApprove bool) {
 	goos := runtimeGOOSForRoute()
 	dest, ok := claudeDesktopManagedConfigDestination(goos, claudeDesktopCurrentUser())
+	existing := readClaudeDesktopManagedConfig()
+	if strings.TrimSpace(recordedPath) != "" {
+		dest, ok = recordedPath, true
+		if goos != "windows" {
+			existing = readClaudeDesktopManagedConfigFile(goos, recordedPath)
+		}
+	}
 	if ok {
-		existing := readClaudeDesktopManagedConfig()
 		if classifyClaudeDesktopModelRoute(existing, preloopURL) == claudeDesktopRouteDirect {
 			interactive := !autoApprove && !nonInteractiveAutoConfirm()
 			proceed := true
@@ -449,6 +474,25 @@ func removeClaudeDesktopModelRoute(input io.Reader, output io.Writer, preloopURL
 			fmt.Fprintf(output, "  Warning: could not remove the cached Claude Desktop gateway credential: %v\n", err) //nolint:errcheck
 		}
 	}
+}
+
+// readClaudeDesktopManagedConfigFile parses one managed configuration file
+// (plist on macOS, JSON on Linux); nil when absent or unreadable.
+func readClaudeDesktopManagedConfigFile(goos, path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var values map[string]string
+	if goos == "macos" {
+		values, err = parseDesktopPlist(data)
+	} else {
+		values, err = parseDesktopManagedJSON(data)
+	}
+	if err != nil {
+		return nil
+	}
+	return values
 }
 
 func uninstallClaudeDesktopRouteArtifact(goos, dest string, existing map[string]string, interactive bool) error {
