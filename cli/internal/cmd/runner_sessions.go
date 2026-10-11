@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -219,7 +220,14 @@ func harnessSessionsEnabled(harness string) bool {
 // setHarnessSessionsEnabled records the host user's decision in runner.json
 // and keeps every other key as it was.
 func setHarnessSessionsEnabled(harness string, enabled bool) error {
-	return withRunnerStateLock(func() error { return setHarnessSessionsEnabledLocked(harness, enabled) })
+	if err := withRunnerStateLock(func() error { return setHarnessSessionsEnabledLocked(harness, enabled) }); err != nil {
+		return err
+	}
+	// The server gates starts on the advertised inventory (sessions_enabled
+	// per harness): ask a running runner to rebuild and resend it on its
+	// next heartbeat instead of after the six-hour refresh.
+	_ = touchHarnessInventoryMarker()
+	return nil
 }
 
 func setHarnessSessionsEnabledLocked(harness string, enabled bool) error {
@@ -445,6 +453,15 @@ type runnerSessionManager struct {
 	notify   chan struct{}
 	adapters map[string]sessionHarnessAdapter
 
+	// starting holds ids whose workspace is being prepared (slot reserved);
+	// stoppedWhileStarting marks those a session_stop reached first.
+	starting             map[string]bool
+	stoppedWhileStarting map[string]bool
+	// runAsync runs the workspace preparation of a start; nil runs it
+	// inline (tests). The runner sets it to a goroutine.
+	runAsync         func(func())
+	resolveWorkspace func(context.Context, string, *sessionWorkspaceSpec, sessionWorkspaceOptions) (*sessionWorkspace, error)
+
 	now        func() time.Time
 	stateDir   string
 	loadConfig func() (map[string]any, error)
@@ -465,6 +482,7 @@ func newRunnerSessionManager(out io.Writer) *runnerSessionManager {
 		stateDir:   dir,
 		loadConfig: loadRunnerConfigDoc,
 		notifyHost: raiseHostNotice,
+		runAsync:   func(f func()) { go f() },
 		out:        out,
 	}
 	m.restore()
@@ -518,12 +536,18 @@ func (m *runnerSessionManager) next() (map[string]any, bool) {
 	return m.outbox[0], true
 }
 
-// pop removes the message next returned, once it is on the wire.
-func (m *runnerSessionManager) pop() {
+// popSent removes the message next returned, once it is on the wire. It
+// matches by identity: an enqueue during the send may have evicted it or
+// shifted the outbox, and the next unsent frame must never be dropped.
+func (m *runnerSessionManager) popSent(sent map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.outbox) > 0 {
-		m.outbox = m.outbox[1:]
+	target := reflect.ValueOf(sent).Pointer()
+	for i, queued := range m.outbox {
+		if reflect.ValueOf(queued).Pointer() == target {
+			m.outbox = append(m.outbox[:i], m.outbox[i+1:]...)
+			return
+		}
 	}
 }
 
@@ -541,7 +565,7 @@ func (m *runnerSessionManager) flush(send func(map[string]any) error) error {
 		if err := send(msg); err != nil {
 			return err
 		}
-		m.pop()
+		m.popSent(msg)
 	}
 }
 
@@ -646,6 +670,10 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		m.enqueue(m.stateMessage(existing))
 		return
 	}
+	if m.starting[id] {
+		// Redelivered while the workspace is still being prepared.
+		return
+	}
 	doc, err := m.loadConfig()
 	if err != nil {
 		m.reject(id, rejectSessionsDisabled, "runner.json could not be read: "+err.Error())
@@ -661,15 +689,39 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		return
 	}
 	settings := runnerSessionSettingsFrom(doc)
-	if len(m.sessions) >= settings.MaxConcurrent {
-		m.reject(id, rejectMaxConcurrent, fmt.Sprintf("this runner already hosts %d of %d sessions", len(m.sessions), settings.MaxConcurrent))
+	if hosted := len(m.sessions) + len(m.starting); hosted >= settings.MaxConcurrent {
+		m.reject(id, rejectMaxConcurrent, fmt.Sprintf("this runner already hosts %d of %d sessions", hosted, settings.MaxConcurrent))
 		return
 	}
+	// The slot is reserved now; the workspace (a dirty check, or a clone
+	// that can take minutes) is prepared without m.mu and off the socket
+	// loop, so heartbeats, turns and stops keep flowing meanwhile.
+	if m.starting == nil {
+		m.starting = map[string]bool{}
+	}
+	m.starting[id] = true
+	m.enqueue(map[string]any{"type": "session_state", "remote_session_id": id, "state": runnerSessionStateStarting})
+	run := m.runAsync
+	if run == nil {
+		run = func(f func()) { f() }
+	}
+	m.mu.Unlock()
+	run(func() { m.finishStart(msg, id, adapter, settings) })
+	m.mu.Lock()
+}
+
+// finishStart resolves the workspace without m.mu, then starts the harness
+// session under it. A stop that arrived meanwhile wins.
+func (m *runnerSessionManager) finishStart(msg runnerWSMessage, id string, adapter sessionHarnessAdapter, settings runnerSessionSettings) {
 	spec := sanitizeSessionWorkspaceSpec(msg.Workspace)
 	parsed, err := parseSessionWorkspaceSpec(msg.Workspace)
 	var workspace *sessionWorkspace
 	if err == nil {
-		workspace, err = resolveSessionWorkspace(context.Background(), id, parsed, sessionWorkspaceOptions{
+		resolve := m.resolveWorkspace
+		if resolve == nil {
+			resolve = resolveSessionWorkspace
+		}
+		workspace, err = resolve(context.Background(), id, parsed, sessionWorkspaceOptions{
 			Harness: msg.Harness,
 			// No session adapter runs a harness read-only yet, so a
 			// read_only directory is refused rather than opened writable.
@@ -677,8 +729,18 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 			Logf:                func(line string) { m.logf("%s", line) },
 		})
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.starting, id)
 	if err != nil {
+		delete(m.stoppedWhileStarting, id)
 		m.reject(id, sessionWorkspaceRejectionCode(err), err.Error())
+		return
+	}
+	if m.stoppedWhileStarting[id] {
+		delete(m.stoppedWhileStarting, id)
+		_ = workspace.Cleanup()
+		m.enqueue(map[string]any{"type": "session_state", "remote_session_id": id, "state": runnerSessionStateEnded, "end_reason": runnerSessionEndStoppedByActor})
 		return
 	}
 	idle := settings.IdleTimeout
@@ -702,7 +764,7 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		session.ActorUserID = msg.Actor.UserID
 		session.ActorName = hostNoticeText(msg.Actor.DisplayName)
 	}
-	m.setState(session, runnerSessionStateStarting)
+	session.state = runnerSessionStateStarting
 	if err := adapter.Start(session); err != nil {
 		code, detail := classifySessionStartError(err)
 		session.state = runnerSessionStateFailed
@@ -963,6 +1025,14 @@ func (m *runnerSessionManager) handleStop(msg runnerWSMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session := m.sessions[id]
+	if session == nil && m.starting[id] {
+		// finishStart ends it once the workspace is ready.
+		if m.stoppedWhileStarting == nil {
+			m.stoppedWhileStarting = map[string]bool{}
+		}
+		m.stoppedWhileStarting[id] = true
+		return
+	}
 	if session == nil {
 		if uuidRe.MatchString(id) {
 			// Idempotent: the session is already gone on this host.

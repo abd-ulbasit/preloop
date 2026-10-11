@@ -341,6 +341,9 @@ def queue_turn(
         RunnerSessionError: ``session_ended``, ``turn_in_progress``,
             ``killed_by_kill_switch`` or ``invalid_turn``.
     """
+    # Lock the row and re-check: two concurrent turn requests must not both
+    # see no turn and overwrite each other's pending_turn.
+    row = crud_runner_remote_session.lock(db, remote_session_id=row.id) or row
     if not row.is_live or row.stop_mode:
         raise RunnerSessionError("session_ended", "The session has ended.")
     if flows_or_tools_halted(db, row.account_id):
