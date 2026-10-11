@@ -12,8 +12,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,19 +96,40 @@ type desktopViewSession struct {
 	ready chan<- string
 }
 
+var desktopUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// desktopAgentPageSize is the agents list endpoint's own ceiling.
+const desktopAgentPageSize = 100
+
+// desktopAgentMaxPages bounds how far name resolution pages (10,000 agents).
+var desktopAgentMaxPages = 100
+
 func resolveDesktopAgentID(client desktopViewClient, value string) (string, error) {
 	value = strings.TrimSpace(value)
-	var response managedAgentListResponse
-	if err := client.Get("/api/v1/agents?limit=100", &response); err != nil {
-		return "", fmt.Errorf("failed to list agents: %w", err)
+	if desktopUUIDPattern.MatchString(value) {
+		var agent managedAgentSummary
+		if err := client.Get("/api/v1/agents/"+url.PathEscape(value), &agent); err != nil {
+			return "", fmt.Errorf("failed to find agent %s: %w", value, err)
+		}
+		return value, nil
 	}
 	var matches []string
-	for _, item := range response.Items {
-		if item.ID == value {
-			return item.ID, nil
+	for page := 0; page < desktopAgentMaxPages; page++ {
+		var response managedAgentListResponse
+		path := fmt.Sprintf("/api/v1/agents?limit=%d&offset=%d", desktopAgentPageSize, page*desktopAgentPageSize)
+		if err := client.Get(path, &response); err != nil {
+			return "", fmt.Errorf("failed to list agents: %w", err)
 		}
-		if strings.EqualFold(item.DisplayName, value) || (len(value) >= 4 && strings.HasPrefix(item.ID, value)) {
-			matches = append(matches, item.ID)
+		for _, item := range response.Items {
+			if item.ID == value {
+				return item.ID, nil
+			}
+			if strings.EqualFold(item.DisplayName, value) || (len(value) >= 4 && strings.HasPrefix(item.ID, value)) {
+				matches = append(matches, item.ID)
+			}
+		}
+		if len(response.Items) < desktopAgentPageSize {
+			break
 		}
 	}
 	switch len(matches) {

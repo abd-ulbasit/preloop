@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,10 @@ import (
 // fakeViewAPI serves the REST routes and the viewer socket used by
 // `preloop agents desktop`.
 type fakeViewAPI struct {
+	// holdOpen keeps the viewer socket open until the client closes it.
+	holdOpen bool
+	agents   []map[string]string
+	gets     []string
 	server   *httptest.Server
 	mu       sync.Mutex
 	deleted  []string
@@ -30,14 +36,48 @@ type fakeViewAPI struct {
 }
 
 func newFakeViewAPI(t *testing.T) *fakeViewAPI {
-	api := &fakeViewAPI{got: make(chan struct{}, 1)}
+	return newFakeViewAPIWith(t, false, nil)
+}
+
+func newFakeViewAPIWith(t *testing.T, holdOpen bool, agents []map[string]string) *fakeViewAPI {
+	if agents == nil {
+		agents = []map[string]string{
+			{"id": "11111111-aaaa", "display_name": "Browser agent"},
+			{"id": "22222222-bbbb", "display_name": "Other"},
+		}
+	}
+	api := &fakeViewAPI{got: make(chan struct{}, 1), holdOpen: holdOpen, agents: agents}
 	upgrader := websocket.Upgrader{Subprotocols: []string{"binary"}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": []map[string]string{
-			{"id": "11111111-aaaa", "display_name": "Browser agent"},
-			{"id": "22222222-bbbb", "display_name": "Other"},
-		}})
+		api.mu.Lock()
+		api.gets = append(api.gets, r.URL.RawQuery)
+		api.mu.Unlock()
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		end := offset + limit
+		if end > len(api.agents) {
+			end = len(api.agents)
+		}
+		page := []map[string]string{}
+		if offset < len(api.agents) {
+			page = api.agents[offset:end]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": page})
+	})
+	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")
+		if strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		for _, agent := range api.agents {
+			if agent["id"] == id {
+				_ = json.NewEncoder(w).Encode(agent)
+				return
+			}
+		}
+		http.NotFound(w, r)
 	})
 	mux.HandleFunc("/api/v1/agents/11111111-aaaa/desktop-views", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
@@ -69,6 +109,14 @@ func newFakeViewAPI(t *testing.T) *fakeViewAPI {
 		}
 		defer conn.Close() //nolint:errcheck
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte(rfbVersion38))
+		if api.holdOpen {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					api.got <- struct{}{}
+					return
+				}
+			}
+		}
 		_, data, err := conn.ReadMessage()
 		if err == nil {
 			api.mu.Lock()
@@ -195,5 +243,74 @@ func TestResolveDesktopAgentID(t *testing.T) {
 	}
 	if _, err := resolveDesktopAgentID(client, "nobody"); err == nil {
 		t.Error("unknown agent resolved")
+	}
+}
+
+func TestAgentsDesktopLocalClientDisconnectsFirst(t *testing.T) {
+	// The common way a view ends: the VNC client closes while the viewer
+	// socket is still open. Run with -race: the close code must not be read
+	// while the other pump is still writing it.
+	api := newFakeViewAPIWith(t, true, nil)
+	ready := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentsDesktop(context.Background(), desktopViewSession{
+			client: &fakeHTTPClient{base: api.server.URL, token: "header.jwt.sig"},
+			agent:  "Browser agent",
+			out:    &lockedWriter{w: &bytes.Buffer{}},
+			dial:   defaultDesktopWSDialer,
+			ready:  ready,
+		})
+	}()
+	conn, err := net.Dial("tcp", <-ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := make([]byte, 12)
+	if _, err := io.ReadFull(conn, version); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("agents desktop did not end when the VNC client left")
+	}
+	<-api.got
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.deleted) != 1 {
+		t.Fatal("view not deleted")
+	}
+}
+
+func TestResolveDesktopAgentIDPagesAndLooksUpIDs(t *testing.T) {
+	var agents []map[string]string
+	for i := 0; i < 150; i++ {
+		agents = append(agents, map[string]string{
+			"id":           fmt.Sprintf("00000000-0000-4000-8000-%012d", i),
+			"display_name": fmt.Sprintf("agent %d", i),
+		})
+	}
+	api := newFakeViewAPIWith(t, false, agents)
+	client := &fakeHTTPClient{base: api.server.URL, token: "t"}
+	got, err := resolveDesktopAgentID(client, "agent 142")
+	if err != nil || got != agents[142]["id"] {
+		t.Fatalf("name on page 2: %q %v", got, err)
+	}
+	got, err = resolveDesktopAgentID(client, agents[149]["id"])
+	if err != nil || got != agents[149]["id"] {
+		t.Fatalf("exact id beyond 100: %q %v", got, err)
+	}
+	if _, err := resolveDesktopAgentID(client, "00000000-0000-4000-8000-999999999999"); err == nil {
+		t.Fatal("unknown uuid resolved")
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.gets) != 2 || api.gets[1] != "limit=100&offset=100" {
+		t.Fatalf("list calls = %v", api.gets)
 	}
 }
