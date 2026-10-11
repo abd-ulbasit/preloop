@@ -319,4 +319,4 @@ export function nudgeMessage(nudge: UsageNudge): string {
 
 /** What the monthly analysis meter counts and what exhaustion changes. */
 export const ANALYSIS_QUOTA_EXPLANATION =
-  'Counts gateway input and output tokens, including cached prompts, on your provider keys or subscriptions. This limits Preloop analytics detail; agents and policies keep running.';
+  'Counts provider-reported gateway input and output totals on your provider keys or subscriptions. OpenAI totals include cached prompts. This limits Preloop analytics detail; agents and policies keep running.';
