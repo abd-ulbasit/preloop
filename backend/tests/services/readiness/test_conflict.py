@@ -15,16 +15,30 @@ from preloop.services.readiness.conflict import IsolatedConflictProbe, IMAGE
 
 async def docker_for_fixture() -> Any:
     """Docker-specific regressions skip only when their isolated runtime is absent."""
-    docker = None
     try:
         docker = aiodocker.Docker()
+    except (AssertionError, OSError, ValueError):
+        # aiodocker asserts when no socket, context, or DOCKER_HOST exists.
+        pytest.skip("Pinned local Docker readiness fixture runtime unavailable")
+    try:
         await docker.system.info()
         await docker.images.inspect(IMAGE)
         return docker
     except (aiodocker.DockerError, OSError, ValueError):
-        if docker is not None:
-            await docker.close()
+        await docker.close()
         pytest.skip("Pinned local Docker readiness fixture runtime unavailable")
+
+
+@pytest.mark.asyncio
+async def test_missing_docker_daemon_skips(monkeypatch: Any) -> None:
+    """A host with no Docker daemon skips instead of failing the suite."""
+
+    def _no_daemon(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError
+
+    monkeypatch.setattr(aiodocker, "Docker", _no_daemon)
+    with pytest.raises(pytest.skip.Exception):
+        await docker_for_fixture()
 
 
 def git(repo: Path, *args: str) -> str:
