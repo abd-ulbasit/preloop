@@ -290,7 +290,7 @@ def registration_verify(
     """Complete passkey registration and store the credential."""
     _require_enabled()
 
-    person = require_active_identity(db, current_user)
+    person = require_active_identity(db, current_user, lock=True)
     payload = _read_challenge_token(body.challenge_token, "register")
     if (
         payload.get("user_id") != str(person.id)

@@ -30,10 +30,12 @@ from preloop.api.auth.router import (
 )
 from preloop.api.auth.webauthn_router import (
     AuthenticationVerifyRequest,
+    RegistrationVerifyRequest,
     _issue_challenge_token,
     authentication_verify,
     delete_credential,
     list_credentials,
+    registration_verify,
 )
 from preloop.config import settings
 from preloop.models import models
@@ -395,3 +397,33 @@ def test_login_selection_prefers_history_then_primary_over_iteration_order(
     assert login_membership(db_session, person).id == child.id
     child.is_active = False
     assert login_membership(db_session, person).id == source.id
+
+
+def test_password_reset_invalidates_outstanding_passkey_registration(
+    db_session: Session,
+) -> None:
+    """A ceremony started before recovery cannot install a credential afterward."""
+    source, child = memberships(db_session, verified=True)
+    person = crud_person.resolve_for_membership(db_session, membership_id=source.id)
+    challenge = _issue_challenge_token(
+        b"synthetic-registration",
+        "register",
+        str(person.id),
+        auth_generation=person.auth_generation,
+    )
+    crud_person.set_password(
+        db_session,
+        person_id=person.id,
+        hashed_password=get_password_hash(NEW_PASSWORD),
+    )
+    with pytest.raises(HTTPException) as denial:
+        registration_verify(
+            RegistrationVerifyRequest(challenge_token=challenge, credential={}),
+            request(),
+            child,
+            db_session,
+        )
+    assert denial.value.status_code == 400
+    assert (
+        crud_webauthn_credential.list_for_person(db_session, person_id=person.id) == []
+    )

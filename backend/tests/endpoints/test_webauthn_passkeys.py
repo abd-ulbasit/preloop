@@ -74,6 +74,9 @@ def db_session_mock(mock_user, monkeypatch):
 
     monkeypatch.setattr(crud_person, "get", lambda *args, **kwargs: person())
     monkeypatch.setattr(
+        crud_person, "lock_for_session", lambda *args, **kwargs: person()
+    )
+    monkeypatch.setattr(
         crud_person, "resolve_for_membership", lambda *args, **kwargs: person()
     )
     monkeypatch.setattr(
