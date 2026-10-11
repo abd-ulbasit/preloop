@@ -42,8 +42,11 @@ export const RUNNER_SESSION_ERROR_MESSAGES: Record<string, string> = {
   workspace_not_authorized:
     'This directory is not authorized for the selected harness on the host.',
   workspace_dirty: 'The directory has uncommitted changes the runner refused.',
-  checkout_not_available:
-    'Repository checkouts are not available yet. Pick an authorized directory.',
+  checkout_repository_invalid: 'The repository must be given as owner/name.',
+  checkout_provider_unsupported:
+    'Checkouts work with GitHub and Bitbucket Cloud trackers.',
+  checkout_credential_unavailable:
+    'The tracker could not issue a checkout credential. Check its connection and try again.',
   checkout_requires_app_or_oauth:
     'Checkouts need a GitHub App tracker. Personal access tokens are never sent to a host.',
   checkout_requires_oauth:

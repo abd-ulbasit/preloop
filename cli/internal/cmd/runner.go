@@ -151,6 +151,10 @@ type runnerState struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 	Name  string `json:"name"`
+	// AuthorizedDirectories is the operator's list of directories remote
+	// sessions may open (preloop runner dirs). Kept here so a token
+	// rotation or re-registration never drops it.
+	AuthorizedDirectories []authorizedDirectory `json:"authorized_directories,omitempty"`
 	// Harnesses holds per-harness switches, e.g.
 	// {"cursor_cli": {"enabled": false}}. Kept on rewrite.
 	Harnesses map[string]runnerHarnessConfig `json:"harnesses,omitempty"`
@@ -199,6 +203,19 @@ type runnerWSMessage struct {
 	HaltExecutionIDs []string         `json:"halt_execution_ids,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	RunnerID         string           `json:"runner_id,omitempty"`
+
+	// Remote session frames (session_start, session_turn, session_stop).
+	RemoteSessionID string              `json:"remote_session_id,omitempty"`
+	TurnID          string              `json:"turn_id,omitempty"`
+	Text            string              `json:"text,omitempty"`
+	Mode            string              `json:"mode,omitempty"`
+	Harness         string              `json:"harness,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	FirstPrompt     string              `json:"first_prompt,omitempty"`
+	Workspace       map[string]any      `json:"workspace,omitempty"`
+	Actor           *runnerSessionActor `json:"actor,omitempty"`
+	Limits          map[string]any      `json:"limits,omitempty"`
+
 	// InventoryWanted on an ack asks for the full harness inventory.
 	InventoryWanted bool `json:"inventory_wanted,omitempty"`
 }
@@ -266,6 +283,9 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Checkouts of sessions that did not survive the restart are garbage;
+	// a session restored from disk keeps its clone.
+	_ = cleanupSessionWorkspaces(liveSessionCheckouts())
 	// Unregister on every exit path an ephemeral process can take: a clean
 	// one-shot finish, a fatal server rejection, a panic. The signal handler
 	// below covers SIGTERM/SIGINT/SIGHUP; SIGKILL cannot be caught, which is
@@ -324,14 +344,15 @@ func loadOrRegisterRunner(
 		concurrency = config.DefaultRunnerConcurrency
 	}
 	req := map[string]any{
-		"harness_inventory":  runnerInventory.current(true),
-		"host_exec_profiles": hostExecAdvertisements(),
-		"name":               name,
-		"hostname":           hostname,
-		"os":                 runtime.GOOS,
-		"arch":               runtime.GOARCH,
-		"labels":             labels,
-		"concurrency":        concurrency,
+		"harness_inventory":      runnerInventory.current(true),
+		"host_exec_profiles":     hostExecAdvertisements(),
+		"authorized_directories": authorizedDirectoryAdvertisements(),
+		"name":                   name,
+		"hostname":               hostname,
+		"os":                     runtime.GOOS,
+		"arch":                   runtime.GOARCH,
+		"labels":                 labels,
+		"concurrency":            concurrency,
 	}
 	if runnerOnce.registersEphemeral() {
 		return registerEphemeralRunner(client, req)
@@ -359,7 +380,11 @@ func loadOrRegisterRunner(
 		return nil, fmt.Errorf("register runner: %w", err)
 	}
 	state := &runnerState{ID: created.ID, Token: created.Token, Name: created.Name}
+	// Directories authorized before the first registration (or after a
+	// stale identity was discarded) belong to this host, not to the runner
+	// row, so they survive a fresh registration.
 	if previous, err := readRunnerState(); err == nil {
+		state.AuthorizedDirectories = previous.AuthorizedDirectories
 		// A fresh registration keeps the operator's harness switches.
 		state.Harnesses = previous.Harnesses
 	}
@@ -529,6 +554,8 @@ func runnerForegroundLoop(
 	}
 
 	jobs := newRunnerJobs(concurrency)
+	jobs.sessions = newRunnerSessionManager(out)
+	defer jobs.sessions.shutdown()
 	backoff := runnerReconnectMin
 	connectedOnce := false
 
@@ -652,6 +679,13 @@ func runRunnerSession(
 	if err := writeRunnerJSON(conn, runnerHeartbeatMessage(jobs.concurrency)); err != nil {
 		return fmt.Errorf("initial heartbeat: %w", err)
 	}
+	// Remote sessions outlive the socket; tell this connection which are
+	// live so the server resumes delivery to them.
+	jobs.sessions.reportLive()
+	sendSessionFrame := func(msg map[string]any) error { return writeRunnerJSON(conn, msg) }
+	if err := jobs.sessions.flush(sendSessionFrame); err != nil {
+		return fmt.Errorf("session report: %w", err)
+	}
 
 	// Unacknowledged output has to be offered again on the new socket, for
 	// every held job and every outcome still waiting to be reported.
@@ -677,6 +711,7 @@ func runRunnerSession(
 		case <-interrupt:
 			fmt.Fprintf(out, "Unregistering...\n")
 			jobs.haltAll()
+			jobs.sessions.shutdown()
 			_ = writeRunnerJSON(conn, map[string]any{"type": "unregister"})
 			return nil
 		case <-logTicker.C:
@@ -699,7 +734,12 @@ func runRunnerSession(
 					return err
 				}
 			}
+		case <-jobs.sessions.notifyChan():
+			if err := jobs.sessions.flush(sendSessionFrame); err != nil {
+				return fmt.Errorf("session delivery: %w", err)
+			}
 		case <-ticker.C:
+			jobs.sessions.tick()
 			if !jobs.publicationActive() {
 				_ = cleanupPublicationRecovery(time.Now())
 			}
@@ -731,6 +771,9 @@ func runRunnerSession(
 				return err
 			}
 		case msg := <-incoming:
+			if jobs.sessions.handle(msg) {
+				continue
+			}
 			if msg.Type == "hello" {
 				logAcknowledgements = msg.LogAcknowledgements
 				// The echo is how a one-shot run learns whether this
@@ -1286,7 +1329,10 @@ func writeRunnerState(state *runnerState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// Atomic: the running runner re-reads this file on every heartbeat for
+	// the authorized directory list, and `preloop runner dirs` edits it
+	// from another process.
+	return writeFileAtomic(path, data, 0o600)
 }
 
 func runRunnerEnable(cmd *cobra.Command, args []string) error {

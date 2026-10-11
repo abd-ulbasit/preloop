@@ -437,13 +437,6 @@ type harnessInventoryView struct {
 	Entries []harnessInventoryEntry `json:"entries"`
 }
 
-type harnessInventoryEntry struct {
-	Harness     string `json:"harness"`
-	DisplayName string `json:"display_name"`
-	Version     string `json:"version"`
-	LoginState  string `json:"login_state"`
-}
-
 func waitForRunnerOnline(out io.Writer) {
 	client, err := api.NewClient(FlagToken, FlagURL)
 	if err != nil {

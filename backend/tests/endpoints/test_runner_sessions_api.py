@@ -2,6 +2,7 @@
 
 import json
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -22,6 +23,7 @@ from preloop.models import models
 from preloop.models.crud import crud_user
 from preloop.models.db.session import get_db_session as get_db
 from preloop.plugins import account_hooks
+from preloop.services.runner_workspace_credentials import CheckoutCredential
 from preloop.plugins.account_hooks import (
     ACTION_RUNNER_SESSION_START,
     Decision,
@@ -470,14 +472,9 @@ def test_without_service_start_is_503_and_audited(db_session, test_user):
     assert client.get(f"/api/v1/runners/{runner.id}/sessions").json() == []
 
 
-def test_tracker_checkout_is_stubbed_until_minting_lands(
-    db_session, test_user, service, monkeypatch
-):
-    monkeypatch.setattr(
-        runner_sessions,
-        "_mint_checkout_credential",
-        runner_sessions._mint_checkout_credential_stub,
-    )
+def test_tracker_checkout_relays_the_minter_refusal(db_session, test_user, service):
+    # The real #1484 minter refuses a PAT tracker by name before any
+    # credential exists.
     runner = _runner(db_session, test_user)
     tracker = _tracker(db_session, test_user, "github")
     response = _client(db_session, test_user).post(
@@ -491,13 +488,13 @@ def test_tracker_checkout_is_stubbed_until_minting_lands(
         ),
     )
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "checkout_not_available"
+    assert response.json()["detail"]["code"] == "checkout_requires_app_or_oauth"
     _assert_audited(
         db_session,
         runner,
         test_user,
         "runner_session.rejected",
-        reason="checkout_not_available",
+        reason="checkout_requires_app_or_oauth",
         workspace_kind="tracker_checkout",
         workspace_label="acme/api",
     )
@@ -508,14 +505,20 @@ def test_tracker_checkout_credential_reaches_only_the_plan(
     db_session, test_user, service, monkeypatch
 ):
     token = "ghs_" + secrets.token_hex(8)
+    minted = []
+
+    async def fake_mint(tracker, repository, **kwargs):
+        minted.append((repository, kwargs))
+        return CheckoutCredential(
+            username="x-access-token",
+            token=token,
+            expires_at=datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc),
+            provider="github",
+            repository=repository,
+        )
+
     monkeypatch.setattr(
-        runner_sessions,
-        "_mint_checkout_credential",
-        lambda db, tracker, repository: {
-            "username": "x-access-token",
-            "token": token,
-            "expires_at": "2026-10-16T10:00:00Z",
-        },
+        runner_sessions.workspace_credentials, "mint_checkout_credential", fake_mint
     )
     runner = _runner(db_session, test_user)
     tracker = _tracker(db_session, test_user, "github")
@@ -531,6 +534,12 @@ def test_tracker_checkout_credential_reaches_only_the_plan(
     )
     assert response.status_code == 202, response.text
     assert service.credentials[0]["token"] == token
+    assert service.credentials[0]["expires_at"] == "2026-10-16T10:00:00Z"
+    # The minter is told which session and actor it mints for, and gets no
+    # database session (the route writes the audit row).
+    assert minted[0][0] == "acme/api"
+    assert "db" not in minted[0][1]
+    assert minted[0][1]["remote_session_id"] == service.plans[0].remote_session_id
     assert token not in json.dumps(service.plans[0].workspace)
     assert service.plans[0].credential is None
     rows = _audit(db_session, runner)

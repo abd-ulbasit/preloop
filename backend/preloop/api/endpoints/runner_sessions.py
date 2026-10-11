@@ -4,10 +4,12 @@ The console (and later the mobile apps) start a session with a harness that
 is installed on one of the caller's runners, send it turns and stop it. The
 routes here own authorization, validation, the clone credential hand-off and
 the audit trail. Persisting the session and talking to the runner belong to
-the runner session service (#1482), which registers itself through
-:func:`register_runner_session_service`. Until it does, every route except
-``session-options`` answers 503 ``remote_sessions_unavailable`` after it has
-authorized, validated and audited the request.
+the runner session service (#1482,
+``preloop.services.runner_session_api_service``), which the app registers
+through :func:`register_runner_session_service` at startup. Without one,
+every route except ``session-options`` answers 503
+``remote_sessions_unavailable`` after it has authorized, validated and
+audited the request.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from preloop.models.crud.flow_runner import crud_flow_runner
 from preloop.models.db.session import get_db_session as get_db
 from preloop.models.schemas.flow_runner import HarnessId, HarnessInventory
 from preloop.models.schemas.runner_session import RunnerSessionStopMode
+from preloop.services import runner_workspace_credentials as workspace_credentials
 from preloop.plugins.account_hooks import (
     AuthorizationContext,
     may_start_runner_session,
@@ -338,7 +341,7 @@ def _call_service(factory: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Clone credential (#1484). Stub until runner_workspace_credentials lands.
+# Clone credential (#1484, ``runner_workspace_credentials``)
 # ---------------------------------------------------------------------------
 
 
@@ -350,29 +353,34 @@ class CheckoutCredentialError(Exception):
         self.code = code
 
 
-def _mint_checkout_credential_stub(
-    db: Session, *, tracker: Any, repository: str
-) -> Dict[str, Any]:
-    raise CheckoutCredentialError(
-        "checkout_not_available",
-        "Repository checkouts for remote sessions are not available yet.",
-    )
-
-
-try:  # pragma: no cover - depends on whether #1484 has landed
-    from preloop.services.runner_workspace_credentials import (  # type: ignore[import-not-found]
-        mint_checkout_credential as _mint_checkout_credential,
-    )
-except ImportError:  # pragma: no cover
-    _mint_checkout_credential = _mint_checkout_credential_stub
-
-
 def mint_checkout_credential(
-    db: Session, *, tracker: Any, repository: str
+    db: Session,
+    *,
+    tracker: Any,
+    repository: str,
+    actor_user_id: Any = None,
+    remote_session_id: Any = None,
 ) -> Dict[str, Any]:
-    """Mint a short-lived clone credential, mapping failures to API codes."""
+    """Mint a short-lived clone credential, mapping failures to API codes.
+
+    Runs on the threadpool (the routes are sync) and awaits the #1484 minter
+    on the event loop. The route writes the
+    ``runner_session.checkout_credential_minted`` audit row itself, so the
+    minter gets no database session.
+
+    Returns:
+        ``{username, token, expires_at}`` for the ``session_start`` frame
+        only. Never persist it.
+    """
     try:
-        return _mint_checkout_credential(db, tracker=tracker, repository=repository)
+        credential = from_thread.run(
+            lambda: workspace_credentials.mint_checkout_credential(
+                tracker,
+                repository,
+                actor_user_id=actor_user_id,
+                remote_session_id=remote_session_id,
+            )
+        )
     except CheckoutCredentialError:
         raise
     except Exception as exc:
@@ -381,6 +389,7 @@ def mint_checkout_credential(
             raise CheckoutCredentialError(code, str(exc)) from exc
         logger.warning("checkout credential minting failed: %s", type(exc).__name__)
         raise CheckoutCredentialError("checkout_failed") from exc
+    return credential.as_wire()
 
 
 # ---------------------------------------------------------------------------
@@ -812,11 +821,16 @@ def _prepare_start(
             "This runner already has the maximum number of remote sessions.",
         )
 
+    remote_session_id = str(uuid4())
     credential: Optional[Dict[str, Any]] = None
     if isinstance(workspace, TrackerCheckoutWorkspace):
         try:
             credential = mint_checkout_credential(
-                db, tracker=tracker, repository=workspace.repository
+                db,
+                tracker=tracker,
+                repository=workspace.repository,
+                actor_user_id=current_user.id,
+                remote_session_id=remote_session_id,
             )
         except CheckoutCredentialError as exc:
             raise audit.reject(
@@ -824,12 +838,12 @@ def _prepare_start(
             ) from None
         audit.log(
             "runner_session.checkout_credential_minted",
+            resource_id=remote_session_id,
             provider=stored_workspace["provider"],
             repository=workspace.repository,
             expires_at=str(credential.get("expires_at")) if credential else None,
         )
 
-    remote_session_id = str(uuid4())
     audit.log(
         "runner_session.start_requested",
         resource_id=remote_session_id,
