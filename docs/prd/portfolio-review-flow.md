@@ -25,13 +25,19 @@ answering it today costs a week of reading.
 
 Preloop already reviews one repository well. The
 [full-repo review presets](../guide/flows/repo-review-presets.md) share one
-skeleton:
+skeleton, and the
+[security audit presets](../guide/flows/security-audit-presets.md) cover the
+release security view of the same repository:
 
-| preset | lens | result schema |
-| --- | --- | --- |
-| `backend/presets/008-architecture-strategy-review.yaml` | architecture and strategy | family schema |
-| `backend/presets/009-repo-code-health-review.yaml` | code health | `preloop.review.codehealth/v1` |
-| `backend/presets/006-release-security-audit.yaml` | release security | `preloop.cra.releaseaudit/v1` |
+| preset | family | lens | result schema |
+| --- | --- | --- | --- |
+| `backend/presets/008-architecture-strategy-review.yaml` | full-repo review | architecture and strategy conformance | `preloop.review.arch/v1` |
+| `backend/presets/009-repo-code-health-review.yaml` | full-repo review | code health | `preloop.review.codehealth/v1` |
+| `backend/presets/010-standards-compliance-walk.yaml` | full-repo review | standards compliance | `preloop.review.standards/v1` |
+| `backend/presets/006-release-security-audit.yaml` | security audit | release security | `preloop.cra.releaseaudit/v1` |
+
+The docs currency lens (`016`) joined the full-repo family as part of this
+work (#641).
 
 What is missing is the layer above: discover the projects, ask a human which
 ones are worth money, run the existing lenses once per project, and turn the
