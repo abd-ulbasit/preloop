@@ -974,3 +974,26 @@ stays at its default (`true`). This overlay sets the plaintext switch to
 See the
 [deployment prerequisites](../../docs/guide/flows/durable-implementation-feedback.md#deployment-prerequisites)
 for retention, quota, egress, rollback and validation requirements.
+
+### Remote execution cluster
+
+Set `agentExecution.kubeconfigSecret` to an existing Secret with a `kubeconfig`
+key. API, gateway and lifecycle workers mount it read-only at
+`/var/run/preloop/execution/kubeconfig`; only execution Kubernetes clients use
+these credentials. Set `agentExecution.apiUrl` and `gatewayUrl` to endpoints
+reachable from that cluster (for example `https://example.com` and
+`https://example.com/openai/v1`). Set `agentExecution.priorityClassName` to a PriorityClass
+provisioned in the execution cluster.
+
+Provision the execution namespace, quotas, placement, image-pull access and
+network policies separately in the remote cluster. Give each environment a
+namespace-scoped identity with `jobs` create/get/delete, `jobs/status` get,
+`pods` get/list, `pods/log` get, `pods/exec` get, and `networkpolicies`
+get/list/create/delete access for verification. `jobs/status` is a separate
+subresource: access to `jobs` alone does not allow completion polling. Do not mount these credentials into
+agent Pods. When the execution kubeconfig is configured, `agentExecution.namespace.name`
+selects the remote destination even when `namespace.create` is false, and the
+chart skips local agent namespace/RBAC/quota/network-policy resources. Provision
+those resources separately in the execution cluster. Drain
+existing hosted executions before changing clusters, including before rollback,
+because existing runtime references do not record their cluster.

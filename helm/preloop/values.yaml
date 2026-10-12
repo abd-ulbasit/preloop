@@ -891,13 +891,20 @@ cleanup:
 
 # Agent execution configuration
 agentExecution:
+  # Existing Secret with key kubeconfig; credentials target the execution cluster.
+  # Provision its namespace, quotas and RBAC there before enabling this option.
+  kubeconfigSecret: ""
+  priorityClassName: ""
+  # Public or privately routed endpoints reachable from the execution cluster.
+  apiUrl: ""
+  gatewayUrl: ""
   # Namespace for running agent containers
   namespace:
     # If true, creates a separate namespace for agent execution (recommended for production)
     # If false, agents run in the same namespace as Preloop (easier for testing/PoC)
     create: false
-    # Name of the namespace for agent execution (only used if create: true)
-    # If create is false, agents run in the same namespace as Preloop
+    # Execution namespace when create is true or kubeconfigSecret is configured.
+    # Otherwise agents run in the release namespace. Remote provisioning is external.
     name: "agent-executions"
 
   # RuntimeClass for agent pods: run them under a stronger sandbox runtime

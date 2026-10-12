@@ -139,3 +139,9 @@ async def test_job_carries_the_execution_deadline_as_backstop(executor, monkeypa
 async def test_job_without_a_deadline_in_context_has_none(executor, monkeypatch):
     job = await _captured_job(executor, monkeypatch)
     assert job.spec.active_deadline_seconds is None
+
+
+async def test_execution_priority_class(executor, monkeypatch):
+    monkeypatch.setenv("PRELOOP_EXECUTION_PRIORITY_CLASS", "example-flow-prod")
+    spec = await _captured_pod_spec(executor, monkeypatch)
+    assert spec.priority_class_name == "example-flow-prod"

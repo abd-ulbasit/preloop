@@ -1,3 +1,4 @@
+{{- if not .Values.agentExecution.kubeconfigSecret -}}
 {{- if .Values.agentExecution.namespace.create -}}
 apiVersion: v1
 kind: Namespace
@@ -9,4 +10,6 @@ metadata:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
+{{- end }}
+
 {{- end }}

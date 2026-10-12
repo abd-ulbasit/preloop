@@ -1105,9 +1105,13 @@ exit $OPENCODE_EXIT_CODE
             self.logger.warning("No account API token provided for Preloop MCP access")
 
         # Set Preloop MCP URL (for Kubernetes)
-        opencode_env["PRELOOP_MCP_URL"] = os.getenv(
-            "PRELOOP_MCP_URL_K8S",
-            os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+        opencode_env["PRELOOP_MCP_URL"] = (
+            os.getenv("PRELOOP_EXECUTION_API_URL", "").rstrip("/") + "/mcp/v1"
+            if os.getenv("PRELOOP_EXECUTION_API_URL")
+            else os.getenv(
+                "PRELOOP_MCP_URL_K8S",
+                os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+            )
         )
 
         # Add MCP_TOOL_TIMEOUT_SEC
@@ -1125,12 +1129,14 @@ exit $OPENCODE_EXIT_CODE
             mcp_env = MCPConfigService.generate_mcp_environment_vars(
                 allowed_mcp_servers, allowed_mcp_tools
             )
+            mcp_env.pop("PRELOOP_MCP_URL", None)
             opencode_env.update(mcp_env)
 
             mcp_config = MCPConfigService.generate_mcp_config(
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
+                preloop_url=opencode_env["PRELOOP_MCP_URL"].removesuffix("/mcp/v1"),
             )
             opencode_env["MCP_CONFIG_JSON"] = json.dumps(mcp_config)
 

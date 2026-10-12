@@ -278,6 +278,7 @@ async def _check_kubernetes(
         client_tolerations as agent_client_tolerations,
         node_selector as agent_node_selector,
         runtime_class_name as agent_runtime_class_name,
+        priority_class_name as agent_priority_class_name,
     )
 
     await executor._init_kubernetes_clients()
@@ -294,6 +295,7 @@ async def _check_kubernetes(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
                     restart_policy="Never",
+                    priority_class_name=agent_priority_class_name() or None,
                     # Repository code runs in this Job too, so it gets the
                     # same sandbox runtime and node placement as agent pods
                     # (issue #1076). ``None`` omits the key, which keeps a

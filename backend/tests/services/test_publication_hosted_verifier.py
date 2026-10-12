@@ -126,6 +126,7 @@ async def test_kubernetes_adapter_streams_input_and_deletes_job_before_return():
 
 @pytest.mark.asyncio
 async def test_kubernetes_verifier_job_carries_agent_placement(monkeypatch):
+    monkeypatch.setenv("PRELOOP_EXECUTION_PRIORITY_CLASS", "example-flow-staging")
     """The verifier runs repository code, so it shares the agent sandbox."""
     execution = str(uuid4())
     batch = SimpleNamespace(create_namespaced_job=AsyncMock())
@@ -196,6 +197,7 @@ async def test_kubernetes_verifier_job_carries_agent_placement(monkeypatch):
             executor, policy, b"frozen-bundle", {"head_sha": "b" * 40}, check
         )
     spec = batch.create_namespaced_job.call_args.kwargs["body"].spec.template.spec
+    assert spec.priority_class_name == "example-flow-staging"
     assert spec.runtime_class_name == "kata-containers"
     assert spec.node_selector == {"runtime": "kata"}
     assert len(spec.tolerations) == 1

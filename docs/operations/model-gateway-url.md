@@ -22,7 +22,8 @@ one, highest precedence first:
 
 | Source | Meaning |
 | --- | --- |
-| `PRELOOP_MODEL_GATEWAY_URL` | An explicit URL for any environment. Set it and nothing else applies |
+| `PRELOOP_EXECUTION_GATEWAY_URL` | The endpoint reachable from a dedicated execution cluster |
+| `PRELOOP_MODEL_GATEWAY_URL` | An explicit URL used when no dedicated execution gateway is configured |
 | `PRELOOP_MODEL_GATEWAY_URL_K8S` | The in-cluster URL. The chart renders this on the API and worker pods |
 | `PRELOOP_API_SERVICE_HTTP_ENDPOINT` under Kubernetes | The API Service, with the gateway Service substituted (below) |
 | `http://host.docker.internal:8000/openai/v1` | The compose and single-node default |

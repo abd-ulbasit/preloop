@@ -254,3 +254,8 @@ def client_tolerations(client: Any) -> List[Any]:
         )
         for item in tolerations()
     ]
+
+
+def priority_class_name() -> str:
+    """Return the shared priority class for hosted agent and verifier Jobs."""
+    return os.getenv("PRELOOP_EXECUTION_PRIORITY_CLASS", "").strip()
