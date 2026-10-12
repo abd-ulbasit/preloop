@@ -7,7 +7,8 @@ Revises: 20261011_session_alias
   INCLUDE (id, status_code, prompt_tokens, completion_tokens, total_tokens,
   estimated_cost, cache_read_tokens, cache_creation_tokens, model_alias,
   provider_name, ai_model_id, flow_id) WHERE action_type = 'model_gateway' AND
-  (purpose IS NULL OR purpose <> 'replay_validation')`` (#1583). The Spend and
+  ((meta_data ->> 'purpose') IS NULL OR
+  (meta_data ->> 'purpose') <> 'replay_validation')`` (#1583). The Spend and
   Gateway traffic window totals and their per-model, per-flow and per-day
   breakdowns become index-only scans and never read the wide ``meta_data``
   heap rows. That holds for the account-wide window; a call that also filters
@@ -26,7 +27,8 @@ Revises: 20261011_session_alias
 - ``ix_api_usage_rate_limit_snapshot``: ``ON api_usage (account_id,
   (COALESCE(provider_name, '')), (COALESCE(model_alias, '')), timestamp DESC)
   WHERE action_type = 'model_gateway' AND (meta_data ->> 'rate_limit') IS NOT
-  NULL AND (purpose IS NULL OR purpose <> 'replay_validation')`` (#1582). The
+  NULL AND ((meta_data ->> 'purpose') IS NULL OR
+  (meta_data ->> 'purpose') <> 'replay_validation')`` (#1582). The
   latest snapshot per provider/model was a DISTINCT ON over every gateway row
   of the account's history; with this index it is a recursive skip scan, one
   probe per pair. NULL and '' names fall in one group.
