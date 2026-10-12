@@ -1828,7 +1828,7 @@ describe('DashboardView', () => {
       const payload = btoa(JSON.stringify({ sub: 'range-cache-tester' }));
       localStorage.setItem('accessToken', `header.${payload}.signature`);
       const first = await mountLoaded();
-      first['gatewayTimeRange'] = 'day';
+      first['gatewayTimeRange'] = 'last-24h';
       await first['refreshUsageBreakdown'](first['getGatewayStartDate']());
       first['saveDashboardCache']();
       const restored = document.createElement(
@@ -1905,7 +1905,7 @@ describe('DashboardView', () => {
       const pending = element['refreshUsageBreakdown'](
         element['getGatewayStartDate']()
       );
-      element['gatewayTimeRange'] = 'day';
+      element['gatewayTimeRange'] = 'last-24h';
       release();
       await pending;
       expect(element['gatewaySummary']).to.equal(originalSummary);
@@ -1921,11 +1921,11 @@ describe('DashboardView', () => {
       const pending = element['fetchDashboardData']({
         preserveLoadingState: true,
       });
-      element['gatewayTimeRange'] = 'day';
+      element['gatewayTimeRange'] = 'last-24h';
       release();
       await pending;
-      expect(element['gatewayUsageRange']).to.equal('month');
-      expect(element['modelUsageRange']).to.equal('month');
+      expect(element['gatewayUsageRange']).to.equal('last-30');
+      expect(element['modelUsageRange']).to.equal('last-30');
       await element.updateComplete;
       const inventory = element.shadowRoot!.querySelector(
         'inventory-card'
@@ -1936,7 +1936,7 @@ describe('DashboardView', () => {
 
     it('does not reuse provenance after a lightweight summary replaces another range', async () => {
       const element = await mountLoaded();
-      element['gatewayTimeRange'] = 'day';
+      element['gatewayTimeRange'] = 'last-24h';
       gatewaySummaryResponse = {
         ...gatewaySummaryResponse,
         usage_by_session: [],
@@ -1946,7 +1946,7 @@ describe('DashboardView', () => {
       };
       await element['refreshGatewayFold']();
       expect(element['gatewayUsageRange']).to.equal(null);
-      element['gatewayTimeRange'] = 'month';
+      element['gatewayTimeRange'] = 'last-30';
       await element.updateComplete;
       const inventory = element.shadowRoot!.querySelector(
         'inventory-card'
@@ -1972,7 +1972,7 @@ describe('DashboardView', () => {
           },
         ],
       };
-      element['gatewayTimeRange'] = 'day';
+      element['gatewayTimeRange'] = 'last-24h';
       await element['fetchModelUsage'](element['getGatewayStartDate']());
       expect(
         element['inventoryModelRows'].map((row) => row.alias)
@@ -2380,6 +2380,58 @@ describe('DashboardView', () => {
       await element.updateComplete;
       await usage.updateComplete;
       expect(usage.updating).to.be.false;
+    });
+
+    it('saves a calendar range and compares it with the whole prior period', async () => {
+      localStorage.removeItem('overview_usage_range');
+      const element = await mountDashboard();
+      await waitUntil(
+        () => element['attentionInputs'] != null,
+        'first pass did not finish'
+      );
+
+      fetchStub.resetHistory();
+      const usage = element.shadowRoot?.querySelector('usage-card') as any;
+      usage.dispatchEvent(
+        new CustomEvent('range-change', {
+          detail: { value: 'this-month' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await waitUntil(
+        () => !element['updatingUsage'],
+        'the range change never settled'
+      );
+
+      try {
+        expect(element['gatewayTimeRange']).to.equal('this-month');
+        expect(localStorage.getItem('overview_usage_range')).to.equal(
+          'this-month'
+        );
+        const monthStart = new Date();
+        monthStart.setDate(1);
+        monthStart.setHours(0, 0, 0, 0);
+        const priorStart = new Date(monthStart.getTime());
+        priorStart.setMonth(priorStart.getMonth() - 1, 1);
+        const summaryUrls = fetchStub
+          .getCalls()
+          .map((call) => String(call.args[0]))
+          .filter((url) =>
+            url.startsWith('/api/v1/account/gateway-usage/summary')
+          )
+          .map((url) => new URL(url, 'http://x').searchParams);
+        expect(
+          summaryUrls.some(
+            (params) =>
+              params.get('start_date') === priorStart.toISOString() &&
+              params.get('end_date') === monthStart.toISOString()
+          ),
+          'prior summary asks for the whole previous month'
+        ).to.be.true;
+      } finally {
+        localStorage.removeItem('overview_usage_range');
+      }
     });
 
     it('reloads what the range changes and nothing else', async () => {

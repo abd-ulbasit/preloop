@@ -18,6 +18,7 @@ export type TimeRangeKey =
   | 'today'
   | 'this-week'
   | 'this-month'
+  | 'this-year'
   | 'last-month'
   | 'last-24h'
   | 'last-7'
@@ -65,6 +66,7 @@ const KNOWN_KEYS: TimeRangeKey[] = [
   'today',
   'this-week',
   'this-month',
+  'this-year',
   'last-month',
   'last-24h',
   'last-7',
@@ -82,6 +84,7 @@ const SHORT_LABELS: Record<TimeRangeKey, string> = {
   today: 'today',
   'this-week': 'this week',
   'this-month': 'this month',
+  'this-year': 'this year',
   'last-month': 'last month',
   'last-24h': '24h',
   'last-7': '7d',
@@ -145,6 +148,9 @@ export function resolveTimeRange(
   } else if (normalized === 'this-month') {
     start.setDate(1);
     start.setHours(0, 0, 0, 0);
+  } else if (normalized === 'this-year') {
+    start.setMonth(0, 1);
+    start.setHours(0, 0, 0, 0);
   } else if (normalized === 'last-month') {
     start.setMonth(start.getMonth() - 1, 1);
     start.setHours(0, 0, 0, 0);
@@ -163,7 +169,7 @@ export function resolveTimeRange(
  * its own duration.
  *
  * The two shapes are deliberately different and both are correct.
- * `this-week`, `this-month` and `last-month` compare whole periods: the
+ * `this-week`, `this-month`, `this-year` and `last-month` compare whole periods: the
  * previous window ends exactly where the current one starts. `today` and the
  * rolling keys compare equal durations: a window that is 9 hours old is
  * measured against the same 9 hours of the day before, not against a whole
@@ -210,6 +216,15 @@ export function resolvePreviousTimeRange(
     };
   }
 
+  if (normalized === 'this-year') {
+    const previousStart = new Date(start.getTime());
+    previousStart.setFullYear(previousStart.getFullYear() - 1, 0, 1);
+    return {
+      startDate: previousStart.toISOString(),
+      endDate: start.toISOString(),
+    };
+  }
+
   const durationMs = end.getTime() - start.getTime();
   return {
     startDate: new Date(start.getTime() - durationMs).toISOString(),
@@ -221,6 +236,56 @@ export function resolvePreviousTimeRange(
 export function timeRangeShortLabel(key: TimeRangeKey | string): string {
   const normalized = normalizeTimeRangeKey(String(key));
   return normalized ? SHORT_LABELS[normalized] : '30d';
+}
+
+/** Calendar keys: the window starts at the beginning of a named period. */
+const CALENDAR_KEYS: TimeRangeKey[] = [
+  'today',
+  'this-week',
+  'this-month',
+  'this-year',
+  'last-month',
+];
+
+/** True for keys that run from the start of a calendar period. */
+export function isCalendarTimeRange(key: TimeRangeKey | string): boolean {
+  const normalized = normalizeTimeRangeKey(String(key));
+  return normalized ? CALENDAR_KEYS.includes(normalized) : false;
+}
+
+/**
+ * The window as a phrase that reads in a sentence: "In the last 30d",
+ * "Today", "This month", "All time".
+ */
+export function timeRangePhrase(key: TimeRangeKey | string): string {
+  const label = timeRangeShortLabel(key);
+  if (
+    normalizeTimeRangeKey(String(key)) === 'all' ||
+    isCalendarTimeRange(key)
+  ) {
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+  return `In the last ${label}`;
+}
+
+/**
+ * What a delta compares against, matching `resolvePreviousTimeRange`:
+ * "prior 30d", "same hours yesterday", "prior month".
+ */
+export function timeRangeComparisonLabel(key: TimeRangeKey | string): string {
+  switch (normalizeTimeRangeKey(String(key))) {
+    case 'today':
+      return 'same hours yesterday';
+    case 'this-week':
+      return 'prior week';
+    case 'this-month':
+    case 'last-month':
+      return 'prior month';
+    case 'this-year':
+      return 'prior year';
+    default:
+      return `prior ${timeRangeShortLabel(key)}`;
+  }
 }
 
 /**
