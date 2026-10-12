@@ -16,6 +16,22 @@ from .base import CRUDBase
 # tool_call row was written for the same correlation_id.
 STANDALONE_POLICY_ACTIONS = ("policy_deny", "policy_require_approval")
 _GROUP_ANCHOR_ACTIONS = ("tool_call", *STANDALONE_POLICY_ACTIONS)
+# Actions that always anchor their own group in the grouped timeline.
+PRIMARY_ACTIONS = (
+    "tool_call",
+    "model_gateway_request",
+    "authentication",
+    "configuration_change",
+    "permission_check",
+    "role_assigned",
+    "role_removed",
+    "runtime_session_created",
+    "runtime_session_updated",
+    "runtime_session_ended",
+)
+# The grouped total is counted per branch and summed, which is only right
+# while no action can match both branches.
+assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
 # The only ``details`` keys the grouped timeline reads to build groups.
 _GROUPING_DETAIL_KEYS = ("correlation_id", "decision", "approval_id", "estimated_cost")
 
@@ -418,18 +434,6 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         # Step 1: Fetch primary events (tool_call + non-tool standalone events)
         # Tool calls are the primary grouping anchors.
         # Non-tool events (auth, config_change, permission_check) are standalone.
-        primary_actions = [
-            "tool_call",
-            "model_gateway_request",
-            "authentication",
-            "configuration_change",
-            "permission_check",
-            "role_assigned",
-            "role_removed",
-            "runtime_session_created",
-            "runtime_session_updated",
-            "runtime_session_ended",
-        ]
 
         # Filters every count and page shares, whatever the event type.
         scope_filters: List[Any] = [AuditLog.account_id == account_id_str]
@@ -504,10 +508,10 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 ~has_tool_call,
             )
             anchor_condition = or_(
-                AuditLog.action.in_(primary_actions), standalone_condition
+                AuditLog.action.in_(PRIMARY_ACTIONS), standalone_condition
             )
             count_conditions = [
-                AuditLog.action.in_(primary_actions),
+                AuditLog.action.in_(PRIMARY_ACTIONS),
                 standalone_condition,
             ]
 

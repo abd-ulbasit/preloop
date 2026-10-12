@@ -836,3 +836,13 @@ class TestGroupedStandalonePolicyDecisions:
         assert details["decision"] == "deny"
         assert details["estimated_cost"] == 2.5
         assert isinstance(details["estimated_cost"], (int, float))
+
+
+def test_grouped_total_branches_are_disjoint():
+    """The grouped total sums one count per branch (#1592); no action may be in both."""
+    from preloop.models.crud.audit_log import (
+        PRIMARY_ACTIONS,
+        STANDALONE_POLICY_ACTIONS,
+    )
+
+    assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
