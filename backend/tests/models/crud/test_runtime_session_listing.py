@@ -221,6 +221,13 @@ def test_listing_ranks_pages_before_aggregating_usage(
         flow_execution_id=UUID(data["sessions"]["legacy"].session_source_id),
         timestamp=data["now"] - timedelta(minutes=1),
     )
+    # Newer than every agent row, and still inside the window. If the narrow
+    # ranking forgot to exclude internal usage, direct would take page one.
+    data["usage"](
+        "direct",
+        meta_data={"purpose": "session_title"},
+        timestamp=data["now"] - timedelta(seconds=30),
+    )
     db_session.flush()
 
     pages = [
@@ -243,3 +250,46 @@ def test_listing_ranks_pages_before_aggregating_usage(
     assert pages[0]["items"][0]["total_requests"] == 4
     assert pages[1]["items"][0]["total_requests"] == 3
     assert pages[2]["items"][0]["total_requests"] == 0
+
+
+def test_listing_pages_one_model(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    """The model detail page ranks only that model's usage (#1584)."""
+    data = session_listing_data
+    listed = models.AIModel(
+        account_id=data["account"].id,
+        name="Listed",
+        provider_name="openai",
+        model_identifier="listed-model",
+    )
+    other = models.AIModel(
+        account_id=data["account"].id,
+        name="Other",
+        provider_name="openai",
+        model_identifier="other-model",
+    )
+    db_session.add_all([listed, other])
+    db_session.flush()
+    data["usage"](
+        "direct",
+        ai_model_id=listed.id,
+        timestamp=data["now"] - timedelta(minutes=2),
+    )
+    data["usage"](
+        "legacy",
+        ai_model_id=other.id,
+        timestamp=data["now"] - timedelta(seconds=20),
+    )
+    db_session.flush()
+
+    page = crud_runtime_session.list_account_sessions(
+        db_session,
+        account_id=str(data["account"].id),
+        start_date=data["now"] - timedelta(days=1),
+        end_date=data["now"],
+        ai_model_id=str(listed.id),
+        limit=1,
+    )
+    assert page["total"] == 1
+    assert page["items"][0]["session_source_id"] == "direct"

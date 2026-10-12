@@ -837,6 +837,17 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         for each session. Separate branches allow hash/index joins, including
         for the legacy UUID-to-text comparison. A row matching both paths for
         the same session is included only once.
+
+        Args:
+            db: Database session.
+            account_id: Account whose gateway usage is mapped.
+            start_date: Inclusive lower bound on usage time, if set.
+            end_date: Exclusive upper bound on usage time, if set.
+            ai_model_id: Restrict usage to one model, if set.
+            session_ids: Restrict both the direct and legacy attribution
+                branches to these sessions.
+            narrow: Select only the timestamp column, which is all the page
+                ranking reads.
         """
         # Keep the UNION narrow even if the planner materializes a branch.
         # Request/response metadata is only inspected by the exclusion filter.
