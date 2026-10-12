@@ -67,8 +67,9 @@ def test_remote_gateway_precedes_cluster_local_settings(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent_name", ["codex", "gemini", "opencode"])
+@pytest.mark.parametrize("remote", [True, False])
 async def test_remote_mcp_wins_after_allowed_tool_environment_merge(
-    monkeypatch, agent_name
+    monkeypatch, agent_name, remote
 ):
     import importlib
     import json
@@ -80,7 +81,11 @@ async def test_remote_mcp_wins_after_allowed_tool_environment_merge(
     }
     module = importlib.import_module("preloop.agents." + agent_name)
     agent = getattr(module, classes[agent_name])({})
-    monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    if remote:
+        monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    else:
+        monkeypatch.delenv("PRELOOP_EXECUTION_API_URL", raising=False)
+    expected = "https://example.com/mcp/v1" if remote else "http://api.svc/mcp/v1"
     monkeypatch.setenv("PRELOOP_URL", "http://control-plane.svc")
     monkeypatch.setenv("PRELOOP_MCP_URL_K8S", "http://api.svc/mcp/v1")
     monkeypatch.setattr(
@@ -96,16 +101,22 @@ async def test_remote_mcp_wins_after_allowed_tool_environment_merge(
     ):
         await agent._start_kubernetes_pod(context)
     env = context["_codex_env" if agent_name == "codex" else "_agent_env"]
-    assert env["PRELOOP_MCP_URL"] == "https://example.com/mcp/v1"
+    assert env["PRELOOP_MCP_URL"] == expected
     config = json.loads(env["MCP_CONFIG_JSON"])
-    assert config["mcpServers"]["preloop-mcp"]["url"] == "https://example.com/mcp/v1"
+    assert config["mcpServers"]["preloop-mcp"]["url"] == expected
 
 
 @pytest.mark.asyncio
-async def test_final_job_environment_keeps_remote_api(monkeypatch):
+@pytest.mark.parametrize("remote", [True, False])
+async def test_final_job_environment_keeps_remote_api(monkeypatch, remote):
     import json
 
-    monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    if remote:
+        monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    else:
+        monkeypatch.delenv("PRELOOP_EXECUTION_API_URL", raising=False)
+    monkeypatch.setenv("PRELOOP_MCP_URL_K8S", "http://api.svc/mcp/v1")
+    expected = "https://example.com/mcp/v1" if remote else "http://api.svc/mcp/v1"
     monkeypatch.setenv("PRELOOP_URL", "http://control-plane.svc")
     executor = ContainerAgentExecutor(
         "codex", {}, "example:latest", use_kubernetes=True
@@ -123,6 +134,6 @@ async def test_final_job_environment_keeps_remote_api(monkeypatch):
     )
     job = create.call_args.args[0]
     env = {item.name: item.value for item in job.spec.template.spec.containers[0].env}
-    assert env["PRELOOP_MCP_URL"] == "https://example.com/mcp/v1"
+    assert env["PRELOOP_MCP_URL"] == expected
     config = json.loads(env["MCP_CONFIG_JSON"])
-    assert config["mcpServers"]["preloop-mcp"]["url"] == "https://example.com/mcp/v1"
+    assert config["mcpServers"]["preloop-mcp"]["url"] == expected

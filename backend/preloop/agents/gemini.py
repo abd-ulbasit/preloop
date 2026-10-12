@@ -669,7 +669,7 @@ exit $GEMINI_EXIT_CODE
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
-                preloop_url=os.getenv("PRELOOP_EXECUTION_API_URL") or None,
+                preloop_url=gemini_env["PRELOOP_MCP_URL"].removesuffix("/mcp/v1"),
             )
             gemini_env["MCP_CONFIG_JSON"] = json.dumps(mcp_config)
 

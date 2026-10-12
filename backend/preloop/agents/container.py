@@ -39,6 +39,7 @@ from .kubernetes_placement import (
     client_tolerations as agent_client_tolerations,
     node_selector as agent_node_selector,
     runtime_class_name as agent_runtime_class_name,
+    priority_class_name as agent_priority_class_name,
 )
 from preloop.services.mcp_config_service import MCPConfigService
 from preloop.agents.verification import build_verification_gate_shell
@@ -1745,6 +1746,9 @@ class ContainerAgentExecutor(AgentExecutor):
             mcp_env = MCPConfigService.generate_mcp_environment_vars(
                 allowed_mcp_servers, allowed_mcp_tools
             )
+            mcp_env["PRELOOP_MCP_URL"] = env.get("PRELOOP_MCP_URL") or os.getenv(
+                "PRELOOP_MCP_URL_K8S", mcp_env["PRELOOP_MCP_URL"]
+            )
             env.update(mcp_env)
 
             if account_api_token:
@@ -1754,7 +1758,10 @@ class ContainerAgentExecutor(AgentExecutor):
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
-                preloop_url=os.getenv("PRELOOP_EXECUTION_API_URL") or None,
+                preloop_url=(
+                    os.getenv("PRELOOP_EXECUTION_API_URL")
+                    or env["PRELOOP_MCP_URL"].removesuffix("/mcp/v1")
+                ),
             )
             env.setdefault("MCP_CONFIG_JSON", json.dumps(mcp_config))
 
@@ -1924,8 +1931,7 @@ class ContainerAgentExecutor(AgentExecutor):
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",
-                priority_class_name=os.getenv("PRELOOP_EXECUTION_PRIORITY_CLASS")
-                or None,
+                priority_class_name=agent_priority_class_name() or None,
                 # Sandbox runtime and node placement for the agent pod.
                 # ``None`` omits the key, which is what keeps a stock
                 # install on the node default.

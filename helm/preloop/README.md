@@ -982,7 +982,7 @@ key. API, gateway and lifecycle workers mount it read-only at
 `/var/run/preloop/execution/kubeconfig`; only execution Kubernetes clients use
 these credentials. Set `agentExecution.apiUrl` and `gatewayUrl` to endpoints
 reachable from that cluster (for example `https://example.com` and
-`https://example.com/openai/v1`). Set `priorityClassName` to a PriorityClass
+`https://example.com/openai/v1`). Set `agentExecution.priorityClassName` to a PriorityClass
 provisioned in the execution cluster.
 
 Provision the execution namespace, quotas, placement, image-pull access and

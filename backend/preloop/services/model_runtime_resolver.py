@@ -151,17 +151,19 @@ def default_model_gateway_url() -> str:
 
     Precedence, highest first:
 
-    1. ``PRELOOP_MODEL_GATEWAY_URL`` - an explicit URL for every environment.
-    2. ``PRELOOP_MODEL_GATEWAY_URL_K8S`` - the in-cluster URL; the chart sets
+    1. ``PRELOOP_EXECUTION_GATEWAY_URL`` - the endpoint reachable from the
+       dedicated execution cluster.
+    2. ``PRELOOP_MODEL_GATEWAY_URL`` - an explicit URL for every environment.
+    3. ``PRELOOP_MODEL_GATEWAY_URL_K8S`` - the in-cluster URL; the chart sets
        it on the API and worker pods to the gateway Service.
-    3. Under Kubernetes, ``PRELOOP_API_SERVICE_HTTP_ENDPOINT`` with
+    4. Under Kubernetes, ``PRELOOP_API_SERVICE_HTTP_ENDPOINT`` with
        ``/openai/v1`` appended. A split deployment runs the API pods with
        ``PRELOOP_SERVICE_ROLE=api``, and those pods never mount the gateway
        routes, so the API Service would answer 404 for them: the sibling
        ``-gateway`` Service is used instead. Only an explicit
        ``PRELOOP_SERVICE_ROLE=all`` (one process serving both surfaces) keeps
        the API Service as the gateway host.
-    4. ``DEFAULT_GATEWAY_URL`` - the compose/single-node host default.
+    5. ``DEFAULT_GATEWAY_URL`` - the compose/single-node host default.
 
     Returns:
         The base URL agents and execution contexts should call for OpenAI
