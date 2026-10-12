@@ -1266,6 +1266,7 @@ export class SessionOptimizationPanel extends LitElement {
     ) {
       const reasons: Record<string, string> = {
         daily_cap_reached: 'daily model budget reached',
+        monthly_analysis_quota_reached: 'monthly analysis quota reached',
         model_error: 'configured model could not run',
         model_empty_response: 'model returned no usable output',
       };
