@@ -159,6 +159,7 @@ describe('time-range', () => {
     expect(timeRangeComparisonLabel('this-week')).to.equal('prior week');
     expect(timeRangeComparisonLabel('this-month')).to.equal('prior month');
     expect(timeRangeComparisonLabel('this-year')).to.equal('prior year');
+    expect(timeRangeComparisonLabel('all')).to.equal('prior period');
   });
 
   it('labels a window in the register the stats use', () => {

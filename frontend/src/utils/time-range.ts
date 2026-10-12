@@ -283,6 +283,9 @@ export function timeRangeComparisonLabel(key: TimeRangeKey | string): string {
       return 'prior month';
     case 'this-year':
       return 'prior year';
+    case 'all':
+      // All time has no prior window; never say "prior all time".
+      return 'prior period';
     default:
       return `prior ${timeRangeShortLabel(key)}`;
   }
