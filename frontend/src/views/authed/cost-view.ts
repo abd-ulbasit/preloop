@@ -62,6 +62,7 @@ import {
 } from '../../table';
 import type { ListColumn } from '../../table';
 import '../../table/data-table';
+import { sessionCountLabel } from '../../utils/session-count';
 import {
   resolvePreviousTimeRange,
   resolveTimeRange,
@@ -320,11 +321,13 @@ export class CostView extends AuthedElement {
    */
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
     listId: 'cost-sessions',
-    getRowId: (row) =>
-      String(
-        row.runtime_session_id ??
-          `${this.getSessionTitle(row)}:${row.last_activity_at ?? row.last_request_at ?? ''}`
-      ),
+    // One row per (session, model, provider): the slice is part of the id.
+    getRowId: (row) => {
+      const slice = `${row.model_alias ?? ''}:${row.provider_name ?? ''}`;
+      return row.runtime_session_id
+        ? `${row.runtime_session_id}:${slice}`
+        : `${this.getSessionTitle(row)}:${slice}:${row.last_activity_at ?? row.last_request_at ?? ''}`;
+    },
     pageSize: 25,
     defaultSorting: [{ id: 'cost', desc: true }],
     url: { prefix: 'sessions' },
@@ -3362,14 +3365,13 @@ export class CostView extends AuthedElement {
       return html`<div class="empty">No session-attributed usage yet.</div>`;
     }
     this.sessionTable.data = sessions;
-    const total = this.sessionTable.totalRows ?? sessions.length;
     return html`
       <div class="tab-panel-body">
         ${renderDataTableToolbar({
           table: this.sessionTable,
           searchPlaceholder: 'Search sessions, agents or flows',
           searchLabel: 'Search sessions',
-          count: `${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'}`,
+          count: sessionCountLabel(this.sessionTable),
         })}
         <div class="analytics-table-wrap">
           <data-table
@@ -3406,6 +3408,10 @@ export class CostView extends AuthedElement {
         header: 'Owner / agent',
         firstSort: 'asc',
         value: (row) => row.agent_name || row.flow_name || '',
+        searchText: (row) =>
+          [row.agent_name, row.flow_name, row.runtime_principal_name]
+            .filter(Boolean)
+            .join(' '),
         cell: (row) => this.renderSessionSubjects(row),
       },
       {

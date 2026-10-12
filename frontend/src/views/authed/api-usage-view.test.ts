@@ -666,7 +666,7 @@ describe('ApiUsageView', () => {
     const link = element.shadowRoot?.querySelector(
       `a[href="/console/flows/executions/${uuid}"]`
     );
-    const row = link?.closest('.session-row');
+    const row = link?.closest('tr');
     const text = row?.textContent?.replace(/\s+/g, ' ').trim() || '';
 
     expect(text).to.contain('Nightly Reviewer');

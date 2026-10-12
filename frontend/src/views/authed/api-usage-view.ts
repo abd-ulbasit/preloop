@@ -51,6 +51,7 @@ import {
 } from '../../table';
 import type { ListColumn } from '../../table';
 import '../../table/data-table';
+import { sessionCountLabel } from '../../utils/session-count';
 import { shortExecutionId } from '../../utils/execution-subject';
 import {
   isHistoryUnavailable,
@@ -447,7 +448,7 @@ export class ApiUsageView extends LitElement {
 
       .stat-detail token-figures,
       .model-breakdown token-figures,
-      .session-row token-figures {
+      .session-list token-figures {
         display: block;
         white-space: normal;
       }
@@ -477,30 +478,6 @@ export class ApiUsageView extends LitElement {
         display: flex;
         justify-content: center;
         padding-top: var(--sl-spacing-small);
-      }
-
-      .session-header,
-      .session-row {
-        display: grid;
-        grid-template-columns:
-          minmax(160px, 2fr) 70px minmax(200px, 1.4fr)
-          80px 150px;
-        gap: var(--sl-spacing-small);
-        align-items: center;
-        padding: var(--sl-spacing-small) 0;
-        border-bottom: 1px solid var(--sl-color-neutral-200);
-      }
-
-      .session-header {
-        color: var(--sl-color-neutral-600);
-        font-size: var(--sl-font-size-x-small);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        font-weight: 600;
-      }
-
-      .session-row:last-child {
-        border-bottom: none;
       }
 
       .session-primary {
@@ -607,15 +584,6 @@ export class ApiUsageView extends LitElement {
         }
 
         .breakdown-row {
-          grid-template-columns: 1fr;
-          gap: var(--sl-spacing-2x-small);
-        }
-
-        .session-header {
-          display: none;
-        }
-
-        .session-row {
           grid-template-columns: 1fr;
           gap: var(--sl-spacing-2x-small);
         }
@@ -1455,13 +1423,12 @@ export class ApiUsageView extends LitElement {
       `;
     }
     this.sessionTable.data = sessions;
-    const total = this.sessionTable.totalRows ?? sessions.length;
     return html`
       ${renderDataTableToolbar({
         table: this.sessionTable,
         searchPlaceholder: 'Search sessions, models or sources',
         searchLabel: 'Search runtime sessions',
-        count: `${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'}`,
+        count: sessionCountLabel(this.sessionTable),
       })}
       <data-table
         class="session-list"
@@ -1474,14 +1441,17 @@ export class ApiUsageView extends LitElement {
     `;
   }
 
-  /** Stable across refreshes: the session id, else its source. */
+  /**
+   * Stable across refreshes and unique per row. The summary returns one row
+   * per (session, model, provider), so the model slice is part of the id.
+   */
   private sessionRowId(session: GatewayUsageBySession): string {
     const record = session as unknown as Record<string, unknown>;
-    return String(
+    const sessionId =
       record.runtime_session_id ??
-        record.session_id ??
-        `${this.getSessionSourceType(session)}:${this.getSessionSourceId(session)}:${session.model_alias ?? ''}`
-    );
+      record.session_id ??
+      `${this.getSessionSourceType(session)}:${this.getSessionSourceId(session)}`;
+    return `${sessionId}:${session.model_alias ?? ''}:${session.provider_name ?? ''}`;
   }
 
   private renderSessionIdentity(session: GatewayUsageBySession) {
@@ -1551,7 +1521,7 @@ export class ApiUsageView extends LitElement {
           ]
             .filter(Boolean)
             .join(' '),
-        cellClass: 'session-row',
+        cellClass: 'session-cell',
         cell: (session) => this.renderSessionIdentity(session),
       },
       {

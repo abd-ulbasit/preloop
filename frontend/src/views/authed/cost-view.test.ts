@@ -2172,6 +2172,25 @@ describe('CostView', () => {
     table.setSearch('builder');
     expect(table.totalRows).to.equal(15);
     table.clearFilters();
+    // One session that used two models is two rows, both kept, and a flow
+    // name is searchable even when the row also names an agent.
+    internals.summary = {
+      ...(internals.summary ?? {}),
+      usage_by_session: [
+        ...sessions,
+        { ...sessions[0], model_alias: 'model-b', flow_name: 'Nightly Report' },
+      ],
+    };
+    internals.renderSessionsTab();
+    expect(table.totalRows).to.equal(31);
+    table.setSearch('nightly');
+    expect(table.rows.map((r) => r.model_alias)).to.deep.equal(['model-b']);
+    table.clearFilters();
+    internals.summary = {
+      ...(internals.summary ?? {}),
+      usage_by_session: sessions,
+    };
+    internals.renderSessionsTab();
     table.toggleSort('requests');
     table.toggleSort('requests');
     expect(table.rows[0].runtime_session_id).to.equal('rs-0');
