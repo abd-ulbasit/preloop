@@ -481,7 +481,9 @@ def resolve_payload_ai_model(
 
     name = str((payload or {}).get("model") or "").strip()
     if name:
-        for candidate in crud_ai_model.get_all_for_account(db, account_id=account.id):
+        for candidate in crud_ai_model.get_all_for_account(
+            db, account_id=account.id, include_retired=True
+        ):
             identifier = (candidate.model_identifier or "").strip()
             meta = candidate.meta_data if isinstance(candidate.meta_data, dict) else {}
             gateway_cfg = (

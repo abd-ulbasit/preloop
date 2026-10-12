@@ -15,12 +15,23 @@ def built_in_models_enabled() -> bool:
     )
 
 
+def is_retired_system_model(model: models.AIModel) -> bool:
+    """Retain historical global rows without selecting them for new work."""
+    metadata = model.meta_data if isinstance(model.meta_data, dict) else {}
+    gateway = metadata.get("gateway")
+    return model.account_id is None and (
+        metadata.get("retired") is True
+        or (isinstance(gateway, dict) and gateway.get("enabled") is False)
+    )
+
+
 def is_available_built_in_model(model: models.AIModel) -> bool:
     """Exclude retired and legacy system models from new work."""
     metadata = model.meta_data if isinstance(model.meta_data, dict) else {}
     gateway = metadata.get("gateway")
     return (
         model.account_id is None
+        and not is_retired_system_model(model)
         and isinstance(gateway, dict)
         and gateway.get("enabled") is True
         and gateway.get("model_alias") == BUILT_IN_MODEL_ALIAS
