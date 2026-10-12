@@ -198,3 +198,48 @@ def test_minimum_requests_is_account_scoped(
         data["sessions"]["direct"].session_source_id,
         data["sessions"]["legacy"].session_source_id,
     }
+
+
+def test_listing_ranks_pages_before_aggregating_usage(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    """Each page is picked on last request, then aggregated in full (#1584).
+
+    Only the sessions on the requested page have their usage summed, so the
+    order must come from a separate ranking that still sees every attribution
+    path (direct and legacy) and the fallback to session activity.
+    """
+    data = session_listing_data
+    kwargs = {
+        "account_id": str(data["account"].id),
+        "start_date": data["now"] - timedelta(days=1),
+        "end_date": data["now"],
+    }
+    # Make the legacy session the most recent one through its legacy path.
+    data["usage"](
+        None,
+        flow_execution_id=UUID(data["sessions"]["legacy"].session_source_id),
+        timestamp=data["now"] - timedelta(minutes=1),
+    )
+    db_session.flush()
+
+    pages = [
+        crud_runtime_session.list_account_sessions(
+            db_session, **kwargs, limit=1, offset=offset
+        )
+        for offset in range(4)
+    ]
+
+    assert [page["total"] for page in pages] == [3, 3, 3, 3]
+    assert [
+        page["items"][0]["session_source_id"] if page["items"] else None
+        for page in pages
+    ] == [
+        data["sessions"]["legacy"].session_source_id,
+        "direct",
+        "empty",
+        None,
+    ]
+    assert pages[0]["items"][0]["total_requests"] == 4
+    assert pages[1]["items"][0]["total_requests"] == 3
+    assert pages[2]["items"][0]["total_requests"] == 0
