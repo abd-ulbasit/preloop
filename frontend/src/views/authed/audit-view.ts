@@ -2175,6 +2175,11 @@ export class AuditView extends AuthedElement {
         justify-content: center;
         padding: 3rem 0;
       }
+      /* The error panel keeps the breathing room the old alert had. */
+      table-state.load-error {
+        margin: 1rem 0;
+      }
+
       /* ── Timeline ──────────────────────────── */
       .timeline {
         display: flex;
