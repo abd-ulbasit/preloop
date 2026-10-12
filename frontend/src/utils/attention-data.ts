@@ -197,6 +197,9 @@ export async function loadAttentionInputs(
       : getAccountGatewayUsageSummary({
           startDate: usageStart,
           includeBreakdown: true,
+          // The rules read only the per-model rollup. Asking for every
+          // section made this the slowest call on Overview (#1582).
+          breakdowns: ['models'],
         }),
     getAttentionDismissals(),
     // An override is a price, including one of $0. Without this the console

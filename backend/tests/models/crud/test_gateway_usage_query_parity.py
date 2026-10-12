@@ -642,3 +642,136 @@ def test_multiple_agents_keep_full_session_totals(db_session, create_account) ->
     assert all(row["request_count"] == 1 for row in rows)
     assert all(row["total_tokens"] == 120 for row in rows)
     assert all(row["estimated_cost"] == 0.12 for row in rows)
+
+
+def test_session_breakdown_limit_keeps_old_rows_of_recent_sessions(
+    db_session, create_account
+) -> None:
+    """Only recent sessions are ranked, but each one is summed in full.
+
+    The breakdown walks usage newest first to pick the sessions that can make
+    the cut (#1582). A session picked that way must still count its older
+    requests, including ones older than every request of a session it beat.
+    """
+    account = create_account()
+    busy = _create_session(db_session, account.id, session_source_id="busy")
+    middle = _create_session(db_session, account.id, session_source_id="middle")
+    stale = _create_session(db_session, account.id, session_source_id="stale")
+    db_session.flush()
+    _log(db_session, account.id, when=BASE, runtime_session_id=busy.id)
+    _log(
+        db_session,
+        account.id,
+        when=BASE,
+        runtime_session_id=busy.id,
+        model_alias="claude-sonnet",
+        provider_name="anthropic",
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=1),
+        runtime_session_id=stale.id,
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=5),
+        runtime_session_id=middle.id,
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=10),
+        runtime_session_id=busy.id,
+    )
+
+    rows = _by_session(db_session, account.id, limit=2)
+
+    assert [(row["session_source_id"], row["model_alias"]) for row in rows] == [
+        ("busy", "gpt-4o"),
+        ("middle", "gpt-4o"),
+    ]
+    assert rows[0]["request_count"] == 2
+    assert rows[0]["total_tokens"] == 200
+
+    # A session contributes one row per model; its older model slice ranks
+    # on its own last request, after the stale session.
+    rows = _by_session(db_session, account.id, limit=4)
+    assert [(row["session_source_id"], row["model_alias"]) for row in rows] == [
+        ("busy", "gpt-4o"),
+        ("middle", "gpt-4o"),
+        ("stale", "gpt-4o"),
+        ("busy", "claude-sonnet"),
+    ]
+
+
+def test_session_breakdown_limit_includes_ties_at_the_cutoff(
+    db_session, create_account
+) -> None:
+    """Sessions tied on the last ranked timestamp all compete on count."""
+    account = create_account()
+    one = _create_session(db_session, account.id, session_source_id="one")
+    many = _create_session(db_session, account.id, session_source_id="many")
+    db_session.flush()
+    _log(db_session, account.id, when=BASE, runtime_session_id=many.id)
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=3),
+        runtime_session_id=one.id,
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=3),
+        runtime_session_id=many.id,
+    )
+
+    rows = _by_session(db_session, account.id, limit=1)
+
+    assert [row["session_source_id"] for row in rows] == ["many"]
+    assert rows[0]["request_count"] == 2
+
+
+def test_session_breakdown_pairs_session_with_execution(
+    db_session, create_account
+) -> None:
+    """A recent pair does not pull in other executions of the same session."""
+    account = create_account()
+    session = _create_session(db_session, account.id, session_source_id="shared")
+    flow, execution = _create_flow_execution(db_session, account.id)
+    _, other_execution = _create_flow_execution(db_session, account.id)
+    db_session.flush()
+    _log(
+        db_session,
+        account.id,
+        when=BASE,
+        runtime_session_id=session.id,
+        flow_execution_id=other_execution.id,
+        flow_id=other_execution.flow_id,
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=1),
+        runtime_session_id=session.id,
+        flow_execution_id=execution.id,
+        flow_id=flow.id,
+    )
+    _log(
+        db_session,
+        account.id,
+        when=BASE + timedelta(minutes=2),
+        flow_execution_id=execution.id,
+        flow_id=flow.id,
+    )
+
+    rows = _by_session(db_session, account.id, limit=2)
+
+    assert [(row["runtime_session_id"], row["flow_execution_id"]) for row in rows] == [
+        (None, str(execution.id)),
+        (str(session.id), str(execution.id)),
+    ]
+    assert all(row["request_count"] == 1 for row in rows)
+    assert rows[0]["flow_name"] == flow.name
