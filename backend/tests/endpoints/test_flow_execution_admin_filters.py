@@ -21,10 +21,16 @@ def test_end_time_window_matches_page_and_count(
     flow = _create_flow(db_session, test_user, "Long-running failure")
     now = datetime.now(timezone.utc)
     recent = crud_flow_execution.create(
-        db_session, FlowExecutionCreate(flow_id=flow.id, status="FAILED")
+        db_session,
+        FlowExecutionCreate(
+            flow_id=flow.id, status="FAILED", start_time=now - timedelta(days=3)
+        ),
     )
     old = crud_flow_execution.create(
-        db_session, FlowExecutionCreate(flow_id=flow.id, status="FAILED")
+        db_session,
+        FlowExecutionCreate(
+            flow_id=flow.id, status="FAILED", start_time=now - timedelta(days=3)
+        ),
     )
     for run, ended in [(recent, now), (old, now - timedelta(days=2))]:
         crud_flow_execution.update(
@@ -50,7 +56,8 @@ def test_lightweight_projection_and_equal_time_pagination(
     ids = []
     for _ in range(2):
         run = crud_flow_execution.create(
-            db_session, FlowExecutionCreate(flow_id=flow.id, status="RUNNING")
+            db_session,
+            FlowExecutionCreate(flow_id=flow.id, status="RUNNING", start_time=now),
         )
         ids.append(run.id)
         crud_flow_execution.update(db_session, run, FlowExecutionUpdate(start_time=now))
