@@ -469,6 +469,83 @@ describe('ApiUsageView', () => {
     expect(String(searchCall?.args[0])).to.contain('limit=10');
   });
 
+  it('windows long lists, takes the full page width, and lays out rate-limit rows', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    await waitUntil(
+      () => !(element as any).loading && (element as any).summary !== null,
+      'API usage view did not finish loading'
+    );
+    const base = (element as any).summary;
+    const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+    (element as any).summary = {
+      ...base,
+      requests_by_day: Array.from({ length: 30 }, (_, i) => ({
+        date: `2026-03-${String(i + 1).padStart(2, '0')}`,
+        request_count: i,
+        estimated_cost: i,
+        total_tokens: 0,
+      })),
+      usage_by_model: Array.from({ length: 15 }, (_, i) => ({
+        ai_model_id: `m-${i}`,
+        model_alias: `example/model-${i}`,
+        provider_name: 'Example',
+        request_count: i,
+        token_usage: usage,
+        estimated_cost: i,
+      })),
+    };
+    (element as any).rateLimitReport = {
+      totals: {
+        rate_limited_requests: 0,
+        blocked_ms: 0,
+        last_rate_limited_at: null,
+        quota_exhausted_count: 0,
+        transient_count: 0,
+      },
+      latest_snapshots: [
+        {
+          model_alias: 'example/model-1',
+          provider_name: 'Example provider',
+          observed_at: '2026-03-09T00:00:00Z',
+          rate_limit: { requests_remaining: 90, requests_limit: 100 },
+        },
+      ],
+    };
+    await element.updateComplete;
+    const root = element.shadowRoot!;
+    // No dashboard grid with an empty side column: the page fills the shell.
+    expect(root.querySelector('.column-layout.dashboard')).to.equal(null);
+    expect(
+      root.querySelector('view-header')!.getAttribute('headertext')
+    ).to.equal('Gateway traffic');
+
+    expect(root.querySelectorAll('.daily-row')).to.have.length(14);
+    // The collapsed list keeps the most recent days.
+    expect(root.querySelector('.daily-list')!.textContent).to.contain('30');
+    expect(
+      root.querySelectorAll('.model-breakdown .breakdown-row')
+    ).to.have.length(10);
+    const toggle = root.querySelector(
+      'sl-button[data-list-toggle="models"]'
+    ) as HTMLElement;
+    expect(toggle.textContent!.trim()).to.equal('Show all 15');
+    toggle.click();
+    await element.updateComplete;
+    expect(
+      root.querySelectorAll('.model-breakdown .breakdown-row')
+    ).to.have.length(15);
+
+    // Provider snapshots get their own flexible row, not the 4-track grid
+    // that squeezed the name to one letter per line.
+    const snapshot = root.querySelector('.snapshot-row')!;
+    expect(snapshot).to.exist;
+    expect(snapshot.classList.contains('breakdown-row')).to.equal(false);
+    const name = snapshot.querySelector('.breakdown-primary') as HTMLElement;
+    expect(name.getBoundingClientRect().width).to.be.greaterThan(60);
+  });
+
   it('states tokens before cost, split in and out, and stays quiet on unreported cache', async () => {
     const element = (await fixture(
       html`<api-usage-view></api-usage-view>`

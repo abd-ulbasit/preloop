@@ -47,7 +47,7 @@ describe('spendOutlierItems', () => {
     expect(item.detail).to.equal(
       '$30.00 on 2026-09-01 (UTC), 3.0x the 28-day median of $10.00'
     );
-    expect(item.href).to.equal('/console/cost');
+    expect(item.href).to.equal('/console/cost/spend');
     expect(item.fingerprint).to.equal('daily_spend|user-1|2026-09-01');
     expect(item.dismissable).to.be.true;
     expect(item.evidence?.spendOutlier?.medianUsd).to.equal(10);

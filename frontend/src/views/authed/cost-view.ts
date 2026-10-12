@@ -5,6 +5,7 @@ import { formatUsd, formatUsdExact } from '../../utils/money';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import { EditPermissions } from '../../controllers/edit-permissions';
 import '../../components/hosted-allowance';
+import '../../components/spend-chart';
 import {
   parseDigestLink,
   withoutDigestPeriod,
@@ -43,7 +44,6 @@ import type {
   CostReconciliationResponse,
   CostReconciliationRow,
   GatewayTokenUsage,
-  GatewayUsageByDay,
   GatewayUsageByModel,
   GatewayUsageBySession,
   GatewayUsageByTool,
@@ -366,55 +366,13 @@ export class CostView extends AuthedElement {
           flex-wrap: wrap;
         }
 
-        /* Wide enough for "Last month"; the shared control is 96px by default,
-         which is sized for 24h/7d/30d chips. */
-        .daily-spend {
-          display: flex;
-          align-items: flex-end;
-          gap: var(--sl-spacing-medium);
-          flex-wrap: wrap;
-        }
-
-        .daily-spend-summary {
-          display: flex;
-          flex-direction: column;
-          font-size: var(--sl-font-size-small);
-          color: var(--sl-color-neutral-600);
-        }
-
-        .daily-spend-title {
-          font-weight: var(--sl-font-weight-semibold);
-          color: var(--sl-color-neutral-800);
-        }
-
-        .daily-bars {
-          display: flex;
-          align-items: flex-end;
-          gap: 2px;
-          height: 32px;
-          flex: 1;
-          min-width: 120px;
-        }
-
-        .daily-bar {
-          flex: 1;
-          height: 100%;
-          display: flex;
-          align-items: flex-end;
-        }
-
-        .daily-bar span {
-          display: block;
-          width: 100%;
-          border-radius: 2px 2px 0 0;
-          background: var(--sl-color-primary-500);
-        }
-
         .model-provider {
           font-size: var(--sl-font-size-x-small);
           color: var(--sl-color-neutral-600);
         }
 
+        /* Wide enough for "Last month"; the shared control is 96px by default,
+         which is sized for 24h/7d/30d chips. */
         .toolbar time-range-select {
           --time-range-select-width: 140px;
         }
@@ -492,8 +450,19 @@ export class CostView extends AuthedElement {
           font-size: var(--sl-font-size-small);
         }
 
-        .subscription-usage {
-          margin-top: var(--sl-spacing-medium);
+        /* Sections of the results share one rhythm instead of each
+           carrying its own margin (or none, which left the catalog line and
+           the accounting alert touching their neighbours). */
+        .results {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sl-spacing-medium);
+        }
+
+        .side-column {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sl-spacing-medium);
         }
 
         .subscription-usage-heading {
@@ -1061,10 +1030,6 @@ export class CostView extends AuthedElement {
       if (!this.digestPeriod)
         void this.loadPreviousRangeSummary(generation, range);
       void this.loadTab(this.activeTab, generation);
-      // The daily strip is small and always visible, so it loads with the page.
-      this.loadBreakdowns(['days'], generation).catch(() => {
-        // Decoration only: the strip stays hidden without its data.
-      });
       if (summary.imported_usage?.event_count)
         void this.loadTab('imported', generation);
     } catch (error) {
@@ -2966,44 +2931,6 @@ export class CostView extends AuthedElement {
     </div>`;
   }
 
-  // A small per-day strip above the tabs: one bar per day, height by
-  // estimated cost, with the window's total spend and requests beside it.
-  private renderDailySpend() {
-    const days: GatewayUsageByDay[] = this.summary?.requests_by_day ?? [];
-    if (!this.readyBreakdowns.has('days') || !days.length) return nothing;
-    const peak = Math.max(...days.map((day) => day.estimated_cost), 0);
-    const totalCost = days.reduce((sum, day) => sum + day.estimated_cost, 0);
-    const totalRequests = days.reduce((sum, day) => sum + day.request_count, 0);
-    return html`<div
-      class="daily-spend"
-      data-testid="daily-spend"
-      role="group"
-      aria-label="Daily spend"
-    >
-      <div class="daily-spend-summary">
-        <span class="daily-spend-title">Daily spend</span>
-        <span
-          >${formatUsd(totalCost)} across ${this.formatNumber(totalRequests)}
-          ${totalRequests === 1 ? 'request' : 'requests'}</span
-        >
-      </div>
-      <div class="daily-bars">
-        ${days.map((day) => {
-          const label = `${day.date}: ${formatUsd(day.estimated_cost)}, ${this.formatNumber(day.request_count)} ${day.request_count === 1 ? 'request' : 'requests'}`;
-          const height = peak > 0 ? (day.estimated_cost / peak) * 100 : 0;
-          return html`<div
-            class="daily-bar"
-            role="img"
-            aria-label=${label}
-            title=${label}
-          >
-            <span style="height: ${Math.max(height, 2)}%"></span>
-          </div>`;
-        })}
-      </div>
-    </div>`;
-  }
-
   private openSpendSetting(destination: string) {
     if (destination === 'outliers') {
       Router.go(SPEND_OUTLIERS_HREF);
@@ -4326,10 +4253,9 @@ export class CostView extends AuthedElement {
     return html`
       <div class="page">
         <view-header
-          headerText="Cost"
-          description="Understand gateway spend by agent, tool, session and user, plus imported GitHub Copilot and Claude Code usage."
+          headerText="Spend"
+          description="What did we pay, and for which agents, tools, sessions and people? Includes imported GitHub Copilot and Claude Code usage."
         ></view-header>
-        <hosted-allowance></hosted-allowance>
 
         ${this.activeAccountLabel ? html`<p class="active-account">Active account: ${this.activeAccountLabel}</p>` : nothing}
         ${this.renderDigestNotice()}
@@ -4384,12 +4310,15 @@ export class CostView extends AuthedElement {
                     ${this.renderMetrics()} ${this.renderSubscriptionUsage()}
                     ${this.renderCatalogInfo()} ${this.renderUnpricedNotice()}
                     ${this.renderAccountingFindings()}
+                    <spend-chart .period=${this.currentPeriod}></spend-chart>
                     <div class="column-layout dashboard extra-wide">
                       <div class="main-column">
-                        ${this.renderDailySpend()} ${this.renderBreakdown()}
-                        ${this.renderImportedUsage()}
+                        ${this.renderBreakdown()} ${this.renderImportedUsage()}
                       </div>
-                      <div class="side-column">${this.renderControls()}</div>
+                      <div class="side-column">
+                        <hosted-allowance compact></hosted-allowance>
+                        ${this.renderControls()}
+                      </div>
                     </div>
                   </div>
                 `

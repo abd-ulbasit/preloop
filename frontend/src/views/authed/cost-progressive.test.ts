@@ -100,15 +100,13 @@ describe('Cost progressive loading', () => {
   it('loads the default tab, shares session data, and defers tools until selected', async () => {
     const element = await fixture<CostView>(html`<cost-view></cost-view>`);
     await waitUntil(() => element['loadedTabs'].has('agents'));
-    // The daily spend strip sits above the tabs, so `days` loads with the
-    // page in its own request; every other breakdown waits for its tab.
+    // The spend chart reads /cost/timeseries, so the summary never asks for
+    // `days`; every breakdown waits for its tab.
     const tabBreakdowns = () =>
-      urls
-        .flatMap((u) => u.searchParams.getAll('breakdown'))
-        .filter((name) => name !== 'days');
+      urls.flatMap((u) => u.searchParams.getAll('breakdown'));
     expect(
       urls.filter((u) => u.searchParams.getAll('breakdown').includes('days'))
-    ).to.have.length(1);
+    ).to.have.length(0);
     expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows']);
     await element['handleTabShow'](
       new CustomEvent('sl-tab-show', { detail: { name: 'users' } })

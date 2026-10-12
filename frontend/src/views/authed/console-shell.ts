@@ -56,6 +56,8 @@ const NAV_PERMISSIONS: Record<string, string[]> = {
   '/console/runtime-sessions': ['view_runtime_sessions'],
   '/console/artifacts': ['view_runtime_sessions'],
   '/console/cost': ['view_cost'],
+  '/console/cost/spend': ['view_cost'],
+  '/console/cost/gateway': ['view_cost'],
   '/console/api-usage': ['view_cost'],
   '/console/approvals': ['view_approvals'],
   // One request, opened from a notification, Slack or email. A link that
@@ -83,6 +85,8 @@ const NAV_PERMISSIONS: Record<string, string[]> = {
  */
 const NAV_ALIASES: Record<string, string[]> = {
   '/console/approvals': ['/console/approval'],
+  // Cost per issue is a drill-down of Spend.
+  '/console/cost/spend': ['/console/cost/by-issue'],
 };
 
 const SIDEBAR_BREAKPOINT = 768;
@@ -409,25 +413,15 @@ export class ConsoleShell extends LitElement {
         margin-left: 0.5rem;
       }
 
+      /* Rows line up with the logo above them: icons centre under the
+         badge and labels start under the "P" of the wordmark. Measured in a
+         1440px browser: badge spans x=20..50 (centre 35), icons centred at
+         31.5, wordmark starts at 62, labels at 58. Both gaps are 4px (icon
+         3.5 rounds to the same), so the whole row moves 4px right. Group
+         chevrons sit in the gutter left of the icon via a negative margin,
+         so they never shift the icon or the label. */
       #console-nav {
-        --nav-row-inset: 1.25rem;
-      }
-
-      .nav-subitem {
-        padding-left: var(--sl-spacing-medium);
-      }
-
-      .nav-text {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-      }
-
-      .nav-subtitle {
-        margin-left: 0.5rem;
-        font-size: var(--console-text-caption, 0.75rem);
-        color: var(--sl-color-neutral-600);
-        white-space: normal;
+        --nav-row-inset: calc(1.25rem + 4px);
       }
 
       .nav-list {
@@ -1226,29 +1220,42 @@ export class ConsoleShell extends LitElement {
                         </span>
                       `
                     )}
-                    ${this._renderNavLink(
-                      '/console/cost',
-                      html`
-                        <span class="nav-row">
-                          <sl-icon name="cash-coin" slot="prefix"></sl-icon>
-                          <span class="sidebar-label">Cost</span>
-                        </span>
-                      `
-                    )}
-                    ${this._renderNavLink(
-                      '/console/api-usage',
-                      html`
-                        <span class="nav-row nav-subitem">
-                          <sl-icon name="activity" slot="prefix"></sl-icon>
-                          <span class="nav-text">
-                            <span class="sidebar-label">API usage</span>
-                            <span class="nav-subtitle"
-                              >Gateway traffic and rate limits</span
-                            >
-                          </span>
-                        </span>
-                      `
-                    )}
+                    ${
+                      this._canAccess('/console/cost/spend') ||
+                      this._canAccess('/console/cost/gateway')
+                        ? html`
+                            <li class="nav-section-item">
+                              <details
+                                class="nav-section"
+                                ?open=${this._isNavActive('/console/cost')}
+                              >
+                                <summary>
+                                  <sl-icon name="cash-coin"></sl-icon>
+                                  <span class="sidebar-label">Cost</span>
+                                </summary>
+                                <ul class="nav-list">
+                                  ${this._renderNavLink(
+                                    '/console/cost/spend',
+                                    html`<span
+                                      class="nav-row"
+                                      title="What did we pay, and for which agents, models and people?"
+                                      >Spend</span
+                                    >`
+                                  )}
+                                  ${this._renderNavLink(
+                                    '/console/cost/gateway',
+                                    html`<span
+                                      class="nav-row"
+                                      title="How much traffic went through the gateway, and how close is it to the rate limits?"
+                                      >Gateway traffic</span
+                                    >`
+                                  )}
+                                </ul>
+                              </details>
+                            </li>
+                          `
+                        : nothing
+                    }
                     ${
                       this._hasAuditSection()
                         ? html`

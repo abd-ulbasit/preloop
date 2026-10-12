@@ -776,7 +776,7 @@ describe('CostView', () => {
       ?.querySelector('view-header')
       ?.getAttribute('description');
     expect(description).to.equal(
-      'Understand gateway spend by agent, tool, session and user, plus imported GitHub Copilot and Claude Code usage.'
+      'What did we pay, and for which agents, tools, sessions and people? Includes imported GitHub Copilot and Claude Code usage.'
     );
 
     const tabs = Array.from(
@@ -861,49 +861,26 @@ describe('CostView', () => {
     expect(names()).to.deep.equal(['claude-test', 'gpt-test']);
   });
 
-  it('shows a daily spend strip above the tabs', async () => {
-    summaryPayload = {
-      ...summaryPayload,
-      requests_by_day: [
-        {
-          date: '2026-03-01',
-          request_count: 4,
-          estimated_cost: 2.5,
-          total_tokens: 100,
-        },
-        {
-          date: '2026-03-02',
-          request_count: 8,
-          estimated_cost: 6,
-          total_tokens: 200,
-        },
-      ],
-    };
+  it('shows a full-width spend chart above the tabs and the allowance in the side column', async () => {
     const element = await loadedView();
-    await waitUntil(
-      () => element.shadowRoot!.querySelector('[data-testid="daily-spend"]'),
-      'the daily strip renders once the days breakdown lands'
-    );
+    const chart = element.shadowRoot!.querySelector('spend-chart');
+    expect(chart).to.exist;
+    // Full width: a direct child of the results stack, not of a column.
+    expect(chart!.parentElement!.classList.contains('results')).to.equal(true);
+    const card = element.shadowRoot!.querySelector('.analytics-card')!;
+    expect(
+      chart!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).to.not.equal(0);
+    // The allowance no longer pushes the page down from the top.
+    const allowance = element.shadowRoot!.querySelector('hosted-allowance')!;
+    expect(allowance.hasAttribute('compact')).to.equal(true);
+    expect(allowance.closest('.side-column')).to.exist;
+    // The old strip and its extra summary request are gone.
     expect(
       fetchStub
         .getCalls()
         .some((call) => String(call.args[0]).includes('breakdown=days'))
-    ).to.equal(true);
-    const strip = element.shadowRoot!.querySelector(
-      '[data-testid="daily-spend"]'
-    )!;
-    const bars = strip.querySelectorAll('.daily-bar');
-    expect(bars).to.have.length(2);
-    expect(bars[1].getAttribute('aria-label')).to.contain('$6.00');
-    expect(bars[1].getAttribute('aria-label')).to.contain('8 requests');
-    expect(strip.textContent!.replace(/\s+/g, ' ')).to.contain(
-      '$8.50 across 12 requests'
-    );
-    // The strip sits above the tab group.
-    const card = element.shadowRoot!.querySelector('.analytics-card')!;
-    expect(
-      strip.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).to.not.equal(0);
+    ).to.equal(false);
   });
 
   it('offers one Spend settings control with every destination', async () => {
@@ -1387,13 +1364,13 @@ describe('CostView', () => {
     await (header as LitElement).updateComplete;
 
     const h1 = header?.shadowRoot?.querySelector('h1');
-    // One name for the page: the sidebar, the Overview link and the h1 all
-    // say Cost.
-    expect(h1?.textContent?.trim()).to.equal('Cost');
+    // One name for the page: the sidebar entry under Cost and the h1 both
+    // say Spend.
+    expect(h1?.textContent?.trim()).to.equal('Spend');
 
     const description = header?.shadowRoot?.querySelector('.description');
     expect(description?.textContent).to.contain(
-      'Understand gateway spend by agent, tool, session and user, plus imported GitHub Copilot and Claude Code usage.'
+      'What did we pay, and for which agents, tools, sessions and people? Includes imported GitHub Copilot and Claude Code usage.'
     );
   });
 

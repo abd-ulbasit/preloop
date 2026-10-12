@@ -99,6 +99,33 @@ describe('hosted inventory and durable allowance', () => {
     await waitUntil(() => el.shadowRoot!.textContent!.includes('Not verified'));
     expect(el.shadowRoot!.textContent).not.to.contain('$0.00');
   });
+  it('compact card shows used, remaining and a bar without the long block', async () => {
+    stub(true);
+    const el = await fixture<HostedAllowance>(
+      html`<hosted-allowance compact></hosted-allowance>`
+    );
+    await waitUntil(() => el.shadowRoot!.querySelector('section.compact'));
+    const root = el.shadowRoot!;
+    const text = root.textContent!.replace(/\s+/g, ' ');
+    expect(text).to.include('$5.00 used of $10.00');
+    expect(text).to.include('$5.00 left');
+    expect(text).to.include('$2.00 held by open requests');
+    expect(
+      root.querySelector('sl-progress-bar')!.getAttribute('value')
+    ).to.equal('50');
+    expect(root.querySelector('h2')).to.equal(null);
+    expect(root.querySelector('sl-badge')).to.equal(null);
+  });
+  it('compact card marks unknown balances with a badge, never zero', async () => {
+    stub(true, true);
+    const el = await fixture<HostedAllowance>(
+      html`<hosted-allowance compact></hosted-allowance>`
+    );
+    await waitUntil(() => el.shadowRoot!.querySelector('section.compact'));
+    const badge = el.shadowRoot!.querySelector('sl-badge')!;
+    expect(badge.textContent).to.include('Not verified');
+    expect(el.shadowRoot!.textContent).not.to.contain('$0.00');
+  });
   it('does not fetch hosted endpoints without the capability', async () => {
     stub(false);
     const el = await fixture<HostedAllowance>(

@@ -12522,6 +12522,82 @@ paths:
       security:
       - bearerAuth: []
       x-restricted-ci: deny
+  /api/v1/cost/timeseries:
+    get:
+      tags:
+      - Cost Analytics
+      - Cost Analytics
+      summary: Get Cost Timeseries
+      description: 'Return gateway spend and requests per time bucket for the spend
+        chart.
+
+
+        Bounded to ``TIMESERIES_MAX_WINDOW_DAYS`` so one request never scans
+
+        unbounded history.'
+      operationId: get_cost_timeseries_api_v1_cost_timeseries_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Start Date
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: End Date
+      - name: granularity
+        in: query
+        required: false
+        schema:
+          enum:
+          - day
+          - week
+          - month
+          type: string
+          description: Bucket size; buckets start on UTC boundaries.
+          default: day
+          title: Granularity
+        description: Bucket size; buckets start on UTC boundaries.
+      - name: runtime_principal_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Runtime Principal Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostTimeseriesResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/cost/summary:
     get:
       tags:
@@ -26933,6 +27009,35 @@ components:
       - status
       title: CostHealthResponse
       description: Account-scoped gateway accounting self-check result.
+    CostTimeseriesResponse:
+      properties:
+        period_start:
+          type: string
+          format: date-time
+          title: Period Start
+        period_end:
+          type: string
+          format: date-time
+          title: Period End
+        granularity:
+          type: string
+          enum:
+          - day
+          - week
+          - month
+          title: Granularity
+        buckets:
+          items:
+            $ref: '#/components/schemas/GatewayUsageByDay'
+          type: array
+          title: Buckets
+      type: object
+      required:
+      - period_start
+      - period_end
+      - granularity
+      title: CostTimeseriesResponse
+      description: Gateway spend bucketed by UTC day, week or month for one window.
     CreateVersionRequest:
       properties:
         description:
@@ -44176,7 +44281,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

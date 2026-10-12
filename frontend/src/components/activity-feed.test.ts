@@ -357,7 +357,7 @@ describe('activity-feed', () => {
         'Gateway request failed · deepseek/deepseek-v4-pro · 502'
       );
       expect(gateway?.tone).to.equal('danger');
-      expect(gateway?.href).to.equal('/console/api-usage');
+      expect(gateway?.href).to.equal('/console/cost/gateway');
 
       const agent = feedEventFromRealtime('managed_agents', {
         type: 'managed_agent_created',

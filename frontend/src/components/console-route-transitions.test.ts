@@ -107,8 +107,19 @@ const MATRIX: Landing[] = [
   { path: '/console/artifacts', tag: 'artifacts-view', params: {} },
   { path: '/console/audit', tag: 'audit-view', params: {} },
   { path: '/console/attention', tag: 'attention-view', params: {} },
-  { path: '/console/cost', tag: 'cost-view', params: {} },
-  { path: '/console/api-usage', tag: 'api-usage-view', params: {} },
+  { path: '/console/cost/spend', tag: 'cost-view', params: {} },
+  { path: '/console/cost/gateway', tag: 'api-usage-view', params: {} },
+  // The flat URLs from before Cost became a group still land on the pages.
+  {
+    path: '/console/cost',
+    url: '/console/cost/spend',
+    tag: 'cost-view',
+  },
+  {
+    path: '/console/api-usage',
+    url: '/console/cost/gateway',
+    tag: 'api-usage-view',
+  },
   { path: '/console/issues', tag: 'issues-view', params: {} },
   // Settings pages, including the group's own redirect to profile.
   {
