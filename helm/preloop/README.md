@@ -987,8 +987,10 @@ provisioned in the execution cluster.
 
 Provision the execution namespace, quotas, placement, image-pull access and
 network policies separately in the remote cluster. Give each environment a
-namespace-scoped identity with Jobs and Pods lifecycle/log/exec access and
-NetworkPolicy access for verification. Do not mount these credentials into
+namespace-scoped identity with `jobs` create/get/delete, `jobs/status` get,
+`pods` get/list, `pods/log` get, `pods/exec` get, and `networkpolicies`
+get/list/create/delete access for verification. `jobs/status` is a separate
+subresource: access to `jobs` alone does not allow completion polling. Do not mount these credentials into
 agent Pods. Existing chart namespace/RBAC/network-policy templates operate on
 the control-plane cluster; they do not provision the remote cluster. Drain
 existing hosted executions before changing clusters, including before rollback,
