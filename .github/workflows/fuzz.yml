@@ -46,7 +46,7 @@ jobs:
       GOCACHE: ${{ github.workspace }}/.fuzz-cache
       FUZZ_PACKAGE: ${{ matrix.package }}
       FUZZ_TARGET: ${{ matrix.target }}
-      FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '60' || '600' }}
+      FUZZ_SECONDS: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.execution_host_tests)) && '60' || '600' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
