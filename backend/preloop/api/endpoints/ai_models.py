@@ -319,15 +319,16 @@ def list_ai_models(
     )
     own_models = [model for model in models if model.account_id is not None]
     built_in = [model for model in models if model.account_id is None]
+    account_has_default = any(model.is_default for model in own_models)
     visible = [
-        *filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*own_models, *shared]),
         *built_in,
+        *filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*own_models, *shared]),
     ]
     priced = _apply_tariff_visibility(
         visible, is_admin=getattr(current_user, "is_superuser", False) is True
     )
     return [
-        public_built_in_model(row)
+        public_built_in_model(row, account_has_default=account_has_default)
         if not isinstance(row, SharedResourceRead) and row.account_id is None
         else row
         for row in priced
@@ -394,6 +395,9 @@ def get_ai_models_overview(
         account_id=current_user.account_id,
         include_built_in=built_in_models_enabled(),
     )
+    account_has_default = any(
+        model.account_id is not None and model.is_default for model in models
+    )
     models = [
         model
         for model in models
@@ -455,7 +459,8 @@ def get_ai_models_overview(
                 provider_name=model.provider_name,
                 model_identifier=model.model_identifier,
                 model_alias=_gateway_alias(model),
-                is_default=bool(model.is_default),
+                is_default=bool(model.is_default)
+                and (model.account_id is not None or not account_has_default),
                 total_requests=requests,
                 successful_requests=max(requests - failed, 0),
                 failed_requests=failed,
@@ -511,7 +516,14 @@ def get_ai_model(
             raise HTTPException(404, "Resource not found")
         return shared
     model = _get_readable_ai_model(db=db, model_id=model_id, current_user=current_user)
-    return public_built_in_model(model) if model.account_id is None else model
+    if model.account_id is None:
+        return public_built_in_model(
+            model,
+            account_has_default=crud_ai_model.account_default_model_exists(
+                db, account_id=current_user.account_id
+            ),
+        )
+    return model
 
 
 @router.get(

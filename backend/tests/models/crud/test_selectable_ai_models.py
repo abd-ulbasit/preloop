@@ -1,5 +1,6 @@
 """The selectable catalog preserves history but excludes retired built-ins."""
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -138,3 +139,94 @@ def test_builtin_usage_is_scoped_to_the_requesting_account(
         ).status_code
         == 404
     )
+
+
+@pytest.mark.parametrize("own_default", [None, False, True])
+@pytest.mark.parametrize("built_in_default", [False, True])
+def test_builtin_default_and_order_follow_account_configuration(
+    client: TestClient,
+    db_session: Session,
+    test_user: models.User,
+    mocker: MockerFixture,
+    own_default: bool | None,
+    built_in_default: bool,
+) -> None:
+    """Account defaults override the built-in badge across catalog and detail."""
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    from preloop.models.crud import crud_account
+
+    other = crud_account.create(
+        db_session,
+        obj_in={"organization_name": "Other example account", "is_active": True},
+    )
+    db_session.add(
+        models.AIModel(
+            id=uuid4(),
+            account_id=other.id,
+            name="Other account default",
+            provider_name="openai",
+            model_identifier="example-model",
+            is_default=True,
+        )
+    )
+    owned = []
+    if own_default is not None:
+        # No credentials: configured defaults still override the fallback badge.
+        owned.append(
+            models.AIModel(
+                id=uuid4(),
+                account_id=test_user.account_id,
+                name="Own model",
+                provider_name="openai",
+                model_identifier="example-model",
+                is_default=own_default,
+                created_at=datetime.now(UTC) - timedelta(minutes=2),
+            )
+        )
+        owned.append(
+            models.AIModel(
+                id=uuid4(),
+                account_id=test_user.account_id,
+                name="Second model",
+                provider_name="openai",
+                model_identifier="another-model",
+                is_default=False,
+                created_at=datetime.now(UTC) - timedelta(minutes=1),
+            )
+        )
+        db_session.add_all(owned)
+        db_session.flush()
+    built_in = models.AIModel(
+        id=uuid4(),
+        name="Built-in model",
+        provider_name="qwen",
+        model_identifier="deepseek-v4.1-flash",
+        account_id=None,
+        is_default=built_in_default,
+        meta_data={"gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS}},
+    )
+    db_session.add(built_in)
+    db_session.commit()
+
+    selected = crud_ai_model.get_selectable_for_account(
+        db_session, account_id=test_user.account_id, include_built_in=True
+    )
+    expected_ids = [str(built_in.id), *[str(row.id) for row in owned]]
+    assert [str(row.id) for row in selected] == expected_ids
+    catalog = client.get("/api/v1/ai-models")
+    assert catalog.status_code == 200
+    assert [row["id"] for row in catalog.json()] == expected_ids
+    expected_default = built_in_default and own_default is not True
+    assert catalog.json()[0]["is_default"] is expected_default
+    if owned:
+        assert catalog.json()[1]["is_default"] is own_default
+    detail = client.get(f"/api/v1/ai-models/{built_in.id}")
+    assert detail.status_code == 200
+    assert detail.json()["is_default"] is expected_default
+    overview = client.get("/api/v1/ai-models/overview")
+    assert overview.status_code == 200
+    assert overview.json()["models"][0]["is_default"] is expected_default
+    db_session.refresh(built_in)
+    assert built_in.is_default is built_in_default

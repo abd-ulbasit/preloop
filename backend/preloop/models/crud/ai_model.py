@@ -550,7 +550,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
             .options(joinedload(self.model.credentials_secret))
             .filter(visible)
             .order_by(
-                self.model.account_id.is_(None).asc(),
+                self.model.account_id.is_(None).desc(),
                 self.model.created_at.asc(),
                 self.model.id.asc(),
             )
@@ -893,6 +893,17 @@ class CRUDAIModel(CRUDBase[AIModel]):
 
         db.commit()
         return obj
+
+    def account_default_model_exists(
+        self, db: Session, *, account_id: uuid.UUID | str
+    ) -> bool:
+        """Check for a configured account default, regardless of credentials."""
+        return (
+            db.query(self.model.id)
+            .filter(self.model.is_default, self.model.account_id == account_id)
+            .first()
+            is not None
+        )
 
     def default_model_exists(self, db: Session) -> bool:
         """Check if a system-wide default model exists."""
