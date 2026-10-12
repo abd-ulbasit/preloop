@@ -3,7 +3,7 @@ import sinon from 'sinon';
 
 import './agents-view.ts';
 import type { AgentListRow, AgentsView } from './agents-view';
-import { sortAgentListRows } from './agents-view';
+import { ListTable } from '../../table';
 import { loadShoelaceTokens } from '../../utils/test-shoelace-theme';
 import { resetConfirmDialogForTests } from '../../components/confirm-dialog';
 import { bulkActionButton, bulkCountText } from '../../utils/test-bulk-bar';
@@ -461,12 +461,11 @@ describe('AgentsView', () => {
       el.shadowRoot?.querySelectorAll('table.agents-table thead th') || []
     );
     // The first header is the select-all checkbox, which carries no text.
+    // Owner and Model start hidden so the default columns fit 1440px.
     expect(headers.map((th) => th.textContent?.trim())).to.deep.equal([
       '',
       'Agent',
       'Status',
-      'Owner',
-      'Model',
       'Requests',
       // Tokens come before cost: volume is the fact, price is the
       // consequence of it.
@@ -478,37 +477,59 @@ describe('AgentsView', () => {
 
     // "$ est." is short enough to read as "dollar est." out loud, so the
     // sort button carries the full name. Index 0 is the select-all checkbox.
-    const spendButton = headers[7].querySelector('.sort-button');
+    const spendButton = headers[5].querySelector('.sort-button');
     expect(spendButton?.getAttribute('aria-label')).to.equal('Estimated spend');
     expect(spendButton?.getAttribute('title')).to.equal('Estimated spend');
     // The cell states one total, so the header names that rather than the
     // split it no longer shows.
-    const tokensButton = headers[6].querySelector('.sort-button');
+    const tokensButton = headers[4].querySelector('.sort-button');
     expect(tokensButton?.getAttribute('aria-label')).to.equal(
       'Total tokens, input plus output'
     );
 
-    const lastSeen = headers[8];
+    const lastSeen = headers[6];
     expect(lastSeen.getAttribute('aria-sort'), 'default sort').to.equal(
       'descending'
     );
     expect(headers[1].getAttribute('aria-sort')).to.equal('none');
 
+    const dataTable = () =>
+      el.shadowRoot!.querySelector('data-table') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      };
+    const settle = async () => {
+      await el.updateComplete;
+      await dataTable().updateComplete;
+    };
     lastSeen.querySelector<HTMLButtonElement>('.sort-button')?.click();
-    await el.updateComplete;
+    await settle();
     expect(
       el.shadowRoot
-        ?.querySelectorAll('table.agents-table thead th')[8]
+        ?.querySelectorAll('table.agents-table thead th')[6]
         .getAttribute('aria-sort')
     ).to.equal('ascending');
 
     headers[1].querySelector<HTMLButtonElement>('.sort-button')?.click();
-    await el.updateComplete;
+    await settle();
     const after = el.shadowRoot?.querySelectorAll(
       'table.agents-table thead th'
     );
     expect(after?.[1].getAttribute('aria-sort')).to.equal('ascending');
-    expect(after?.[8].getAttribute('aria-sort')).to.equal('none');
+    expect(after?.[6].getAttribute('aria-sort')).to.equal('none');
+
+    // The picker offers the two hidden columns back.
+    const picker = el.agentTable.pickerColumns;
+    expect(
+      picker.filter((column) => !column.visible).map((column) => column.id)
+    ).to.deep.equal(['owner', 'model']);
+    el.agentTable.setVisible('owner', true);
+    await settle();
+    expect(
+      Array.from(
+        el.shadowRoot!.querySelectorAll('table.agents-table thead th')
+      ).map((th) => th.textContent?.trim())
+    ).to.include('Owner');
+    el.agentTable.resetColumns();
   });
 
   it('shows the status chip taxonomy and a right-aligned request count', async () => {
@@ -641,7 +662,7 @@ describe('AgentsView', () => {
     const el = await fixture<AgentsView>(html`<agents-view></agents-view>`);
     await waitForAgents(el);
 
-    const cell = el.shadowRoot?.querySelectorAll('tbody td')[8];
+    const cell = el.shadowRoot?.querySelector('tbody td.last-seen-cell');
     expect(cell?.textContent?.trim()).to.not.contain('2026-03-10T10:00:00Z');
     expect(cell?.getAttribute('title'))
       .to.be.a('string')
@@ -1082,23 +1103,21 @@ describe('AgentsView', () => {
     expect(el.shadowRoot?.querySelector('.model-traffic-failing')).to.not.exist;
   });
 
-  it('gives every column a fixed width so the kebab stays inside the card', async () => {
+  it('fits the default columns in the card with the kebab inside', async () => {
     const el = await fixture<AgentsView>(html`<agents-view></agents-view>`);
     await waitForAgents(el);
 
     const table = el.shadowRoot?.querySelector('table.agents-table');
-    const cols = Array.from(table?.querySelectorAll('colgroup col') || []);
-    expect(cols.map((col) => col.className)).to.deep.equal([
-      'col-select',
-      'col-agent',
-      'col-status',
-      'col-owner',
-      'col-model',
-      'col-requests',
-      'col-tokens',
-      'col-spend',
-      'col-last-seen',
-      'col-actions',
+    // Fixed-content columns declare their width on the header.
+    const widths = Array.from(table?.querySelectorAll('thead th') || []).map(
+      (th) => (th as HTMLElement).style.width
+    );
+    expect(widths.slice(2, 7)).to.deep.equal([
+      '150px',
+      '110px',
+      '110px',
+      '110px',
+      '128px',
     ]);
 
     const actionsCell = table?.querySelector('tbody td.actions-cell');
@@ -1212,6 +1231,14 @@ describe('AgentsView', () => {
 
     const el = await fixture<AgentsView>(html`<agents-view></agents-view>`);
     await waitForAgents(el);
+    // Model is one column the picker turns on.
+    el.agentTable.setVisible('model', true);
+    await el.updateComplete;
+    await (
+      el.shadowRoot!.querySelector('data-table') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      }
+    ).updateComplete;
 
     const cell = el.shadowRoot?.querySelector('tbody td.model-cell');
     expect(cell?.textContent?.trim()).to.equal(
@@ -1220,6 +1247,7 @@ describe('AgentsView', () => {
     expect(cell?.getAttribute('title')).to.contain(
       'OpenClaw preloop/deepseek/deepseek-chat'
     );
+    el.agentTable.resetColumns();
   });
 
   it('keeps last seen relative to ninety days and absolute after it', async () => {
@@ -1248,7 +1276,7 @@ describe('AgentsView', () => {
 
     const lastSeen = Array.from(
       el.shadowRoot?.querySelectorAll('tbody tr') || []
-    ).map((row) => row.children[8].textContent?.trim());
+    ).map((row) => row.querySelector('td.last-seen-cell')?.textContent?.trim());
     expect(lastSeen).to.contain('10d ago');
     expect(lastSeen).to.contain(
       new Date(twoHundredDaysAgo).toLocaleDateString()
@@ -1272,7 +1300,8 @@ describe('AgentsView', () => {
 
     const listCell = el
       .shadowRoot!.querySelector('tbody tr')!
-      .children[8].textContent?.trim();
+      .querySelector('td.last-seen-cell')!
+      .textContent?.trim();
     expect(listCell).to.equal('6w ago');
 
     localStorage.setItem('preloop.agents.view_mode', 'cards');
@@ -1669,7 +1698,7 @@ describe('AgentsView', () => {
   });
 });
 
-describe('sortAgentListRows', () => {
+describe('agents list sorting (shared table columns)', () => {
   const rows = [
     makeRow({
       id: 'b',
@@ -1697,25 +1726,43 @@ describe('sortAgentListRows', () => {
     }),
   ];
 
-  const ids = (
-    key: Parameters<typeof sortAgentListRows>[1],
+  /** The view's own column definitions on a bare table model. */
+  function sorted(
+    data: AgentListRow[],
+    id: string,
     dir: 'asc' | 'desc'
-  ) => sortAgentListRows(rows, key, dir).map((row) => row.id);
+  ): string[] {
+    const view = document.createElement('agents-view') as unknown as {
+      agentColumns(): ConstructorParameters<typeof ListTable>[1]['columns'];
+    };
+    const table = new ListTable<AgentListRow>(
+      { addController() {}, requestUpdate() {} } as never,
+      {
+        listId: `agents-sort-${Math.random()}`,
+        getRowId: (row) => row.id,
+        persist: [],
+        columns: view.agentColumns() as never,
+      }
+    );
+    table.data = data;
+    table.setSorting([{ id, desc: dir === 'desc' }]);
+    return table.rows.map((row) => row.id);
+  }
 
   it('does not mutate the rows it is given', () => {
     const before = rows.map((row) => row.id);
-    sortAgentListRows(rows, 'agent', 'asc');
+    sorted(rows, 'agent', 'asc');
     expect(rows.map((row) => row.id)).to.deep.equal(before);
   });
 
   it('sorts by name in both directions', () => {
-    expect(ids('agent', 'asc')).to.deep.equal(['a', 'b', 'c']);
-    expect(ids('agent', 'desc')).to.deep.equal(['c', 'b', 'a']);
+    expect(sorted(rows, 'agent', 'asc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'agent', 'desc')).to.deep.equal(['c', 'b', 'a']);
   });
 
   it('sorts numeric columns by value, not by their formatted text', () => {
-    expect(ids('requests', 'desc')).to.deep.equal(['c', 'b', 'a']);
-    expect(ids('spend', 'desc')).to.deep.equal(['a', 'c', 'b']);
+    expect(sorted(rows, 'requests', 'desc')).to.deep.equal(['c', 'b', 'a']);
+    expect(sorted(rows, 'spend', 'desc')).to.deep.equal(['a', 'c', 'b']);
   });
 
   it('sorts tokens by the total the cell states', () => {
@@ -1751,19 +1798,25 @@ describe('sortAgentListRows', () => {
       }),
       makeRow({ id: 'none', name: 'None', tokenUsage: null }),
     ];
-    expect(
-      sortAgentListRows(tokenRows, 'tokens', 'desc').map((row) => row.id)
-    ).to.deep.equal(['large', 'small', 'split', 'none']);
-    expect(
-      sortAgentListRows(tokenRows, 'tokens', 'asc').map((row) => row.id)
-    ).to.deep.equal(['none', 'split', 'small', 'large']);
+    expect(sorted(tokenRows, 'tokens', 'desc')).to.deep.equal([
+      'large',
+      'small',
+      'split',
+      'none',
+    ]);
+    expect(sorted(tokenRows, 'tokens', 'asc')).to.deep.equal([
+      'none',
+      'split',
+      'small',
+      'large',
+    ]);
   });
 
   it('sorts last seen newest first and keeps never-seen agents last', () => {
-    expect(ids('last_seen', 'desc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'last_seen', 'desc')).to.deep.equal(['a', 'b', 'c']);
   });
 
   it('sorts owners alphabetically with unassigned agents last', () => {
-    expect(ids('owner', 'asc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'owner', 'asc')).to.deep.equal(['a', 'b', 'c']);
   });
 });

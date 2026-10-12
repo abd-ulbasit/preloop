@@ -6,6 +6,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { Router } from '../../router';
 import {
   AuthedElement,
+  fetchWithAuth,
   approveRequest,
   declineRequest,
   decideApprovalsBatch,
@@ -70,6 +71,7 @@ import '@shoelace-style/shoelace/dist/components/divider/divider.js';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import { debugLog } from '../../utils/debug';
 import '../../components/view-header';
+import '../../table/table-pagination';
 
 /**
  * Ids the operator has already had on screen, so a request that arrived since
@@ -92,6 +94,40 @@ interface ApprovalStats {
   approvalRate: number;
   /** Requests auto-approved by a time-boxed bypass, with no human review. */
   autoApprovedByBypass: number;
+}
+
+/** History rows per page. Cards are tall; 25 keeps a page short. */
+export const HISTORY_PAGE_SIZE = 25;
+
+/** `GET /approval-requests/stats`: counts over the whole account. */
+interface ApprovalStatsResponse {
+  total: number;
+  pending: number;
+  approved: number;
+  declined: number;
+  expired: number;
+  cancelled: number;
+  human_approved: number;
+  human_declined: number;
+  auto_approved_by_bypass: number;
+  avg_response_minutes: number | null;
+  tools: string[];
+}
+
+function isStatsResponse(value: unknown): value is ApprovalStatsResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as ApprovalStatsResponse).total === 'number'
+  );
+}
+
+function byNewest(a: ApprovalRequest, b: ApprovalRequest): number {
+  return (
+    parseUTCDate(b.requested_at).getTime() -
+    parseUTCDate(a.requested_at).getTime()
+  );
 }
 
 @customElement('approvals-view')
@@ -118,19 +154,12 @@ export class ApprovalsView extends AuthedElement {
   @state()
   private loading = true;
 
-  /** True while an older page of the history is in flight. */
-  @state()
-  private loadingMore = false;
-
   /**
-   * True when the last fetched page came back full, so more rows may exist
-   * beyond the loaded window. Drives "Load older" and the honest count labels.
+   * True when a page came back full and the server stated no total, so more
+   * rows may exist. Drives the honest "last N" label on the stat strip.
    */
   @state()
   private hasMore = false;
-
-  @state()
-  private moreError: string | null = null;
 
   @state()
   private stats: ApprovalStats = {
@@ -144,8 +173,37 @@ export class ApprovalsView extends AuthedElement {
     autoApprovedByBypass: 0,
   };
 
+  /**
+   * Status shown when the URL names none. Pending: what needs a person is
+   * the reason to open the page; the history is one select away and paged
+   * on the server instead of loaded whole.
+   */
+  static readonly DEFAULT_STATUS = 'pending';
+
   @state()
-  private statusFilter: string = 'all';
+  private statusFilter: string = ApprovalsView.DEFAULT_STATUS;
+
+  /** 0-based page of the history, paged on the server. */
+  @state()
+  private historyPage = 0;
+
+  @state()
+  private historyPageSize = HISTORY_PAGE_SIZE;
+
+  /** Rows the history filter matches on the server; null when not stated. */
+  @state()
+  private historyTotal: number | null = null;
+
+  /** Rows on the current history page, for the pager's range. */
+  @state()
+  private historyPageRows = 0;
+
+  /** Account-wide counts from the server; null until (or unless) loaded. */
+  @state()
+  private serverStats: ApprovalStatsResponse | null = null;
+
+  /** Bumped per list load; a slower, older response is dropped. */
+  private loadSeq = 0;
 
   @state()
   private toolFilter: string = 'all';
@@ -287,11 +345,8 @@ export class ApprovalsView extends AuthedElement {
         gap: var(--sl-spacing-small);
       }
 
-      .load-older {
-        display: flex;
-        align-items: center;
-        gap: var(--sl-spacing-small);
-        justify-content: center;
+      .history-pager {
+        display: block;
         margin-top: var(--sl-spacing-medium);
       }
 
@@ -535,6 +590,8 @@ export class ApprovalsView extends AuthedElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    if (this.statsTimer !== null) window.clearTimeout(this.statsTimer);
+    this.statsTimer = null;
     window.removeEventListener('popstate', this.onFilterPopState);
     if (this.filterSearchTimer !== null)
       window.clearTimeout(this.filterSearchTimer);
@@ -806,12 +863,19 @@ export class ApprovalsView extends AuthedElement {
         return;
       }
 
-      // Add to the beginning of the list
-      this.approvalRequests = [newApproval, ...this.approvalRequests];
       this.newApprovalCount++;
       this.accessibilityStatus.announce(
         `${this.newApprovalCount} new approval ${this.newApprovalCount === 1 ? 'request' : 'requests'}.`
       );
+      this.refreshStatsSoon();
+      // The server owns the text search; a row it has not matched is not
+      // pushed into a searched list, the list is asked again instead.
+      if (this.searchQuery.trim()) {
+        void this.loadApprovalRequests();
+        return;
+      }
+      // Add to the beginning of the list
+      this.approvalRequests = [newApproval, ...this.approvalRequests];
       this.applyFilters();
       this.calculateStats();
     }
@@ -843,96 +907,177 @@ export class ApprovalsView extends AuthedElement {
         this.applyFilters();
         this.calculateStats();
       }
+      this.refreshStatsSoon();
     }
   }
 
+  private statsTimer: number | null = null;
+
+  /**
+   * Re-read the account counts shortly after a decision or a live status
+   * change, so the strip moves with the list. Bursts of events cost one
+   * request.
+   */
+  private refreshStatsSoon() {
+    if (this.statsTimer !== null) return;
+    this.statsTimer = window.setTimeout(() => {
+      this.statsTimer = null;
+      if (this.isConnected) void this.loadStats();
+    }, 500);
+  }
+
+  /**
+   * One page of the list endpoint and the total it states in
+   * `X-Total-Count`. Null when the request failed.
+   */
+  private async fetchPage(params: Record<string, string>): Promise<{
+    rows: ApprovalRequest[];
+    total: number | null;
+  } | null> {
+    const query = new URLSearchParams(params).toString();
+    const response = await fetchWithAuth(`/api/v1/approval-requests?${query}`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data)) return null;
+    const header = response.headers.get('X-Total-Count');
+    const total = header === null || header === '' ? NaN : Number(header);
+    return {
+      rows: (data as ApprovalRequest[]).map((request) =>
+        normalizeApprovalRequest(request)
+      ),
+      total: Number.isFinite(total) ? total : null,
+    };
+  }
+
+  /** Tool and text search, which the server applies to both lists. */
+  private filterParams(): Record<string, string> {
+    const params: Record<string, string> = {};
+    if (this.toolFilter !== 'all') params.tool_name = this.toolFilter;
+    if (this.searchQuery.trim()) params.q = this.searchQuery.trim();
+    return params;
+  }
+
+  /** The history query: the status, tool and search filters, one page. */
+  private historyParams(): Record<string, string> {
+    const params: Record<string, string> = {
+      ...this.filterParams(),
+      limit: String(this.historyPageSize),
+      skip: String(this.historyPage * this.historyPageSize),
+    };
+    if (this.statusFilter !== 'all') params.status = this.statusFilter;
+    return params;
+  }
+
+  /** True when the page shows history rows, not only what is waiting. */
+  private get showsHistory(): boolean {
+    return this.statusFilter !== 'pending';
+  }
+
+  /**
+   * Load what is waiting (every pending request, up to the endpoint cap) and
+   * one server page of the filtered history, then the account-wide stats.
+   *
+   * The page used to pull the history 100 rows at a time into the browser
+   * to filter, search and count it; the server does all three now.
+   */
   private async loadApprovalRequests() {
-    this.loading = true;
+    const seq = ++this.loadSeq;
+    if (!this.approvalRequests.length) this.loading = true;
     this.loadError = null;
+    void this.loadStats();
     try {
-      const data = await this.fetchData(
-        `/api/v1/approval-requests?limit=${APPROVAL_REQUESTS_PAGE_LIMIT}`
-      );
-      if (!Array.isArray(data)) {
-        // fetchData resolves null on a failed request rather than throwing.
+      const [pending, history] = await Promise.all([
+        this.fetchPage({
+          ...this.filterParams(),
+          status: 'pending',
+          limit: String(APPROVAL_REQUESTS_PAGE_LIMIT),
+        }),
+        this.showsHistory
+          ? this.fetchPage(this.historyParams())
+          : Promise.resolve(null),
+      ]);
+      if (seq !== this.loadSeq) return;
+      if (!pending || (this.showsHistory && !history)) {
         this.loadError = "Couldn't load approval requests.";
-      } else {
-        // Sort by requested_at descending (most recent first)
-        this.approvalRequests = (data as ApprovalRequest[])
-          .map((request) => normalizeApprovalRequest(request))
-          .sort(
-            (a, b) =>
-              parseUTCDate(b.requested_at).getTime() -
-              parseUTCDate(a.requested_at).getTime()
-          );
-        // A full page means the window may be truncated; only a short page
-        // proves the whole account history is on screen.
-        this.hasMore =
-          (data as ApprovalRequest[]).length >= APPROVAL_REQUESTS_PAGE_LIMIT;
-        this.applyFilters();
-        this.markNewSinceLastVisit();
-        this.calculateStats();
+        return;
       }
+      const rows = new Map<string, ApprovalRequest>();
+      for (const request of [...pending.rows, ...(history?.rows ?? [])]) {
+        rows.set(request.id, request);
+      }
+      this.approvalRequests = [...rows.values()].sort(byNewest);
+      this.historyPageRows = history?.rows.length ?? 0;
+      this.historyTotal = history?.total ?? null;
+      // Without a stated total, a full page is the only hint that more
+      // exist; the strip then says "last N" instead of a total.
+      this.hasMore =
+        pending.rows.length >= APPROVAL_REQUESTS_PAGE_LIMIT ||
+        (history !== null &&
+          history.total === null &&
+          history.rows.length >= this.historyPageSize);
+      this.applyFilters();
+      this.markNewSinceLastVisit();
+      this.calculateStats();
     } catch (error) {
+      if (seq !== this.loadSeq) return;
       console.error('Failed to load approval requests:', error);
       const detail = error instanceof Error ? error.message : '';
       this.loadError = detail
         ? `Couldn't load approval requests. ${detail}`
         : "Couldn't load approval requests.";
     } finally {
-      this.loading = false;
+      if (seq === this.loadSeq) this.loading = false;
     }
   }
 
-  /**
-   * Append the next (older) page of the history.
-   *
-   * The endpoint is newest-first and paged by `skip`, so the next page starts
-   * at the current loaded count. Rows are normalized and deduplicated by id
-   * before appending: a live websocket insert that arrives while this fetch is
-   * in flight changes the list length and would otherwise make a stale `skip`
-   * re-read the same boundary row.
-   */
-  private async loadOlder(): Promise<void> {
-    if (this.loadingMore || !this.hasMore) return;
-    this.loadingMore = true;
-    this.moreError = null;
+  /** Account-wide counts; the strip falls back to the loaded rows without. */
+  private async loadStats(): Promise<void> {
     try {
-      const data = await this.fetchData(
-        `/api/v1/approval-requests?limit=${APPROVAL_REQUESTS_PAGE_LIMIT}&skip=${this.approvalRequests.length}`
-      );
-      if (!data || !Array.isArray(data)) {
-        this.moreError = 'Failed to load older requests.';
-        return;
-      }
-      const rows = (data as ApprovalRequest[])
-        .map((request) => normalizeApprovalRequest(request))
-        .sort(
-          (a, b) =>
-            parseUTCDate(b.requested_at).getTime() -
-            parseUTCDate(a.requested_at).getTime()
-        );
-      const known = new Set(this.approvalRequests.map((request) => request.id));
-      const appended = rows.filter((request) => !known.has(request.id));
-      if (appended.length) {
-        this.approvalRequests = [...this.approvalRequests, ...appended];
-      }
-      this.hasMore =
-        (data as ApprovalRequest[]).length >= APPROVAL_REQUESTS_PAGE_LIMIT;
-      this.applyFilters();
-      this.calculateStats();
-    } catch (error) {
-      console.error('Failed to load older approval requests:', error);
-      this.moreError =
-        error instanceof Error
-          ? error.message
-          : 'Failed to load older requests.';
-    } finally {
-      this.loadingMore = false;
+      const response = await fetchWithAuth('/api/v1/approval-requests/stats');
+      const data = response.ok ? await response.json() : null;
+      this.serverStats = isStatsResponse(data) ? data : null;
+    } catch {
+      this.serverStats = null;
     }
+    this.calculateStats();
+  }
+
+  /** Move the history to another page (the pager's event). */
+  private goToHistoryPage(pageIndex: number) {
+    if (pageIndex === this.historyPage || pageIndex < 0) return;
+    this.historyPage = pageIndex;
+    void this.loadApprovalRequests();
+  }
+
+  private setHistoryPageSize(pageSize: number) {
+    if (pageSize === this.historyPageSize) return;
+    this.historyPageSize = pageSize;
+    this.historyPage = 0;
+    void this.loadApprovalRequests();
+  }
+
+  /** A filter changed: back to the first page, fetched with the new query. */
+  private reloadFromFirstPage() {
+    this.historyPage = 0;
+    void this.loadApprovalRequests();
   }
 
   private calculateStats() {
+    const server = this.serverStats;
+    if (server) {
+      const decided = server.human_approved + server.human_declined;
+      this.stats = {
+        total: server.total,
+        approved: server.approved,
+        declined: server.declined,
+        expired: server.expired,
+        cancelled: server.cancelled,
+        avgResponseTimeMinutes: server.avg_response_minutes ?? 0,
+        approvalRate: decided > 0 ? (server.human_approved / decided) * 100 : 0,
+        autoApprovedByBypass: server.auto_approved_by_bypass,
+      };
+      return;
+    }
     const requests = this.approvalRequests;
     const total = requests.length;
     const approved = requests.filter((r) => r.status === 'approved').length;
@@ -1014,19 +1159,9 @@ export class ApprovalsView extends AuthedElement {
       filtered = filtered.filter((r) => r.tool_name === this.toolFilter);
     }
 
-    // Search query (searches tool name, execution ID, and reasoning)
-    if (this.searchQuery.trim()) {
-      const query = this.searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (r) =>
-          r.tool_name.toLowerCase().includes(query) ||
-          r.summary?.toLowerCase().includes(query) ||
-          r.managed_agent_name?.toLowerCase().includes(query) ||
-          r.execution_id?.toLowerCase().includes(query) ||
-          r.agent_reasoning?.toLowerCase().includes(query) ||
-          JSON.stringify(r.tool_args).toLowerCase().includes(query)
-      );
-    }
+    // The text search is the server's (`q`): matching it here again, on a
+    // different rendering of the arguments, could drop rows the server
+    // counted.
 
     this.filteredRequests = filtered;
 
@@ -1040,6 +1175,8 @@ export class ApprovalsView extends AuthedElement {
 
   private getUniqueTools(): string[] {
     const tools = new Set(this.approvalRequests.map((r) => r.tool_name));
+    for (const tool of this.serverStats?.tools ?? []) tools.add(tool);
+    if (this.toolFilter !== 'all') tools.add(this.toolFilter);
     return Array.from(tools).sort();
   }
 
@@ -1088,17 +1225,22 @@ export class ApprovalsView extends AuthedElement {
   private filterSearchTimer: number | null = null;
   private readFilterLocation(): void {
     const params = new URLSearchParams(window.location.search);
-    this.statusFilter = params.get('status') ?? 'all';
+    this.statusFilter = params.get('status') ?? ApprovalsView.DEFAULT_STATUS;
     this.toolFilter = params.get('tool') ?? 'all';
     this.searchQuery = params.get('q') ?? '';
   }
   private onFilterPopState = (): void => {
     this.readFilterLocation();
     this.applyFilters();
+    this.reloadFromFirstPage();
   };
   private syncFilterLocation(): void {
     replaceListFilters({
-      status: this.statusFilter === 'all' ? '' : this.statusFilter,
+      // The default is left out of the URL; "all" has to be spelled out.
+      status:
+        this.statusFilter === ApprovalsView.DEFAULT_STATUS
+          ? ''
+          : this.statusFilter,
       tool: this.toolFilter === 'all' ? '' : this.toolFilter,
       q: this.searchQuery,
     });
@@ -1108,12 +1250,14 @@ export class ApprovalsView extends AuthedElement {
     this.statusFilter = (e.target as HTMLSelectElement).value;
     this.syncFilterLocation();
     this.applyFilters();
+    this.reloadFromFirstPage();
   }
 
   private handleToolFilterChange(e: CustomEvent) {
     this.toolFilter = (e.target as HTMLSelectElement).value;
     this.syncFilterLocation();
     this.applyFilters();
+    this.reloadFromFirstPage();
   }
 
   private handleSearchInput(e: CustomEvent) {
@@ -1124,6 +1268,7 @@ export class ApprovalsView extends AuthedElement {
     this.filterSearchTimer = window.setTimeout(() => {
       this.filterSearchTimer = null;
       this.applyFilters();
+      this.reloadFromFirstPage();
     }, 250);
   }
 
@@ -1171,6 +1316,7 @@ export class ApprovalsView extends AuthedElement {
     ];
     this.applyFilters();
     this.calculateStats();
+    this.refreshStatsSoon();
   }
 
   /**
@@ -1501,17 +1647,16 @@ export class ApprovalsView extends AuthedElement {
 
           <!-- Results count -->
           <div
+            class="results-count"
             style="margin-bottom: var(--sl-spacing-medium); color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small);"
           >
-            Showing ${this.filteredRequests.length} of
-            ${this.approvalRequests.length} requests
             ${
-              this.searchQuery.trim() && this.approvalRequests.length > 0
-                ? html`<span data-testid="search-scope">
-                    · Searching the latest ${this.approvalRequests.length}
-                    requests</span
-                  >`
-                : nothing
+              this.showsHistory
+                ? this.historyTotal !== null
+                  ? html`${this.historyTotal.toLocaleString()}
+                    ${this.historyTotal === 1 ? 'request matches' : 'requests match'}`
+                  : html`Showing ${this.filteredRequests.length} requests`
+                : html`${this.waitingRequests.length} waiting`
             }
           </div>
 
@@ -1551,9 +1696,9 @@ export class ApprovalsView extends AuthedElement {
                         ${
                           this.approvalRequests.length === 0
                             ? 'No approval requests yet. Configure tools to require approval in the Tools section.'
-                            : this.hasMore
-                              ? `No requests match your filters in the latest ${this.approvalRequests.length} requests.`
-                              : 'No requests match your filters.'
+                            : this.showsHistory
+                              ? 'No requests match your filters.'
+                              : 'Nothing is waiting for you. Pick a status to see the history.'
                         }
                       </p>
                       ${
@@ -1581,37 +1726,36 @@ export class ApprovalsView extends AuthedElement {
                     )}
                   `
           }
-          ${this.renderLoadOlder()}
+          ${this.renderHistoryPager()}
         </div>
       </div>
     `;
   }
 
   /**
-   * The "Load older" control under the history. Rendered whenever the loaded
-   * window may be truncated — including when every loaded row is filtered out
-   * — so a search that misses in the window can still page toward its match.
+   * The shared pager under the history: "26-50 of 40,000 requests", page
+   * size, Previous and Next. Hidden while only the waiting group is shown.
    */
-  private renderLoadOlder() {
-    if (!this.hasMore) return nothing;
-    return html`
-      <div class="load-older">
-        <sl-button
-          size="small"
-          ?loading=${this.loadingMore}
-          @click=${() => this.loadOlder()}
-          data-testid="load-older"
-          >Load older</sl-button
-        >
-        ${
-          this.moreError
-            ? html`<span class="error" role="alert" data-testid="more-error"
-                >${this.moreError}</span
-              >`
-            : nothing
-        }
-      </div>
-    `;
+  private renderHistoryPager() {
+    if (!this.showsHistory || this.loadError) return nothing;
+    return html`<table-pagination
+      class="history-pager"
+      page-index=${this.historyPage}
+      page-size=${this.historyPageSize}
+      .pageSizes=${[25, 50, 100]}
+      .total=${this.historyTotal}
+      page-rows=${this.historyPageRows}
+      ?has-next=${
+        this.historyTotal === null &&
+        this.historyPageRows >= this.historyPageSize
+      }
+      ?loading=${this.loading}
+      noun="requests"
+      @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
+        this.goToHistoryPage(event.detail.pageIndex)}
+      @page-size-change=${(event: CustomEvent<{ pageSize: number }>) =>
+        this.setHistoryPageSize(event.detail.pageSize)}
+    ></table-pagination>`;
   }
 
   /**
@@ -1625,7 +1769,7 @@ export class ApprovalsView extends AuthedElement {
     // The loaded window is the honest ceiling: "Last N" while more may exist,
     // a bare total once a short page proves everything is on screen.
     const loaded = stats.total;
-    const capped = this.hasMore;
+    const capped = !this.serverStats && this.hasMore;
     const avg =
       stats.avgResponseTimeMinutes > 0
         ? stats.avgResponseTimeMinutes < 60

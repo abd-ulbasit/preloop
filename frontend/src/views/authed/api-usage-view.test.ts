@@ -1,3 +1,4 @@
+import { render } from 'lit';
 import { fixture, html, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 
@@ -366,10 +367,16 @@ describe('ApiUsageView', () => {
       );
       const summaryCall = fetchStub
         .getCalls()
-        .find((call) =>
-          call.args[0].toString().includes('include_breakdown=true')
+        .find(
+          (call) =>
+            call.args[0].toString().includes('include_breakdown=true') &&
+            !call.args[0].toString().includes('session_limit')
         )!;
       expect(summaryCall.args[0].toString()).to.include('breakdown=models');
+      // Sessions page on their own request (#1585).
+      expect(summaryCall.args[0].toString()).not.to.include(
+        'breakdown=sessions'
+      );
       expect(summaryCall.args[0].toString()).not.to.include('breakdown=tools');
     } finally {
       release();
@@ -733,8 +740,12 @@ describe('ApiUsageView', () => {
       expect(url).to.not.contain('start_date=');
       expect(url).to.not.contain('end_date=');
     });
-    // No prior window exists, so no comparison request and no false delta.
-    expect(summaryCalls.length).to.equal(1);
+    // No prior window exists, so no comparison request and no false delta:
+    // one summary and its first page of sessions.
+    expect(summaryCalls.length).to.equal(2);
+    expect(
+      summaryCalls.filter((url) => url.includes('session_limit=10')).length
+    ).to.equal(1);
     expect(element.shadowRoot?.textContent).to.contain(
       'All recorded gateway spend'
     );
@@ -996,5 +1007,49 @@ describe('ApiUsageView', () => {
 
     expect(seen).to.have.length(1);
     expect(seen[0].detail.feature).to.equal('analytics_window_days');
+  });
+
+  it('pages sessions on the server and shows the total', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    await waitUntil(
+      () => (element as any).sessionPages.loaded,
+      'sessions never loaded'
+    );
+    const sessionUrls = () =>
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes('session_limit='));
+    expect(sessionUrls()[0]).to.contain('breakdown=sessions');
+    expect(sessionUrls()[0]).to.contain('session_offset=0');
+    (element as any).sessionPages.total = 60;
+    await (element as any).sessionPages.goTo(2);
+    expect(sessionUrls().at(-1)).to.contain('session_offset=20');
+    expect((element as any).sessionPages.total).to.equal(60);
+  });
+
+  it('pages the flow breakdown ten at a time', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    const flows = Array.from({ length: 12 }, (_, i) => ({
+      flow_id: `flow-${i}`,
+      flow_name: `Flow ${i}`,
+      request_count: 100 - i,
+      estimated_cost: 1,
+      token_usage: null,
+    }));
+    const host = document.createElement('div');
+    render((element as any).renderFlowBreakdown(flows), host);
+    expect(host.querySelectorAll('.breakdown-row')).to.have.length(10);
+    const pager = host.querySelector('table-pagination') as HTMLElement & {
+      total: number;
+    };
+    expect(pager.total).to.equal(12);
+    (element as any).flowPage = 1;
+    render((element as any).renderFlowBreakdown(flows), host);
+    expect(host.querySelectorAll('.breakdown-row')).to.have.length(2);
   });
 });

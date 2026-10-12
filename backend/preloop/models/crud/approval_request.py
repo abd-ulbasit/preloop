@@ -1,9 +1,10 @@
 """CRUD operations for ApprovalRequest model."""
 
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from uuid import UUID
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import Text, and_, cast, func, or_
+from sqlalchemy.orm import Query, Session, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -11,6 +12,11 @@ from preloop.models import models
 
 from ..models.approval_request import ApprovalRequest
 from .base import CRUDBase
+
+
+def _escape_like(text: str) -> str:
+    """Escape LIKE wildcards so a search for ``50%`` matches literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
@@ -183,6 +189,50 @@ class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
             .all()
         )
 
+    def _account_query(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        execution_id: Optional[str] = None,
+        status: Optional[str] = None,
+        runtime_session_id: Optional[Union[UUID, str]] = None,
+        tool_name: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> "Query[ApprovalRequest]":
+        """The account's requests with the list filters applied, unordered."""
+        query = db.query(self.model).filter(self.model.account_id == account_id)
+
+        if execution_id:
+            query = query.filter(self.model.execution_id == execution_id)
+
+        if runtime_session_id:
+            query = query.filter(
+                self.model.runtime_session_id == str(runtime_session_id)
+            )
+
+        if status:
+            query = query.filter(self.model.status == status)
+
+        if tool_name:
+            query = query.filter(self.model.tool_name == tool_name)
+
+        if search and search.strip():
+            # The console's search box: tool, summary, agent, execution,
+            # reasoning and the arguments, as the browser used to match them.
+            pattern = f"%{_escape_like(search.strip())}%"
+            query = query.filter(
+                or_(
+                    self.model.tool_name.ilike(pattern, escape="\\"),
+                    self.model.summary.ilike(pattern, escape="\\"),
+                    self.model.managed_agent_name.ilike(pattern, escape="\\"),
+                    self.model.execution_id.ilike(pattern, escape="\\"),
+                    self.model.agent_reasoning.ilike(pattern, escape="\\"),
+                    cast(self.model.tool_args, Text).ilike(pattern, escape="\\"),
+                )
+            )
+        return query
+
     def get_multi_by_account(
         self,
         db: Session,
@@ -191,6 +241,8 @@ class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
         execution_id: Optional[str] = None,
         status: Optional[str] = None,
         runtime_session_id: Optional[Union[UUID, str]] = None,
+        tool_name: Optional[str] = None,
+        search: Optional[str] = None,
         skip: int = 0,
         limit: int = 100,
     ) -> list[ApprovalRequest]:
@@ -207,25 +259,98 @@ class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
         keeping this method read-only avoids hidden UPDATE+COMMIT work on list
         endpoints.
         """
-        query = db.query(self.model).filter(self.model.account_id == account_id)
-
-        if execution_id:
-            query = query.filter(self.model.execution_id == execution_id)
-
-        if runtime_session_id:
-            query = query.filter(
-                self.model.runtime_session_id == str(runtime_session_id)
-            )
-
-        if status:
-            query = query.filter(self.model.status == status)
-
+        query = self._account_query(
+            db,
+            account_id=account_id,
+            execution_id=execution_id,
+            status=status,
+            runtime_session_id=runtime_session_id,
+            tool_name=tool_name,
+            search=search,
+        )
         return (
             query.order_by(self.model.requested_at.desc(), self.model.id.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
+
+    def count_by_account(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        execution_id: Optional[str] = None,
+        status: Optional[str] = None,
+        runtime_session_id: Optional[Union[UUID, str]] = None,
+        tool_name: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        """How many rows ``get_multi_by_account`` pages over, same filters."""
+        query = self._account_query(
+            db,
+            account_id=account_id,
+            execution_id=execution_id,
+            status=status,
+            runtime_session_id=runtime_session_id,
+            tool_name=tool_name,
+            search=search,
+        )
+        return int(
+            query.with_entities(func.count(self.model.id)).order_by(None).scalar() or 0
+        )
+
+    def stats_by_account(self, db: Session, *, account_id: str) -> dict[str, Any]:
+        """Counts, human approval rate inputs and mean response for the strip.
+
+        One aggregate over the account's requests instead of the browser
+        counting whatever page it happened to load.
+        """
+        model = self.model
+        human = and_(model.auto_approved_reason.is_(None), ~model.decided_by_ai)
+        decided = model.status.in_(["approved", "declined"])
+        row = (
+            db.query(
+                func.count(model.id),
+                func.count(model.id).filter(model.status == "pending"),
+                func.count(model.id).filter(model.status == "approved"),
+                func.count(model.id).filter(model.status == "declined"),
+                func.count(model.id).filter(model.status == "expired"),
+                func.count(model.id).filter(model.status == "cancelled"),
+                func.count(model.id).filter(model.status == "approved", human),
+                func.count(model.id).filter(model.status == "declined", human),
+                func.count(model.id).filter(model.auto_approved_reason.isnot(None)),
+                func.avg(
+                    func.extract("epoch", model.resolved_at - model.requested_at)
+                ).filter(decided, model.resolved_at.isnot(None)),
+            )
+            .filter(model.account_id == account_id)
+            .one()
+        )
+        tools = [
+            name
+            for (name,) in db.query(model.tool_name)
+            .filter(model.account_id == account_id)
+            .distinct()
+            .order_by(model.tool_name)
+            .limit(500)
+        ]
+        avg_seconds = row[9]
+        return {
+            "total": row[0],
+            "pending": row[1],
+            "approved": row[2],
+            "declined": row[3],
+            "expired": row[4],
+            "cancelled": row[5],
+            "human_approved": row[6],
+            "human_declined": row[7],
+            "auto_approved_by_bypass": row[8],
+            "avg_response_minutes": (
+                round(float(avg_seconds) / 60) if avg_seconds is not None else None
+            ),
+            "tools": tools,
+        }
 
     #: Written on requests cancelled because the execution that asked can
     #: no longer receive an answer.

@@ -5,7 +5,8 @@ import os
 import uuid
 from typing import Annotated, Any, AsyncGenerator, Dict, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -256,6 +257,47 @@ def _record_viewed_event(
         )
 
 
+class ApprovalRequestStats(BaseModel):
+    """Account-wide counts behind the approvals page's stat strip."""
+
+    total: int
+    pending: int
+    approved: int
+    declined: int
+    expired: int
+    cancelled: int
+    human_approved: int = Field(
+        description="Approved by a person: no bypass, not decided by AI."
+    )
+    human_declined: int = Field(
+        description="Declined by a person: no bypass, not decided by AI."
+    )
+    auto_approved_by_bypass: int
+    avg_response_minutes: Optional[int] = Field(
+        None, description="Mean request-to-decision time of decided requests."
+    )
+    tools: list[str] = Field(
+        default_factory=list, description="Tool names seen, for the filter."
+    )
+
+
+# Declared before ``/{request_id}`` so "stats" is not parsed as an id.
+@router.get("/stats", response_model=ApprovalRequestStats)
+@require_permission("view_approvals")
+def get_approval_request_stats(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> ApprovalRequestStats:
+    """Counts by status, human approval inputs and mean response time.
+
+    Computed over every request of the account, so the page no longer has
+    to load the whole history to count it.
+    """
+    return ApprovalRequestStats(
+        **crud_approval_request.stats_by_account(db, account_id=current_user.account_id)
+    )
+
+
 @router.get("/{request_id}", response_model=ApprovalRequestResponse)
 @require_permission("view_approvals")
 def get_approval_request(
@@ -421,24 +463,45 @@ def _decision_for_path(
 @router.get("", response_model=list[ApprovalRequestResponse])
 @require_permission("view_approvals")
 def list_approval_requests(
+    response: Response,
     status: Optional[str] = Query(None, description="Filter by status"),
     execution_id: Optional[str] = Query(None, description="Filter by execution ID"),
     runtime_session_id: Annotated[
         Optional[uuid.UUID],
         Query(description="Filter by runtime session ID (agent conversation)"),
     ] = None,
+    tool_name: Annotated[
+        Optional[str], Query(description="Filter by tool name")
+    ] = None,
+    q: Annotated[
+        Optional[str],
+        Query(
+            max_length=200,
+            description=(
+                "Case-insensitive text match on tool, summary, agent, "
+                "execution id, reasoning and arguments"
+            ),
+        ),
+    ] = None,
     limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
     skip: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ) -> list[ApprovalRequestResponse]:
-    """List approval requests for the current account.
+    """List approval requests for the current account, newest first.
+
+    The body stays a plain list for existing clients; the number of rows the
+    filter matches is in the ``X-Total-Count`` header, so a pager can say
+    "51-100 of 40,000" without loading them.
 
     Args:
+        response: Carries the ``X-Total-Count`` header.
         status: Filter by status (pending, approved, declined, etc.)
         execution_id: Filter by execution ID
         runtime_session_id: Filter by a validated runtime session ID
             (agent conversation)
+        tool_name: Filter by tool name
+        q: Text search
         limit: Maximum number of results
         skip: Number of results to skip
         current_user: Current authenticated user
@@ -455,15 +518,24 @@ def list_approval_requests(
     # Use CRUD layer to get approval requests with filters. `runtime_session_id`
     # is ANDed with the caller's account inside the CRUD layer, so a session id
     # from another account yields no rows rather than that account's approvals.
+    filters: dict[str, Any] = {
+        "account_id": current_user.account_id,
+        "execution_id": execution_id,
+        "status": status,
+        "runtime_session_id": runtime_session_id,
+        "tool_name": tool_name,
+        "search": q,
+    }
     rows = crud_approval_request.get_multi_by_account(
-        db,
-        account_id=current_user.account_id,
-        execution_id=execution_id,
-        status=status,
-        runtime_session_id=runtime_session_id,
-        skip=skip,
-        limit=limit,
+        db, skip=skip, limit=limit, **filters
     )
+    # A short first page is its own count; only a full page or a later one
+    # needs the COUNT query.
+    if skip == 0 and len(rows) < limit:
+        total = len(rows)
+    else:
+        total = crud_approval_request.count_by_account(db, **filters)
+    response.headers["X-Total-Count"] = str(total)
     # One batched pass for the page, not four lookups per row, then convert
     # every row while the request session is still open.
     return [

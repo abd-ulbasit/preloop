@@ -1846,6 +1846,32 @@ paths:
           title: Breakdown
         description: Selected breakdowns, repeated for multiple sections. Omitted
           preserves all sections; ignored when include_breakdown=false.
+      - name: session_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 200
+            minimum: 1
+          - type: 'null'
+          description: 'Page the session breakdown: every model row of this many sessions,
+            most recent first. Omitted keeps the historical 250 most recent rows.
+            The first page also returns total_sessions.'
+          title: Session Limit
+        description: 'Page the session breakdown: every model row of this many sessions,
+          most recent first. Omitted keeps the historical 250 most recent rows. The
+          first page also returns total_sessions.'
+      - name: session_offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Sessions to skip when session_limit is set.
+          default: 0
+          title: Session Offset
+        description: Sessions to skip when session_limit is set.
       responses:
         '200':
           description: Successful Response
@@ -5948,6 +5974,35 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/approval-requests/stats:
+    get:
+      tags:
+      - Approval Requests
+      - approval_requests
+      summary: Get Approval Request Stats
+      description: 'Counts by status, human approval inputs and mean response time.
+
+
+        Computed over every request of the account, so the page no longer has
+
+        to load the whole history to count it.'
+      operationId: get_approval_request_stats_api_v1_approval_requests_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalRequestStats'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
   /api/v1/approval-requests/{request_id}:
     get:
       tags:
@@ -6093,16 +6148,20 @@ paths:
       - Approval Requests
       - approval_requests
       summary: List Approval Requests
-      description: "List approval requests for the current account.\n\nArgs:\n   \
-        \ status: Filter by status (pending, approved, declined, etc.)\n    execution_id:\
-        \ Filter by execution ID\n    runtime_session_id: Filter by a validated runtime\
-        \ session ID\n        (agent conversation)\n    limit: Maximum number of results\n\
-        \    skip: Number of results to skip\n    current_user: Current authenticated\
-        \ user\n\nReturns:\n    List of approval requests\n\nRaises:\n    HTTPException:\
-        \ 422 when ``runtime_session_id`` is not a UUID. The\n        filter is typed\
-        \ rather than string-matched so a typo returns an\n        explicit validation\
-        \ error instead of an empty list that reads as\n        \"this session needs\
-        \ nothing\"."
+      description: "List approval requests for the current account, newest first.\n\
+        \nThe body stays a plain list for existing clients; the number of rows the\n\
+        filter matches is in the ``X-Total-Count`` header, so a pager can say\n\"\
+        51-100 of 40,000\" without loading them.\n\nArgs:\n    response: Carries the\
+        \ ``X-Total-Count`` header.\n    status: Filter by status (pending, approved,\
+        \ declined, etc.)\n    execution_id: Filter by execution ID\n    runtime_session_id:\
+        \ Filter by a validated runtime session ID\n        (agent conversation)\n\
+        \    tool_name: Filter by tool name\n    q: Text search\n    limit: Maximum\
+        \ number of results\n    skip: Number of results to skip\n    current_user:\
+        \ Current authenticated user\n\nReturns:\n    List of approval requests\n\n\
+        Raises:\n    HTTPException: 422 when ``runtime_session_id`` is not a UUID.\
+        \ The\n        filter is typed rather than string-matched so a typo returns\
+        \ an\n        explicit validation error instead of an empty list that reads\
+        \ as\n        \"this session needs nothing\"."
       operationId: list_approval_requests_api_v1_approval_requests_get
       security:
       - bearerAuth: []
@@ -6138,6 +6197,29 @@ paths:
           description: Filter by runtime session ID (agent conversation)
           title: Runtime Session Id
         description: Filter by runtime session ID (agent conversation)
+      - name: tool_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by tool name
+          title: Tool Name
+        description: Filter by tool name
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          description: Case-insensitive text match on tool, summary, agent, execution
+            id, reasoning and arguments
+          title: Q
+        description: Case-insensitive text match on tool, summary, agent, execution
+          id, reasoning and arguments
       - name: limit
         in: query
         required: false
@@ -12689,6 +12771,32 @@ paths:
           title: Breakdown
         description: Optional breakdown selection. Repeat for multiple sections; omitted
           returns all. Ignored when include_breakdown=false.
+      - name: session_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 200
+            minimum: 1
+          - type: 'null'
+          description: 'Page the session breakdown: every model row of this many sessions,
+            most recent first. Omitted keeps the historical 250 most recent rows.
+            The first page also returns total_sessions.'
+          title: Session Limit
+        description: 'Page the session breakdown: every model row of this many sessions,
+          most recent first. Omitted keeps the historical 250 most recent rows. The
+          first page also returns total_sessions.'
+      - name: session_offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Sessions to skip when session_limit is set.
+          default: 0
+          title: Session Offset
+        description: Sessions to skip when session_limit is set.
       - name: compare_start_date
         in: query
         required: false
@@ -12947,6 +13055,60 @@ paths:
             format: uuid
           - type: 'null'
           title: Flow Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 500
+            minimum: 1
+          - type: 'null'
+          description: Issue rows per page. Omit for every row (up to the report cap).
+            Summaries and `total_issues` always cover the whole filter.
+          title: Limit
+        description: Issue rows per page. Omit for every row (up to the report cap).
+          Summaries and `total_issues` always cover the whole filter.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Issue rows to skip.
+          default: 0
+          title: Offset
+        description: Issue rows to skip.
+      - name: sort
+        in: query
+        required: false
+        schema:
+          enum:
+          - cost
+          - tokens
+          - runs
+          - first_event
+          - to_pr
+          - to_approval
+          - to_merge
+          - estimate
+          - issue
+          - tracker
+          type: string
+          description: Issue row order.
+          default: cost
+          title: Sort
+        description: Issue row order.
+      - name: order
+        in: query
+        required: false
+        schema:
+          enum:
+          - asc
+          - desc
+          type: string
+          default: desc
+          title: Order
       responses:
         '200':
           description: Successful Response
@@ -21454,6 +21616,14 @@ components:
             $ref: '#/components/schemas/GatewayUsageBySession'
           type: array
           title: Usage By Session
+        total_sessions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Sessions
+          description: Sessions in the period when the session breakdown is paged
+            (session_limit), on the first page only. A session can span several rows,
+            one per model.
         usage_by_tool:
           items:
             $ref: '#/components/schemas/GatewayUsageByTool'
@@ -23576,6 +23746,62 @@ components:
       - has_answer_form
       title: ApprovalRequestResponse
       description: Schema for approval request response.
+    ApprovalRequestStats:
+      properties:
+        total:
+          type: integer
+          title: Total
+        pending:
+          type: integer
+          title: Pending
+        approved:
+          type: integer
+          title: Approved
+        declined:
+          type: integer
+          title: Declined
+        expired:
+          type: integer
+          title: Expired
+        cancelled:
+          type: integer
+          title: Cancelled
+        human_approved:
+          type: integer
+          title: Human Approved
+          description: 'Approved by a person: no bypass, not decided by AI.'
+        human_declined:
+          type: integer
+          title: Human Declined
+          description: 'Declined by a person: no bypass, not decided by AI.'
+        auto_approved_by_bypass:
+          type: integer
+          title: Auto Approved By Bypass
+        avg_response_minutes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Avg Response Minutes
+          description: Mean request-to-decision time of decided requests.
+        tools:
+          items:
+            type: string
+          type: array
+          title: Tools
+          description: Tool names seen, for the filter.
+      type: object
+      required:
+      - total
+      - pending
+      - approved
+      - declined
+      - expired
+      - cancelled
+      - human_approved
+      - human_declined
+      - auto_approved_by_bypass
+      title: ApprovalRequestStats
+      description: Account-wide counts behind the approvals page's stat strip.
     ApprovalSessionSummary:
       properties:
         id:
@@ -27546,6 +27772,13 @@ components:
             $ref: '#/components/schemas/GatewayUsageBySession'
           type: array
           title: Usage By Session
+        total_sessions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Sessions
+          description: Sessions in the period when the session breakdown is paged
+            (session_limit), on the first page only.
         usage_by_tool:
           items:
             $ref: '#/components/schemas/GatewayUsageByTool'
@@ -32861,6 +33094,19 @@ components:
             $ref: '#/components/schemas/IssueCostRow'
           type: array
           title: Issues
+        total_issues:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Issues
+          description: Issues in the filter before paging, up to the report cap (5,000);
+            `truncated` is true when more exist. `issues` holds the requested page;
+            `by_project` and `by_flow` cover every counted issue.
+        offset:
+          type: integer
+          title: Offset
+          description: Index of the first row in `issues`.
+          default: 0
         by_project:
           items:
             $ref: '#/components/schemas/IssueCostSummary'

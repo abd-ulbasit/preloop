@@ -24,6 +24,14 @@ import '@shoelace-style/shoelace/dist/components/tab/tab.js';
 import '@shoelace-style/shoelace/dist/components/tab-panel/tab-panel.js';
 import '@shoelace-style/shoelace/dist/components/copy-button/copy-button.js';
 import '../../components/list-toolbar.ts';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  type ListColumn,
+} from '../../table';
+import '../../table/data-table';
+import '../../table/column-picker';
 import '../../components/view-header.ts';
 import '../../components/preloop-agent-deployer.ts';
 import '../../components/preloop-deploy-wizard.ts';
@@ -169,18 +177,6 @@ const RELATIVE_TIME_DAYS = 90;
  */
 export type AgentLifecycleAction = AgentLifecycleMove;
 
-export type AgentListSortKey =
-  | 'agent'
-  | 'status'
-  | 'owner'
-  | 'model'
-  | 'requests'
-  | 'tokens'
-  | 'spend'
-  | 'last_seen';
-
-export type SortDirection = 'asc' | 'desc';
-
 /** One normalized table row, covering both managed agents and flow nodes. */
 export interface AgentListRow {
   id: string;
@@ -210,73 +206,6 @@ export interface AgentListRow {
   lastSeen: string | null;
   /** The original API item, so row actions keep working on the real object. */
   source: any;
-}
-
-/** Total tokens for sorting; matches the figure the cell states. */
-function tokenTotal(usage: GatewayTokenUsage | null): number {
-  return totalTokensOf(usage);
-}
-
-function timestampValue(value: string | null): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
-}
-
-/** Sorts blank owners to the end of an ascending sort. */
-function ownerSortValue(row: AgentListRow): string {
-  return row.owner || '￿';
-}
-
-function compareRowsByKey(
-  a: AgentListRow,
-  b: AgentListRow,
-  key: AgentListSortKey
-): number {
-  switch (key) {
-    case 'agent':
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    case 'status':
-      return a.statusLabel.localeCompare(b.statusLabel, undefined, {
-        sensitivity: 'base',
-      });
-    case 'owner':
-      // Unassigned agents have no owner to alphabetise, so they sort after
-      // every named owner rather than landing at the top of an A-Z sort.
-      return ownerSortValue(a).localeCompare(ownerSortValue(b), undefined, {
-        sensitivity: 'base',
-      });
-    case 'model':
-      return a.modelLabel.localeCompare(b.modelLabel, undefined, {
-        sensitivity: 'base',
-      });
-    case 'requests':
-      return a.requests - b.requests;
-    case 'tokens':
-      return tokenTotal(a.tokenUsage) - tokenTotal(b.tokenUsage);
-    case 'spend':
-      return a.spend - b.spend;
-    case 'last_seen':
-      return timestampValue(a.lastSeen) - timestampValue(b.lastSeen);
-  }
-}
-
-/**
- * Sorts table rows without mutating the input. Ties fall back to the agent
- * name so a re-sort on a column full of equal values (every Idle agent, every
- * zero-spend agent) still produces a stable, readable order.
- */
-export function sortAgentListRows(
-  rows: AgentListRow[],
-  key: AgentListSortKey,
-  direction: SortDirection
-): AgentListRow[] {
-  const factor = direction === 'asc' ? 1 : -1;
-  return [...rows].sort((a, b) => {
-    const primary = compareRowsByKey(a, b, key);
-    if (primary !== 0) return primary * factor;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  });
 }
 
 const CANVAS_LAYOUT_VERSION = 'polygon-rings-v1';
@@ -410,8 +339,18 @@ export class AgentsView extends LitElement {
     VIEW_MODE_KEY,
     AGENTS_VIEW_MODES
   );
-  @state() private sortKey: AgentListSortKey = 'last_seen';
-  @state() private sortDirection: SortDirection = 'desc';
+  /**
+   * List mode on the shared table (#1585). Owner and Model start hidden: with
+   * them the default columns did not fit a 1440px window and the list
+   * scrolled sideways. The column picker brings them back per browser.
+   */
+  readonly agentTable = new ListTable<AgentListRow>(this, {
+    listId: 'agents',
+    getRowId: (row) => row.id,
+    pageSize: 0,
+    defaultSorting: [{ id: 'last_seen', desc: true }],
+    columns: this.agentColumns(),
+  });
   /** True on phone-width viewports, where the table falls back to cards. */
   @state() private narrowViewport = false;
   private narrowViewportSubscription: NarrowViewportSubscription | null = null;
@@ -470,6 +409,8 @@ export class AgentsView extends LitElement {
       consoleDialogStyles,
       reducedMotionStyles,
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       css`
         :host {
           display: block;
@@ -517,26 +458,19 @@ export class AgentsView extends LitElement {
         .content-bounds {
           padding-block: 1rem 0;
         }
-        /* The table sizes itself from the colgroup, not from its content: an
-         agent named after a container hash used to push the kebab column past
-         the right edge of the card, where it was clipped and unclickable. */
+        /* Fixed layout: the header widths (status, counts, last seen) are
+         the budget and Agent takes what is left, so an agent named after a
+         container hash cannot push the kebab out of the card. The pixel
+         columns sum to 720px (select 40, status 150, requests 110, tokens
+         110, spend 110, last seen 128, actions 72); 960px leaves Agent its
+         220px minimum with room for borders. Owner and Model start hidden (column picker), which
+         is what lets the default list fit a 1440px window without scrolling
+         sideways; turned on, they share Agent's space and the card scrolls
+         only below 960px. The list falls back to cards under 640px. */
         .agents-table {
           table-layout: fixed;
           width: 100%;
-          /* Below this the columns cannot hold their content, so the card
-           scrolls sideways instead of hiding anything. The number is derived,
-           not guessed: the pixel columns sum to 720px (select 40, status 150,
-           requests 110, tokens 110, spend 110, last seen 128, actions 72) and
-           owner + model take 24%, so the auto Agent column gets
-           0.76 x width - 720. At 1260px that is 238px: 32px of cell padding
-           and the 180px .agent-identity (20px icon, 12px gap, ~150px of
-           name), with room to spare. The old 1096px left Agent with nothing:
-           a fixed-layout auto column collapses to zero once the others
-           overrun the table, which is how the name column vanished (and
-           "Agent" became "AGE") at zoomed or laptop widths. 1340px was the
-           same arithmetic while tokens still spent 190px on a breakdown.
-           The list falls back to cards under 640px. */
-          min-width: 1260px;
+          min-width: 960px;
         }
         .table-scroll {
           overflow-x: auto;
@@ -578,48 +512,9 @@ export class AgentsView extends LitElement {
         .actions-cell resource-actions::part(container) {
           overflow: visible;
         }
-        /* Percentages for the text columns so wide screens give them the space,
-         pixels for the ones whose content has a known width. Agent takes what
-         is left. */
-        /* The shared 40px select column, so the agent name starts at the same
-         x as the key, model and flow names. */
-        .col-select {
-          width: 40px;
-        }
         .agents-table th.select-cell,
         .agents-table td.select-cell {
           overflow: visible;
-        }
-        .col-status {
-          width: 150px;
-        }
-        /* Owner and model are the two other text columns. Their percentages
-         and the table min-width above are one budget: raise these and the
-         Agent column shrinks first, because it is the only auto column. */
-        .col-owner {
-          width: 9%;
-        }
-        .col-model {
-          width: 15%;
-        }
-        .col-requests {
-          width: 110px;
-        }
-        /* Tokens read before cost, so the pair sits together. The column
-         holds one compact total ("12.4M"), not the in/out/cache breakdown
-         that used to be clipped mid-word here, so it needs no more room
-         than the requests count beside it. */
-        .col-tokens {
-          width: 110px;
-        }
-        .col-spend {
-          width: 110px;
-        }
-        .col-last-seen {
-          width: 128px;
-        }
-        .col-actions {
-          width: 72px;
         }
         .sort-button {
           display: flex;
@@ -3035,24 +2930,6 @@ export class AgentsView extends LitElement {
   }
 
   /**
-   * Clicking a header sorts by that column; clicking the active one flips the
-   * direction. Text columns start ascending (A first), numeric and time
-   * columns start descending (biggest and newest first), which is what an
-   * operator scanning for the busiest or most recent agent expects.
-   */
-  private toggleSort(key: AgentListSortKey) {
-    if (this.sortKey === key) {
-      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
-      return;
-    }
-    this.sortKey = key;
-    this.sortDirection =
-      key === 'requests' || key === 'spend' || key === 'last_seen'
-        ? 'desc'
-        : 'asc';
-  }
-
-  /**
    * The rows the current view is about to paint, in paint order.
    *
    * Computed once per update in `willUpdate` because the bulk bar renders
@@ -3070,11 +2947,7 @@ export class AgentsView extends LitElement {
       this.effectiveView === 'canvas'
         ? []
         : this.effectiveView === 'list'
-          ? sortAgentListRows(
-              this.getListRows(),
-              this.sortKey,
-              this.sortDirection
-            )
+          ? this.listRowsInTableOrder()
           : this.getListRows();
     this.selection.setItems(this.selectionRows);
   }
@@ -3606,48 +3479,6 @@ export class AgentsView extends LitElement {
    * reader would otherwise read "$ est." as "dollar est." with nothing else to
    * go on, and the sort button has no other name.
    */
-  private renderSortableHeader(
-    key: AgentListSortKey,
-    label: string,
-    numeric = false,
-    srLabel?: string
-  ) {
-    const active = this.sortKey === key;
-    const ariaSort = active
-      ? this.sortDirection === 'asc'
-        ? 'ascending'
-        : 'descending'
-      : 'none';
-    return html`
-      <th
-        class="sortable ${numeric ? 'numeric' : ''} ${active ? 'active' : ''}"
-        aria-sort=${ariaSort}
-        scope="col"
-      >
-        <button
-          type="button"
-          class="sort-button"
-          data-sort-key=${key}
-          title=${srLabel ?? label}
-          aria-label=${srLabel ?? label}
-          @click=${() => this.toggleSort(key)}
-        >
-          <span>${label}</span>
-          <sl-icon
-            class="sort-caret"
-            name=${
-              active
-                ? this.sortDirection === 'asc'
-                  ? 'caret-up-fill'
-                  : 'caret-down-fill'
-                : 'chevron-expand'
-            }
-          ></sl-icon>
-        </button>
-      </th>
-    `;
-  }
-
   private renderStatusChip(row: AgentListRow) {
     const chip = html`
       <sl-badge
@@ -3664,33 +3495,26 @@ export class AgentsView extends LitElement {
       : chip;
   }
 
-  private renderListRow(row: AgentListRow) {
-    const actions = this.getCardActions(row.source, { includeTalk: true });
-    return html`
-      <tr
-        class="agent-row"
-        data-selection-id=${row.id}
-        aria-selected=${this.selection.isSelected(row.id) ? 'true' : 'false'}
-        @click=${(event: MouseEvent) => this.handleRowClick(event, row)}
-      >
-        <td
-          class="select-cell"
-          @click=${(event: Event) => event.stopPropagation()}
-        >
-          ${
-            row.isFlow
-              ? nothing
-              : html`<list-select-checkbox
-                  item-id=${row.id}
-                  label=${`Select ${row.name}`}
-                  ?checked=${this.selection.isSelected(row.id)}
-                  ?disabled=${this.selection.busy}
-                  @selection-toggle=${this.selection.handleToggleEvent}
-                ></list-select-checkbox>`
-          }
-        </td>
-        <td class="agent-cell" title=${row.name}>
-          <div class="agent-identity">
+  /** List rows, sorted (and kept) by the shared table. */
+  private listRowsInTableOrder(): AgentListRow[] {
+    this.agentTable.data = this.getListRows();
+    return this.agentTable.rows;
+  }
+
+  private agentColumns(): Array<ListColumn<AgentListRow>> {
+    const byText = (text: string) => text.toLocaleLowerCase();
+    return [
+      {
+        id: 'agent',
+        header: 'Agent',
+        hideable: false,
+        firstSort: 'asc',
+        minWidth: 220,
+        cellClass: 'agent-cell',
+        value: (row) => byText(row.name),
+        cellTitle: (row) => row.name,
+        cell: (row) =>
+          html`<div class="agent-identity">
             ${
               row.isFlow
                 ? html`<img
@@ -3708,99 +3532,115 @@ export class AgentsView extends LitElement {
               <a class="row-link" href=${row.detailUrl}>${row.name}</a>
               <div class="row-subtitle">${row.kindLabel}</div>
             </div>
-          </div>
-        </td>
-        <td>${this.renderStatusChip(row)}</td>
-        <td class="muted-cell">${row.owner || 'Unassigned'}</td>
-        <td class="model-cell" title=${row.modelTitle || row.modelLabel}>
-          ${
-            row.modelId
-              ? html`<a
-                  class="row-link"
-                  href="/console/ai-models/${encodeURIComponent(row.modelId)}"
-                  >${row.modelLabel}</a
-                >`
-              : row.modelGated
-                ? html`<span>${row.modelLabel}</span>`
-                : html`<span class="muted-cell">${row.modelLabel}</span>`
-          }
-        </td>
-        <td class="numeric">${(row.requests || 0).toLocaleString()}</td>
-        <!-- The list states the total; in, out and the cache split are in
-             the tooltip and on the agent's own page. -->
-        <td class="numeric">
-          <token-figures total-only .usage=${row.tokenUsage}></token-figures>
-        </td>
-        <td class="numeric">
-          ${html`<span title=${formatUsdExact(row.spend)}>${formatUsd(row.spend)}</span>`}
-        </td>
-        <td
-          class="muted-cell"
-          title=${row.lastSeen ? this.formatDateTime(row.lastSeen) : 'Never'}
-        >
-          ${
-            row.lastSeen
-              ? // Ninety days of relative time, the Overview's cutoff: the
-                // same agent read "6w ago" there and "7/22/2026" here, which
-                // is one fact in two formats. The absolute value stays in the
-                // cell's title.
-                formatRelativeTime(row.lastSeen, undefined, {
-                  maxRelativeDays: RELATIVE_TIME_DAYS,
-                })
-              : 'Never'
-          }
-        </td>
-        <td class="actions-cell">
-          ${
-            actions.length
-              ? html`<div
-                  class="row-actions"
-                  @click=${(event: Event) => event.stopPropagation()}
-                  @keydown=${(event: Event) => event.stopPropagation()}
-                >
-                  <resource-actions
-                    .actions=${actions}
-                    menu-only
-                  ></resource-actions>
-                </div>`
-              : null
-          }
-        </td>
-      </tr>
-    `;
-  }
-
-  /**
-   * The whole row is clickable for convenience, but the name is a real anchor
-   * so cmd-click and middle-click open a tab. Let the browser handle those and
-   * any click that started inside a link, a button or the kebab menu.
-   */
-  private handleRowClick(event: MouseEvent, row: AgentListRow) {
-    if (event.defaultPrevented) return;
-    if (
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.button !== 0
-    ) {
-      return;
-    }
-    const path = event.composedPath();
-    for (const node of path) {
-      if (!(node instanceof HTMLElement)) continue;
-      if (node.tagName === 'TR') break;
-      const tag = node.tagName.toLowerCase();
-      if (
-        tag === 'a' ||
-        tag === 'button' ||
-        tag === 'sl-button' ||
-        tag === 'sl-menu-item' ||
-        tag === 'resource-actions'
-      ) {
-        return;
-      }
-    }
-    this.navigateToCardTarget(row.detailUrl);
+          </div>`,
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        firstSort: 'asc',
+        width: 150,
+        value: (row) => byText(row.statusLabel),
+        cell: (row) => this.renderStatusChip(row),
+      },
+      {
+        id: 'owner',
+        header: 'Owner',
+        firstSort: 'asc',
+        visible: false,
+        truncate: true,
+        cellClass: 'muted-cell',
+        // Unassigned agents sort after every named owner.
+        value: (row) => (row.owner ? byText(row.owner) : '\uffff'),
+        cellTitle: (row) => row.owner || 'Unassigned',
+        cell: (row) => row.owner || 'Unassigned',
+      },
+      {
+        id: 'model',
+        header: 'Model',
+        firstSort: 'asc',
+        visible: false,
+        truncate: true,
+        cellClass: 'model-cell',
+        value: (row) => byText(row.modelLabel),
+        cellTitle: (row) => row.modelTitle || row.modelLabel,
+        cell: (row) =>
+          row.modelId
+            ? html`<a
+                class="row-link"
+                href="/console/ai-models/${encodeURIComponent(row.modelId)}"
+                >${row.modelLabel}</a
+              >`
+            : row.modelGated
+              ? html`<span>${row.modelLabel}</span>`
+              : html`<span class="muted-cell">${row.modelLabel}</span>`,
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        width: 110,
+        value: (row) => row.requests || 0,
+        searchText: () => '',
+        cell: (row) => (row.requests || 0).toLocaleString(),
+      },
+      {
+        // The list states the total; in, out and the cache split are in the
+        // tooltip and on the agent's own page.
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        width: 110,
+        headerTitle: 'Total tokens, input plus output',
+        headerLabel: 'Total tokens, input plus output',
+        value: (row) => totalTokensOf(row.tokenUsage),
+        searchText: () => '',
+        cell: (row) =>
+          html`<token-figures
+            total-only
+            .usage=${row.tokenUsage}
+          ></token-figures>`,
+      },
+      {
+        id: 'spend',
+        header: '$ est.',
+        pickerLabel: 'Estimated spend',
+        numeric: true,
+        sort: 'number',
+        width: 110,
+        headerTitle: 'Estimated spend',
+        headerLabel: 'Estimated spend',
+        value: (row) => row.spend,
+        searchText: () => '',
+        cell: (row) =>
+          html`<span title=${formatUsdExact(row.spend)}
+            >${formatUsd(row.spend)}</span
+          >`,
+      },
+      {
+        id: 'last_seen',
+        header: 'Last seen',
+        sort: 'number',
+        width: 128,
+        value: (row) =>
+          row.lastSeen
+            ? Date.parse(row.lastSeen) || 0
+            : Number.MIN_SAFE_INTEGER,
+        searchText: () => '',
+        cellClass: 'muted-cell last-seen-cell',
+        cellTitle: (row) =>
+          row.lastSeen ? this.formatDateTime(row.lastSeen) : 'Never',
+        // Ninety days of relative time, the Overview's cutoff; the absolute
+        // value stays in the cell's title.
+        cell: (row) =>
+          row.lastSeen
+            ? formatRelativeTime(row.lastSeen, undefined, {
+                maxRelativeDays: RELATIVE_TIME_DAYS,
+              })
+            : 'Never',
+      },
+    ];
   }
 
   private renderListView() {
@@ -3813,69 +3653,41 @@ export class AgentsView extends LitElement {
     return html`
       <div class="list-bounds">
         <sl-card class="table-card">
-          <div class="table-scroll">
-            <table
-              class="styled-table agents-table"
-              role="grid"
-              aria-multiselectable="true"
-              aria-label="Agents and flows"
-            >
-              <colgroup>
-                <col class="col-select" />
-                <col class="col-agent" />
-                <col class="col-status" />
-                <col class="col-owner" />
-                <col class="col-model" />
-                <col class="col-requests" />
-                <col class="col-tokens" />
-                <col class="col-spend" />
-                <col class="col-last-seen" />
-                <col class="col-actions" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th class="select-cell">
-                    <list-select-checkbox
-                      label="Select all agents"
-                      ?checked=${this.selection.allSelected}
-                      ?indeterminate=${this.selection.someSelected}
-                      ?disabled=${this.selection.busy}
-                      @selection-toggle=${this.selection.handleToggleEvent}
-                    ></list-select-checkbox>
-                  </th>
-                  ${this.renderSortableHeader('agent', 'Agent')}
-                  ${this.renderSortableHeader('status', 'Status')}
-                  ${this.renderSortableHeader('owner', 'Owner')}
-                  ${this.renderSortableHeader('model', 'Model')}
-                  ${this.renderSortableHeader('requests', 'Requests', true)}
-                  ${this.renderSortableHeader(
-                    'tokens',
-                    'Tokens',
-                    true,
-                    'Total tokens, input plus output'
-                  )}
-                  ${this.renderSortableHeader(
-                    'spend',
-                    '$ est.',
-                    true,
-                    'Estimated spend'
-                  )}
-                  ${this.renderSortableHeader('last_seen', 'Last seen')}
-                  <th class="actions-cell">
-                    <span class="visually-hidden">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map((row) => this.renderListRow(row))}
-              </tbody>
-            </table>
-          </div>
+          <data-table
+            .table=${this.agentTable}
+            .rows=${rows}
+            .selection=${this.selection}
+            .rowSelectable=${(row: AgentListRow) => !row.isFlow}
+            .rowActions=${(row: AgentListRow) =>
+              this.getCardActions(row.source, { includeTalk: true })}
+            .rowClass=${() => 'agent-row'}
+            .rowLabel=${(row: AgentListRow) => row.name}
+            .stickyHeader=${false}
+            table-class="agents-table"
+            label="Agents and flows"
+            noun="agents"
+            activatable
+            @row-activate=${this.onRowActivate}
+          ></data-table>
         </sl-card>
         ${this.renderLoadMore()}
       </div>
     `;
   }
+
+  /**
+   * The whole row opens the agent; the name is a real anchor so cmd-click
+   * and middle-click open a tab, and those are left to the browser.
+   */
+  private onRowActivate = (
+    event: CustomEvent<{ row: AgentListRow; event: Event }>
+  ) => {
+    const source = event.detail.event as MouseEvent;
+    if (source.defaultPrevented) return;
+    if (source.metaKey || source.ctrlKey || source.shiftKey) return;
+    if (typeof source.button === 'number' && source.button !== 0) return;
+    this.navigateToCardTarget(event.detail.row.detailUrl);
+  };
 
   private renderAgentCard(item: any) {
     const isFlow =
@@ -4977,6 +4789,23 @@ export class AgentsView extends LitElement {
               <sl-option value="last_24_hours">Last 24 hours</sl-option>
               <sl-option value="last_7_days">Last 7 days</sl-option>
             </sl-select>
+            ${
+              this.effectiveView === 'list'
+                ? html`<column-picker
+                    .columns=${this.agentTable.pickerColumns}
+                    ?can-reset=${this.agentTable.hasColumnChanges}
+                    density=${this.agentTable.density}
+                    @column-toggle=${(event: CustomEvent) =>
+                      this.agentTable.setVisible(
+                        event.detail.id,
+                        event.detail.visible
+                      )}
+                    @columns-reset=${() => this.agentTable.resetColumns()}
+                    @density-change=${(event: CustomEvent) =>
+                      this.agentTable.setDensity(event.detail.density)}
+                  ></column-picker>`
+                : null
+            }
             <span slot="count">${this.resultsLabel}</span>
             ${this.renderBulkBar()}
           </list-toolbar>

@@ -270,7 +270,37 @@ describe('PoliciesView', () => {
     await waitUntil(() => !(element as any)._loading, 'still loading');
     await element.updateComplete;
 
-    expect(element.shadowRoot?.textContent).to.contain('No rules yet');
+    // The shared empty panel: same look as every other empty list.
+    const state = element.shadowRoot?.querySelector('table-state');
+    expect(state?.getAttribute('heading')).to.equal('No rules yet');
+    expect(state?.getAttribute('kind')).to.equal('empty');
+    expect(element.shadowRoot?.querySelector('table-pagination')).to.equal(
+      null
+    );
+  });
+
+  it('pages the rule cards ten at a time', async () => {
+    fetchStub = createFetchStub({});
+    const element = (await fixture(
+      html`<policies-view></policies-view>`
+    )) as PoliciesView;
+    await waitUntil(() => !(element as any)._loading, 'still loading');
+    const rules = Array.from({ length: 23 }, (_, i) => ({ key: `r${i}` }));
+    const view = element as any;
+    expect(view.rulesOnPage(rules).map((r: any) => r.key)).to.deep.equal(
+      rules.slice(0, 10).map((r) => r.key)
+    );
+    view._rulePage = 2;
+    expect(view.rulesOnPage(rules).map((r: any) => r.key)).to.deep.equal([
+      'r20',
+      'r21',
+      'r22',
+    ]);
+    // A page past the end (rules deleted) shows the last page.
+    view._rulePage = 9;
+    expect(view.rulesOnPage(rules)).to.have.length(3);
+    // The pager is told the same clamped page the cards use.
+    expect(view.rulePageOf(rules.length)).to.equal(2);
   });
 
   it('does not loop fetching versions when the list is empty', async () => {

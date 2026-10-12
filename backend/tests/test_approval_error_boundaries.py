@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import FastAPI, Request, WebSocket, Response
 from fastapi.exceptions import ResponseValidationError
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import TimeoutError as PoolTimeout
@@ -61,6 +61,7 @@ def test_approval_read_response_survives_session_cleanup(
     request_id = approval_row.id
     if list_endpoint:
         result = approval_requests.list_approval_requests(
+            response=Response(),
             current_user=test_user,
             db=db_session,
             status=None,

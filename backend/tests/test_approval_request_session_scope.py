@@ -21,7 +21,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
@@ -191,6 +191,7 @@ class TestListEndpointPassesTheFilter:
         ) as crud_layer:
             crud_layer.get_multi_by_account.return_value = []
             approval_requests.list_approval_requests(
+                response=Response(),
                 status="pending",
                 execution_id=None,
                 runtime_session_id=session_id,

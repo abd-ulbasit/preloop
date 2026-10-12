@@ -205,28 +205,32 @@ describe('Cost progressive loading', () => {
     expect(element['sectionStates'].tools).to.equal('ready');
   });
 
-  it('deduplicates a pending session breakdown shared by Agents and Sessions', async () => {
+  it('pages the Sessions tab on its own request, not the shared window', async () => {
     const fallback = handler;
     let resolveBreakdown!: (response: Response) => void;
+    // The recent-session window (Agents, Users) hangs; the paged Sessions
+    // request must not wait for it.
     handler = (url) =>
-      url.searchParams.getAll('breakdown').includes('sessions')
+      url.searchParams.getAll('breakdown').includes('sessions') &&
+      !url.searchParams.has('session_limit')
         ? new Promise((resolve) => {
             resolveBreakdown = resolve;
           })
         : fallback(url);
     const element = await fixture<CostView>(html`<cost-view></cost-view>`);
     await waitUntil(() => !!resolveBreakdown);
-    const selected = element['handleTabShow'](
+    await element['handleTabShow'](
       new CustomEvent('sl-tab-show', { detail: { name: 'sessions' } })
     );
-    expect(
-      urls.filter((u) =>
-        u.searchParams.getAll('breakdown').includes('sessions')
-      )
-    ).to.have.length(1);
-    resolveBreakdown(reply(payload));
-    await selected;
+    const paged = urls.filter((u) => u.searchParams.has('session_limit'));
+    expect(paged).to.have.length(1);
+    expect(paged[0].searchParams.get('session_limit')).to.equal('25');
+    expect(paged[0].searchParams.get('session_offset')).to.equal('0');
+    expect(paged[0].searchParams.getAll('breakdown')).to.deep.equal([
+      'sessions',
+    ]);
     expect(element['loadedTabs'].has('sessions')).to.equal(true);
+    resolveBreakdown(reply(payload));
   });
 
   it('does not publish totals after the view disconnects', async () => {

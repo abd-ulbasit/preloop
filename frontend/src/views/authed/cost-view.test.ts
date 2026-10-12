@@ -3,7 +3,7 @@ import type { LitElement } from 'lit';
 import sinon from 'sinon';
 import '../../components/view-header.ts';
 import './cost-view.ts';
-import { CostView } from './cost-view';
+import { CostView, sortColumnsToList } from './cost-view';
 import { RepriceJobStatusElement } from '../../components/reprice-job-status';
 import { invalidateApiCaches } from '../../api';
 
@@ -883,10 +883,13 @@ describe('CostView', () => {
     const requestsHeader = Array.from(table!.querySelectorAll('th')).find(
       (th) => th.textContent?.trim().startsWith('Requests')
     ) as HTMLElement;
-    requestsHeader.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter' })
-    );
+    (requestsHeader.querySelector('.sort-button') as HTMLElement).click();
     await element.updateComplete;
+    await (
+      table!.closest('data-table') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      }
+    ).updateComplete;
     expect(names()).to.deep.equal(['claude-test', 'gpt-test']);
   });
 
@@ -2172,7 +2175,7 @@ describe('CostView', () => {
     await element.updateComplete;
   };
 
-  it('pages, sorts and searches session spend on the shared table', async () => {
+  it('shows one server page of sessions, sorted and searched in the page', async () => {
     const element = await fixture<CostView>(html`<cost-view></cost-view>`);
     await settled(element);
     const sessions = Array.from({ length: 30 }, (_, i) => ({
@@ -2181,52 +2184,41 @@ describe('CostView', () => {
       request_count: i,
       estimated_cost: i / 10,
       token_usage: { total_tokens: i * 100 },
-      last_activity_at: '2026-10-01T00:00:00Z',
+      last_activity_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(),
     }));
     const internals = element as unknown as {
-      summary: Record<string, unknown> | null;
       renderSessionsTab(): unknown;
       sessionTable: CostView['sessionTable'];
+      sessionPages: CostView['sessionPages'];
     };
-    internals.summary = {
-      ...(internals.summary ?? {}),
-      usage_by_session: sessions,
-    };
+    const pages = internals.sessionPages;
+    pages.rows = sessions as never;
+    pages.loaded = true;
+    pages.total = 1204;
     internals.renderSessionsTab();
     const table = internals.sessionTable;
-    expect(table.rows).to.have.length(25);
-    expect(table.totalRows).to.equal(30);
-    // Most expensive first by default.
+    // The page is drawn whole; the pager under it pages the server.
+    expect(table.rows).to.have.length(30);
+    expect(pages.countLabel).to.equal('1,204 sessions');
+    // Most recent first, as the server ranks them.
     expect(table.rows[0].runtime_session_id).to.equal('rs-29');
     table.setSearch('builder');
     expect(table.totalRows).to.equal(15);
     table.clearFilters();
     // One session that used two models is two rows, both kept, and a flow
     // name is searchable even when the row also names an agent.
-    internals.summary = {
-      ...(internals.summary ?? {}),
-      usage_by_session: [
-        ...sessions,
-        { ...sessions[0], model_alias: 'model-b', flow_name: 'Nightly Report' },
-      ],
-    };
+    pages.rows = [
+      ...sessions,
+      { ...sessions[0], model_alias: 'model-b', flow_name: 'Nightly Report' },
+    ] as never;
     internals.renderSessionsTab();
     expect(table.totalRows).to.equal(31);
     table.setSearch('nightly');
     expect(table.rows.map((r) => r.model_alias)).to.deep.equal(['model-b']);
     table.clearFilters();
-    internals.summary = {
-      ...(internals.summary ?? {}),
-      usage_by_session: sessions,
-    };
-    internals.renderSessionsTab();
     table.toggleSort('requests');
     table.toggleSort('requests');
     expect(table.rows[0].runtime_session_id).to.equal('rs-0');
-    expect(
-      new URLSearchParams(window.location.search).get('sessions.sort')
-    ).to.equal('requests');
-    window.history.replaceState(null, '', window.location.pathname);
   });
 
   it('uses the exact digest period for headline and lazy data without saving the preset', async () => {
@@ -2547,5 +2539,23 @@ describe('CostView', () => {
       );
       expect(notice(element)?.querySelector('sl-button')).to.not.exist;
     });
+  });
+});
+
+describe('sortColumnsToList', () => {
+  it('maps a Spend column to a shared-table column', () => {
+    const [name, cost] = sortColumnsToList<{ name: string; cost: number }>([
+      { key: 'name', label: 'Agent', numeric: false, value: (r) => r.name },
+      { key: 'cost', label: 'Cost', numeric: true, value: (r) => r.cost },
+    ]);
+    expect(name.id).to.equal('name');
+    expect(name.hideable).to.equal(false);
+    expect(name.firstSort).to.equal('asc');
+    expect(name.searchText!({ name: 'Builder', cost: 1 })).to.equal('Builder');
+    expect(cost.numeric).to.equal(true);
+    expect(cost.sort).to.equal('number');
+    expect(cost.firstSort).to.equal('desc');
+    expect(cost.searchText!({ name: 'x', cost: 12 })).to.equal('');
+    expect(cost.cell({ name: 'x', cost: 12 })).to.equal('12');
   });
 });

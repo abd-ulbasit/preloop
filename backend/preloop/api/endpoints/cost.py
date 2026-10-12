@@ -160,6 +160,19 @@ def get_cost_summary(
         None,
         description="Optional breakdown selection. Repeat for multiple sections; omitted returns all. Ignored when include_breakdown=false.",
     ),
+    session_limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=200,
+        description=(
+            "Page the session breakdown: every model row of this many "
+            "sessions, most recent first. Omitted keeps the historical 250 "
+            "most recent rows. The first page also returns total_sessions."
+        ),
+    ),
+    session_offset: int = Query(
+        0, ge=0, description="Sessions to skip when session_limit is set."
+    ),
     compare_start_date: Optional[datetime] = Query(
         None,
         description=(
@@ -190,6 +203,8 @@ def get_cost_summary(
         exclude_retries=exclude_retries,
         include_breakdown=include_breakdown,
         breakdown=breakdown,
+        session_limit=session_limit,
+        session_offset=session_offset,
     )
     if compare_start_date is not None and compare_end_date is not None:
         summary.previous = _build_cost_summary(
@@ -215,6 +230,8 @@ def _build_cost_summary(
     exclude_retries: bool,
     include_breakdown: bool,
     breakdown: Optional[list[UsageBreakdown]],
+    session_limit: Optional[int] = None,
+    session_offset: int = 0,
 ) -> CostAnalyticsSummaryResponse:
     """One window of the cost overview (totals, and breakdowns if asked)."""
     selected = set(breakdown) if breakdown is not None else None
@@ -229,6 +246,8 @@ def _build_cost_summary(
         include_breakdown=include_breakdown,
         breakdowns=selected,
         exclude_retries=exclude_retries,
+        session_limit=session_limit,
+        session_offset=session_offset,
     )
     # Imported (observed) spend is reported as a SEPARATE block, using the
     # summary's normalized window: it is never added into estimated_cost or
@@ -327,6 +346,7 @@ def _build_cost_summary(
         usage_by_model=summary.usage_by_model,
         usage_by_flow=summary.usage_by_flow,
         usage_by_session=summary.usage_by_session,
+        total_sessions=summary.total_sessions,
         usage_by_tool=summary.usage_by_tool,
         imported_usage=imported_usage,
         subscription_usage=subscription_usage,

@@ -71,6 +71,8 @@ import '@shoelace-style/shoelace/dist/components/copy-button/copy-button.js';
 import '@shoelace-style/shoelace/dist/components/dropdown/dropdown.js';
 import '@shoelace-style/shoelace/dist/components/menu/menu.js';
 import '@shoelace-style/shoelace/dist/components/menu-item/menu-item.js';
+import '../../table/table-pagination';
+import '../../table/table-state';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import { consoleDialogStyles } from '../../styles/console-dialog';
 import { ruleActionLabel, ruleActionMeta } from '../../utils/rule-actions';
@@ -234,6 +236,9 @@ const DETECTOR_FACTS: Array<{
 export class PoliciesView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state() private _activeTab = 'rules';
+  /** Rule cards are paged: a busy account had 14,000px of them (#1585). */
+  @state() private _rulePage = 0;
+  @state() private _rulePageSize = 10;
   @state() private _ruleFilter:
     'all' | 'tools' | 'model.request' | 'model.response' = 'all';
   @state() private _showGenerateDialog = false;
@@ -2111,7 +2116,10 @@ export class PoliciesView extends LitElement {
               size="small"
               variant=${this._ruleFilter === filter ? 'primary' : 'default'}
               aria-pressed=${this._ruleFilter === filter ? 'true' : 'false'}
-              @click=${() => (this._ruleFilter = filter)}
+              @click=${() => {
+                this._ruleFilter = filter;
+                this._rulePage = 0;
+              }}
             >
               ${
                 filter === 'all'
@@ -2135,19 +2143,21 @@ export class PoliciesView extends LitElement {
       ${
         rules.length === 0
           ? html`
-              <div class="empty-state">
-                <sl-icon name="shield-lock"></sl-icon>
-                <p>No rules yet.</p>
-                <p class="model-io-hint">
-                  Describe a change, add a rule, or import YAML. Traffic is
-                  allowed when no rule matches.
-                </p>
-              </div>
+              <table-state
+                kind=${this._ruleFilter === 'all' ? 'empty' : 'no-results'}
+                icon="shield-lock"
+                heading=${
+                  this._ruleFilter === 'all'
+                    ? 'No rules yet'
+                    : 'No rules of this kind'
+                }
+                message="Describe a change, add a rule, or import YAML. Traffic is allowed when no rule matches."
+              ></table-state>
             `
           : html`
               <div class="access-rules-list">
                 ${repeat(
-                  rules,
+                  this.rulesOnPage(rules),
                   (rule) => rule.key,
                   (rule) => html`
                     <div
@@ -2207,9 +2217,39 @@ export class PoliciesView extends LitElement {
                   `
                 )}
               </div>
+              <table-pagination
+                class="rules-pager"
+                page-index=${this.rulePageOf(rules.length)}
+                page-size=${this._rulePageSize}
+                .pageSizes=${[10, 25, 50]}
+                .total=${rules.length}
+                page-rows=${this.rulesOnPage(rules).length}
+                noun="rules"
+                @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
+                  (this._rulePage = event.detail.pageIndex)}
+                @page-size-change=${(
+                  event: CustomEvent<{ pageSize: number }>
+                ) => {
+                  this._rulePageSize = event.detail.pageSize;
+                  this._rulePage = 0;
+                }}
+              ></table-pagination>
             `
       }
     `;
+  }
+
+  /** The page shown: a page past the end (rules deleted) is the last one. */
+  private rulePageOf(count: number): number {
+    const last = Math.max(0, Math.ceil(count / this._rulePageSize) - 1);
+    return Math.min(this._rulePage, last);
+  }
+
+  /** The rule cards of the current page. */
+  private rulesOnPage<T>(rules: T[]): T[] {
+    const size = this._rulePageSize;
+    const page = this.rulePageOf(rules.length);
+    return rules.slice(page * size, page * size + size);
   }
 
   private renderModelIODialog() {

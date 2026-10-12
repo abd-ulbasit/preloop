@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
@@ -122,6 +122,7 @@ class TestListApprovalRequests:
             mock_crud.get_multi_by_account.return_value = [mock_approval_request]
 
             result = approval_requests.list_approval_requests(
+                response=Response(),
                 status=None,
                 runtime_session_id=None,
                 execution_id=None,
@@ -141,6 +142,8 @@ class TestListApprovalRequests:
                 runtime_session_id=None,
                 execution_id=None,
                 status=None,
+                tool_name=None,
+                search=None,
                 skip=0,
                 limit=50,
             )
@@ -155,6 +158,7 @@ class TestListApprovalRequests:
             mock_crud.get_multi_by_account.return_value = [mock_approval_request]
 
             approval_requests.list_approval_requests(
+                response=Response(),
                 status="pending",
                 runtime_session_id=None,
                 execution_id=None,
@@ -170,6 +174,8 @@ class TestListApprovalRequests:
                 runtime_session_id=None,
                 execution_id=None,
                 status="pending",
+                tool_name=None,
+                search=None,
                 skip=0,
                 limit=50,
             )
@@ -185,6 +191,7 @@ class TestListApprovalRequests:
             mock_crud.get_multi_by_account.return_value = [mock_approval_request]
 
             approval_requests.list_approval_requests(
+                response=Response(),
                 status=None,
                 runtime_session_id=None,
                 execution_id=execution_id,
@@ -200,6 +207,8 @@ class TestListApprovalRequests:
                 runtime_session_id=None,
                 execution_id=execution_id,
                 status=None,
+                tool_name=None,
+                search=None,
                 skip=0,
                 limit=50,
             )
@@ -214,6 +223,7 @@ class TestListApprovalRequests:
         ) as mock_crud:
             mock_crud.get_multi_by_account.return_value = []
             approval_requests.list_approval_requests(
+                response=Response(),
                 runtime_session_id=session_id,
                 status="pending",
                 execution_id="execution-example",
@@ -228,6 +238,8 @@ class TestListApprovalRequests:
                 execution_id="execution-example",
                 runtime_session_id=session_id,
                 status="pending",
+                tool_name=None,
+                search=None,
                 skip=100,
                 limit=25,
             )
@@ -262,6 +274,7 @@ class TestListApprovalRequests:
             mock_crud.get_multi_by_account.return_value = []
 
             result = approval_requests.list_approval_requests(
+                response=Response(),
                 status=None,
                 runtime_session_id=None,
                 execution_id=None,

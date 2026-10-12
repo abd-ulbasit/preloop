@@ -1824,6 +1824,64 @@ def _optional_float(value: Optional[Decimal]) -> Optional[float]:
     return None if value is None else float(value)
 
 
+#: Sort keys of the issue rows, for ``build_report(sort=...)``.
+ISSUE_SORT_KEYS = (
+    "cost",
+    "tokens",
+    "runs",
+    "first_event",
+    "to_pr",
+    "to_approval",
+    "to_merge",
+    "estimate",
+    "issue",
+    "tracker",
+)
+
+
+def _sort_rollups(
+    rollups: list[models.IssueCostRollup],
+    per_issue: dict[uuid.UUID, "_Totals"],
+    *,
+    sort: str,
+    descending: bool,
+    tracker_labels: Optional[dict[uuid.UUID, str]] = None,
+) -> list[models.IssueCostRollup]:
+    """Order issue rows by one key, rows without a value last.
+
+    The query already returns the default order (cost, then newest), which
+    the stable sort keeps as the tie-break.
+    """
+
+    def value(rollup: models.IssueCostRollup) -> Any:
+        totals = per_issue[rollup.id]
+        if sort == "tokens":
+            return totals.tokens
+        if sort == "runs":
+            return totals.runs
+        if sort == "first_event":
+            return _optional_aware(rollup.first_event_at)
+        if sort == "to_pr":
+            return interval_hours(rollup.first_event_at, rollup.pr_opened_at)
+        if sort == "to_approval":
+            return interval_hours(rollup.pr_opened_at, rollup.approved_at)
+        if sort == "to_merge":
+            return interval_hours(rollup.approved_at, rollup.merged_at)
+        if sort == "estimate":
+            return _optional_float(rollup.estimate_hours)
+        if sort == "issue":
+            return (rollup.issue_key or "").lower()
+        if sort == "tracker":
+            # The label the column shows: the tracker name, else its type.
+            return (tracker_labels or {}).get(rollup.tracker_id, "").lower()
+        return totals.cost
+
+    present = [r for r in rollups if value(r) is not None]
+    missing = [r for r in rollups if value(r) is None]
+    present.sort(key=value, reverse=descending)
+    return present + missing
+
+
 def build_report(
     db: Session,
     *,
@@ -1835,6 +1893,10 @@ def build_report(
     include_execution_ids: bool = False,
     include_failure_categories: bool = False,
     limit: int = MAX_REPORT_ROWS,
+    offset: int = 0,
+    page_size: Optional[int] = None,
+    sort: str = "cost",
+    descending: bool = True,
 ) -> IssueCostReport:
     """Issue rows, summaries and the unassigned bucket for one filter.
 
@@ -1857,7 +1919,12 @@ def build_report(
             always computed.
         include_failure_categories: Attach per-issue failed-run counts by
             failure category (exports).
-        limit: Maximum issue rows.
+        limit: Maximum issue rows considered (summaries cover all of them).
+        offset: First issue row returned, after sorting.
+        page_size: Issue rows returned; None returns every row. Summaries,
+            ``total_issues`` and the unassigned bucket never depend on it.
+        sort: One of ``ISSUE_SORT_KEYS``; unknown keys sort by cost.
+        descending: Sort direction. Rows without a value go last either way.
 
     Returns:
         The report.
@@ -1897,6 +1964,47 @@ def build_report(
         per_flow.setdefault(fid, _Totals()).add(
             rid, tokens, cost, runs, failed, known_cost_runs, unknown_cost_runs
         )
+
+    # Summaries and the total cover every issue in the filter; only the
+    # requested page is turned into rows (billing, names, readiness).
+    per_project: dict[Optional[uuid.UUID], _Totals] = {}
+    for rollup in rollups:
+        totals = per_issue[rollup.id]
+        per_project.setdefault(rollup.project_id, _Totals()).add(
+            rollup.id,
+            totals.tokens,
+            totals.cost,
+            totals.runs,
+            totals.failed,
+            totals.known_cost_runs,
+            totals.unknown_cost_runs,
+        )
+    total_issues = len(rollups)
+    all_project_ids = [pid for pid in per_project if pid]
+    tracker_labels: Optional[dict[uuid.UUID, str]] = None
+    if sort == "tracker":
+        tracker_names, _, _ = crud_issue_cost.names(
+            db,
+            tracker_ids=list({rollup.tracker_id for rollup in rollups}),
+            project_ids=[],
+            flow_ids=[],
+        )
+        tracker_labels = {
+            tracker_id: name or kind
+            for tracker_id, (name, kind) in tracker_names.items()
+        }
+    rollups = _sort_rollups(
+        rollups,
+        per_issue,
+        sort=sort,
+        descending=descending,
+        tracker_labels=tracker_labels,
+    )
+    if page_size is not None:
+        rollups = rollups[offset : offset + page_size]
+    elif offset:
+        rollups = rollups[offset:]
+    rollup_ids = [rollup.id for rollup in rollups]
 
     execution_ids: dict[uuid.UUID, list[uuid.UUID]] = {}
     failure_categories: dict[uuid.UUID, dict[str, int]] = {}
@@ -1956,7 +2064,7 @@ def build_report(
     trackers, projects, flows = crud_issue_cost.names(
         db,
         tracker_ids=[rollup.tracker_id for rollup in rollups],
-        project_ids=[rollup.project_id for rollup in rollups if rollup.project_id],
+        project_ids=all_project_ids,
         flow_ids=list(per_flow),
     )
 
@@ -1971,18 +2079,8 @@ def build_report(
     )
     readiness_reported_at = datetime.now(UTC)
     rows: list[IssueCostRow] = []
-    per_project: dict[Optional[uuid.UUID], _Totals] = {}
     for rollup in rollups:
         totals = per_issue[rollup.id]
-        per_project.setdefault(rollup.project_id, _Totals()).add(
-            rollup.id,
-            totals.tokens,
-            totals.cost,
-            totals.runs,
-            totals.failed,
-            totals.known_cost_runs,
-            totals.unknown_cost_runs,
-        )
         tracker_name, tracker_type = trackers.get(rollup.tracker_id, ("", ""))
         rows.append(
             IssueCostRow(
@@ -2089,6 +2187,8 @@ def build_report(
         project_id=project_id,
         flow_id=flow_id,
         issues=rows,
+        total_issues=total_issues,
+        offset=offset,
         by_project=by_project,
         by_flow=by_flow,
         unassigned=unassigned,

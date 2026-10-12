@@ -149,6 +149,17 @@ export interface ListColumn<TRow extends RowData> {
   width?: number;
   /** False for the column that absorbs the leftover width. */
   resizable?: boolean;
+  /**
+   * Narrowest the column may get, in pixels: the header is never squeezed
+   * under it and a resize stops there. Defaults to `MIN_COLUMN_WIDTH`.
+   */
+  minWidth?: number;
+  /**
+   * One line, cut with an ellipsis, the whole text on hover (`cellTitle`,
+   * else `searchText`, else `value`). For long names and ids that would
+   * otherwise wrap a row to three lines or spill out of the cell.
+   */
+  truncate?: boolean;
   /** False for a column the operator may not switch off. */
   hideable?: boolean;
   /** False for a column that is off until the operator turns it on. */
@@ -159,6 +170,11 @@ export interface ListColumn<TRow extends RowData> {
   pickerLabel?: string;
   /** `title` on the header button. */
   headerTitle?: string;
+  /**
+   * Accessible name of the header button, when the visible label is an
+   * abbreviation ("$ est." is read as "Estimated spend").
+   */
+  headerLabel?: string;
   /**
    * Offers a per-column filter. `text` is "contains"; `select` is "is one
    * of" the `filterOptions`. Client mode filters on `value`; server mode
@@ -178,6 +194,17 @@ export interface ListColumn<TRow extends RowData> {
    * `value` or `searchText` are never searched.
    */
   searchText?: (row: TRow) => string;
+  /**
+   * False while the column does not apply (a feature flag is off, a setting
+   * is missing). An unavailable column is neither drawn nor offered in the
+   * picker, and the operator's stored visibility for it is kept for when it
+   * comes back. Read on every paint, so it may depend on view state.
+   */
+  available?: () => boolean;
+}
+
+function isAvailable<TRow extends RowData>(column: ListColumn<TRow>): boolean {
+  return column.available ? column.available() : true;
 }
 
 /** Which state slices a list remembers between visits. */
@@ -472,7 +499,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     const visible: Array<ListColumn<TRow>> = [];
     for (const column of this.table.getVisibleLeafColumns()) {
       const declared = this.byId.get(column.id);
-      if (declared) visible.push(declared);
+      if (declared && isAvailable(declared)) visible.push(declared);
     }
     return visible;
   }
@@ -482,7 +509,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     const sorting = this.tableState.sorting ?? [];
     return this.table.getLeafHeaders().flatMap((header) => {
       const declared = this.byId.get(header.column.id);
-      if (!declared) return [];
+      if (!declared || !isAvailable(declared)) return [];
       const sorted = header.column.getIsSorted();
       const rank = sorting.findIndex((entry) => entry.id === header.column.id);
       return [
@@ -677,7 +704,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     visible: boolean;
     hideable: boolean;
   }> {
-    return this.columns.map((column) => ({
+    return this.columns.filter(isAvailable).map((column) => ({
       id: column.id,
       label: column.pickerLabel || column.header,
       group: column.group,
@@ -713,7 +740,10 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     const column = this.byId.get(columnId);
     if (!column || column.resizable === false) return;
     const current = this.widthOf(column) ?? DEFAULT_COLUMN_WIDTH;
-    const next = Math.max(MIN_COLUMN_WIDTH, Math.round(current + delta));
+    const next = Math.max(
+      this.byId.get(columnId)?.minWidth ?? MIN_COLUMN_WIDTH,
+      Math.round(current + delta)
+    );
     this.table.setColumnSizing((sizing) => ({ ...sizing, [columnId]: next }));
   }
 
@@ -910,6 +940,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
       enableHiding: column.hideable !== false,
       enableResizing: column.resizable !== false,
       size: column.width,
+      minSize: column.minWidth ?? MIN_COLUMN_WIDTH,
       sortDescFirst: column.firstSort !== 'asc',
       enableColumnFilter: Boolean(column.filter),
       enableGlobalFilter: Boolean(column.searchText || column.value),

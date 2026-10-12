@@ -989,6 +989,35 @@ def test_project_and_flow_summaries_equal_the_sum_of_rows(world: World) -> None:
     assert review.run_count == 2
 
 
+def test_paged_report_keeps_summaries_over_every_issue(world: World) -> None:
+    _mixed_world(world)
+    full = world.report()
+    assert full.total_issues == 2
+    by_cost = [row.issue_key for row in full.issues]
+
+    first = world.report(page_size=1)
+    second = world.report(page_size=1, offset=1)
+    assert [row.issue_key for row in first.issues] == by_cost[:1]
+    assert [row.issue_key for row in second.issues] == by_cost[1:]
+    assert second.offset == 1
+    for page in (first, second):
+        # The page is one row; totals and summaries still cover both issues.
+        assert page.total_issues == 2
+        assert page.by_project == full.by_project
+        assert page.by_flow == full.by_flow
+        assert page.unassigned == full.unassigned
+
+    cheapest_first = world.report(page_size=2, descending=False)
+    assert [row.issue_key for row in cheapest_first.issues] == by_cost[::-1]
+    by_key = world.report(sort="issue", descending=False)
+    assert [row.issue_key for row in by_key.issues] == sorted(by_cost)
+    # Rows without the sorted value (no PR yet) go last in both directions.
+    to_pr = world.report(sort="to_pr")
+    assert to_pr.issues[-1].first_event_to_pr_opened_hours is None or all(
+        row.first_event_to_pr_opened_hours is not None for row in to_pr.issues
+    )
+
+
 def test_flow_filter_restricts_rows_to_that_flows_work(world: World) -> None:
     _mixed_world(world)
     report = world.report(flow_id=world.review.id)
@@ -2324,3 +2353,26 @@ def test_gateway_only_issue_is_metered_without_seat_label(world: World) -> None:
     )
     assert csv_row["billing_mode"] == "metered"
     assert csv_row["premium_requests"] == ""
+
+
+def test_tracker_sort_uses_the_label_the_column_shows() -> None:
+    """Sorting on Tracker orders by the shown name, not the tracker id."""
+    from types import SimpleNamespace
+
+    from preloop.services.issue_cost_rollup import _sort_rollups, _Totals
+
+    ids = [uuid.uuid4() for _ in range(3)]
+    trackers = [uuid.uuid4() for _ in range(3)]
+    rollups = [
+        SimpleNamespace(id=rid, tracker_id=tid)
+        for rid, tid in zip(ids, trackers, strict=False)
+    ]
+    labels = {trackers[0]: "Jira", trackers[1]: "github", trackers[2]: "GitLab"}
+    ordered = _sort_rollups(
+        rollups,  # type: ignore[arg-type]
+        {rid: _Totals() for rid in ids},
+        sort="tracker",
+        descending=False,
+        tracker_labels=labels,
+    )
+    assert [labels[row.tracker_id] for row in ordered] == ["github", "GitLab", "Jira"]

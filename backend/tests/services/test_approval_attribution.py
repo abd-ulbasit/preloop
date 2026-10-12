@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Response
 from sqlalchemy import event
 
 from preloop.api.endpoints import approval_requests
@@ -565,6 +566,7 @@ def test_the_list_endpoint_returns_validated_responses_with_attribution(
         return_value=rows,
     ):
         results = approval_requests.list_approval_requests(
+            response=Response(),
             status=None,
             execution_id=None,
             limit=50,

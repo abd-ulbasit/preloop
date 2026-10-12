@@ -80,6 +80,7 @@
   "GET /api/v1/approval-bypasses": "deny",
   "GET /api/v1/approval-bypasses/status": "deny",
   "GET /api/v1/approval-requests": "deny",
+  "GET /api/v1/approval-requests/stats": "deny",
   "GET /api/v1/approval-requests/{request_id}": "deny",
   "GET /api/v1/approval-requests/{request_id}/history": "deny",
   "GET /api/v1/approval-requests/{request_id}/original-args": "deny",

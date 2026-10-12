@@ -48,6 +48,10 @@ export const dataTableStyles = css`
   .data-table .styled-table tr.selected {
     background-color: var(--console-selected-tint, var(--sl-color-primary-50));
   }
+  .data-table .styled-table tr.row-detail > td {
+    background: var(--sl-color-neutral-50);
+    padding: var(--sl-spacing-small) var(--sl-spacing-medium);
+  }
   .data-table .styled-table tr[data-row]:focus-visible {
     outline: var(--sl-focus-ring);
     outline-offset: -2px;
