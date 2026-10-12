@@ -27,7 +27,7 @@ export class AccountLoginChooser extends LitElement {
       width: 100%;
     }
     .nest {
-      color: var(--sl-color-neutral-500);
+      color: var(--console-meta-color);
     }
     .error {
       color: var(--sl-color-danger-700);

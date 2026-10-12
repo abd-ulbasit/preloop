@@ -64,14 +64,13 @@ function issueStatusLabel(status: string | null | undefined): string {
 /** Parallel verdict checks per page load. */
 const VERDICT_CONCURRENCY = 2;
 
-/** A failure of the verdict service as a whole, not of one pair. */
+/**
+ * A failure of the verdict service as a whole, not of one pair. A 404 is
+ * per pair ("Issue(s) not found"), so it never trips the breaker.
+ */
 function isServiceFailure(error: unknown): boolean {
   if (!(error instanceof VerdictError)) return false;
-  return (
-    error.code === 'no_default_ai_model' ||
-    error.status === 404 ||
-    error.status >= 500
-  );
+  return error.code === 'no_default_ai_model' || error.status >= 500;
 }
 
 @customElement('issues-view')
@@ -392,7 +391,7 @@ export class IssuesView extends LitElement {
     }
 
     // A small pool instead of one request per row, and a breaker: once the
-    // verdict service itself fails (5xx, 404, no model) the remaining rows
+    // verdict service itself fails (5xx, no model) the remaining rows
     // are marked without calling it again. Each row keeps its Review action.
     const queue = [...pending];
     let tripped: VerdictState | null = null;
