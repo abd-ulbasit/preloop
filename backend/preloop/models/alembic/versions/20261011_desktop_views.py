@@ -1,7 +1,7 @@
 """Desktop endpoints and brokered desktop views.
 
 Revision ID: 20261011_desktop_views
-Revises: 20261011_audit_outbox
+Revises: 20261012_identity_backfill
 Create Date: 2026-10-11
 
 Issue #870. ``desktop_endpoint`` records hosts running ``preloop desktop

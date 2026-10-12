@@ -168,11 +168,11 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
-    "PersonAuthIdentity",
-    "PersonPasswordCredential",
     "DESKTOP_VIEW_OPEN_STATES",
     "DesktopEndpoint",
     "DesktopView",
+    "PersonAuthIdentity",
+    "PersonPasswordCredential",
     "AUDIT_OUTBOX_DELIVERED",
     "AUDIT_OUTBOX_FAILED",
     "AUDIT_OUTBOX_PENDING",
