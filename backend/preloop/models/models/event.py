@@ -82,7 +82,8 @@ class Event(Base):
         UUID(as_uuid=True),
         ForeignKey("account.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
+        # Indexed by ix_event_account_timestamp (account_id leads), which
+        # replaced the single-column ix_event_account_id.
         comment="Account this event belongs to (required for most events)",
     )
 

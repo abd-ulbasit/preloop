@@ -129,14 +129,65 @@ def test_model_metadata_declares_the_indexes(db_session):
     assert [diff for diff in diffs if mentions_index(diff)] == []
 
 
-def test_gateway_spend_filter_can_use_the_partial_index(db_session):
-    """The partial predicate must stay provably implied by the CRUD filter.
+def _seed_usage_and_events(db_session):
+    """Three tenants among many noisy neighbours, then fresh statistics.
+
+    Most rows belong to other accounts or fall outside the 30-day window, so
+    the planner's choice reflects the real table shape rather than a tiny
+    table where any index looks equally cheap.
+    """
+    from preloop.models.crud import crud_account
+
+    accounts = [
+        crud_account.create(db_session, obj_in={"organization_name": f"idx-{n}"})
+        for n in range(3)
+    ]
+    ids = ",".join(f"'{account.id}'::uuid" for account in accounts)
+    db_session.execute(
+        text(
+            "INSERT INTO api_usage (id, account_id, endpoint, method, status_code, "
+            "duration, action_type, estimated_cost, timestamp, meta_data) "
+            "SELECT gen_random_uuid(), "
+            f"CASE WHEN g % 50 = 0 THEN (ARRAY[{ids}])[1 + g % 3] END, "
+            "'/v1/messages', 'POST', 200, 1.0, "
+            "CASE WHEN g % 4 = 0 THEN 'mcp_tool' ELSE 'model_gateway' END, "
+            "0.01, now() - make_interval(hours => g % 2400), "
+            "jsonb_build_object('client_request_id', md5(g::text)) "
+            "FROM generate_series(1, 20000) g"
+        )
+    )
+    db_session.execute(
+        text(
+            "INSERT INTO event (id, account_id, event_type, timestamp) "
+            "SELECT gen_random_uuid(), "
+            f"CASE WHEN g % 50 = 0 THEN (ARRAY[{ids}])[1 + g % 3] END, "
+            "'page_view', now() - make_interval(mins => g) "
+            "FROM generate_series(1, 20000) g"
+        )
+    )
+    db_session.execute(text("ANALYZE api_usage"))
+    db_session.execute(text("ANALYZE event"))
+    return accounts
+
+
+def _explain(db_session, statement) -> str:
+    compiled = statement.compile(
+        dialect=db_session.get_bind().dialect,
+        compile_kwargs={"literal_binds": True},
+    )
+    # Tiny test tables would otherwise always seq scan.
+    db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    db_session.execute(text("SET LOCAL enable_bitmapscan = off"))
+    return "\n".join(row[0] for row in db_session.execute(text(f"EXPLAIN {compiled}")))
+
+
+def test_gateway_spend_is_an_index_only_scan(db_session):
+    """The spend sum must be served by the covering partial index alone.
 
     ``ix_api_usage_gateway_spend`` is only usable while its WHERE clause
-    matches ``exclude_replay_usage_condition`` exactly; if either side drifts
-    the planner silently falls back to reading every gateway row.
+    matches ``exclude_replay_usage_condition`` exactly, and it avoids the heap
+    (and the wide meta_data column) only while it covers estimated_cost.
     """
-    import uuid
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import func, select
@@ -144,21 +195,49 @@ def test_gateway_spend_filter_can_use_the_partial_index(db_session):
     from preloop.models.crud.api_usage import exclude_replay_usage_condition
     from preloop.models.models import ApiUsage
 
+    accounts = _seed_usage_and_events(db_session)
     query = (
         select(ApiUsage.account_id, func.sum(ApiUsage.estimated_cost))
         .where(
-            ApiUsage.account_id.in_([uuid.uuid4()]),
+            ApiUsage.account_id.in_([accounts[0].id]),
             ApiUsage.action_type == "model_gateway",
             ApiUsage.timestamp >= datetime.now(timezone.utc) - timedelta(days=30),
             exclude_replay_usage_condition(),
         )
         .group_by(ApiUsage.account_id)
     )
-    compiled = query.compile(
-        dialect=db_session.get_bind().dialect,
-        compile_kwargs={"literal_binds": True},
+    plan = _explain(db_session, query)
+    assert "Index Only Scan using ix_api_usage_gateway_spend" in plan, plan
+
+
+def test_latest_event_per_account_uses_the_composite_index(db_session):
+    """The admin last-activity value is one backward probe per account."""
+    from sqlalchemy import func, select
+
+    from preloop.models.models import Account, Event
+
+    accounts = _seed_usage_and_events(db_session)
+    last_activity = (
+        select(func.max(Event.timestamp))
+        .where(Event.account_id == Account.id)
+        .correlate(Account)
+        .scalar_subquery()
     )
-    db_session.execute(text("SET LOCAL enable_seqscan = off"))
-    db_session.execute(text("SET LOCAL enable_bitmapscan = off"))
-    plan = "\n".join(row[0] for row in db_session.execute(text(f"EXPLAIN {compiled}")))
-    assert "ix_api_usage_gateway_spend" in plan, plan
+    query = select(Account.id, last_activity).where(
+        Account.id.in_([account.id for account in accounts])
+    )
+    plan = _explain(db_session, query)
+    assert "ix_event_account_timestamp" in plan, plan
+
+
+def test_single_column_account_index_is_replaced(db_engine):
+    """ix_event_account_id is redundant once the composite leads with it."""
+    with db_engine.connect() as connection:
+        names = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT indexname FROM pg_indexes WHERE tablename = 'event'")
+            )
+        }
+    assert "ix_event_account_timestamp" in names
+    assert "ix_event_account_id" not in names
