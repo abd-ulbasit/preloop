@@ -3397,6 +3397,7 @@ export class CostView extends AuthedElement {
         })}
         <div class="analytics-table-wrap">
           <data-table
+            style="--cell-truncate-max: 10rem"
             .table=${this.sessionTable}
             .rows=${this.sessionTable.rows}
             .loading=${pages.loading}
