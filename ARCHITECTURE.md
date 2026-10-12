@@ -703,7 +703,9 @@ without a provider credential still require explicit email verification.
 Cloud's hosted-model capability adds the active built-in
 `qwen/deepseek-v4.1-flash-hosted` to the account model catalog and flow selectors.
 The model is read-only, and retired system rows remain available only for
-historical references. OSS deployments do not expose built-ins by default.
+historical references. The catalog lists built-ins first; their Default badge
+appears only when the system row is default and the account has no configured
+default of the same service kind. OSS deployments do not expose built-ins by default.
 Built-in detail usage is scoped to the requesting account; operator credentials
 and routing metadata are never included in the public catalog. Preset cloning
 prefers a usable account model and otherwise binds the built-in. Hosted allowance
