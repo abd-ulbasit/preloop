@@ -16,9 +16,7 @@
  * per view and served at `GET /__desktop_mock/log?view=<id>`, so a test can
  * assert that a view-only viewer sent no KeyEvent (4) or PointerEvent (5).
  */
-import WebSocket from 'ws';
-
-const { Server: WebSocketServer } = WebSocket;
+import { WebSocketServer } from 'ws';
 
 export const MOCK_WIDTH = 64;
 export const MOCK_HEIGHT = 48;
