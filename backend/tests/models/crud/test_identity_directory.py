@@ -202,3 +202,53 @@ def test_expanded_memberships_show_direct_and_team_roles(db_session: Session) ->
     )
     assert direct_roles[0]["name"] == "Example direct"
     assert team_roles[0]["team_name"] == "Example team"
+
+
+def test_member_page_projection_query_count_is_bounded(db_session: Session) -> None:
+    from typing import Any
+    from sqlalchemy import event
+
+    rows = [member(db_session) for _ in range(40)]
+    statements: list[str] = []
+
+    def observe(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", observe)
+    try:
+        profiles, roles = identity_directory.projections_for_memberships(
+            db_session, membership_ids=[row.id for row in rows]
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", observe)
+    assert len(profiles) == len(roles) == 40
+    assert len(statements) == 3
+    assert all(profile.username.startswith("chosen-") for profile in profiles.values())
+
+
+def test_role_context_deduplicates_roles_inherited_from_multiple_teams(
+    db_session: Session,
+) -> None:
+    row = member(db_session)
+    role = models.Role(name="Shared role", account_id=row.account_id)
+    first = models.Team(name="First team", account_id=row.account_id)
+    second = models.Team(name="Second team", account_id=row.account_id)
+    db_session.add_all([role, first, second])
+    db_session.flush()
+    for team in (first, second):
+        db_session.add(models.TeamRole(team_id=team.id, role_id=role.id))
+        db_session.add(models.TeamMembership(team_id=team.id, user_id=row.id))
+    db_session.flush()
+    direct, inherited = identity_directory.role_context(
+        db_session, membership_id=row.id
+    )
+    assert not direct
+    assert [item["id"] for item in inherited] == [role.id]
+    assert inherited[0]["team_name"] == "First team"

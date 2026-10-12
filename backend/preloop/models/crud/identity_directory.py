@@ -229,34 +229,83 @@ class IdentityDirectory:
             )
         return result
 
+    def projections_for_memberships(
+        self, db: Session, *, membership_ids: list[UUID]
+    ) -> tuple[
+        dict[UUID, IdentityPresentation],
+        dict[UUID, tuple[list[dict[str, Any]], list[dict[str, Any]]]],
+    ]:
+        """Load canonical profiles and role context in three queries per page."""
+        if not membership_ids:
+            return {}, {}
+        profiles = {
+            member_id: self.profile_for_person(person)
+            for member_id, person in db.query(models.User.id, models.Person)
+            .join(models.Person, models.Person.id == models.User.person_id)
+            .filter(models.User.id.in_(membership_ids))
+            .all()
+        }
+        return profiles, self.role_contexts(db, membership_ids=membership_ids)
+
+    def role_contexts(
+        self, db: Session, *, membership_ids: list[UUID]
+    ) -> dict[UUID, tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
+        """Batch direct and inherited role context, deduplicating inherited IDs."""
+        result: dict[UUID, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {
+            member_id: ([], []) for member_id in membership_ids
+        }
+        if not membership_ids:
+            return result
+        inherited_ids: dict[UUID, set[UUID]] = {
+            member_id: set() for member_id in membership_ids
+        }
+        assignments = (
+            db.query(models.UserRole, models.Role)
+            .join(models.Role, models.Role.id == models.UserRole.role_id)
+            .filter(models.UserRole.user_id.in_(membership_ids))
+            .order_by(models.Role.name, models.Role.id)
+            .all()
+        )
+        for assignment, role in assignments:
+            values = {"id": role.id, "name": role.name, "description": role.description}
+            index = 1 if assignment.access_grant_id else 0
+            result[assignment.user_id][index].append(values)
+            if index:
+                inherited_ids[assignment.user_id].add(role.id)
+        inherited = (
+            db.query(models.TeamMembership.user_id, models.Role, models.Team)
+            .select_from(models.TeamMembership)
+            .join(
+                models.TeamRole,
+                models.TeamRole.team_id == models.TeamMembership.team_id,
+            )
+            .join(models.Role, models.Role.id == models.TeamRole.role_id)
+            .join(models.Team, models.Team.id == models.TeamMembership.team_id)
+            .filter(models.TeamMembership.user_id.in_(membership_ids))
+            .order_by(
+                models.Role.name, models.Role.id, models.Team.name, models.Team.id
+            )
+            .all()
+        )
+        for member_id, role, team in inherited:
+            if role.id in inherited_ids[member_id]:
+                continue
+            inherited_ids[member_id].add(role.id)
+            result[member_id][1].append(
+                {
+                    "id": role.id,
+                    "name": role.name,
+                    "description": role.description,
+                    "team_name": team.name,
+                }
+            )
+        return result
+
     def role_context(
         self, db: Session, *, membership_id: UUID
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Roles for one membership, including team inheritance in its account."""
-        direct = [
-            {"id": role.id, "name": role.name, "description": role.description}
-            for role in db.query(models.Role)
-            .join(models.UserRole, models.UserRole.role_id == models.Role.id)
-            .filter(models.UserRole.user_id == membership_id)
-            .all()
-        ]
-        inherited = [
-            {
-                "id": role.id,
-                "name": role.name,
-                "description": role.description,
-                "team_name": team.name,
-            }
-            for role, team in db.query(models.Role, models.Team)
-            .join(models.TeamRole, models.TeamRole.role_id == models.Role.id)
-            .join(models.Team, models.Team.id == models.TeamRole.team_id)
-            .join(
-                models.TeamMembership, models.TeamMembership.team_id == models.Team.id
-            )
-            .filter(models.TeamMembership.user_id == membership_id)
-            .all()
-        ]
-        return direct, inherited
+        """Role context for one authorized account membership."""
+        return self.role_contexts(db, membership_ids=[membership_id])[membership_id]
 
     def activity(
         self, db: Session, *, person_id: UUID, limit: int = 100, offset: int = 0
