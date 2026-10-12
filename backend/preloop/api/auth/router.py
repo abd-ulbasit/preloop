@@ -21,7 +21,11 @@ from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutErro
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import bootstrap
-from preloop.api.auth.identity import login_membership, require_active_identity
+from preloop.api.auth.identity import (
+    login_membership,
+    require_active_identity,
+    require_session_profile_edit,
+)
 from preloop.api.auth.email_verification import (
     check_resend_rate_limit,
     enforce_verified_email,
@@ -284,17 +288,28 @@ def _runner_policy_for(user: UserModel, db: Session) -> RunnerPolicy:
 
 def _build_auth_user_response(user: UserModel, db: Session) -> AuthUserResponse:
     """Build the profile payload returned by the ``/users/me`` endpoints."""
+    from preloop.models.crud import crud_person
+
+    try:
+        profile = crud_person.profile_for_membership(db, membership_id=user.id)
+    except IdentityUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Identity is unavailable",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
     return AuthUserResponse(
         id=user.id,
+        person_id=profile.person_id,
         account_id=user.account_id,
-        username=user.username,
-        email=user.email,
-        full_name=user.full_name,
-        email_verified=user.email_verified,
+        username=profile.username,
+        email=profile.email,
+        full_name=profile.full_name,
+        email_verified=profile.email_verified,
         is_superuser=bool(user.is_superuser),
         permissions=_resolve_user_permissions(user, db),
-        avatar_url=user.avatar_url,
-        avatar_source=user.avatar_source,
+        avatar_url=profile.avatar_url,
+        avatar_source=profile.avatar_source,
         # The console already fetches this profile on every load, so carrying
         # the answer here is what keeps "have you chosen a plan" from costing
         # an extra request per page for the overwhelming majority of people,
@@ -1402,8 +1417,23 @@ def update_user_me(
     current_user: UserModel = Depends(get_current_active_user),
 ) -> AuthUserResponse:
     """Update own user."""
-    user = crud_user.update(db, db_obj=current_user, obj_in=user_update)
-    return _build_auth_user_response(user, db)
+    from preloop.models.crud import crud_person
+    from preloop.models.crud.person import (
+        IdentityConflictError,
+        IdentityUnavailableError,
+    )
+
+    changes = user_update.model_dump(exclude_unset=True)
+    require_session_profile_edit(current_user, changes)
+    if any(changes.get(key) is None for key in ("username", "email") if key in changes):
+        raise HTTPException(status_code=422, detail="Username and email cannot be null")
+    try:
+        crud_person.update_profile(db, membership_id=current_user.id, changes=changes)
+    except IdentityConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IdentityUnavailableError as exc:
+        raise HTTPException(status_code=401, detail="Identity is unavailable") from exc
+    return _build_auth_user_response(current_user, db)
 
 
 @router.put("/users/me/password", status_code=status.HTTP_204_NO_CONTENT)

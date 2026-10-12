@@ -55,6 +55,8 @@ type TokenResponse struct {
 // UserInfo represents the authenticated user's information.
 type UserInfo struct {
 	ID           string `json:"id"`
+	PersonID     string `json:"person_id,omitempty"`
+	AccountID    string `json:"account_id,omitempty"`
 	Email        string `json:"email"`
 	Name         string `json:"name"`
 	Organization string `json:"organization"`

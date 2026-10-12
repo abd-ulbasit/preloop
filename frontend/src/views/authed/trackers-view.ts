@@ -12,6 +12,10 @@ import {
   BITBUCKET_CONNECT_HANDLE_PARAM,
   BITBUCKET_CONNECT_TRACKER_PARAM,
   describeBitbucketConnectError,
+  describeJiraConnectError,
+  JIRA_CONNECT_ERROR_PARAM,
+  JIRA_CONNECT_HANDLE_PARAM,
+  JIRA_CONNECT_TRACKER_PARAM,
 } from '../../api';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import '../../components/view-header';
@@ -45,6 +49,16 @@ export class TrackersView extends LitElement {
   @state()
   private bitbucketError: string | null = null;
 
+  /** Opaque Jira completion handle from `?jira_connect=` (never a token). */
+  @state()
+  private jiraConnectHandle: string | null = null;
+
+  @state()
+  private jiraReconnectTrackerId: string | null = null;
+
+  @state()
+  private jiraError: string | null = null;
+
   /** Stashed until the add-tracker modal fully closes (incl. warnings flow). */
   @state()
   private pendingUnlockedToolNames: string[] | null = null;
@@ -65,6 +79,34 @@ export class TrackersView extends LitElement {
     this._handleUrlAction();
     this._handleGitHubCallback();
     this._handleBitbucketCallback();
+    this._handleJiraCallback();
+  }
+
+  /**
+   * Jira (Atlassian) consent callback: same contract as Bitbucket. Only an
+   * opaque handle or a sanitized error code arrives, and both leave the
+   * address bar and history immediately.
+   */
+  private _handleJiraCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const handle = params.get(JIRA_CONNECT_HANDLE_PARAM);
+    const trackerId = params.get(JIRA_CONNECT_TRACKER_PARAM);
+    const error = params.get(JIRA_CONNECT_ERROR_PARAM);
+    if (!handle && !error) {
+      return;
+    }
+    const cleaned = new URL(window.location.href);
+    cleaned.searchParams.delete(JIRA_CONNECT_HANDLE_PARAM);
+    cleaned.searchParams.delete(JIRA_CONNECT_TRACKER_PARAM);
+    cleaned.searchParams.delete(JIRA_CONNECT_ERROR_PARAM);
+    window.history.replaceState({}, '', cleaned.toString());
+    if (error) {
+      this.jiraError = describeJiraConnectError(error);
+      return;
+    }
+    this.jiraConnectHandle = handle;
+    this.jiraReconnectTrackerId = trackerId;
+    this.isAddingTracker = true;
   }
 
   /**
@@ -200,6 +242,8 @@ export class TrackersView extends LitElement {
     this.editingTracker = null;
     this.bitbucketConnectHandle = null;
     this.bitbucketReconnectTrackerId = null;
+    this.jiraConnectHandle = null;
+    this.jiraReconnectTrackerId = null;
 
     if (this._maybeRedirectAfterTrackerModal()) {
       return;
@@ -315,12 +359,31 @@ export class TrackersView extends LitElement {
               : ''
           }
           ${
+            this.jiraError
+              ? html`
+                  <sl-alert
+                    variant="danger"
+                    open
+                    closable
+                    class="jira-connect-error"
+                    @sl-after-hide=${() => (this.jiraError = null)}
+                  >
+                    <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                    <strong>Jira Connection Failed</strong><br />
+                    ${this.jiraError}
+                  </sl-alert>
+                `
+              : ''
+          }
+          ${
             this.isAddingTracker
               ? html`<add-tracker-modal
                   .githubInstallationId=${this.githubInstallationId}
                   .githubTargetLogin=${this.githubTargetLogin}
                   .bitbucketConnectHandle=${this.bitbucketConnectHandle}
                   .bitbucketReconnectTrackerId=${this.bitbucketReconnectTrackerId}
+                  .jiraConnectHandle=${this.jiraConnectHandle}
+                  .jiraReconnectTrackerId=${this.jiraReconnectTrackerId}
                   .existingTrackers=${this.accountTrackers}
                   @tracker-added=${this._handleTrackerAdded}
                   @tracker-updated=${this._handleTrackerUpdated}

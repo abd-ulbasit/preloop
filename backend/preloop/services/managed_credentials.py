@@ -36,7 +36,17 @@ logger = logging.getLogger(__name__)
 MANAGED_AUTH_TYPE = "managed_oauth"
 RESOLVER_SERVICE_PREFIX = "managed_oauth_resolver:"
 # Feature flag a configured provider plugin advertises through ``/features``.
-MANAGED_FEATURE_FLAGS = {"bitbucket": "bitbucket_cloud_oauth"}
+MANAGED_FEATURE_FLAGS = {
+    "bitbucket": "bitbucket_cloud_oauth",
+    "jira": "jira_cloud_oauth",
+}
+# Providers whose managed grant is bound to a site, not a repository: the
+# tracker's code-host repository binding is never passed to their resolver.
+SITE_BOUND_PROVIDERS = frozenset({"jira"})
+# Plugin service that verifies inbound deliveries for managed providers whose
+# webhooks are authenticated by the provider app (Jira dynamic webhooks carry
+# a JWT signed with the app's client secret, which only the plugin holds).
+WEBHOOK_VERIFIER_SERVICE_PREFIX = "managed_oauth_webhook_verifier:"
 DEFAULT_GIT_USERNAME = "x-token-auth"
 
 _overrides: dict[str, Any] = {}
@@ -310,11 +320,16 @@ def tracker_credential_source(
     if not is_managed_tracker(tracker):
         return None
     details = getattr(tracker, "connection_details", None) or {}
-    bound = repository or details.get("repository") or None
+    provider = str(getattr(tracker.tracker_type, "value", tracker.tracker_type))
+    provider = provider.lower()
+    if provider in SITE_BOUND_PROVIDERS:
+        bound = None
+    else:
+        bound = repository or details.get("repository") or None
     return ManagedCredentialSource(
         account_id=_to_uuid(tracker.account_id),
         tracker_id=_to_uuid(tracker.id),
-        provider=str(tracker.tracker_type).lower(),
+        provider=provider,
         repository=str(bound) if bound else None,
     )
 
@@ -322,3 +337,32 @@ def tracker_credential_source(
 def managed_feature_flag(provider: str) -> Optional[str]:
     """The ``/features`` flag that advertises a configured provider service."""
     return MANAGED_FEATURE_FLAGS.get(str(provider or "").lower())
+
+
+_verifier_overrides: dict[str, Any] = {}
+
+
+def register_managed_webhook_verifier(provider: str, verifier: Any) -> None:
+    """Install (or with ``None`` remove) a webhook verifier override (tests)."""
+    if verifier is None:
+        _verifier_overrides.pop(provider, None)
+    else:
+        _verifier_overrides[provider] = verifier
+
+
+def get_managed_webhook_verifier(provider: str) -> Any:
+    """Return the provider's inbound webhook verifier, or None.
+
+    The verifier is duck typed: ``verifier.verify(authorization=<header>)``
+    returns True only for a delivery signed by the configured provider app.
+    """
+    if provider in _verifier_overrides:
+        return _verifier_overrides[provider]
+    try:
+        from preloop.plugins.base import get_plugin_manager
+
+        return get_plugin_manager().get_service(
+            f"{WEBHOOK_VERIFIER_SERVICE_PREFIX}{provider}"
+        )
+    except Exception:  # noqa: BLE001 - no plugin manager means no verifier
+        return None

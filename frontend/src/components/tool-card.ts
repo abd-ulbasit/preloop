@@ -176,8 +176,8 @@ export class ToolCard extends LitElement {
   @state()
   private availableUsers: Array<{
     id: string;
-    username: string;
-    email: string;
+    username: string | null;
+    email: string | null;
   }> = [];
 
   @state()
@@ -2312,7 +2312,7 @@ DENY if:
                                             (user) => html`
                                               <sl-option
                                                 value=${'user:' + user.id}
-                                                >${user.username}
+                                                >${user.username || 'Identity unavailable'}
                                                 (${user.email})</sl-option
                                               >
                                             `
@@ -2430,7 +2430,7 @@ DENY if:
                                                     (user) => html`
                                                       <sl-option
                                                         value=${'user:' + user.id}
-                                                        >${user.username}
+                                                        >${user.username || 'Identity unavailable'}
                                                         (${user.email})</sl-option
                                                       >
                                                     `

@@ -3952,14 +3952,15 @@ async def upload_avatar(
             detail=str(exc),
         )
 
-    current_user.avatar_url = data_uri
-    current_user.avatar_source = "manual"
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    from preloop.models.crud import crud_person
+
+    person = crud_person.update_profile(
+        db,
+        membership_id=current_user.id,
+        changes={"avatar_url": data_uri, "avatar_source": "manual"},
+    )
     return AvatarResponse(
-        avatar_url=current_user.avatar_url,
-        avatar_source=current_user.avatar_source,
+        avatar_url=person.avatar_url, avatar_source=person.avatar_source
     )
 
 
@@ -3969,11 +3970,13 @@ async def delete_avatar(
     db: Session = Depends(get_db_session),
 ) -> AvatarResponse:
     """Remove the current user's avatar, falling back to the default."""
-    current_user.avatar_url = None
-    current_user.avatar_source = None
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    from preloop.models.crud import crud_person
+
+    crud_person.update_profile(
+        db,
+        membership_id=current_user.id,
+        changes={"avatar_url": None, "avatar_source": None},
+    )
     return AvatarResponse(avatar_url=None, avatar_source=None)
 
 

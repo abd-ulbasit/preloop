@@ -136,11 +136,27 @@ class TrackerClient:
                 tracker.id, tracker.resolved_api_key, connection_details
             )
         elif self.tracker_type == "jira":
+            from preloop.services.managed_credentials import (
+                is_managed_tracker,
+                tracker_credential_source,
+            )
+
             from ..trackers.jira import JiraTracker
 
-            self.client = JiraTracker(
-                tracker.id, tracker.resolved_api_key, connection_details
-            )
+            if is_managed_tracker(tracker):
+                # Managed Atlassian grant: Bearer through the API gateway,
+                # resolved before each request; no stored key exists.
+                connection_details["auth_type"] = "managed_oauth"
+                self.client = JiraTracker(
+                    tracker.id,
+                    "",
+                    connection_details,
+                    credential_source=tracker_credential_source(tracker),
+                )
+            else:
+                self.client = JiraTracker(
+                    tracker.id, tracker.resolved_api_key, connection_details
+                )
         elif self.tracker_type == "bitbucket_dc":
             from ..trackers.bitbucket_dc import BitbucketDCTracker
 
@@ -591,7 +607,29 @@ async def _process_organization(
             if not org.webhook_secret:
                 current_secret_to_use = secrets.token_hex(32)
 
-            if client.tracker_type == "jira":
+            if (
+                client.tracker_type == "jira"
+                and getattr(client.client, "managed", False) is True
+            ):
+                # Managed grant: one dynamic webhook for all bound projects,
+                # registered or refreshed (30-day expiry) on every scan.
+                try:
+                    result = await client.client.sync_dynamic_webhooks(
+                        db, projects, webhook_target_url
+                    )
+                    logger.info(
+                        "Jira dynamic webhook %s for tracker %s",
+                        result.get("action"),
+                        client.tracker.id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Error syncing Jira dynamic webhook for tracker %s: %s",
+                        client.tracker.id,
+                        e,
+                    )
+                    org_stats["organizations"]["errors"] += 1
+            elif client.tracker_type == "jira":
                 logger.info(
                     f"Checking webhook registration for {len(projects)} Jira projects"
                 )

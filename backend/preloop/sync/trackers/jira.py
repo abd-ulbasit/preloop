@@ -37,6 +37,14 @@ from ..exceptions import (
     TrackerResponseError,
     TrackerError,
 )
+from preloop.services.managed_credentials import (
+    CredentialSource,
+    ManagedCredential,
+    ManagedCredentialError,
+    ManagedCredentialUnavailableError,
+    is_managed_auth_type,
+)
+
 from .base import BaseTracker
 from .utils import (
     HTTP_STATUS_NO_CONTENT,
@@ -54,6 +62,32 @@ from preloop.models.models.organization import Organization
 logger = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s<>\"]+")
+
+
+# Atlassian API gateway: the only origin a managed (3LO) token is sent to.
+ATLASSIAN_API_GATEWAY = "https://api.atlassian.com"
+MANAGED_HTTP_TIMEOUT_SECONDS = 20.0
+_CLOUD_ID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
+# A Jira project key ("PRJ") or a numeric project id ("10000"); both are
+# valid on the left of ``project =`` / ``project IN`` in dynamic-webhook JQL.
+_PROJECT_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,99}|[0-9]{1,18}")
+# Events a managed tracker subscribes to with a dynamic webhook.
+DYNAMIC_WEBHOOK_EVENTS = (
+    "jira:issue_created",
+    "jira:issue_updated",
+    "jira:issue_deleted",
+    "comment_created",
+    "comment_updated",
+)
+
+
+def _safe_error_text(response: httpx.Response, limit: int = 300) -> str:
+    """A bounded error body for messages; never includes request headers."""
+    try:
+        text = response.text or ""
+    except Exception:  # noqa: BLE001 - undecodable body
+        return ""
+    return text[:limit]
 
 
 def _adf_inline(line: str) -> List[Dict[str, Any]]:
@@ -120,21 +154,53 @@ class JiraTracker(BaseTracker):
         connection_details: Dict[str, Any],
         *,
         initialize_client: bool = True,
+        credential_source: Optional[CredentialSource] = None,
     ) -> None:
         """
         Initialize the Jira tracker.
+
+        Args:
+            tracker_id: Tracker id.
+            api_key: Atlassian API token for Basic auth; empty when managed.
+            connection_details: ``url``/``jira_url`` and ``username`` for
+                Basic auth. A managed grant (``auth_type: managed_oauth``)
+                carries ``cloud_id`` and ``site_url`` instead.
+            initialize_client: Build the ``jira`` client (Basic auth only).
+            credential_source: Managed grants only: async callable returning
+                a fresh ``ManagedCredential`` before every request.
         """
         super().__init__(tracker_id, api_key, connection_details)
 
-        jira_url = connection_details.get("jira_url") or connection_details.get("url")
+        self.managed: bool = credential_source is not None or is_managed_auth_type(
+            connection_details.get("auth_type")
+        )
+        self._credential_source = credential_source
+        self._last_credential: Optional[ManagedCredential] = None
+        self.cloud_id: Optional[str] = None
+
+        jira_url = (
+            (
+                connection_details.get("site_url")
+                if self.managed and connection_details.get("site_url")
+                else None
+            )
+            or connection_details.get("jira_url")
+            or connection_details.get("url")
+        )
         if not jira_url:
             raise ValueError("Jira URL is required in connection_details")
+
+        if self.managed:
+            self._init_managed(api_key, connection_details, jira_url)
+            return
 
         if initialize_client and "username" not in connection_details:
             raise ValueError("Jira username is required in connection_details")
 
         self.jira_url = jira_url.rstrip("/")
         self.base_url = self.jira_url  # Alias for compatibility
+        # Basic-auth trackers call the site directly, exactly as before.
+        self.api_root = self.jira_url
         self.username = connection_details.get("username", "")
 
         auth_str = f"{self.username}:{api_key}"
@@ -176,6 +242,14 @@ class JiraTracker(BaseTracker):
         api_version: str = "2",
     ) -> Any:
         """Make a request to the Jira API using httpx."""
+        if self.managed:
+            return await self._make_managed_request(
+                method,
+                endpoint,
+                params=params,
+                json_data=json_data,
+                api_version=api_version,
+            )
         async with httpx.AsyncClient() as client:
             try:
                 url = f"{self.jira_url}/rest/api/{api_version}/{endpoint.lstrip('/')}"
@@ -205,6 +279,355 @@ class JiraTracker(BaseTracker):
                 )
             except httpx.RequestError as e:
                 raise TrackerConnectionError(f"Jira connection error: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Managed (Atlassian OAuth 2.0 3LO) transport
+    # ------------------------------------------------------------------
+
+    def _init_managed(
+        self, api_key: str, connection_details: Dict[str, Any], site_url: str
+    ) -> None:
+        """Configure a managed grant: Bearer through the pinned gateway.
+
+        Raises:
+            ValueError: A pasted token, a missing or malformed ``cloud_id``, or
+                a non-HTTPS site URL.
+        """
+        if api_key:
+            raise ValueError(
+                "A managed Jira connection does not accept a pasted token."
+            )
+        cloud_id = str(connection_details.get("cloud_id") or "").strip()
+        if not _CLOUD_ID_RE.fullmatch(cloud_id):
+            raise ValueError(
+                "A managed Jira connection requires the Atlassian site cloud_id."
+            )
+        site = site_url.rstrip("/")
+        if urllib.parse.urlsplit(site).scheme != "https":
+            raise ValueError("A managed Jira site URL must use https.")
+        self.cloud_id = cloud_id
+        # Human-facing links (browse, comment anchors) use the site; every
+        # API call goes to the gateway, the only origin the token may reach.
+        self.jira_url = site
+        self.base_url = site
+        self.api_root = f"{ATLASSIAN_API_GATEWAY}/ex/jira/{cloud_id}"
+        self.username = ""
+        self.headers = {"Content-Type": "application/json"}
+        self.jira_client = None
+
+    @property
+    def managed_credential(self) -> Optional[ManagedCredential]:
+        """The credential used by the most recent managed request, if any."""
+        return self._last_credential
+
+    async def _managed_token(self, *, force_refresh: bool = False) -> str:
+        """Resolve the current managed access token before a request.
+
+        Raises:
+            TrackerAuthenticationError: No resolver is installed, the grant
+                needs reconnect, or the provider refused.
+        """
+        if self._credential_source is None:
+            error = ManagedCredentialUnavailableError(
+                "resolver_missing", provider=self.tracker_type
+            )
+            raise TrackerAuthenticationError(error.actionable_message())
+        try:
+            credential = await self._credential_source(force_refresh=force_refresh)
+        except ManagedCredentialError as exc:
+            if exc.provider is None:
+                exc.provider = self.tracker_type
+            raise TrackerAuthenticationError(exc.actionable_message()) from exc
+        self._last_credential = credential
+        return credential.access_token
+
+    async def _send_managed(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]],
+        json_data: Optional[Any],
+        token: str,
+    ) -> httpx.Response:
+        headers = dict(self.headers)
+        headers["Accept"] = "application/json"
+        headers["Authorization"] = f"Bearer {token}"
+        # The token is pinned to the gateway origin: a redirect could carry it
+        # elsewhere, so it is reported instead of followed.
+        async with httpx.AsyncClient(
+            timeout=MANAGED_HTTP_TIMEOUT_SECONDS,
+            follow_redirects=False,
+            transport=self._transport,
+        ) as client:
+            return await client.request(
+                method.upper(), url, headers=headers, params=params, json=json_data
+            )
+
+    _transport: Optional[httpx.AsyncBaseTransport] = None
+
+    async def _make_managed_request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_data: Optional[Any] = None,
+        api_version: str = "2",
+    ) -> Any:
+        """Send one gateway request with a freshly resolved Bearer token.
+
+        A 401 forces exactly one rotation and retry; a second 401 is
+        reported. There is no Basic fallback and no stale-token fallback.
+        """
+        url = f"{self.api_root}/rest/api/{api_version}/{endpoint.lstrip('/')}"
+        try:
+            token = await self._managed_token()
+            response = await self._send_managed(
+                method, url, params=params, json_data=json_data, token=token
+            )
+            if response.status_code == HTTP_STATUS_UNAUTHORIZED:
+                token = await self._managed_token(force_refresh=True)
+                response = await self._send_managed(
+                    method, url, params=params, json_data=json_data, token=token
+                )
+        except httpx.RequestError as e:
+            raise TrackerConnectionError(
+                f"Jira connection error: {type(e).__name__}"
+            ) from e
+
+        status_code = response.status_code
+        if 300 <= status_code < 400:
+            raise TrackerResponseError(
+                "Refusing to follow a Jira redirect with a managed credential."
+            )
+        if status_code == HTTP_STATUS_UNAUTHORIZED:
+            raise TrackerAuthenticationError(
+                "Jira refused the managed credential after a refresh. Reconnect "
+                "the Jira connection from the tracker page."
+            )
+        if HTTP_SUCCESS_MIN <= status_code <= HTTP_SUCCESS_MAX:
+            if status_code == HTTP_STATUS_NO_CONTENT or not response.content:
+                return None
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
+        raise TrackerResponseError(
+            f"Jira API error: {status_code} - {_safe_error_text(response)}"
+        )
+
+    def _handle_jira_error(self, error: Exception, context: str) -> None:
+        """Raise the typed tracker error for a ``jira``/``requests`` failure.
+
+        Args:
+            error: ``JIRAError`` or ``requests`` exception.
+            context: What was being attempted, for the message.
+
+        Raises:
+            TrackerAuthenticationError: 401.
+            TrackerResponseError: Any other HTTP status.
+            TrackerConnectionError: No HTTP status (network failure).
+        """
+        status_code = getattr(error, "status_code", None)
+        if status_code is None:
+            response = getattr(error, "response", None)
+            status_code = getattr(response, "status_code", None)
+        text = getattr(error, "text", None) or str(error)
+        if status_code == HTTP_STATUS_UNAUTHORIZED:
+            raise TrackerAuthenticationError(
+                f"Jira authentication failed while {context}"
+            ) from error
+        if status_code is None:
+            raise TrackerConnectionError(
+                f"Jira connection error while {context}: {text}"
+            ) from error
+        raise TrackerResponseError(
+            f"Jira API error {status_code} while {context}: {text}"
+        ) from error
+
+    # ------------------------------------------------------------------
+    # Dynamic webhooks (managed grants only)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def dynamic_webhook_jql(project_keys: List[str]) -> str:
+        """JQL filter covering every bound project.
+
+        Dynamic webhooks accept only ``project`` with ``=``/``IN`` here.
+
+        Raises:
+            ValueError: No keys, or a value that is neither a Jira project key
+                nor a numeric project id.
+        """
+        keys = sorted({str(k).strip().upper() for k in project_keys if str(k).strip()})
+        if not keys:
+            raise ValueError("At least one Jira project key is required.")
+        for key in keys:
+            if not _PROJECT_KEY_RE.fullmatch(key):
+                raise ValueError(f"Invalid Jira project key: {key!r}")
+        if len(keys) == 1:
+            return f'project = "{keys[0]}"'
+        return "project IN (" + ", ".join(f'"{k}"' for k in keys) + ")"
+
+    async def register_dynamic_webhook(
+        self, webhook_url: str, project_keys: List[str]
+    ) -> str:
+        """Register one dynamic webhook covering ``project_keys``.
+
+        One webhook per tracker keeps the grant well under Atlassian's limit
+        of 5 dynamic webhooks per OAuth app, user and site.
+
+        Returns:
+            The ``createdWebhookId`` as a string.
+
+        Raises:
+            TrackerResponseError: Atlassian rejected the registration.
+        """
+        if not self.managed:
+            raise ValueError("Dynamic webhooks are only used by managed Jira trackers.")
+        body = {
+            "url": webhook_url,
+            "webhooks": [
+                {
+                    "jqlFilter": self.dynamic_webhook_jql(project_keys),
+                    "events": list(DYNAMIC_WEBHOOK_EVENTS),
+                }
+            ],
+        }
+        result = await self._make_request(
+            "POST", "webhook", json_data=body, api_version="3"
+        )
+        entries = (result or {}).get("webhookRegistrationResult") or []
+        first = entries[0] if entries else {}
+        created = first.get("createdWebhookId")
+        if created is None:
+            errors = first.get("errors") or ["no webhook id returned"]
+            raise TrackerResponseError(
+                "Jira rejected the dynamic webhook: " + "; ".join(map(str, errors))
+            )
+        return str(created)
+
+    @staticmethod
+    def _project_jql_key(project: Any) -> str:
+        """The Jira project key (``Project.slug``), else the numeric id.
+
+        ``Project.identifier`` holds Jira's numeric project id; the key is the
+        slug. Either is valid JQL, the key reads better in Jira's UI.
+        """
+        return str(getattr(project, "slug", None) or project.identifier)
+
+    async def list_dynamic_webhook_ids(self) -> set[str]:
+        """Ids of the dynamic webhooks this app registered (bounded pages)."""
+        ids: set[str] = set()
+        start = 0
+        for _ in range(10):
+            page = await self._make_request(
+                "GET",
+                "webhook",
+                params={"startAt": start, "maxResults": 100},
+                api_version="3",
+            )
+            values = (page or {}).get("values") or [] if isinstance(page, dict) else []
+            ids.update(str(v.get("id")) for v in values if isinstance(v, dict))
+            if not values or (page or {}).get("isLast", True):
+                break
+            start += len(values)
+        return ids
+
+    async def refresh_dynamic_webhooks(self, webhook_ids: List[str]) -> Optional[str]:
+        """Extend dynamic webhooks by another 30 days.
+
+        Returns:
+            The new ``expirationDate`` reported by Jira, if any.
+        """
+        ids = [int(i) for i in webhook_ids if str(i).strip().isdigit()]
+        if not ids:
+            return None
+        result = await self._make_request(
+            "PUT", "webhook/refresh", json_data={"webhookIds": ids}, api_version="3"
+        )
+        expiration = (
+            (result or {}).get("expirationDate") if isinstance(result, dict) else None
+        )
+        return str(expiration) if expiration is not None else None
+
+    async def delete_dynamic_webhooks(self, webhook_ids: List[str]) -> None:
+        """Delete dynamic webhooks; unknown ids are ignored by Jira."""
+        ids = [int(i) for i in webhook_ids if str(i).strip().isdigit()]
+        if ids:
+            await self._make_request(
+                "DELETE", "webhook", json_data={"webhookIds": ids}, api_version="3"
+            )
+
+    async def sync_dynamic_webhooks(
+        self, db: Session, projects: List[Project], webhook_url: str
+    ) -> Dict[str, Any]:
+        """Keep one dynamic webhook covering ``projects`` alive.
+
+        The webhook id is stored on each project's ``Webhook`` row. When the
+        covered project set and URL are unchanged the webhook is refreshed
+        (``PUT /rest/api/3/webhook/refresh``, another 30 days); otherwise the
+        old one is deleted and a new one registered.
+
+        Returns:
+            ``{"action": "refreshed"|"registered"|"none", "webhook_id": ...}``.
+        """
+        if not projects:
+            return {"action": "none", "webhook_id": None}
+        rows = {
+            project.id: crud_webhook.get_by_project_id(db, project_id=project.id)
+            for project in projects
+        }
+        existing_ids = {row.external_id for row in rows.values() if row is not None}
+        coverage_ok = (
+            len(existing_ids) == 1
+            and all(row is not None for row in rows.values())
+            and all(row.url == webhook_url for row in rows.values())
+        )
+        if coverage_ok:
+            webhook_id = next(iter(existing_ids))
+            # A stored row is not proof: the webhook may have been removed on
+            # the Jira side or purged after expiry. Refresh only one that the
+            # app still owns; otherwise register a replacement below.
+            if webhook_id in await self.list_dynamic_webhook_ids():
+                expires = await self.refresh_dynamic_webhooks([webhook_id])
+                return {
+                    "action": "refreshed",
+                    "webhook_id": webhook_id,
+                    "expires": expires,
+                }
+
+        webhook_id = await self.register_dynamic_webhook(
+            webhook_url, [self._project_jql_key(project) for project in projects]
+        )
+        stale = [i for i in existing_ids if i != webhook_id]
+        for row in rows.values():
+            if row is not None:
+                crud_webhook.remove(db, id=row.id)
+        for project in projects:
+            crud_webhook.create(
+                db,
+                obj_in={
+                    "project_id": project.id,
+                    "external_id": webhook_id,
+                    "url": webhook_url,
+                    # Dynamic deliveries are authenticated by the app's JWT,
+                    # not by a per-hook secret.
+                    "secret": "",
+                    "events": list(DYNAMIC_WEBHOOK_EVENTS),
+                },
+            )
+        if stale:
+            try:
+                await self.delete_dynamic_webhooks(stale)
+            except Exception as e:  # noqa: BLE001 - expiry removes leftovers
+                logger.warning(
+                    "Could not delete superseded Jira dynamic webhooks for tracker %s: %s",
+                    self.tracker_id,
+                    type(e).__name__,
+                )
+        return {"action": "registered", "webhook_id": webhook_id}
 
     async def test_connection(self) -> TrackerConnection:
         """Test the connection to the tracker."""

@@ -678,13 +678,12 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
         org_ids = [org.id for org in organizations]
 
         # Find all projects under this tracker (either directly or through organizations)
+        # Projects belong to a tracker through their organization (Project
+        # has no tracker_id column).
         projects = (
-            db.query(Project)
-            .filter(
-                (Project.tracker_id == tracker_id)
-                | (Project.organization_id.in_(org_ids) if org_ids else False)
-            )
-            .all()
+            db.query(Project).filter(Project.organization_id.in_(org_ids)).all()
+            if org_ids
+            else []
         )
         project_ids = [proj.id for proj in projects]
 
@@ -715,6 +714,13 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
         )
 
         should_delete_external = len(other_trackers) == 0
+        managed_jira = (
+            str(tracker.tracker_type).lower() == "jira"
+            and str(tracker.auth_type or "").lower() == "managed_oauth"
+        )
+        if managed_jira:
+            # Dynamic webhooks belong to this tracker's grant, never shared.
+            should_delete_external = True
         if should_delete_external:
             logger.info(
                 "No other active trackers with same type/URL found. Will delete webhooks from external tracker."
@@ -742,14 +748,26 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
                         **(tracker.connection_details or {}),
                         **(
                             {"auth_type": tracker.auth_type}
-                            if tracker.tracker_type == "bitbucket"
+                            if tracker.tracker_type == "bitbucket" or managed_jira
                             else {}
                         ),
                     },
                     credential_source=tracker_credential_source(tracker),
                 )
 
-                for webhook in webhooks:
+                if managed_jira:
+                    try:
+                        await client.delete_dynamic_webhooks(
+                            sorted({w.external_id for w in webhooks if w.external_id})
+                        )
+                    except Exception as e:  # noqa: BLE001 - they expire in 30 days
+                        logger.warning(
+                            "Could not delete Jira dynamic webhooks for tracker %s "
+                            "(%s); they expire within 30 days without refresh.",
+                            tracker_id,
+                            type(e).__name__,
+                        )
+                for webhook in [] if managed_jira else webhooks:
                     try:
                         if webhook.external_id:
                             await client.delete_webhook(webhook.external_id)

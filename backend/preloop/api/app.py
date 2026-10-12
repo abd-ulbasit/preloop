@@ -903,6 +903,7 @@ def _register_control_plane_routes(
     from preloop.api.endpoints import (
         account,
         agent_control,
+        desktop,
         agent_deployments,
         agent_discovery,
         agent_permission,
@@ -1302,6 +1303,11 @@ def _register_control_plane_routes(
         agent_control.router,
         prefix="/api/v1",
         tags=["Agent Control"],
+    )
+    app.include_router(
+        desktop.router,
+        prefix="/api/v1",
+        tags=["Desktop Views"],
     )
     app.include_router(
         agent_permission.router,

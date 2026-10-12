@@ -108,11 +108,13 @@ from .discovered_agent_candidate import (
 from .discovery_observation import crud_discovery_observation
 from .embedding import CRUDEmbeddingModel, CRUDIssueEmbedding
 from .event import CRUDEvent, crud_event
+from .identity_directory import identity_directory
 from .flow import CRUDFlow  # Import CRUDFlow class
 from .flow_execution import CRUDFlowExecution
 from .flow_execution_log import CRUDFlowExecutionLog
 from .flow_feedback import crud_flow_feedback
 from .flow_runner import CRUDFlowRunner, crud_flow_runner
+from .desktop import crud_desktop
 from .runner_remote_session import (
     CRUDRunnerRemoteSession,
     crud_runner_remote_session,
@@ -287,6 +289,7 @@ crud_tool_access_rule = CRUDToolAccessRule()  # Instantiate CRUDToolAccessRule
 
 
 __all__ = [
+    "identity_directory",
     "CRUDPerson",
     "IdentityConflictError",
     "IdentityUnavailableError",
@@ -338,6 +341,7 @@ __all__ = [
     "CRUDFlowRunner",
     "crud_flow_runner",
     "CRUDRunnerRemoteSession",
+    "crud_desktop",
     "crud_runner_remote_session",
     "CRUDIssueComplianceResult",
     "CRUDIssueSet",

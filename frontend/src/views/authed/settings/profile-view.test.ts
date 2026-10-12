@@ -171,9 +171,7 @@ describe('ProfileView', () => {
     await (element as any).handleUpdateProfile(new Event('submit'));
     await element.updateComplete;
 
-    expect((element as any).updateProfileMessage).to.contain(
-      'Failed to update profile'
-    );
+    expect((element as any).updateProfileMessage).to.contain('nope');
   });
   it('shows verified status without resend controls', async () => {
     fetchStub = createFetchStub({ verified: true });
@@ -307,5 +305,88 @@ describe('ProfileView', () => {
     expect(
       element.shadowRoot?.querySelector('[data-testid="resend-verification"]')
     ).to.exist;
+  });
+});
+
+describe('shared identity profile edits', () => {
+  let fetchStub: sinon.SinonStub;
+  beforeEach(() => {
+    invalidateApiCaches();
+    localStorage.setItem('accessToken', 'test-token');
+    localStorage.setItem('refreshToken', 'test-refresh');
+    fetchStub = sinon.stub(window, 'fetch').callsFake(async (_input, init) => {
+      const changes =
+        init?.method === 'PUT' ? JSON.parse(String(init.body)) : {};
+      return new Response(
+        JSON.stringify({
+          id: 'child-membership',
+          person_id: 'person-example',
+          account_id: 'child-account',
+          username: 'chosen-person',
+          email: 'jane@example.com',
+          full_name: 'Jane Example',
+          email_verified: !changes.email,
+          ...changes,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+  });
+  afterEach(() => {
+    fetchStub.restore();
+    localStorage.clear();
+    invalidateApiCaches();
+  });
+
+  it('edits the canonical username and notifies existing header listeners', async () => {
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(() => !!(element as any).user);
+    const listener = sinon.spy();
+    window.addEventListener('auth-change', listener);
+    try {
+      (element as any).username = 'chosen-updated';
+      await element.handleUpdateProfile(new Event('submit'));
+      const call = fetchStub
+        .getCalls()
+        .find((call) => call.args[1]?.method === 'PUT')!;
+      expect(JSON.parse(String(call.args[1].body))).to.deep.equal({
+        full_name: 'Jane Example',
+        username: 'chosen-updated',
+      });
+      expect((element as any).user.person_id).to.equal('person-example');
+      expect(listener.calledOnce).to.equal(true);
+    } finally {
+      window.removeEventListener('auth-change', listener);
+    }
+  });
+
+  it('clears credentials and auth state while showing email verification guidance', async () => {
+    const element = await fixture<ProfileView>(
+      html`<profile-view></profile-view>`
+    );
+    await waitUntil(() => !!(element as any).user);
+    const listener = sinon.spy();
+    window.addEventListener('auth-change', listener);
+    try {
+      (element as any).email = 'updated@example.com';
+      await element.handleUpdateProfile(new Event('submit'));
+      await element.updateComplete;
+      expect(localStorage.getItem('accessToken')).to.equal(null);
+      expect(localStorage.getItem('refreshToken')).to.equal(null);
+      expect(listener.calledOnce).to.equal(true);
+      expect(element.shadowRoot!.textContent).to.contain(
+        'verify your new address'
+      );
+      expect(element.shadowRoot!.querySelector('a[href="/login"]')).to.exist;
+      expect(
+        element
+          .shadowRoot!.querySelector('sl-button[type="submit"]')!
+          .hasAttribute('disabled')
+      ).to.equal(true);
+    } finally {
+      window.removeEventListener('auth-change', listener);
+    }
   });
 });

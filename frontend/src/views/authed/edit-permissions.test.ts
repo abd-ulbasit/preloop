@@ -176,7 +176,11 @@ describe('Edit controls permission states', () => {
         }
         const mutationLabels =
           tag === 'user-management-view'
-            ? ['Manage roles', 'Edit user', 'Deactivate user']
+            ? [
+                'Manage roles',
+                'Edit account membership',
+                'Deactivate account membership',
+              ]
             : tag === 'team-management-view'
               ? ['Manage roles', 'Edit team', 'Delete team']
               : [];

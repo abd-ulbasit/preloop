@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261011_session_alias"
-down_revision = "20261011_runner_scheduling"
+down_revision = "20261011_desktop_views"
 branch_labels = None
 depends_on = None
 _ALEMBIC_IDENTIFIERS = (revision, down_revision, branch_labels, depends_on)

@@ -48,8 +48,9 @@ class AdminUserCreate(UserBase):
 class AdminUserUpdate(BaseModel):
     """Schema for updating a user."""
 
-    model_config = {"title": "AdminUserUpdate"}
+    model_config = ConfigDict(title="AdminUserUpdate")
 
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
     email: Optional[EmailStr] = None
     full_name: Optional[str] = Field(None, max_length=255)
     is_active: Optional[bool] = None
@@ -82,11 +83,15 @@ class AdminUserResponse(BaseModel):
     """Response schema for user data."""
 
     id: UUID
+    person_id: Optional[UUID] = None
     account_id: UUID
-    username: str
-    email: EmailStr
+    username: Optional[str]
+    email: Optional[EmailStr]
     email_verified: bool
     full_name: Optional[str]
+    avatar_url: Optional[str] = None
+    avatar_source: Optional[str] = None
+    identity_status: str = "active"
     is_active: bool
     user_source: str
     oauth_provider: Optional[str]
@@ -108,8 +113,9 @@ class UserSummary(BaseModel):
     """Summary schema for user data (minimal info)."""
 
     id: UUID
-    username: str
-    email: EmailStr
+    person_id: Optional[UUID] = None
+    username: Optional[str]
+    email: Optional[EmailStr]
     full_name: Optional[str]
     is_active: bool
 

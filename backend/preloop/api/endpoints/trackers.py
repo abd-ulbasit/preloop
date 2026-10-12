@@ -79,6 +79,21 @@ MANAGED_TRACKER_TOKEN_DETAIL = (
     "It has no pasted token to replace: reconnect or disconnect it instead."
 )
 
+# Connection details a managed Jira grant owns; only the provider plugin's
+# binding endpoint changes them.
+MANAGED_JIRA_PINNED_KEYS = ("cloud_id", "site_url", "site_name")
+MANAGED_METADATA_KEYS = (
+    "managed_oauth",
+    "managed_state",
+    "reconnect_reason",
+    "actor",
+    "provider",
+)
+MANAGED_JIRA_SITE_DETAIL = (
+    "A managed Jira connection is bound to its Atlassian site. Choose a "
+    "different site from the tracker page (Connect Jira), not by editing it."
+)
+
 # OAuthAppInstallation.external_id is a BigInteger, so an id outside the signed
 # 64-bit range can never match a stored installation.
 _BIGINT_MAX = 2**63 - 1
@@ -209,7 +224,20 @@ def _apply_tracker_auth(
         # No token exists for a managed grant; the client resolves one per
         # request through the provider plugin bound to this tracker.
         request_data.api_key = ""
-        return {"auth_type": MANAGED_AUTH_TYPE}
+        details: Dict[str, Any] = {"auth_type": MANAGED_AUTH_TYPE}
+        if tracker.tracker_type == TrackerType.JIRA.value:
+            # The Atlassian site binding is owned by the provider plugin; a
+            # request cannot point the grant at another site or origin.
+            stored = tracker.connection_details or {}
+            details.update(
+                {
+                    key: stored[key]
+                    for key in MANAGED_JIRA_PINNED_KEYS
+                    if stored.get(key) is not None
+                }
+            )
+            details["username"] = ""
+        return details
     if tracker.auth_type in OAUTH_AUTH_TYPES:
         installation = tracker.oauth_installation
         if installation is None:
@@ -325,6 +353,39 @@ def _bitbucket_auth_details(
     except BitbucketConfigError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return {"auth_type": auth_type}
+
+
+def _merge_managed_jira_details(
+    previous: Dict[str, Any], requested: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge a console edit into a managed Jira tracker's details.
+
+    The site binding (``cloud_id``, ``site_url``, ``site_name``) and the
+    managed metadata are owned by the provider plugin: an edit may change
+    other fields (scope, repository binding) but never rebinds the site,
+    and never stores a username or token.
+
+    Raises:
+        HTTPException: 400 when the edit names a different site.
+    """
+    for key in ("cloud_id", "site_url"):
+        if key in requested and str(requested[key] or "").rstrip("/") != str(
+            previous.get(key) or ""
+        ).rstrip("/"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=MANAGED_JIRA_SITE_DETAIL,
+            )
+    merged = dict(requested)
+    for key in MANAGED_JIRA_PINNED_KEYS + MANAGED_METADATA_KEYS:
+        if key in previous:
+            merged[key] = previous[key]
+        else:
+            merged.pop(key, None)
+    merged["auth_type"] = MANAGED_AUTH_TYPE
+    for key in ("username", "email", "api_key", "token", "token_expires_at"):
+        merged.pop(key, None)
+    return merged
 
 
 def _unique_tracker_name(db: Session, *, base_name: str, account_id: str) -> str:
@@ -947,6 +1008,15 @@ async def update_tracker(
                 detail=MANAGED_TRACKER_TOKEN_DETAIL,
             )
         details = update_data.get("connection_details")
+        if tracker.tracker_type == TrackerType.JIRA.value:
+            # The row URL is the grant's canonical instance; the provider
+            # plugin owns it (reconnect checks it), the site lives in details.
+            update_data.pop("url", None)
+        if details is not None and tracker.tracker_type == TrackerType.JIRA.value:
+            update_data["connection_details"] = _merge_managed_jira_details(
+                dict(tracker.connection_details or {}), dict(details)
+            )
+            details = None
         if details is not None:
             previous = dict(tracker.connection_details or {})
             merged = dict(details)

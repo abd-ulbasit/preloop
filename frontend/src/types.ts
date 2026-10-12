@@ -2221,10 +2221,14 @@ export interface DependencyResponse {
 
 // User Management Types
 export interface User {
+  /** Account membership id, including for roles and audit attribution. */
   id: string;
+  person_id?: string | null;
+  identity_status?: string;
+  avatar_url?: string | null;
   account_id: string;
-  username: string;
-  email: string;
+  username: string | null;
+  email: string | null;
   email_verified: boolean;
   full_name: string | null;
   is_active: boolean;
