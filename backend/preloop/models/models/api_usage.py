@@ -13,6 +13,23 @@ from sqlalchemy.types import Boolean, DateTime, Float, Integer, String
 
 from .base import Base
 
+# Columns the gateway window aggregates read, carried in
+# ix_api_usage_gateway_totals so those reads skip the heap.
+GATEWAY_TOTALS_INCLUDE = [
+    "id",
+    "status_code",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "estimated_cost",
+    "cache_read_tokens",
+    "cache_creation_tokens",
+    "model_alias",
+    "provider_name",
+    "ai_model_id",
+    "flow_id",
+]
+
 if TYPE_CHECKING:
     from .account import Account
     from .ai_model import AIModel
@@ -229,6 +246,53 @@ class ApiUsage(Base):
             postgresql_include=["estimated_cost"],
             postgresql_where=text(
                 "action_type = 'model_gateway' AND "
+                "((meta_data ->> 'purpose') IS NULL OR "
+                "(meta_data ->> 'purpose') <> 'replay_validation')"
+            ),
+        ),
+        # Gateway totals per account and window: Spend and Gateway traffic
+        # summaries and the per-model, per-flow and per-day breakdowns.
+        # Covering + partial on the exact filter of
+        # exclude_replay_usage_condition, so those aggregates are index-only
+        # scans and never touch the wide meta_data column in the heap (#1583).
+        # Index-only for the account-wide window: an extra filter on a column
+        # not carried here (principal, API key, session, execution, is_retry)
+        # makes it a plain index scan with heap reads.
+        Index(
+            "ix_api_usage_gateway_totals",
+            "account_id",
+            "timestamp",
+            postgresql_include=GATEWAY_TOTALS_INCLUDE,
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND "
+                "((meta_data ->> 'purpose') IS NULL OR "
+                "(meta_data ->> 'purpose') <> 'replay_validation')"
+            ),
+        ),
+        # Subscription-billed gateway rows (Spend subscription block). Few
+        # rows, and without it the block was a sequential scan of the table.
+        Index(
+            "ix_api_usage_gateway_subscription",
+            "account_id",
+            "timestamp",
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND cost_source = 'subscription'"
+            ),
+        ),
+        # Latest rate-limit header snapshot per (provider, model): a skip
+        # scan walks one entry per pair instead of every gateway row of the
+        # account's history (#1582). NULL names are coalesced so the pairs
+        # are an index range.
+        Index(
+            "ix_api_usage_rate_limit_snapshot",
+            "account_id",
+            text("(COALESCE(provider_name, ''))"),
+            text("(COALESCE(model_alias, ''))"),
+            "timestamp",
+            postgresql_ops={"timestamp": "DESC"},
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND "
+                "(meta_data ->> 'rate_limit') IS NOT NULL AND "
                 "((meta_data ->> 'purpose') IS NULL OR "
                 "(meta_data ->> 'purpose') <> 'replay_validation')"
             ),

@@ -211,7 +211,12 @@ def test_gateway_spend_is_an_index_only_scan(db_session):
         .group_by(ApiUsage.account_id)
     )
     plan = _explain(db_session, query)
-    assert "Index Only Scan using ix_api_usage_gateway_spend" in plan, plan
+    # ix_api_usage_gateway_totals (20261014) has the same predicate and also
+    # covers estimated_cost; either covering index keeps it off the heap.
+    assert any(
+        f"Index Only Scan using {index}" in plan
+        for index in ("ix_api_usage_gateway_spend", "ix_api_usage_gateway_totals")
+    ), plan
 
 
 def test_latest_event_per_account_uses_the_composite_index(db_session):
