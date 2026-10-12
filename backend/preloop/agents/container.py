@@ -1754,8 +1754,14 @@ class ContainerAgentExecutor(AgentExecutor):
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
+                preloop_url=os.getenv("PRELOOP_EXECUTION_API_URL") or None,
             )
             env.setdefault("MCP_CONFIG_JSON", json.dumps(mcp_config))
+
+        if os.getenv("PRELOOP_EXECUTION_API_URL"):
+            env["PRELOOP_MCP_URL"] = (
+                os.environ["PRELOOP_EXECUTION_API_URL"].rstrip("/") + "/mcp/v1"
+            )
 
         # Convert env dict to list of V1EnvVar. Git credentials are merged in
         # here rather than baked into the agent script, so the token stays out

@@ -99,3 +99,30 @@ async def test_remote_mcp_wins_after_allowed_tool_environment_merge(
     assert env["PRELOOP_MCP_URL"] == "https://example.com/mcp/v1"
     config = json.loads(env["MCP_CONFIG_JSON"])
     assert config["mcpServers"]["preloop-mcp"]["url"] == "https://example.com/mcp/v1"
+
+
+@pytest.mark.asyncio
+async def test_final_job_environment_keeps_remote_api(monkeypatch):
+    import json
+
+    monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    monkeypatch.setenv("PRELOOP_URL", "http://control-plane.svc")
+    executor = ContainerAgentExecutor(
+        "codex", {}, "example:latest", use_kubernetes=True
+    )
+    monkeypatch.setattr(executor, "_init_kubernetes_clients", AsyncMock())
+    create = AsyncMock(return_value="job")
+    monkeypatch.setattr(executor, "_create_kubernetes_job", create)
+    await executor._start_kubernetes_pod(
+        {
+            "execution_id": "00000000-0000-0000-0000-000000000001",
+            "flow_id": "00000000-0000-0000-0000-000000000002",
+            "prompt": "synthetic prompt",
+            "allowed_mcp_servers": ["preloop-mcp"],
+        }
+    )
+    job = create.call_args.args[0]
+    env = {item.name: item.value for item in job.spec.template.spec.containers[0].env}
+    assert env["PRELOOP_MCP_URL"] == "https://example.com/mcp/v1"
+    config = json.loads(env["MCP_CONFIG_JSON"])
+    assert config["mcpServers"]["preloop-mcp"]["url"] == "https://example.com/mcp/v1"
