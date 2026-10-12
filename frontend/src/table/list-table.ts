@@ -1,17 +1,33 @@
 import type { ReactiveController, ReactiveControllerHost } from 'lit';
 import {
+  columnFilteringFeature,
   columnOrderingFeature,
   columnResizingFeature,
   columnSizingFeature,
   columnVisibilityFeature,
   constructTable,
   createCoreRowModel,
+  createFilteredRowModel,
+  createPaginatedRowModel,
   createSortedRowModel,
   getInitialTableState,
+  globalFilteringFeature,
+  rowPaginationFeature,
   rowSortingFeature,
   tableFeatures,
 } from '@tanstack/table-core';
-import type { RowData, Table, TableState, Updater } from '@tanstack/table-core';
+import type {
+  ColumnFiltersState,
+  RowData,
+  Table,
+  TableState,
+  Updater,
+} from '@tanstack/table-core';
+import {
+  readTableUrlState,
+  writeTableUrlState,
+  type TableUrlOptions,
+} from './table-url-state';
 import { storeReactivityBindings } from '@tanstack/table-core/store-reactivity-bindings';
 import {
   readTablePreferences,
@@ -32,10 +48,47 @@ import type { StoredTablePreferences } from './table-preferences';
  *
  * Only the features a console list actually uses are registered, which is
  * what keeps the cost near the measured +17 kB gz rather than the whole
- * library: sorting, visibility, ordering, sizing and resizing. Selection
- * stays with `list-selection.ts`, which already does it, and row expansion is
- * one more feature import on the day a list grows a tree.
+ * library: sorting, filtering (global search and per column), pagination,
+ * visibility, ordering, sizing and resizing. Selection stays with
+ * `list-selection.ts`, which already does it, and row expansion is one more
+ * feature import on the day a list grows a tree.
+ *
+ * A list runs in one of two modes. `client` (the default) sorts, filters and
+ * pages the rows it was handed. `server` hands every query change to the view
+ * through `onQueryChange` and renders the rows it is given as they are: the
+ * model still owns the state, so the header carets, the search box, the page
+ * size and the URL agree whichever side does the work.
  */
+
+function textOfFn(value: unknown): string {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+type FilterRow = { getValue: (columnId: string) => unknown };
+
+/** "Contains, ignoring case": the console's one text filter. */
+const consoleText = Object.assign(
+  (row: FilterRow, columnId: string, filterValue: unknown): boolean =>
+    textOfFn(row.getValue(columnId))
+      .toLowerCase()
+      .includes(textOfFn(filterValue).toLowerCase()),
+  { autoRemove: (value: unknown) => !textOfFn(value) }
+);
+
+/** "Is one of": the console's one select filter. */
+const consoleOneOf = Object.assign(
+  (row: FilterRow, columnId: string, filterValue: unknown): boolean => {
+    const wanted = Array.isArray(filterValue)
+      ? filterValue.map(textOfFn)
+      : [textOfFn(filterValue)];
+    return wanted.includes(textOfFn(row.getValue(columnId)));
+  },
+  {
+    autoRemove: (value: unknown) =>
+      Array.isArray(value) ? value.length === 0 : !textOfFn(value),
+  }
+);
+
 const listTableFeatures = tableFeatures({
   coreReactivityFeature: storeReactivityBindings(),
   columnOrderingFeature,
@@ -43,8 +96,16 @@ const listTableFeatures = tableFeatures({
   columnSizingFeature,
   columnVisibilityFeature,
   rowSortingFeature,
+  columnFilteringFeature,
+  globalFilteringFeature,
+  rowPaginationFeature,
   coreRowModel: createCoreRowModel(),
   sortedRowModel: createSortedRowModel(),
+  filteredRowModel: createFilteredRowModel(),
+  paginatedRowModel: createPaginatedRowModel(),
+  // One filter recipe instead of the stock registry: every console filter is
+  // "contains, ignoring case" on text, or "is one of" on a select.
+  filterFns: { consoleText, consoleOneOf },
 });
 
 type ListFeatures = typeof listTableFeatures;
@@ -98,11 +159,47 @@ export interface ListColumn<TRow extends RowData> {
   pickerLabel?: string;
   /** `title` on the header button. */
   headerTitle?: string;
+  /**
+   * Offers a per-column filter. `text` is "contains"; `select` is "is one
+   * of" the `filterOptions`. Client mode filters on `value`; server mode
+   * passes the filter through `onQueryChange` untouched.
+   */
+  filter?: 'text' | 'select';
+  /** The choices of a `select` filter. */
+  filterOptions?: Array<{ value: string; label: string }>;
+  /**
+   * The text the global search matches, when it is not `value`. Return an
+   * empty string to keep a column out of the search. Columns without a
+   * `value` or `searchText` are never searched.
+   */
+  searchText?: (row: TRow) => string;
 }
 
 /** Which state slices a list remembers between visits. */
 export type PersistedSlice =
-  'columnVisibility' | 'columnOrder' | 'columnSizing' | 'sorting';
+  | 'columnVisibility'
+  | 'columnOrder'
+  | 'columnSizing'
+  | 'sorting'
+  | 'pageSize'
+  | 'density';
+
+/** Row height. Compact is for operators scanning long lists. */
+export type ListDensity = 'comfortable' | 'compact';
+
+/** Everything the server needs to produce a page, in one object. */
+export interface ListQuery {
+  sorting: Array<{ id: string; desc: boolean }>;
+  /** The global search text, trimmed. */
+  search: string;
+  /** Per-column filters, by column id. */
+  filters: Record<string, string | string[]>;
+  /** 0-based. */
+  pageIndex: number;
+  pageSize: number;
+  /** `pageIndex * pageSize`, for offset APIs. */
+  offset: number;
+}
 
 export interface ListTableOptions<TRow extends RowData> {
   /** The `localStorage` key's list part, e.g. `flow-executions`. */
@@ -116,6 +213,23 @@ export interface ListTableOptions<TRow extends RowData> {
    * avoids doing until someone asks.
    */
   persist?: PersistedSlice[];
+  /** `client` (default) or `server`; see the class comment. */
+  mode?: 'client' | 'server';
+  /**
+   * Rows per page. 0 (the default) turns pagination off, which is what a
+   * list that already shows everything it fetched wants.
+   */
+  pageSize?: number;
+  /** What the page size picker offers. */
+  pageSizes?: number[];
+  /** Server mode: called after any sort, filter or page change. */
+  onQueryChange?: (query: ListQuery) => void;
+  /**
+   * Mirrors sort, search, filters, page and page size into the query string
+   * so a filtered, sorted page can be linked, and reads them back on load.
+   * Pass a `prefix` when two lists share a page.
+   */
+  url?: TableUrlOptions | boolean;
 }
 
 /** Nothing readable is narrower than this, drag or keyboard. */
@@ -134,7 +248,14 @@ const DEFAULT_PERSISTED: PersistedSlice[] = [
   'columnVisibility',
   'columnOrder',
   'columnSizing',
+  'pageSize',
+  'density',
 ];
+
+export const DEFAULT_PAGE_SIZES = [25, 50, 100];
+
+/** Filter slices that send a list back to its first page. */
+const QUERY_SLICES = new Set(['sorting', 'globalFilter', 'columnFilters']);
 
 /** What the header row needs to draw one cell. */
 export interface ListHeader<TRow extends RowData> {
@@ -151,8 +272,7 @@ export interface ListHeader<TRow extends RowData> {
   ariaSort: 'ascending' | 'descending' | 'none';
 }
 
-const textOf = (value: unknown): string =>
-  value === null || value === undefined ? '' : String(value).trim();
+const textOf = textOfFn;
 
 const numberOf = (value: unknown): number => {
   const parsed = Number(value);
@@ -184,18 +304,36 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
   private readonly table: Table<ListFeatures, TRow>;
   private tableState: ListTableState;
   private rowsData: TRow[] = [];
+  private densityValue: ListDensity = 'comfortable';
+  private serverRowCount: number | null = null;
+  private serverHasMore = false;
+  private readonly getRowId: (row: TRow) => string;
+  private readonly onQueryChange?: (query: ListQuery) => void;
+  private readonly url: TableUrlOptions | null;
+  readonly mode: 'client' | 'server';
+  readonly pageSizes: number[];
+  /** True when the list pages at all. */
+  readonly paginated: boolean;
 
   constructor(host: ReactiveControllerHost, options: ListTableOptions<TRow>) {
     this.host = host;
     this.listId = options.listId;
     this.columns = options.columns;
     this.persisted = options.persist ?? DEFAULT_PERSISTED;
+    this.mode = options.mode ?? 'client';
+    this.getRowId = options.getRowId;
+    this.onQueryChange = options.onQueryChange;
+    this.url = options.url === true ? {} : options.url ? options.url : null;
+    this.paginated = (options.pageSize ?? 0) > 0;
+    this.pageSizes = options.pageSizes ?? DEFAULT_PAGE_SIZES;
     for (const column of options.columns) this.byId.set(column.id, column);
+    const declaredPageSize = options.pageSize ?? 0;
 
     this.tableState = getInitialTableState(
       listTableFeatures,
-      this.initialState()
+      this.initialState(declaredPageSize)
     );
+    const server = this.mode === 'server';
     this.table = constructTable<ListFeatures, TRow>({
       features: listTableFeatures,
       data: this.rowsData,
@@ -212,6 +350,33 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
         this.applySlice('columnSizing', updater),
       onColumnResizingChange: (updater) =>
         this.applySlice('columnResizing', updater),
+      onGlobalFilterChange: (updater) =>
+        this.applySlice('globalFilter', updater),
+      onColumnFiltersChange: (updater) =>
+        this.applySlice('columnFilters', updater),
+      onPaginationChange: (updater) => this.applySlice('pagination', updater),
+      manualSorting: server,
+      manualFiltering: server,
+      manualPagination: server || !this.paginated,
+      autoResetPageIndex: false,
+      globalFilterFn: Object.assign(
+        (
+          row: { original: TRow; getValue: (id: string) => unknown },
+          columnId: string,
+          filterValue: unknown
+        ) => {
+          const declared = this.byId.get(columnId);
+          const text = declared?.searchText
+            ? declared.searchText(row.original)
+            : textOf(row.getValue(columnId));
+          return text.toLowerCase().includes(textOf(filterValue).toLowerCase());
+        },
+        { autoRemove: (value: unknown) => !textOf(value) }
+      ),
+      getColumnCanGlobalFilter: (column) => {
+        const declared = this.byId.get(column.id);
+        return Boolean(declared && (declared.searchText || declared.value));
+      },
       getRowId: (row: TRow) => options.getRowId(row),
       columnResizeMode: 'onChange',
       enableSortingRemoval: false,
@@ -226,15 +391,37 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     // onStateChange, which already asks the host to repaint.
   }
 
-  /** The rows to render, sorted by whatever the headers say. */
+  /**
+   * The rows to render: filtered, sorted and paged in client mode, and
+   * exactly the rows handed in, in that order, in server mode.
+   */
   get rows(): TRow[] {
     return this.table.getRowModel().rows.map((row) => row.original);
+  }
+
+  /** The id a row is keyed, selected and stored by. */
+  idOf(row: TRow): string {
+    return this.getRowId(row);
+  }
+
+  /** Rows that pass the filters, before paging (client mode). */
+  get filteredRowCount(): number {
+    return this.table.getPrePaginatedRowModel().rows.length;
   }
 
   set data(rows: TRow[]) {
     if (rows === this.rowsData) return;
     this.rowsData = rows;
     this.table.setOptions((options) => ({ ...options, data: rows }));
+    // A refetch that shrank the list must not strand the operator on a page
+    // past its end.
+    if (this.mode === 'client' && this.paginated && this.pageIndex > 0) {
+      const lastPage = Math.max(
+        0,
+        Math.ceil(this.filteredRowCount / this.pageSize) - 1
+      );
+      if (this.pageIndex > lastPage) this.setPageIndex(lastPage);
+    }
   }
 
   get data(): TRow[] {
@@ -295,6 +482,123 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
 
   setSorting(sorting: Array<{ id: string; desc: boolean }>): void {
     this.table.setSorting(sorting.map((entry) => ({ ...entry })));
+  }
+
+  // ----- Search, filters, pagination --------------------------------------
+
+  get search(): string {
+    return textOf(this.tableState.globalFilter);
+  }
+
+  setSearch(value: string): void {
+    this.table.setGlobalFilter(value);
+  }
+
+  filterValue(columnId: string): string | string[] {
+    const entry = (this.tableState.columnFilters ?? []).find(
+      (filter) => filter.id === columnId
+    );
+    return (entry?.value as string | string[] | undefined) ?? '';
+  }
+
+  setFilter(columnId: string, value: string | string[] | null): void {
+    this.table.setColumnFilters((filters: ColumnFiltersState) => {
+      const rest = filters.filter((filter) => filter.id !== columnId);
+      const empty =
+        value === null || (Array.isArray(value) ? !value.length : !value);
+      return empty ? rest : [...rest, { id: columnId, value }];
+    });
+  }
+
+  /** Drops the search and every column filter. */
+  clearFilters(): void {
+    this.table.setGlobalFilter('');
+    this.table.setColumnFilters([]);
+  }
+
+  get filtersActive(): boolean {
+    return (
+      Boolean(this.search) || (this.tableState.columnFilters ?? []).length > 0
+    );
+  }
+
+  get pageIndex(): number {
+    return this.tableState.pagination?.pageIndex ?? 0;
+  }
+
+  get pageSize(): number {
+    return this.tableState.pagination?.pageSize ?? 0;
+  }
+
+  setPageIndex(index: number): void {
+    this.table.setPageIndex(Math.max(0, index));
+  }
+
+  setPageSize(size: number): void {
+    if (!(size > 0)) return;
+    this.table.setPagination({ pageIndex: 0, pageSize: size });
+  }
+
+  /**
+   * The total the server reported, for server mode. Pass null when the API
+   * does not count (cursor APIs) and use `hasMore` instead.
+   */
+  set totalRows(total: number | null) {
+    this.serverRowCount = total;
+    this.table.setOptions((options) => ({
+      ...options,
+      rowCount: total ?? undefined,
+    }));
+  }
+
+  /** How many rows the whole list has, or null when nobody counted. */
+  get totalRows(): number | null {
+    if (this.mode === 'server') return this.serverRowCount;
+    return this.filteredRowCount;
+  }
+
+  /** Server mode without a total: whether there is a page after this one. */
+  set hasMore(more: boolean) {
+    this.serverHasMore = more;
+  }
+
+  get canPreviousPage(): boolean {
+    return this.pageIndex > 0;
+  }
+
+  get canNextPage(): boolean {
+    if (!this.paginated) return false;
+    const total = this.totalRows;
+    if (total === null) return this.serverHasMore;
+    return (this.pageIndex + 1) * this.pageSize < total;
+  }
+
+  /** The query a server-mode list fetches with. */
+  get query(): ListQuery {
+    const filters: Record<string, string | string[]> = {};
+    for (const filter of this.tableState.columnFilters ?? []) {
+      filters[filter.id] = filter.value as string | string[];
+    }
+    const pageSize = this.pageSize;
+    return {
+      sorting: this.sorting,
+      search: this.search.trim(),
+      filters,
+      pageIndex: this.pageIndex,
+      pageSize,
+      offset: this.pageIndex * pageSize,
+    };
+  }
+
+  get density(): ListDensity {
+    return this.densityValue;
+  }
+
+  setDensity(density: ListDensity): void {
+    if (density === this.densityValue) return;
+    this.densityValue = density;
+    this.save();
+    this.host.requestUpdate();
   }
 
   isVisible(columnId: string): boolean {
@@ -407,8 +711,11 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
   }
 
   /** Declared defaults, with anything remembered for this list on top. */
-  private initialState(): Partial<ListTableState> {
+  private initialState(declaredPageSize: number): Partial<ListTableState> {
     const stored = readTablePreferences(this.listId) ?? {};
+    if (this.persists('density') && stored.density) {
+      this.densityValue = stored.density;
+    }
     const visibility = this.declaredVisibility();
     if (this.persists('columnVisibility') && stored.columnVisibility) {
       for (const [id, value] of Object.entries(stored.columnVisibility)) {
@@ -427,15 +734,40 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
         if (this.byId.has(id)) sizing[id] = value;
       }
     }
-    const sorting =
+    let sorting =
       this.persists('sorting') && stored.sorting
         ? stored.sorting.filter((entry) => this.byId.has(entry.id))
         : [];
+    let pageSize =
+      this.persists('pageSize') && stored.pageSize && declaredPageSize > 0
+        ? stored.pageSize
+        : declaredPageSize;
+    let pageIndex = 0;
+    let globalFilter = '';
+    let columnFilters: ColumnFiltersState = [];
+    // A link beats a remembered preference: it is what someone meant to show.
+    if (this.url) {
+      const fromUrl = readTableUrlState(this.url);
+      if (fromUrl.sorting) {
+        sorting = fromUrl.sorting.filter((entry) => this.byId.has(entry.id));
+      }
+      if (fromUrl.search) globalFilter = fromUrl.search;
+      columnFilters = Object.entries(fromUrl.filters)
+        .filter(([id]) => this.byId.get(id)?.filter)
+        .map(([id, value]) => ({ id, value }));
+      if (declaredPageSize > 0) {
+        if (fromUrl.pageSize) pageSize = fromUrl.pageSize;
+        if (fromUrl.pageIndex) pageIndex = fromUrl.pageIndex;
+      }
+    }
     return {
       columnVisibility: visibility,
       columnOrder: order,
       columnSizing: sizing,
       sorting,
+      globalFilter,
+      columnFilters,
+      pagination: { pageIndex, pageSize: pageSize || 0 },
     };
   }
 
@@ -456,6 +788,13 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
         : updater;
     if (next === previous) return;
     this.tableState = { ...this.tableState, [slice]: next };
+    // A new sort or filter makes "page 4" meaningless: back to the start.
+    if (QUERY_SLICES.has(slice) && this.pageIndex !== 0) {
+      this.tableState = {
+        ...this.tableState,
+        pagination: { ...this.tableState.pagination, pageIndex: 0 },
+      };
+    }
     const state = this.tableState;
     this.table.setOptions((options) => ({ ...options, state }));
     // columnResizeMode is 'onChange', so a pointer drag fires sizing on
@@ -469,7 +808,22 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     } else if (slice !== 'columnSizing' || this.resizingColumn === null) {
       this.save();
     }
+    if (QUERY_SLICES.has(slice) || slice === 'pagination') {
+      if (this.url) writeTableUrlState(this.url, this.urlSnapshot());
+      if (this.mode === 'server') this.onQueryChange?.(this.query);
+    }
     this.host.requestUpdate();
+  }
+
+  private urlSnapshot() {
+    const query = this.query;
+    return {
+      sorting: query.sorting,
+      search: query.search,
+      filters: query.filters,
+      pageIndex: this.paginated ? query.pageIndex : 0,
+      pageSize: this.paginated ? query.pageSize : 0,
+    };
   }
 
   private save(): void {
@@ -485,6 +839,12 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     }
     if (this.persists('sorting')) {
       preferences.sorting = this.tableState.sorting;
+    }
+    if (this.persists('pageSize') && this.paginated) {
+      preferences.pageSize = this.pageSize;
+    }
+    if (this.persists('density') && this.densityValue !== 'comfortable') {
+      preferences.density = this.densityValue;
     }
     writeTablePreferences(this.listId, preferences);
   }
@@ -504,6 +864,11 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
       enableResizing: column.resizable !== false,
       size: column.width,
       sortDescFirst: true,
+      enableColumnFilter: Boolean(column.filter),
+      enableGlobalFilter: Boolean(column.searchText || column.value),
+      filterFn: (column.filter === 'select'
+        ? 'consoleOneOf'
+        : 'consoleText') as 'consoleOneOf' | 'consoleText',
       sortFn: (
         rowA: { getValue: (id: string) => unknown },
         rowB: { getValue: (id: string) => unknown },
