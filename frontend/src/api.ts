@@ -1,4 +1,5 @@
 import { LitElement } from 'lit';
+import { withSafeIcon } from './utils/icon-name';
 import { Router } from './router';
 import { DEFAULT_SIMILARITY_THRESHOLD } from './config';
 import { PermissionError, permissionErrorFromResponse } from './permissions';
@@ -4304,7 +4305,8 @@ export async function getFlowSummaries(
   const query = params.toString() ? `?${params.toString()}` : '';
   const response = await fetchWithAuth(`/api/v1/flows/summary${query}`);
   if (!response.ok) throw new Error('Failed to fetch flow summaries');
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4337,7 +4339,8 @@ export async function getFlows(
   if (!response.ok) {
     throw new Error('Failed to fetch flows');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4377,7 +4380,7 @@ export async function getFlow(flowId: string): Promise<any> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow');
   }
-  return response.json();
+  return withSafeIcon(await response.json());
 }
 
 /**
@@ -4522,7 +4525,8 @@ export async function getFlowPresets(): Promise<any[]> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow presets');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /** One page of executions plus how many rows the filters matched. */

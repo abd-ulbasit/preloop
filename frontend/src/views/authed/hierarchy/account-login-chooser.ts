@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
+import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import { switchAccount, type Membership } from '../../../hierarchy-api';
 import { groupMemberships } from './membership-order';
 
@@ -18,8 +19,15 @@ export class AccountLoginChooser extends LitElement {
       display: grid;
       gap: var(--sl-spacing-x-small);
     }
+    /* Every button spans the same box. A sub-account used to be pushed
+       right by its whole button (padding on the li), which read as a 20px
+       layout bug rather than as nesting; the nesting is now a glyph inside
+       the button. */
     sl-button {
       width: 100%;
+    }
+    .nest {
+      color: var(--sl-color-neutral-500);
     }
     .error {
       color: var(--sl-color-danger-700);
@@ -46,16 +54,23 @@ export class AccountLoginChooser extends LitElement {
     }
   }
 
-  private entry(m: Membership, depth: number) {
-    return html`<li
-      class=${depth > 0 ? 'child' : 'root'}
-      style=${depth > 0 ? `padding-left: ${depth * 1.25}rem` : ''}
-    >
+  private entry(m: Membership, depth: number, parentName = '') {
+    return html`<li class=${depth > 0 ? 'child' : 'root'}>
       <sl-button
         data-account=${m.account_id}
         ?loading=${this.busyId === m.account_id}
         @click=${() => this.pick(m.account_id)}
-        >${m.account_name}</sl-button
+        >${
+          depth > 0
+            ? html`<sl-icon
+                slot="prefix"
+                class="nest"
+                name="arrow-return-right"
+                style=${`margin-left: ${(depth - 1) * 0.75}rem`}
+                label=${parentName ? `Under ${parentName}` : 'Sub-account'}
+              ></sl-icon>`
+            : nothing
+        }${m.account_name}</sl-button
       >
     </li>`;
   }
@@ -66,7 +81,11 @@ export class AccountLoginChooser extends LitElement {
         ${groupMemberships(this.memberships).map(
           (group) =>
             html`${this.entry(group.root, 0)}${group.children.map((m) =>
-              this.entry(m, group.depth.get(m.account_id) ?? 1)
+              this.entry(
+                m,
+                group.depth.get(m.account_id) ?? 1,
+                group.root.account_name
+              )
             )}`
         )}
       </ul>
