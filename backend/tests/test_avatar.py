@@ -5,7 +5,12 @@ Covers upload validation, precedence rules, and per-provider SSO claim mapping.
 
 import io
 import pytest
-from unittest.mock import MagicMock
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+
+from preloop.models import models
+from preloop.models.crud import crud_user
 
 from preloop.services.avatar import (
     AvatarValidationError,
@@ -349,51 +354,51 @@ class TestExtractSsoAvatarUrl:
 class TestAvatarPrecedence:
     """Test that manual upload > SSO > default via the CRUD helper."""
 
-    def test_sso_sets_avatar(self):
-        """set_avatar_from_sso sets url and source='sso' on a fresh user."""
-        from preloop.models.crud.user import CRUDUser
-
-        crud = CRUDUser.__new__(CRUDUser)
-        user = MagicMock()
-        user.avatar_source = None
-        user.avatar_url = None
-        db = MagicMock()
-
-        crud.set_avatar_from_sso(
-            db, user=user, avatar_url="https://example.com/pic.jpg", commit=False
+    @pytest.mark.parametrize(
+        ("source", "previous_url"),
+        [
+            (None, None),
+            ("manual", "data:image/png;base64,AAAA"),
+            ("sso", "https://old.example.com/pic.jpg"),
+        ],
+    )
+    def test_sso_uses_canonical_precedence_across_memberships(
+        self, db_session: Session, source: str | None, previous_url: str | None
+    ) -> None:
+        """A stale membership cache cannot override the identity's manual upload."""
+        accounts = [models.Account(organization_name="Example") for _ in range(2)]
+        db_session.add_all(accounts)
+        db_session.flush()
+        first = models.User(
+            account_id=accounts[0].id,
+            username=uuid4().hex,
+            email="avatar@example.com",
+            avatar_source=source,
+            avatar_url=previous_url,
         )
-        assert user.avatar_url == "https://example.com/pic.jpg"
-        assert user.avatar_source == "sso"
-
-    def test_manual_upload_blocks_sso(self):
-        """set_avatar_from_sso is a no-op when avatar_source is 'manual'."""
-        from preloop.models.crud.user import CRUDUser
-
-        crud = CRUDUser.__new__(CRUDUser)
-        user = MagicMock()
-        user.avatar_source = "manual"
-        user.avatar_url = "data:image/png;base64,AAAA"
-        db = MagicMock()
-
-        crud.set_avatar_from_sso(
-            db, user=user, avatar_url="https://example.com/new.jpg", commit=False
+        db_session.add(first)
+        db_session.flush()
+        second = models.User(
+            account_id=accounts[1].id,
+            person=first.person,
+            username=uuid4().hex,
+            email=first.email,
+            avatar_source="sso",
+            avatar_url="https://stale.example.com/pic.jpg",
         )
-        # Manual avatar is preserved
-        assert user.avatar_url == "data:image/png;base64,AAAA"
-        assert user.avatar_source == "manual"
-
-    def test_sso_replaces_sso(self):
-        """A new SSO URL overwrites a previous SSO URL."""
-        from preloop.models.crud.user import CRUDUser
-
-        crud = CRUDUser.__new__(CRUDUser)
-        user = MagicMock()
-        user.avatar_source = "sso"
-        user.avatar_url = "https://old.example.com/pic.jpg"
-        db = MagicMock()
-
-        crud.set_avatar_from_sso(
-            db, user=user, avatar_url="https://new.example.com/pic.jpg", commit=False
+        db_session.add(second)
+        db_session.flush()
+        original_ids = (first.id, second.id)
+        new_url = "https://new.example.com/pic.jpg"
+        crud_user.set_avatar_from_sso(
+            db_session, user=second, avatar_url=new_url, commit=False
         )
-        assert user.avatar_url == "https://new.example.com/pic.jpg"
-        assert user.avatar_source == "sso"
+        assert first.person.avatar_url == (
+            previous_url if source == "manual" else new_url
+        )
+        assert first.person.avatar_source == ("manual" if source == "manual" else "sso")
+        if source != "manual":
+            db_session.refresh(first)
+            db_session.refresh(second)
+            assert first.avatar_url == second.avatar_url == new_url
+        assert (first.id, second.id) == original_ids

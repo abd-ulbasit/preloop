@@ -2219,6 +2219,9 @@ export class RuntimeSessionsView extends LitElement {
             // account with no embedded sessions gets a sentence saying so
             // rather than an empty box.
             similarSessions: true,
+            // Shown only when the server lists an online desktop endpoint
+            // for the session (#870); inert otherwise.
+            liveDesktop: true,
           }}
           @session-selected=${(event: CustomEvent) => {
             this.selectSession(event.detail.sessionId);

@@ -161,7 +161,7 @@ def test_create_mcp_server_with_connection_error(
     The server should still be created but with error status.
     """
     # Make the mock client raise an error on connect
-    mock_mcp_client.connect.side_effect = Exception("Connection refused")
+    mock_mcp_client.connect.side_effect = ConnectionRefusedError("Connection refused")
 
     server_data = {
         "name": "Failing Server",
@@ -177,7 +177,8 @@ def test_create_mcp_server_with_connection_error(
     assert response_json["name"] == "Failing Server"
     assert response_json["status"] == "error"
     assert response_json["last_error"] is not None
-    assert "Connection refused" in response_json["last_error"]
+    assert "Could not connect" in response_json["last_error"]
+    assert "reachability from Preloop" in response_json["last_error"]
 
     # Still verify UUID serialization works even with error status
     assert isinstance(response_json["id"], str)
@@ -499,3 +500,30 @@ def test_delete_mcp_server_evicts_client_and_unregisters_tools(
     fake_mcp.unregister_proxied_tools.assert_called_once_with(
         str(test_user.account_id), str(server.id), ["read_scope"]
     )
+
+
+def test_create_mcp_server_authentication_error_is_actionable_and_safe(
+    client: TestClient, db_session, mock_mcp_client
+):
+    """Failed validation persists the safe cause rather than a TaskGroup wrapper."""
+    import httpx
+
+    request = httpx.Request("GET", "https://example.com/mcp?token=private")
+    response = httpx.Response(401, request=request)
+    error = httpx.HTTPStatusError("token=private", request=request, response=response)
+    mock_mcp_client.connect.side_effect = ExceptionGroup("opaque TaskGroup", [error])
+    result = client.post(
+        "/api/v1/mcp-servers",
+        json={
+            "name": "Example auth server",
+            "url": "https://example.com/mcp",
+            "transport": "http-streaming",
+            "auth_type": "none",
+        },
+    )
+    assert result.status_code == 201
+    assert result.json()["status"] == "error"
+    assert "HTTP 401" in result.json()["last_error"]
+    assert "authentication" in result.json()["last_error"]
+    assert "private" not in result.json()["last_error"]
+    assert "TaskGroup" not in result.json()["last_error"]

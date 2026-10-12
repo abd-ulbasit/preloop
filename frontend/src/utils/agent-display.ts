@@ -61,7 +61,7 @@ export function getAgentLifecycleLabel(agent: ManagedAgentSummary): string {
  * the word "remove" alone.
  */
 export const REMOVE_AGENT_CONSEQUENCE =
-  "This also revokes the agent's Preloop credentials. If the agent is still onboarded on a machine, its gateway and MCP access stop working until you run `preloop agents onboard` again. To disconnect cleanly, run `preloop agents offboard` on that machine instead.";
+  "Past sessions and activity remain in Preloop after removal. This also revokes the agent's Preloop credentials. If the agent is still onboarded on a machine, its gateway and MCP access stop working until you run `preloop agents onboard` again. To disconnect cleanly, run `preloop agents offboard` on that machine instead.";
 
 export interface AgentStatusChip {
   label: string;

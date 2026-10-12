@@ -30,15 +30,21 @@ def ci_resources(
     account = crud.crud_account.create(
         db_session, obj_in={"organization_name": "Synthetic CI", "is_active": True}
     )
+    email = f"{uuid4()}@example.com"
     person = CRUDBase(models.Person).create(
-        db_session, obj_in={"email_normalized": f"{uuid4()}@example.com"}
+        db_session,
+        obj_in={
+            "username": f"operator-{uuid4()}",
+            "email": email,
+            "email_normalized": email,
+            "hashed_password": "fixture-only",
+        },
     )
     owner = crud.crud_user.create(
         db_session,
         obj_in={
-            "username": f"operator-{uuid4()}",
+            "username": person.username,
             "email": person.email_normalized,
-            "hashed_password": "fixture-only",
             "account_id": account.id,
             "person_id": person.id,
             "is_active": True,

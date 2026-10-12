@@ -86,6 +86,13 @@ export interface SessionObserverFeatures {
    * rather than an empty box.
    */
   similarSessions?: boolean;
+  /**
+   * Offers "Live desktop" in the toolbar when the live session's host has an
+   * online desktop endpoint (#870), opening the viewer next to the timeline.
+   * The button only appears once the server lists an endpoint, so a server
+   * without desktop views leaves the toolbar unchanged.
+   */
+  liveDesktop?: boolean;
 }
 
 export interface SessionSummaryInsight {

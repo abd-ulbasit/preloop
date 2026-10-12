@@ -98,7 +98,10 @@ async def create_mcp_server(
 
     # Validate connection to the MCP server before saving
     # Skip validation for OAuth — no credentials until the OAuth flow completes
-    from preloop.services.mcp_client_pool import MCPClient
+    from preloop.services.mcp_client_pool import (
+        MCPClient,
+        describe_mcp_connection_error,
+    )
 
     validation_error = None
     if server_data.auth_type == "oauth":
@@ -122,8 +125,8 @@ async def create_mcp_server(
             await test_client.close()
 
         except Exception as e:
-            validation_error = str(e)
-            logger.warning(f"Failed to validate MCP server at {server_data.url}: {e}")
+            validation_error = describe_mcp_connection_error(e)
+            logger.warning("MCP server validation failed: %s", validation_error)
             # Don't raise here - we'll store the error and mark status as 'error'
 
     # Create new MCP server
