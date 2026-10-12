@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: '19 3 * * *'
   workflow_dispatch:
+    inputs:
+      execution_host_tests:
+        description: Run on the isolated ephemeral test runner
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,11 +24,11 @@ concurrency:
 jobs:
   fuzz:
     name: Fuzz ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.execution_host_tests && 'gce-tests-only' || 'ubuntu-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: ${{ github.event_name == 'workflow_dispatch' && inputs.execution_host_tests && 1 || 2 }}
       matrix:
         include:
           - package: ./internal/mcpclient
