@@ -719,6 +719,7 @@ class RuntimeSessionExplorerService:
             period_end=end_date,
             query=interaction_query,
             total=interactions["total"],
+            has_more=interactions.get("has_more", False),
             limit=interaction_limit,
             offset=interaction_offset,
             items=interaction_items,

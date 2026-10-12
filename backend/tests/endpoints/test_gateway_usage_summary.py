@@ -631,6 +631,13 @@ def test_account_runtime_sessions_endpoints(client, db_session, test_user):
     )
     assert interactions_body["total"] == 1
     assert "deployment risk" in interactions_body["items"][0]["excerpt"].lower()
+    # The session interactions answer carries has_more too (#1620 review).
+    assert interactions_body["has_more"] is False
+    paged = client.get(
+        f"/api/v1/runtime-sessions/{runtime_session.id}/interactions",
+        params={"interaction_limit": 1},
+    ).json()
+    assert paged["has_more"] is (paged["total"] > 1)
 
 
 def test_account_runtime_sessions_use_most_recent_model_alias(

@@ -578,7 +578,7 @@ class ModelGatewayUsageService:
             period_end=end_date,
             query=query,
             total=results["total"],
-            has_more=results["has_more"],
+            has_more=results.get("has_more", False),
             limit=limit,
             offset=offset,
             items=[self._search_row_to_schema(item) for item in results["items"]],
