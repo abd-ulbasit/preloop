@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date, datetime, timedelta
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -21,6 +22,7 @@ from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.common import get_account_or_404
 from preloop.models.crud import crud_api_usage
 from preloop.models.db.session import get_db_session
+from preloop.models.models.account import Account
 from preloop.models.models.user import User
 from preloop.schemas.cost_analytics import (
     CostAnalyticsSummaryResponse,
@@ -206,7 +208,7 @@ def get_cost_summary(
 def _build_cost_summary(
     db: Session,
     *,
-    account: Any,
+    account: Account,
     start_date: Optional[datetime],
     end_date: Optional[datetime],
     runtime_principal_id: Optional[str],
@@ -351,17 +353,24 @@ def get_cost_health(
     unnoticed.
     """
     account = get_account_or_404(db, current_user)
-    key = (str(account.id), hours)
+    account_id = str(account.id)
+    key = (account_id, hours)
     now = time.monotonic()
-    cached = _HEALTH_CACHE.get(key)
+    with _HEALTH_CACHE_LOCK:
+        cached = _HEALTH_CACHE.get(key)
+        generation = _HEALTH_GENERATION.get(account_id, 0)
     if cached is not None and cached[0] > now:
         return cached[1]
     result = CostHealthResponse(
-        **run_accounting_checks(db, account_id=str(account.id), window_hours=hours)
+        **run_accounting_checks(db, account_id=account_id, window_hours=hours)
     )
-    if len(_HEALTH_CACHE) >= _HEALTH_CACHE_MAX_ENTRIES:
-        _HEALTH_CACHE.clear()
-    _HEALTH_CACHE[key] = (now + HEALTH_CACHE_TTL_SECONDS, result)
+    with _HEALTH_CACHE_LOCK:
+        # A reprice that finished while this ran made the result stale:
+        # serve it once, but do not keep it for the next minute.
+        if _HEALTH_GENERATION.get(account_id, 0) == generation:
+            if len(_HEALTH_CACHE) >= _HEALTH_CACHE_MAX_ENTRIES:
+                _HEALTH_CACHE.clear()
+            _HEALTH_CACHE[key] = (now + HEALTH_CACHE_TTL_SECONDS, result)
     return result
 
 
@@ -373,11 +382,17 @@ def get_cost_health(
 HEALTH_CACHE_TTL_SECONDS = 60.0
 _HEALTH_CACHE_MAX_ENTRIES = 1024
 _HEALTH_CACHE: dict[tuple[str, int], tuple[float, CostHealthResponse]] = {}
+# Bumped by every reprice of the account, so a check that started before it
+# is not stored after it.
+_HEALTH_GENERATION: dict[str, int] = {}
+_HEALTH_CACHE_LOCK = threading.Lock()
 
 
 def _forget_cost_health(account_id: str) -> None:
-    for key in [key for key in _HEALTH_CACHE if key[0] == account_id]:
-        _HEALTH_CACHE.pop(key, None)
+    with _HEALTH_CACHE_LOCK:
+        _HEALTH_GENERATION[account_id] = _HEALTH_GENERATION.get(account_id, 0) + 1
+        for key in [key for key in _HEALTH_CACHE if key[0] == account_id]:
+            del _HEALTH_CACHE[key]
 
 
 @router.post("/reprice", response_model=RepriceResponse)

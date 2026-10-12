@@ -30,7 +30,17 @@ The console does not persist previous-period results across account sessions.
 
 This changes request scheduling and selected query execution only. Account
 isolation, history policies, ledger accounting, attribution, reporting limits,
-and full-query ordering remain unchanged. It adds no rollups or response cache.
+and full-query ordering remain unchanged. It adds no rollups.
+
+The headline totals request also carries the comparison range:
+`compare_start_date` and `compare_end_date` (sent together, 422 otherwise)
+return that window's totals, without breakdowns, as `previous`. A Spend load is
+one totals request plus the selected tab's breakdowns.
+
+`GET /cost/health` is the one cached response. Each worker keeps the self-check
+per (account, window) for 60 s, because the Spend page asks it on every load
+and it changes slowly. A non-dry-run reprice drops that account's entries, and
+a check computed while a reprice ran is not stored.
 
 ## Query shape
 
@@ -43,8 +53,8 @@ in a materialized day bucket, then sort those buckets. Per-user windows filter
 (`account_id`, `runtime_principal_id`, `timestamp` for `model_gateway` rows).
 `ix_api_usage_account_principal_ts` still leads with principal type. Accounting
 rules are unchanged: replay-validation rows stay excluded, retries stay included
-unless the caller sets `exclude_retries`, and there is no daily rollup or
-response cache.
+unless the caller sets `exclude_retries`, and there is no daily rollup. Summary
+responses are not cached.
 
 ## Cost Analytics and Budgeting
 *   **Purpose:** Turn model usage telemetry into explainable spend, enforceable budgets, and optimization guidance.
