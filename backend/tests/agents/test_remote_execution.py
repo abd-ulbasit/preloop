@@ -112,7 +112,7 @@ async def test_final_job_environment_keeps_remote_api(monkeypatch, remote):
     import json
 
     if remote:
-        monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+        monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com/")
     else:
         monkeypatch.delenv("PRELOOP_EXECUTION_API_URL", raising=False)
     monkeypatch.setenv("PRELOOP_MCP_URL_K8S", "http://api.svc/mcp/v1")

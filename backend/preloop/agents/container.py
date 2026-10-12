@@ -1759,7 +1759,7 @@ class ContainerAgentExecutor(AgentExecutor):
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
                 preloop_url=(
-                    os.getenv("PRELOOP_EXECUTION_API_URL")
+                    os.getenv("PRELOOP_EXECUTION_API_URL", "").rstrip("/")
                     or env["PRELOOP_MCP_URL"].removesuffix("/mcp/v1")
                 ),
             )
