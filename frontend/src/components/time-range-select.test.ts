@@ -93,4 +93,16 @@ describe('time-range-select', () => {
     wrapper.style.width = '400px';
     expect(select.getBoundingClientRect().width).to.equal(136);
   });
+
+  it('turns the chevron into a spinner while busy', async () => {
+    const element = await render();
+    expect(element.shadowRoot!.querySelector('[data-testid="time-range-busy"]'))
+      .to.not.exist;
+    element.busy = true;
+    await element.updateComplete;
+    const spinner = element.shadowRoot!.querySelector(
+      '[data-testid="time-range-busy"]'
+    )!;
+    expect(spinner.getAttribute('slot')).to.equal('expand-icon');
+  });
 });

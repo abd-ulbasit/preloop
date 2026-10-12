@@ -1,5 +1,5 @@
 import { formatUsd, formatUsdExact } from '../utils/money';
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
 import '@shoelace-style/shoelace/dist/components/alert/alert.js';
@@ -185,14 +185,14 @@ export class UsageCard extends LitElement {
       .header {
         display: flex;
         align-items: center;
-        flex-wrap: wrap;
         justify-content: space-between;
         gap: var(--sl-spacing-small);
       }
 
       /* Flex children default to min-width: auto, which let a zoomed select
-         push the header past the card edge. */
-      .header > *,
+         push the header past the card edge. With min-width: 0 the controls
+         shrink instead and wrap onto a second line inside the header. */
+      .header-controls,
       .header-controls > * {
         min-width: 0;
       }
@@ -206,6 +206,7 @@ export class UsageCard extends LitElement {
         gap: var(--sl-spacing-small);
         justify-content: flex-end;
         max-width: 100%;
+        position: relative;
         /* Wide enough for "This month", the longest range label, and never
            wider than the header (time-range-select clamps it to 100%). */
         --time-range-select-width: 136px;
@@ -220,22 +221,15 @@ export class UsageCard extends LitElement {
         color: var(--sl-color-neutral-900);
       }
 
-      /* The one place the card says it is working. Small enough to sit in a
-         title, and it is the second and last ambient motion on this card:
-         it exists only while a request is in flight. */
-      .updating {
-        align-items: center;
-        color: var(--sl-color-primary-600);
-        display: inline-flex;
-        font-size: 0.8125rem;
-        gap: var(--sl-spacing-2x-small);
+      /* The spinner itself is drawn inside the range select (its busy
+         state); this is the same news for screen readers. */
+      .visually-hidden {
+        clip: rect(0 0 0 0);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
         white-space: nowrap;
-      }
-
-      .updating-spinner {
-        font-size: 1rem;
-        --indicator-color: var(--sl-color-primary-600);
-        --track-width: 2px;
+        width: 1px;
       }
 
       /* A range change used to dim the old numbers to 0.6, and nobody
@@ -326,6 +320,17 @@ export class UsageCard extends LitElement {
         font-size: 0.75rem;
         gap: var(--sl-spacing-x-small);
         margin-top: var(--sl-spacing-2x-small);
+      }
+
+      .legend-item {
+        align-items: center;
+        display: inline-flex;
+        gap: var(--sl-spacing-2x-small);
+        white-space: nowrap;
+      }
+
+      .legend-total {
+        flex-basis: 100%;
       }
 
       .legend-swatch {
@@ -784,7 +789,7 @@ export class UsageCard extends LitElement {
       this.unit === 'dollars'
         ? `Estimated spend per day ${this.rangeSpan}`
         : `Tokens per day ${this.rangeSpan}`,
-      html`<polygon
+      svg`<polygon
           class="sparkline-area"
           points=${areaPoints}
           fill="var(--sl-color-primary-500)"
@@ -901,9 +906,9 @@ export class UsageCard extends LitElement {
         : ''
     }`;
 
-    const svg = this.renderSparklineSvg(
+    const chart = this.renderSparklineSvg(
       label,
-      html`<polygon
+      svg`<polygon
           class="sparkline-area"
           points=${`0,${height} ${actualPoints.join(' ')} ${nowX},${height}`}
           fill="var(--sl-color-primary-500)"
@@ -919,7 +924,7 @@ export class UsageCard extends LitElement {
         ></polyline>
         ${
           projectedPoints.length > 0
-            ? html`<polygon
+            ? svg`<polygon
                   class="sparkline-projection-area"
                   points=${`${nowX},${height} ${projectedPoints.join(' ')} ${width},${height}`}
                   fill="url(#${this.sparklineHatchId})"
@@ -946,14 +951,15 @@ export class UsageCard extends LitElement {
           vector-effect="non-scaling-stroke"
         ></line>`
     );
-    return html`${svg}${this.renderProjectionLegend(projection)}`;
+    return html`${chart}${this.renderProjectionLegend(projection)}`;
   }
 
   private renderProjectionLegend(
     projection: NonNullable<ReturnType<typeof buildUsageProjection>>
   ) {
-    const solid = html`<span class="legend-swatch" aria-hidden="true"></span> so
-      far`;
+    const solid = html`<span class="legend-item"
+      ><span class="legend-swatch" aria-hidden="true"></span>so far</span
+    >`;
     if (projection.status === 'too-early') {
       return html`<div
         class="sparkline-legend"
@@ -985,9 +991,12 @@ export class UsageCard extends LitElement {
       title=${`Projection: the rate so far carried to the end of the period, ${shape}.`}
     >
       ${solid}
-      <span class="legend-swatch dashed" aria-hidden="true"></span>
-      <span
-        >projected, on track for ${total} by
+      <span class="legend-item"
+        ><span class="legend-swatch dashed" aria-hidden="true"></span
+        >projected</span
+      >
+      <span class="legend-total"
+        >Projected: ${total} by
         ${forecastEndLabel(period, projection.end, 'local')}</span
       >
     </div>`;
@@ -1154,20 +1163,17 @@ export class UsageCard extends LitElement {
             ${
               this.updating
                 ? html`<span
-                    class="updating"
+                    class="visually-hidden"
                     data-testid="usage-updating"
                     role="status"
-                    ><sl-spinner
-                      class="updating-spinner"
-                      aria-hidden="true"
-                    ></sl-spinner
-                    >Updating</span
+                    >Updating usage</span
                   >`
                 : nothing
             }
             ${this.renderUnitToggle()}
             <time-range-select
               ariaLabel="Usage time range"
+              ?busy=${this.updating}
               .value=${normalizeTimeRangeKey(this.timeRange) ?? DEFAULT_USAGE_RANGE}
               .options=${USAGE_RANGE_OPTIONS}
               @range-change=${this.handleRangeChange}

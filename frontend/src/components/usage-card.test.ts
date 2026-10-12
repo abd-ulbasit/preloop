@@ -175,6 +175,8 @@ describe('usage-card', () => {
     const svg = element.shadowRoot!.querySelector('.sparkline')!;
     const line = svg.querySelector('polyline')!;
     const area = svg.querySelector('polygon')!;
+    expect(line).to.be.instanceOf(SVGPolylineElement);
+    expect(area).to.be.instanceOf(SVGPolygonElement);
     const linePoints = line.getAttribute('points')!.split(' ');
     const areaPoints = area.getAttribute('points')!.split(' ');
     // The area is the line plus the two baseline corners that close it.
@@ -273,6 +275,9 @@ describe('usage-card', () => {
       const line = svg.querySelector('.sparkline-line')!;
       const dashed = svg.querySelector('.sparkline-projection-line')!;
       const marker = svg.querySelector('.sparkline-now')!;
+      // Real SVG elements, not HTML elements that happen to be named polyline.
+      expect(line).to.be.instanceOf(SVGPolylineElement);
+      expect(dashed).to.be.instanceOf(SVGPolylineElement);
       expect(dashed.getAttribute('stroke-dasharray')).to.equal('4 3');
       expect(line.hasAttribute('stroke-dasharray')).to.equal(false);
       expect(
@@ -293,7 +298,7 @@ describe('usage-card', () => {
 
       const legend = text(element, '[data-testid="usage-projection-legend"]');
       expect(legend).to.contain('so far');
-      expect(legend).to.contain('projected, on track for');
+      expect(legend).to.contain('Projected:');
       expect(legend).to.contain('by Oct 31');
     });
 
@@ -331,7 +336,7 @@ describe('usage-card', () => {
         now,
       })!;
       const dollars = text(element, '[data-testid="usage-projection-legend"]');
-      expect(dollars).to.contain(`on track for ${formatUsd(forecast.amount)}`);
+      expect(dollars).to.contain(`Projected: ${formatUsd(forecast.amount)}`);
     });
 
     it('says it is too early to project in the first tenth of the period', async () => {
@@ -617,11 +622,13 @@ describe('usage-card', () => {
       expect(element.shadowRoot!.querySelector('.secondary-line')).to.not.exist;
       expect(element.shadowRoot!.querySelector('.sparkline')).to.not.exist;
 
-      // The spinner sits next to the range control and says what it means.
+      // The spinner sits in the range control, and screen readers hear it.
+      const select = element.shadowRoot!.querySelector('time-range-select')!;
+      expect(select.busy).to.equal(true);
       const updating = element.shadowRoot!.querySelector(
         '[data-testid="usage-updating"]'
       )!;
-      expect(updating.closest('.header-controls')).to.exist;
+      expect(updating.getAttribute('role')).to.equal('status');
       expect(updating.textContent).to.contain('Updating');
 
       element.updating = false;
