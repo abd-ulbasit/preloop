@@ -152,6 +152,11 @@ func TestSpawnAliasFallbackRegistersFromPermissionEventOnce(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		// Session start also pulls pending notes. Only the registration
 		// must happen once and carry the alias.
+		if strings.Contains(r.URL.Path, "/notes/") {
+			t.Errorf("permission fallback must not claim notes: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/agents/session-start") {
 			w.WriteHeader(http.StatusNoContent)
 			return

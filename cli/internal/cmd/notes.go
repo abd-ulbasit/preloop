@@ -229,13 +229,36 @@ func runNotesSend(cmd *cobra.Command, args []string) error {
 		if err := json.Unmarshal(response, &batch); err != nil {
 			return err
 		}
-		if noteJSON {
+		wait := cmd.Flags().Changed("wait")
+		if noteJSON && !wait {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(batch)
 		}
+		var receipts []operatorNoteResponse
 		for _, note := range batch.Notes {
-			if err := printSentNote(cmd.OutOrStdout(), note, target, false); err != nil {
-				return err
+			if !noteJSON {
+				if err := printSentNote(cmd.OutOrStdout(), note, target, false); err != nil {
+					return err
+				}
 			}
+			if !wait {
+				continue
+			}
+			receipt, waitErr := waitForNote(cmd, client, note.NoteID, noteWait)
+			if receipt.NoteID != "" {
+				if noteJSON {
+					receipts = append(receipts, receipt)
+				} else if err := printNoteReceipt(cmd, receipt, false); err != nil {
+					return err
+				}
+			}
+			if waitErr != nil {
+				return waitErr
+			}
+		}
+		if noteJSON {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+				Notes []operatorNoteResponse `json:"notes"`
+			}{Notes: receipts})
 		}
 		return nil
 	}

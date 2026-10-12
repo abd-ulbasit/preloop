@@ -316,12 +316,24 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 	// the model before its first tool call. First turn only, so an interactive
 	// session does not pay a request per prompt; later notes land on the tool
 	// call or the Stop hook.
-	if registered && (!isPrompt || !haveFile) {
+	// The permission-hook fallback registers lineage only. Claiming notes
+	// here would mark them delivered before SessionStart and write a second
+	// JSON document onto the permission decision's stdout.
+	if !sessionHookRegisterOnly(cmd) && registered && (!isPrompt || !haveFile) {
 		if text := claimNotesForHook(cred, externalID, noteEventSessionStart); text != "" {
 			writeSessionAdditionalContext(cmd.OutOrStdout(), event.HookEventName, text)
 		}
 	}
 	return nil
+}
+
+func sessionHookRegisterOnly(cmd *cobra.Command) bool {
+	flag := cmd.Flags().Lookup("register-only")
+	if flag == nil {
+		return false
+	}
+	value, err := cmd.Flags().GetBool("register-only")
+	return err == nil && value
 }
 
 // Register on the first permission event as well for hosts which do not emit
@@ -345,7 +357,9 @@ func registerSpawnFromPermissionHook(source string, raw []byte) {
 	}
 	command := &cobra.Command{}
 	command.Flags().String("source", source, "")
+	command.Flags().Bool("register-only", true, "")
 	command.SetIn(bytes.NewReader(payload))
+	command.SetOut(io.Discard)
 	command.SetErr(os.Stderr)
 	_ = runAgentsSessionHook(command, nil)
 }
