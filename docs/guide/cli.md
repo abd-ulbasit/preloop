@@ -100,6 +100,10 @@ preloop agents reconnect "Codex CLI"    # same recovery for a ChatGPT subscripti
 preloop agents reconnect "Claude Code" --from-local # use a fresh login completed separately
 preloop agents install-plugin <agent>    # Agent Control runtime plugin (openclaw | hermes)
 preloop agents install-runtime <hermes|openclaw>  # install the runtime itself, then onboard
+preloop agents install-runtime <hermes|openclaw> --desktop  # + headless desktop and live-view tunnel
+preloop agents desktop <agent> --port 5901  # live view of the agent's desktop for a local VNC client
+preloop desktop enable --agent <agent-id>   # add the desktop and live-view tunnel to this host (Debian/Ubuntu)
+preloop desktop serve                    # the tunnel itself (run by preloop-desktop-tunnel.service)
 preloop agents restore <agent>           # restore the most recent local config backup
 preloop agents offboard <agent>          # restore config + remove managed enrollment
 preloop agents offboard --all -y --remove-model yes --remove-mcp-servers yes
@@ -117,6 +121,9 @@ machine's enrollment in the selected account. Use `--from-local` after completin
 `claude auth login --claudeai` or `codex login`. Expired or incomplete local
 credentials are refused. Update the CLI if your installed version does not yet
 provide this command.
+
+Live desktop views (view only by default, nothing recorded) are described in
+[Agent deployment](../operations/agent-deployment.md#live-desktop-view).
 
 ### The onboarding summary table
 

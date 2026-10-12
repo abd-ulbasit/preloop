@@ -407,12 +407,15 @@ func relayDesktopStreams(a, b io.ReadWriteCloser) {
 	<-done
 	_ = a.Close()
 	_ = b.Close()
+	<-done // both pumps have stopped reading once this returns
 }
 
 // wsStream adapts a binary websocket to a byte stream.
 type wsStream struct {
 	conn    *websocket.Conn
 	readBuf []byte
+	errMu   sync.Mutex
+	readErr error
 	writeMu sync.Mutex
 	once    sync.Once
 }
@@ -425,6 +428,9 @@ func (w *wsStream) Read(p []byte) (int, error) {
 	for len(w.readBuf) == 0 {
 		kind, data, err := w.conn.ReadMessage()
 		if err != nil {
+			w.errMu.Lock()
+			w.readErr = err
+			w.errMu.Unlock()
 			return 0, io.EOF
 		}
 		if kind != websocket.BinaryMessage {
@@ -435,6 +441,18 @@ func (w *wsStream) Read(p []byte) (int, error) {
 	n := copy(p, w.readBuf)
 	w.readBuf = w.readBuf[n:]
 	return n, nil
+}
+
+// CloseCode is the close code the peer sent, or 0. Valid after Read ends.
+func (w *wsStream) CloseCode() int {
+	w.errMu.Lock()
+	err := w.readErr
+	w.errMu.Unlock()
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return closeErr.Code
+	}
+	return 0
 }
 
 func (w *wsStream) Write(p []byte) (int, error) {
