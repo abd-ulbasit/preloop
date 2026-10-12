@@ -5,6 +5,7 @@ import { formatUsd, formatUsdExact } from '../../utils/money';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import { EditPermissions } from '../../controllers/edit-permissions';
 import '../../components/hosted-allowance';
+import '../../components/spend-chart';
 import {
   parseDigestLink,
   withoutDigestPeriod,
@@ -43,7 +44,6 @@ import type {
   CostReconciliationResponse,
   CostReconciliationRow,
   GatewayTokenUsage,
-  GatewayUsageByDay,
   GatewayUsageByModel,
   GatewayUsageBySession,
   GatewayUsageByTool,
@@ -54,6 +54,15 @@ import type {
   ProviderBillingConnection,
 } from '../../types';
 import consoleStyles from '../../styles/console-styles.css?inline';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  renderDataTableToolbar,
+} from '../../table';
+import type { ListColumn } from '../../table';
+import '../../table/data-table';
+import { sessionCountLabel } from '../../utils/session-count';
 import {
   resolvePreviousTimeRange,
   resolveTimeRange,
@@ -306,7 +315,24 @@ export class CostView extends AuthedElement {
     key: 'total_cost',
     dir: 'desc',
   };
-  @state() private sessionSort: SortState = { key: 'cost', dir: 'desc' };
+  /**
+   * Sessions in the period, up to 250: paged, searchable and sortable on the
+   * shared table instead of one 26,000 px column.
+   */
+  readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
+    listId: 'cost-sessions',
+    // One row per (session, model, provider): the slice is part of the id.
+    getRowId: (row) => {
+      const slice = `${row.model_alias ?? ''}:${row.provider_name ?? ''}`;
+      return row.runtime_session_id
+        ? `${row.runtime_session_id}:${slice}`
+        : `${this.getSessionTitle(row)}:${slice}:${row.last_activity_at ?? row.last_request_at ?? ''}`;
+    },
+    pageSize: 25,
+    defaultSorting: [{ id: 'cost', desc: true }],
+    url: { prefix: 'sessions' },
+    columns: this.sessionColumns(),
+  });
   @state() private userSort: SortState = { key: 'cost', dir: 'desc' };
   @state() private importedSort: SortState = { key: 'cost', dir: 'desc' };
   @state() private modelSort: SortState = { key: 'cost', dir: 'desc' };
@@ -341,6 +367,8 @@ export class CostView extends AuthedElement {
     [
       consoleDialogStyles,
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       css`
         :host {
           display: block;
@@ -366,55 +394,13 @@ export class CostView extends AuthedElement {
           flex-wrap: wrap;
         }
 
-        /* Wide enough for "Last month"; the shared control is 96px by default,
-         which is sized for 24h/7d/30d chips. */
-        .daily-spend {
-          display: flex;
-          align-items: flex-end;
-          gap: var(--sl-spacing-medium);
-          flex-wrap: wrap;
-        }
-
-        .daily-spend-summary {
-          display: flex;
-          flex-direction: column;
-          font-size: var(--sl-font-size-small);
-          color: var(--sl-color-neutral-600);
-        }
-
-        .daily-spend-title {
-          font-weight: var(--sl-font-weight-semibold);
-          color: var(--sl-color-neutral-800);
-        }
-
-        .daily-bars {
-          display: flex;
-          align-items: flex-end;
-          gap: 2px;
-          height: 32px;
-          flex: 1;
-          min-width: 120px;
-        }
-
-        .daily-bar {
-          flex: 1;
-          height: 100%;
-          display: flex;
-          align-items: flex-end;
-        }
-
-        .daily-bar span {
-          display: block;
-          width: 100%;
-          border-radius: 2px 2px 0 0;
-          background: var(--sl-color-primary-500);
-        }
-
         .model-provider {
           font-size: var(--sl-font-size-x-small);
           color: var(--sl-color-neutral-600);
         }
 
+        /* Wide enough for "Last month"; the shared control is 96px by default,
+         which is sized for 24h/7d/30d chips. */
         .toolbar time-range-select {
           --time-range-select-width: 140px;
         }
@@ -492,8 +478,19 @@ export class CostView extends AuthedElement {
           font-size: var(--sl-font-size-small);
         }
 
-        .subscription-usage {
-          margin-top: var(--sl-spacing-medium);
+        /* Sections of the results share one rhythm instead of each
+           carrying its own margin (or none, which left the catalog line and
+           the accounting alert touching their neighbours). */
+        .results {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sl-spacing-medium);
+        }
+
+        .side-column {
+          display: flex;
+          flex-direction: column;
+          gap: var(--sl-spacing-medium);
         }
 
         .subscription-usage-heading {
@@ -1061,10 +1058,6 @@ export class CostView extends AuthedElement {
       if (!this.digestPeriod)
         void this.loadPreviousRangeSummary(generation, range);
       void this.loadTab(this.activeTab, generation);
-      // The daily strip is small and always visible, so it loads with the page.
-      this.loadBreakdowns(['days'], generation).catch(() => {
-        // Decoration only: the strip stays hidden without its data.
-      });
       if (summary.imported_usage?.event_count)
         void this.loadTab('imported', generation);
     } catch (error) {
@@ -2966,44 +2959,6 @@ export class CostView extends AuthedElement {
     </div>`;
   }
 
-  // A small per-day strip above the tabs: one bar per day, height by
-  // estimated cost, with the window's total spend and requests beside it.
-  private renderDailySpend() {
-    const days: GatewayUsageByDay[] = this.summary?.requests_by_day ?? [];
-    if (!this.readyBreakdowns.has('days') || !days.length) return nothing;
-    const peak = Math.max(...days.map((day) => day.estimated_cost), 0);
-    const totalCost = days.reduce((sum, day) => sum + day.estimated_cost, 0);
-    const totalRequests = days.reduce((sum, day) => sum + day.request_count, 0);
-    return html`<div
-      class="daily-spend"
-      data-testid="daily-spend"
-      role="group"
-      aria-label="Daily spend"
-    >
-      <div class="daily-spend-summary">
-        <span class="daily-spend-title">Daily spend</span>
-        <span
-          >${formatUsd(totalCost)} across ${this.formatNumber(totalRequests)}
-          ${totalRequests === 1 ? 'request' : 'requests'}</span
-        >
-      </div>
-      <div class="daily-bars">
-        ${days.map((day) => {
-          const label = `${day.date}: ${formatUsd(day.estimated_cost)}, ${this.formatNumber(day.request_count)} ${day.request_count === 1 ? 'request' : 'requests'}`;
-          const height = peak > 0 ? (day.estimated_cost / peak) * 100 : 0;
-          return html`<div
-            class="daily-bar"
-            role="img"
-            aria-label=${label}
-            title=${label}
-          >
-            <span style="height: ${Math.max(height, 2)}%"></span>
-          </div>`;
-        })}
-      </div>
-    </div>`;
-  }
-
   private openSpendSetting(destination: string) {
     if (destination === 'outliers') {
       Router.go(SPEND_OUTLIERS_HREF);
@@ -3405,121 +3360,119 @@ export class CostView extends AuthedElement {
   }
 
   private renderSessionsTab() {
-    const columns: SortColumn<GatewayUsageBySession>[] = [
-      {
-        key: 'session',
-        label: 'Session',
-        numeric: false,
-        value: (r) => this.getSessionTitle(r),
-      },
-      {
-        key: 'owner',
-        label: 'Owner / agent',
-        numeric: false,
-        value: (r) => r.agent_name || r.flow_name || '—',
-      },
-      {
-        key: 'requests',
-        label: 'Requests',
-        numeric: true,
-        value: (r) => r.request_count,
-      },
-      {
-        key: 'tokens',
-        label: 'Tokens',
-        numeric: true,
-        value: (r) => r.token_usage?.total_tokens || 0,
-      },
-      {
-        key: 'cost',
-        label: 'Cost',
-        numeric: true,
-        value: (r) => r.estimated_cost,
-      },
-      {
-        key: 'last_activity',
-        label: 'Last activity',
-        numeric: true,
-        value: (r) =>
-          r.last_activity_at || r.last_request_at
-            ? parseUTCDate(
-                (r.last_activity_at || r.last_request_at) as string
-              ).getTime()
-            : 0,
-      },
-    ];
-    const rows = this.sortRows(
-      this.summary?.usage_by_session || [],
-      columns,
-      this.sessionSort
-    );
-    if (!rows.length) {
+    const sessions = this.summary?.usage_by_session || [];
+    if (!sessions.length) {
       return html`<div class="empty">No session-attributed usage yet.</div>`;
     }
+    this.sessionTable.data = sessions;
     return html`
       <div class="tab-panel-body">
+        ${renderDataTableToolbar({
+          table: this.sessionTable,
+          searchPlaceholder: 'Search sessions, agents or flows',
+          searchLabel: 'Search sessions',
+          count: sessionCountLabel(this.sessionTable),
+        })}
         <div class="analytics-table-wrap">
-          <div class="table-scroll">
-            <table class="styled-table" aria-label="Session spend">
-              <thead>
-                <tr>
-                  ${columns.map((column) =>
-                    this.renderSortableHeader(
-                      column,
-                      this.sessionSort,
-                      (key) =>
-                        (this.sessionSort = this.toggleSort(
-                          this.sessionSort,
-                          key
-                        ))
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map(
-                  (row) => html`
-                    <tr>
-                      <td>
-                        ${
-                          row.runtime_session_id
-                            ? html`<a
-                                href="/console/runtime-sessions?sessionId=${row.runtime_session_id}"
-                                >${this.getSessionTitle(row)}</a
-                              >`
-                            : this.getSessionTitle(row)
-                        }
-                      </td>
-                      <td>${this.renderSessionSubjects(row)}</td>
-                      <td>${this.formatNumber(row.request_count)}</td>
-                      <td>
-                        <token-figures
-                          .usage=${row.token_usage || null}
-                          expanded
-                        ></token-figures>
-                      </td>
-                      <td>
-                        ${html`<span title=${formatUsdExact(row.estimated_cost)}>${formatUsd(row.estimated_cost)}</span>`}
-                      </td>
-                      <td>
-                        ${
-                          row.last_activity_at || row.last_request_at
-                            ? parseUTCDate(
-                                (row.last_activity_at ||
-                                  row.last_request_at) as string
-                              ).toLocaleString()
-                            : '—'
-                        }
-                      </td>
-                    </tr>
-                  `
-                )}
-              </tbody>
-            </table>
-          </div>
+          <data-table
+            .table=${this.sessionTable}
+            .rows=${this.sessionTable.rows}
+            label="Session spend"
+            noun="sessions"
+          ></data-table>
         </div>
       </div>
     `;
+  }
+
+  private sessionColumns(): Array<ListColumn<GatewayUsageBySession>> {
+    const lastActivity = (row: GatewayUsageBySession) =>
+      row.last_activity_at || row.last_request_at || '';
+    return [
+      {
+        id: 'session',
+        header: 'Session',
+        hideable: false,
+        firstSort: 'asc',
+        value: (row) => this.getSessionTitle(row),
+        cell: (row) =>
+          row.runtime_session_id
+            ? html`<a
+                href="/console/runtime-sessions?sessionId=${row.runtime_session_id}"
+                >${this.getSessionTitle(row)}</a
+              >`
+            : this.getSessionTitle(row),
+      },
+      {
+        id: 'owner',
+        header: 'Owner / agent',
+        firstSort: 'asc',
+        value: (row) => row.agent_name || row.flow_name || '',
+        searchText: (row) =>
+          [row.agent_name, row.flow_name, row.runtime_principal_name]
+            .filter(Boolean)
+            .join(' '),
+        cell: (row) => this.renderSessionSubjects(row),
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.request_count,
+        searchText: () => '',
+        cell: (row) => this.formatNumber(row.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.token_usage?.total_tokens || 0,
+        searchText: () => '',
+        cell: (row) =>
+          html`<token-figures
+            total-only
+            .usage=${row.token_usage || null}
+          ></token-figures>`,
+      },
+      {
+        id: 'tokens_detail',
+        header: 'Token breakdown',
+        group: 'Tokens',
+        visible: false,
+        searchText: () => '',
+        cell: (row) =>
+          html`<token-figures
+            .usage=${row.token_usage || null}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.estimated_cost,
+        searchText: () => '',
+        cell: (row) =>
+          html`<span title=${formatUsdExact(row.estimated_cost)}
+            >${formatUsd(row.estimated_cost)}</span
+          >`,
+      },
+      {
+        id: 'last_activity',
+        header: 'Last activity',
+        sort: 'number',
+        value: (row) =>
+          lastActivity(row) ? parseUTCDate(lastActivity(row)).getTime() : 0,
+        searchText: () => '',
+        cell: (row) =>
+          lastActivity(row)
+            ? parseUTCDate(lastActivity(row)).toLocaleString()
+            : '-',
+      },
+    ];
   }
 
   private renderUsersTab() {
@@ -4326,10 +4279,9 @@ export class CostView extends AuthedElement {
     return html`
       <div class="page">
         <view-header
-          headerText="Cost"
-          description="Understand gateway spend by agent, tool, session and user, plus imported GitHub Copilot and Claude Code usage."
+          headerText="Spend"
+          description="What did we pay, and for which agents, tools, sessions and people? Includes imported GitHub Copilot and Claude Code usage."
         ></view-header>
-        <hosted-allowance></hosted-allowance>
 
         ${this.activeAccountLabel ? html`<p class="active-account">Active account: ${this.activeAccountLabel}</p>` : nothing}
         ${this.renderDigestNotice()}
@@ -4384,12 +4336,15 @@ export class CostView extends AuthedElement {
                     ${this.renderMetrics()} ${this.renderSubscriptionUsage()}
                     ${this.renderCatalogInfo()} ${this.renderUnpricedNotice()}
                     ${this.renderAccountingFindings()}
+                    <spend-chart .period=${this.currentPeriod}></spend-chart>
                     <div class="column-layout dashboard extra-wide">
                       <div class="main-column">
-                        ${this.renderDailySpend()} ${this.renderBreakdown()}
-                        ${this.renderImportedUsage()}
+                        ${this.renderBreakdown()} ${this.renderImportedUsage()}
                       </div>
-                      <div class="side-column">${this.renderControls()}</div>
+                      <div class="side-column">
+                        <hosted-allowance compact></hosted-allowance>
+                        ${this.renderControls()}
+                      </div>
                     </div>
                   </div>
                 `

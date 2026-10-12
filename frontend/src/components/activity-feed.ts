@@ -546,7 +546,7 @@ export function feedEventFromAuditGroup(
           entity: model || undefined,
           actor: actor || undefined,
           fields: gatewayFields,
-          href: '/console/api-usage',
+          href: '/console/cost/gateway',
           openLabel: 'Open API usage',
         };
       }
@@ -559,7 +559,7 @@ export function feedEventFromAuditGroup(
         entity: model || undefined,
         actor: actor || undefined,
         fields: gatewayFields,
-        href: '/console/api-usage',
+        href: '/console/cost/gateway',
         openLabel: 'Open API usage',
       };
     }
@@ -1137,7 +1137,7 @@ export function feedEventFromRealtime(
           wide: true,
         })
       ),
-      href: '/console/api-usage',
+      href: '/console/cost/gateway',
       openLabel: 'Open API usage',
     };
   }

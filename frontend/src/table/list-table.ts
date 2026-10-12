@@ -426,6 +426,11 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     return this.getRowId(row);
   }
 
+  /** The rows that pass the filters, before paging (client mode). */
+  get filteredRows(): TRow[] {
+    return this.table.getPrePaginatedRowModel().rows.map((row) => row.original);
+  }
+
   /** Rows that pass the filters, before paging (client mode). */
   get filteredRowCount(): number {
     return this.table.getPrePaginatedRowModel().rows.length;

@@ -459,3 +459,12 @@ class CostHealthResponse(BaseModel):
     window_hours: int
     checks: List[CostHealthCheck] = Field(default_factory=list)
     status: str = Field(..., pattern="^(pass|warn|fail|skip)$")
+
+
+class CostTimeseriesResponse(BaseModel):
+    """Gateway spend bucketed by UTC day, week or month for one window."""
+
+    period_start: datetime
+    period_end: datetime
+    granularity: Literal["day", "week", "month"]
+    buckets: List[GatewayUsageByDay] = Field(default_factory=list)

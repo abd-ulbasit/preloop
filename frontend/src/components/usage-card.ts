@@ -836,7 +836,7 @@ export class UsageCard extends LitElement {
               <sl-icon slot="prefix" name="gear"></sl-icon>
               Configure limits
             </sl-button>
-            <a href="/console/cost">Cost details</a>
+            <a href="/console/cost/spend">Cost details</a>
           </div>
         </div>
       </sl-card>

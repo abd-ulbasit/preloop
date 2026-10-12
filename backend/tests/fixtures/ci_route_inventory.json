@@ -120,6 +120,7 @@
   "GET /api/v1/cost/copilot/spend-coverage": "deny",
   "GET /api/v1/cost/health": "deny",
   "GET /api/v1/cost/summary": "deny",
+  "GET /api/v1/cost/timeseries": "deny",
   "GET /api/v1/embeddings": "deny",
   "GET /api/v1/event-webhooks/catalogue": "deny",
   "GET /api/v1/event-webhooks/deliveries": "deny",

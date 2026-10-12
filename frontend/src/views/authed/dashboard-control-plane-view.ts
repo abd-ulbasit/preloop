@@ -3446,7 +3446,7 @@ export class DashboardView extends AuthedElement {
       <sl-card class="content-card">
         <div class="card-header">
           <div class="card-title">Gateway failures needing attention</div>
-          <a class="row-link" href="/console/api-usage"
+          <a class="row-link" href="/console/cost/gateway"
             >Open gateway activity</a
           >
         </div>
@@ -3462,7 +3462,7 @@ export class DashboardView extends AuthedElement {
                     href=${
                       item.runtime_session_id
                         ? `/console/runtime-sessions?sessionId=${item.runtime_session_id}`
-                        : '/console/api-usage'
+                        : '/console/cost/gateway'
                     }
                   >
                     ${item.model_alias || item.provider_name || item.endpoint}

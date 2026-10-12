@@ -105,6 +105,7 @@ import type {
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEndpointCreated,
+  GatewayUsageByDay,
 } from './types';
 
 // Global refresh promise to prevent concurrent refresh requests
@@ -1474,6 +1475,32 @@ export async function getCostAnalyticsSummary(
     if (refused) throw refused;
     throw new Error('Failed to fetch cost analytics summary');
   }
+  return response.json();
+}
+
+export type CostGranularity = 'day' | 'week' | 'month';
+
+/** Gateway spend per UTC bucket; `date` is the bucket start (YYYY-MM-DD). */
+export interface CostTimeseriesResponse {
+  period_start: string;
+  period_end: string;
+  granularity: CostGranularity;
+  buckets: GatewayUsageByDay[];
+}
+
+/** Spend chart series. The server caps a window at 366 days. */
+export async function getCostTimeseries(params: {
+  startDate: string;
+  endDate: string;
+  granularity: CostGranularity;
+}): Promise<CostTimeseriesResponse> {
+  const query = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+    granularity: params.granularity,
+  });
+  const response = await fetchWithAuth(`/api/v1/cost/timeseries?${query}`);
+  if (!response.ok) throw new Error('Failed to fetch spend over time');
   return response.json();
 }
 
