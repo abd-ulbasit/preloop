@@ -1128,3 +1128,111 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     expect(calls.some((c) => c.includes('/auth/bitbucket/'))).to.equal(false);
   });
 });
+
+describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
+  let fetchStub: sinon.SinonStub;
+
+  function stubJira(flag: boolean) {
+    const calls: string[] = [];
+    const stub = sinon
+      .stub(window, 'fetch')
+      .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push(`${(init?.method || 'GET').toUpperCase()} ${url}`);
+        const json = (data: unknown, code = 200) =>
+          new Response(JSON.stringify(data), { status: code });
+        if (url.includes('/api/v1/features')) {
+          return json({
+            plugins: [],
+            features: flag ? { jira_cloud_oauth: true } : {},
+          });
+        }
+        if (url.includes(`/auth/jira/trackers/${trackerId}/status`)) {
+          return json({
+            tracker_id: trackerId,
+            name: 'Jira Cloud',
+            provider: 'jira',
+            managed: true,
+            state: 'connected',
+            consumer_configured: true,
+            cloud_id: 'cloud-1',
+            site_url: 'https://example-site.atlassian.net',
+            site_name: 'example-site',
+            actor: { account_id: 'a', name: 'Jane Doe' },
+            expires_at: '2026-10-12T13:00:00+00:00',
+            reconnect_reason: null,
+          });
+        }
+        if (
+          url.includes(`/api/v1/trackers/${trackerId}`) &&
+          !url.includes('/sync')
+        ) {
+          return json({
+            id: trackerId,
+            name: 'Jira Cloud',
+            tracker_type: 'jira',
+            auth_type: 'managed_oauth',
+            created: '2026-01-01T00:00:00Z',
+            last_updated: '2026-01-02T00:00:00Z',
+            is_valid: true,
+            token_expires_at: null,
+            token_expiry_status: null,
+          });
+        }
+        if (url.includes('/api/v1/organizations')) {
+          return json({ items: [] });
+        }
+        if (url.includes('/api/v1/projects')) {
+          return json([]);
+        }
+        return json({});
+      });
+    return { stub, calls };
+  }
+
+  beforeEach(() => {
+    localStorage.setItem('accessToken', 'test-access-token');
+    invalidateApiCaches();
+    window.history.replaceState({}, '', `/console/trackers/${trackerId}`);
+  });
+
+  afterEach(() => {
+    fetchStub?.restore();
+    invalidateApiCaches();
+    localStorage.clear();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('shows actor, site, server expiry and reconnect without token fields', async () => {
+    const { stub, calls } = stubJira(true);
+    fetchStub = stub;
+    const el = await mountView();
+    await waitUntil(
+      () => el.shadowRoot?.querySelector('.jira-managed-connection'),
+      'jira panel not rendered'
+    );
+    const panel = el.shadowRoot!.querySelector('.jira-managed-connection')!;
+    expect(panel.querySelector('.managed-actor')?.textContent).to.contain(
+      'Jane Doe'
+    );
+    expect(panel.querySelector('.jira-site')?.textContent).to.contain(
+      'example-site'
+    );
+    expect(panel.querySelector('.managed-reconnect')).to.exist;
+    expect(el.shadowRoot!.querySelector('.token-expiry')).to.not.exist;
+    expect(calls.some((c) => c.includes('/auth/jira/trackers/'))).to.equal(
+      true
+    );
+  });
+
+  it('flag off: warns and never calls the provider', async () => {
+    const { stub, calls } = stubJira(false);
+    fetchStub = stub;
+    const el = await mountView();
+    await el.updateComplete;
+    expect(el.shadowRoot!.textContent).to.contain(
+      'Managed Jira connections are unavailable here'
+    );
+    expect(calls.some((c) => c.includes('/auth/jira/'))).to.equal(false);
+  });
+});

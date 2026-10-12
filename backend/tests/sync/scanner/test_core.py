@@ -683,6 +683,44 @@ async def test_process_organization_jira(
 
 
 @pytest.mark.asyncio
+@patch("preloop.sync.scanner.core.crud_organization")
+@patch("os.getenv")
+async def test_process_organization_managed_jira_uses_dynamic_webhook(
+    mock_getenv,
+    mock_crud_org,
+    mock_db_session,
+    mock_organization,
+    mock_project,
+):
+    """A managed Jira grant syncs one dynamic webhook, never the classic path."""
+    mock_getenv.return_value = "http://test.com"
+    mock_client = AsyncMock(spec=TrackerClient)
+    mock_client.client = AsyncMock()
+    mock_client.client.managed = True
+    mock_client.client.sync_dynamic_webhooks = AsyncMock(
+        return_value={"action": "refreshed", "webhook_id": "1000"}
+    )
+    mock_client.client.register_webhook = MagicMock()
+    mock_client.scan_projects.return_value = [mock_project]
+    mock_client.scan_issues.return_value = ([], 0)
+    mock_client.tracker_type = "jira"
+
+    await _process_organization(
+        db=mock_db_session,
+        client=mock_client,
+        org=mock_organization,
+        since=None,
+        force_update=False,
+    )
+
+    mock_client.client.sync_dynamic_webhooks.assert_awaited_once()
+    args = mock_client.client.sync_dynamic_webhooks.await_args.args
+    assert args[1] == [mock_project]
+    assert args[2].endswith(f"/api/v1/private/webhooks/jira/{mock_organization.id}")
+    mock_client.client.register_webhook.assert_not_called()
+
+
+@pytest.mark.asyncio
 @patch("preloop.sync.scanner.core.scan_tracker")
 @patch("preloop.sync.scanner.core.crud_account")
 async def test_scan_account_no_trackers(

@@ -23,6 +23,11 @@ import '../../components/list-toolbar.ts';
 import type { ResourceAction } from '../../components/resource-actions.ts';
 import {
   BITBUCKET_CLOUD_OAUTH_FEATURE,
+  JIRA_CLOUD_OAUTH_FEATURE,
+  disconnectJira,
+  getJiraConnectionStatus,
+  startJiraReconnect,
+  type JiraConnectionStatus,
   fetchWithAuth,
   getFeatures,
   deleteTracker,
@@ -125,6 +130,10 @@ export class TrackerDetailView extends LitElement {
 
   @state()
   private _managedBusy = false;
+
+  /** Managed Jira connection status (sanitized, never tokens). */
+  @state()
+  private _jiraStatus: JiraConnectionStatus | null = null;
 
   @state()
   private _syncing = false;
@@ -976,7 +985,171 @@ export class TrackerDetailView extends LitElement {
     return this._features?.[BITBUCKET_CLOUD_OAUTH_FEATURE] === true;
   }
 
+  /** A managed Jira grant (Atlassian consent, no pasted token). */
+  private _isManagedJira(): boolean {
+    return (
+      this._tracker?.tracker_type === 'jira' &&
+      this._tracker?.auth_type === 'managed_oauth'
+    );
+  }
+
+  private _jiraFeatureEnabled(): boolean {
+    return this._features?.[JIRA_CLOUD_OAUTH_FEATURE] === true;
+  }
+
+  private async _loadJiraStatus() {
+    this._jiraStatus = null;
+    if (!this._isManagedJira() || !this._jiraFeatureEnabled()) {
+      return;
+    }
+    try {
+      this._jiraStatus = await getJiraConnectionStatus(this._trackerId);
+    } catch (error) {
+      console.error('Failed to read the Jira connection status:', error);
+    }
+  }
+
+  private async _reconnectJira() {
+    if (this._managedBusy) return;
+    this._managedBusy = true;
+    this._error = null;
+    try {
+      const start = await startJiraReconnect(
+        this._trackerId,
+        '/console/trackers'
+      );
+      this._navigate(start.authorization_url);
+    } catch (error) {
+      this._error =
+        error instanceof Error
+          ? error.message
+          : 'Failed to start the Jira reconnect';
+    } finally {
+      this._managedBusy = false;
+    }
+  }
+
+  private async _disconnectJira() {
+    if (!this._tracker || this._managedBusy) return;
+    const confirmed = await confirmDialog({
+      title: 'Disconnect Jira',
+      message: `Disconnect the Jira connection of "${this._tracker.name}"?`,
+      detail:
+        'The grant is erased and the tracker is disabled until it is reconnected.',
+      confirmLabel: 'Disconnect',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    this._managedBusy = true;
+    this._error = null;
+    try {
+      await disconnectJira(this._trackerId);
+      await this._loadData();
+    } catch (error) {
+      this._error =
+        error instanceof Error
+          ? error.message
+          : 'Failed to disconnect the Jira connection';
+    } finally {
+      this._managedBusy = false;
+    }
+  }
+
+  /** Managed Jira panel: actor, site, actual expiry, state; no token fields. */
+  private _renderJiraConnection() {
+    if (!this._isManagedJira()) {
+      return nothing;
+    }
+    if (!this._jiraFeatureEnabled()) {
+      return html`
+        <sl-alert variant="warning" open class="managed-connection-panel">
+          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+          <strong>Managed Jira connections are unavailable here.</strong>
+          This tracker authenticates through a managed provider that is not
+          configured on this deployment, so it cannot refresh its credential
+          until an administrator enables the <code>jira_cloud_oauth</code>
+          capability. API token trackers are unaffected.
+        </sl-alert>
+      `;
+    }
+    const status = this._jiraStatus;
+    if (!status) {
+      return nothing;
+    }
+    const chip = this._managedStateChip(status.state as any);
+    const busy = this._managedBusy;
+    return html`
+      <sl-card
+        class="managed-connection-panel jira-managed-connection"
+        data-state=${status.state}
+      >
+        <div
+          slot="header"
+          style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;"
+        >
+          <strong>Managed Jira connection</strong>
+          <div style="display:flex; gap:0.5rem;">
+            <sl-button
+              size="small"
+              class="managed-reconnect"
+              .loading=${busy}
+              ?disabled=${busy}
+              @click=${() => this._reconnectJira()}
+            >
+              <sl-icon slot="prefix" name="arrow-repeat"></sl-icon>
+              Reconnect
+            </sl-button>
+            <sl-button
+              size="small"
+              variant="danger"
+              outline
+              class="managed-disconnect"
+              .loading=${busy}
+              ?disabled=${busy || status.state === 'disconnected'}
+              @click=${() => this._disconnectJira()}
+            >
+              <sl-icon slot="prefix" name="plug"></sl-icon>
+              Disconnect
+            </sl-button>
+          </div>
+        </div>
+        <dl class="managed-connection-facts">
+          <dt>State</dt>
+          <dd class="managed-state">
+            ${status.state === 'site_required' ? 'Site required' : chip.text}
+          </dd>
+          <dt>Authorized by</dt>
+          <dd class="managed-actor">
+            ${status.actor?.name || 'unknown actor'}
+          </dd>
+          <dt>Site</dt>
+          <dd class="jira-site">
+            ${status.site_name || status.site_url || 'not selected'}
+          </dd>
+          <dt>Access token expiry</dt>
+          <dd class="managed-expiry">
+            ${
+              status.expires_at
+                ? formatLocalDateTime(status.expires_at)
+                : 'none (reconnect required)'
+            }
+            <span style="color: var(--console-meta-color);">
+              (renewed by the provider service)</span
+            >
+          </dd>
+          ${
+            status.reconnect_reason
+              ? html`<dt>Reason</dt>
+                  <dd class="managed-reason">${status.reconnect_reason}</dd>`
+              : ''
+          }
+        </dl>
+      </sl-card>
+    `;
+  }
+
   private async _loadManagedStatus() {
+    void this._loadJiraStatus();
     this._managedStatus = null;
     if (!this._isManagedBitbucket() || !this._managedFeatureEnabled()) {
       return;
@@ -1200,7 +1373,7 @@ export class TrackerDetailView extends LitElement {
 
   /** Warning chip when the recorded token expiry is near or past. */
   private _renderTokenExpiry(tracker: TrackerDetail) {
-    if (this._isManagedBitbucket()) {
+    if (this._isManagedBitbucket() || this._isManagedJira()) {
       // Managed grants report their real expiry through the provider status.
       return nothing;
     }
@@ -2005,7 +2178,7 @@ export class TrackerDetailView extends LitElement {
             }
           </div>
 
-          ${this._renderManagedConnection()}
+          ${this._renderManagedConnection()} ${this._renderJiraConnection()}
 
           <p class="scope-summary">
             <strong>Scope:</strong> ${this._describeScope()}

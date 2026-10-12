@@ -255,6 +255,7 @@ nav:
       - Restricted CI setup: guide/flows/restricted-ci.md
       - Trackers:
           - Bitbucket Cloud: guide/bitbucket-tracker.md
+          - Jira Cloud: guide/jira-tracker.md
           - Moving a GitHub repository: guide/github-repository-transfer.md
           - Bitbucket and Jira quickstart: guide/bitbucket-jira-quickstart.md
           - Jira repository binding: guide/flows/jira-repository-binding.md

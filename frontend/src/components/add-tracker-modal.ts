@@ -259,6 +259,36 @@ export class AddTrackerModal extends LitElement {
   @state()
   private managedOfflineEdit = false;
 
+  /**
+   * Whether a managed Jira Cloud provider is configured
+   * (`features.jira_cloud_oauth`). Off: the Jira form is unchanged.
+   */
+  @state()
+  private jiraCloudOAuthEnabled = false;
+
+  /** Opaque Jira completion handle (`?jira_connect=`), exchanged once. */
+  @property({ type: String })
+  jiraConnectHandle: string | null = null;
+
+  /** Jira reconnect completion: the managed tracker the handle belongs to. */
+  @property({ type: String })
+  jiraReconnectTrackerId: string | null = null;
+
+  /** Sanitized managed Jira status (actor, site, expiry), never tokens. */
+  @state()
+  private jiraStatus: api.JiraConnectionStatus | null = null;
+
+  /** Sites the Jira grant can access, when a choice is needed. */
+  @state()
+  private jiraSites: api.JiraSite[] = [];
+
+  @state()
+  private jiraSiteId = '';
+
+  /** Tracker created by the managed Jira completion. */
+  @state()
+  private jiraManagedTrackerId: string | null = null;
+
   /** Bitbucket Data Center: instance URL as typed (canonicalised on submit). */
   @state()
   private bitbucketDcInstanceUrl = '';
@@ -445,6 +475,12 @@ export class AddTrackerModal extends LitElement {
       this.step = 1;
     }
 
+    // Returning from Atlassian consent: finish the managed Jira connection.
+    if (this.jiraConnectHandle && !this.tracker) {
+      this.trackerType = 'jira';
+      this.step = 1;
+    }
+
     // If we have a GitHub installation ID from OAuth callback (not editing), set up for GitHub App flow
     // Only apply these defaults for new trackers, not when editing existing ones
     if (this.githubInstallationId && !this.tracker) {
@@ -491,6 +527,8 @@ export class AddTrackerModal extends LitElement {
       this.bitbucketDcEnabled = response.features?.['bitbucket_dc'] === true;
       this.bitbucketCloudOAuthEnabled =
         response.features?.[api.BITBUCKET_CLOUD_OAUTH_FEATURE] === true;
+      this.jiraCloudOAuthEnabled =
+        response.features?.[api.JIRA_CLOUD_OAUTH_FEATURE] === true;
     } catch (error) {
       console.error(
         'Failed to check Bitbucket Data Center availability:',
@@ -498,6 +536,7 @@ export class AddTrackerModal extends LitElement {
       );
       this.bitbucketDcEnabled = false;
       this.bitbucketCloudOAuthEnabled = false;
+      this.jiraCloudOAuthEnabled = false;
     } finally {
       this.bitbucketDcFeatureLoaded = true;
     }
@@ -746,6 +785,218 @@ export class AddTrackerModal extends LitElement {
     }
   }
 
+  /** The tracker on screen authenticates through a managed Jira grant. */
+  private get isManagedJira(): boolean {
+    return (
+      this.trackerType === 'jira' &&
+      ((this.isManagedTracker(this.tracker) &&
+        this.tracker?.tracker_type === 'jira') ||
+        !!this.jiraManagedTrackerId)
+    );
+  }
+
+  /** Connect Jira leads the form for a new Jira tracker when configured. */
+  private get offersJiraConnect(): boolean {
+    return (
+      this.trackerType === 'jira' &&
+      (this.isManagedJira ||
+        !!this.jiraConnectHandle ||
+        (this.jiraCloudOAuthEnabled && !this.tracker))
+    );
+  }
+
+  async startJiraConnect() {
+    this.managedBusy = true;
+    this.errorMessage = '';
+    try {
+      const start = await this._api.startJiraConnect('/console/trackers');
+      sessionStorage.setItem(
+        'jira_connect_tracker_name',
+        this.trackerName.trim()
+      );
+      this._navigate(start.authorization_url);
+    } catch (error: any) {
+      this.errorMessage =
+        error?.message || 'Failed to start the Jira connection';
+    } finally {
+      this.managedBusy = false;
+    }
+  }
+
+  /**
+   * Exchange the callback handle once. A new connection creates the tracker
+   * server-side; when the grant sees several Jira sites the user picks one
+   * before the tracker becomes active (`site_required`).
+   */
+  async completeJiraConnect() {
+    const handle = this.jiraConnectHandle;
+    if (!handle) {
+      return;
+    }
+    this.jiraConnectHandle = null;
+    this.isLoading = true;
+    this.managedBusy = true;
+    this.errorMessage = '';
+    try {
+      const rememberedName =
+        sessionStorage.getItem('jira_connect_tracker_name') ?? '';
+      sessionStorage.removeItem('jira_connect_tracker_name');
+      if (this.jiraReconnectTrackerId) {
+        this.jiraStatus = await this._api.completeJiraReconnect(
+          this.jiraReconnectTrackerId,
+          handle
+        );
+        this.dispatchEvent(
+          new CustomEvent('tracker-updated', {
+            detail: { tracker: { id: this.jiraStatus.tracker_id } },
+          })
+        );
+        this.closeModal(true);
+        return;
+      }
+      const name = this.trackerName.trim() || rememberedName;
+      this.jiraStatus = await this._api.completeJiraConnect({
+        handle,
+        ...(name ? { name } : {}),
+      });
+      this.applyJiraStatus(this.jiraStatus);
+      this.trackerName = this.jiraStatus.name;
+      if (this.jiraStatus.state === 'site_required') {
+        await this.loadJiraSites();
+      }
+    } catch (error: any) {
+      this.errorMessage =
+        error?.message || 'Failed to complete the Jira connection';
+    } finally {
+      this.isLoading = false;
+      this.managedBusy = false;
+    }
+  }
+
+  private applyJiraStatus(status: api.JiraConnectionStatus) {
+    this.jiraManagedTrackerId = status.tracker_id;
+    this.jiraSiteId = status.cloud_id ?? this.jiraSiteId;
+    if (status.site_url) {
+      this.trackerUrl = status.site_url;
+    }
+  }
+
+  private async loadJiraSites() {
+    if (!this.jiraManagedTrackerId) {
+      return;
+    }
+    try {
+      const response = await this._api.getJiraSites(this.jiraManagedTrackerId);
+      this.jiraSites = response.sites ?? [];
+      if (!this.jiraSiteId && this.jiraSites.length === 1) {
+        this.jiraSiteId = this.jiraSites[0].id;
+      }
+    } catch (error: any) {
+      this.errorMessage = error?.message || 'Failed to list the Jira sites';
+    }
+  }
+
+  private async loadJiraStatus() {
+    if (!this.jiraManagedTrackerId || !this.jiraCloudOAuthEnabled) {
+      return;
+    }
+    try {
+      this.jiraStatus = await this._api.getJiraConnectionStatus(
+        this.jiraManagedTrackerId
+      );
+      this.applyJiraStatus(this.jiraStatus);
+      if (this.jiraStatus.state === 'site_required') {
+        await this.loadJiraSites();
+      }
+    } catch (error) {
+      console.error('Failed to read the Jira connection status:', error);
+    }
+  }
+
+  /** Bind the chosen site if needed, then reuse the scope preview. */
+  private async bindJiraSiteAndPreview(): Promise<boolean> {
+    const trackerId = this.jiraManagedTrackerId;
+    if (!trackerId) {
+      return false;
+    }
+    if (
+      this.jiraStatus?.state === 'site_required' ||
+      (this.jiraSiteId && this.jiraSiteId !== this.jiraStatus?.cloud_id)
+    ) {
+      if (!this.jiraSiteId) {
+        this.errorMessage = 'Select the Jira site Preloop may act on.';
+        return false;
+      }
+      this.jiraStatus = await this._api.bindJiraSite(
+        trackerId,
+        this.jiraSiteId
+      );
+      this.applyJiraStatus(this.jiraStatus);
+    }
+    const response = await this._api.validateTrackerToken(
+      'jira',
+      'unchanged',
+      this.trackerUrl,
+      undefined,
+      trackerId
+    );
+    if (!response.success) {
+      this.errorMessage = response.message.split('\n')[0];
+      return false;
+    }
+    this.orgs = response.orgs;
+    this.selectedOrgs = {};
+    for (const org of this.orgs) {
+      this.selectedOrgs[org.id] = true;
+    }
+    this.step = 2;
+    return true;
+  }
+
+  async startJiraReconnect() {
+    if (!this.jiraManagedTrackerId) {
+      return;
+    }
+    this.managedBusy = true;
+    this.errorMessage = '';
+    try {
+      const start = await this._api.startJiraReconnect(
+        this.jiraManagedTrackerId,
+        '/console/trackers'
+      );
+      this._navigate(start.authorization_url);
+    } catch (error: any) {
+      this.errorMessage =
+        error?.message || 'Failed to start the Jira reconnect';
+    } finally {
+      this.managedBusy = false;
+    }
+  }
+
+  async disconnectJira() {
+    if (!this.jiraManagedTrackerId) {
+      return;
+    }
+    this.managedBusy = true;
+    this.errorMessage = '';
+    try {
+      await this._api.disconnectJira(this.jiraManagedTrackerId);
+      this.jiraStatus = await this._api.getJiraConnectionStatus(
+        this.jiraManagedTrackerId
+      );
+      this.dispatchEvent(
+        new CustomEvent('tracker-updated', {
+          detail: { tracker: { id: this.jiraManagedTrackerId } },
+        })
+      );
+    } catch (error: any) {
+      this.errorMessage =
+        error?.message || 'Failed to disconnect the Jira connection';
+    } finally {
+      this.managedBusy = false;
+    }
+  }
+
   async checkGitHubAppAvailability() {
     try {
       const authMethods = await this._api.getTrackerAuthMethods();
@@ -815,6 +1066,16 @@ export class AddTrackerModal extends LitElement {
       setTimeout(() => this.testConnection(), 200);
     } else if (this.bitbucketConnectHandle) {
       void this.completeBitbucketConnect();
+    } else if (this.jiraConnectHandle) {
+      void this.completeJiraConnect();
+    } else if (
+      this.isManagedTracker(this.tracker) &&
+      this.tracker?.tracker_type === 'jira'
+    ) {
+      this.jiraManagedTrackerId = this.tracker.id;
+      void this.checkBitbucketDcAvailability().then(() =>
+        this.loadJiraStatus()
+      );
     } else if (this.isManagedTracker(this.tracker)) {
       void this.checkBitbucketDcAvailability().then(() =>
         this.loadManagedStatus()
@@ -1001,22 +1262,24 @@ export class AddTrackerModal extends LitElement {
           : ''
       }
       ${
-        this.trackerType === 'bitbucket'
-          ? this.renderBitbucketFields()
-          : this.isBitbucketDc
-            ? this.renderBitbucketDcFields()
-            : html`
-                <sl-input
-                  label="URL"
-                  name="url"
-                  .value=${this.trackerUrl}
-                  @sl-input=${(e: any) => (this.trackerUrl = e.target.value)}
-                  placeholder="e.g., https://github.example.com"
-                ></sl-input>
-              `
+        this.offersJiraConnect
+          ? this.renderJiraConnectFields()
+          : this.trackerType === 'bitbucket'
+            ? this.renderBitbucketFields()
+            : this.isBitbucketDc
+              ? this.renderBitbucketDcFields()
+              : html`
+                  <sl-input
+                    label="URL"
+                    name="url"
+                    .value=${this.trackerUrl}
+                    @sl-input=${(e: any) => (this.trackerUrl = e.target.value)}
+                    placeholder="e.g., https://github.example.com"
+                  ></sl-input>
+                `
       }
       ${
-        this.trackerType === 'jira'
+        this.trackerType === 'jira' && !this.offersJiraConnect
           ? html`
               <sl-input
                 label="Jira Username"
@@ -1136,6 +1399,9 @@ export class AddTrackerModal extends LitElement {
    * a new Bitbucket tracker, where the manual fields carry their own input.
    */
   private get hidesPastedTokenInput(): boolean {
+    if (this.offersJiraConnect) {
+      return true;
+    }
     if (this.trackerType !== 'bitbucket') {
       return false;
     }
@@ -1494,6 +1760,201 @@ export class AddTrackerModal extends LitElement {
   renderManagedBitbucketCompletion() {
     return html`
       ${this.renderManagedStatus()} ${this.renderManagedBitbucketSelection()}
+    `;
+  }
+
+  private jiraStateLabel(state: api.JiraConnectionState): {
+    text: string;
+    variant: string;
+  } {
+    switch (state) {
+      case 'connected':
+        return { text: 'Connected', variant: 'success' };
+      case 'site_required':
+        return { text: 'Choose a Jira site', variant: 'warning' };
+      case 'reconnect_required':
+        return { text: 'Reconnect required', variant: 'danger' };
+      case 'disconnected':
+        return { text: 'Disconnected', variant: 'neutral' };
+      case 'unavailable':
+        return { text: 'Provider unavailable', variant: 'warning' };
+      default:
+        return { text: 'Not managed', variant: 'neutral' };
+    }
+  }
+
+  /** Sanitized managed Jira status: actor, site, expiry. */
+  renderJiraStatus() {
+    const status = this.jiraStatus;
+    if (!status) {
+      return html`<p class="jira-managed-status-pending">
+        Reading the Jira connection status...
+      </p>`;
+    }
+    const state = this.jiraStateLabel(status.state);
+    const actor = status.actor?.name || 'unknown actor';
+    const expiry = status.expires_at
+      ? parseUTCDate(status.expires_at).toLocaleString()
+      : 'reported by the provider when connected';
+    return html`
+      <sl-alert
+        variant=${state.variant as any}
+        open
+        class="jira-managed-status"
+        data-state=${status.state}
+      >
+        <sl-icon slot="icon" name="shield-lock"></sl-icon>
+        <strong>${state.text}.</strong>
+        Managed Jira Cloud connection authorized by
+        <strong class="managed-actor">${actor}</strong>${
+          status.site_url
+            ? html` for
+                <strong class="jira-site"
+                  >${status.site_name || status.site_url}</strong
+                >`
+            : ''
+        }.
+        ${
+          status.reconnect_reason
+            ? html`<span class="managed-reason">
+                (${status.reconnect_reason})</span
+              >`
+            : ''
+        }
+        <div class="managed-expiry">
+          Access token expiry: <span>${expiry}</span>. Renewed automatically by
+          the provider service; there is no date to enter.
+        </div>
+      </sl-alert>
+    `;
+  }
+
+  /** Site picker shown when the grant can see several Jira sites. */
+  renderJiraSitePicker() {
+    if (
+      this.jiraSites.length < 2 &&
+      this.jiraStatus?.state !== 'site_required'
+    ) {
+      return '';
+    }
+    return html`
+      <sl-select
+        label="Jira site"
+        name="jira_managed_site"
+        .value=${this.jiraSiteId}
+        help-text="This Atlassian account can access several sites. Preloop acts on the one you choose."
+        @sl-change=${(e: any) => (this.jiraSiteId = e.target.value)}
+      >
+        ${this.jiraSites.map(
+          (site) => html`
+            <sl-option value=${site.id}>${site.name || site.url}</sl-option>
+          `
+        )}
+      </sl-select>
+    `;
+  }
+
+  /** Managed Jira edit or completion, or Connect Jira with the token form collapsed. */
+  renderJiraConnectFields() {
+    if (this.isManagedJira && this.tracker && !this.jiraCloudOAuthEnabled) {
+      return html`
+        <sl-alert variant="warning" open class="jira-managed-disabled">
+          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+          <strong>Managed Jira connections are unavailable here.</strong>
+          This tracker was connected through a managed provider that is not
+          configured on this deployment. Its name and scope can still be saved
+          from the stored rules; it cannot test the connection, be reconnected,
+          or be converted to a pasted token.
+        </sl-alert>
+      `;
+    }
+    if (this.isManagedJira || this.jiraConnectHandle) {
+      const busy = this.managedBusy;
+      return html`
+        ${this.renderJiraStatus()} ${this.renderJiraSitePicker()}
+        ${
+          this.tracker
+            ? html`
+                <div
+                  class="managed-actions"
+                  style="display:flex; gap:0.5rem; margin-bottom:1rem;"
+                >
+                  <sl-button
+                    size="small"
+                    name="jira-reconnect"
+                    .loading=${busy}
+                    ?disabled=${busy}
+                    @click=${this.startJiraReconnect}
+                  >
+                    <sl-icon slot="prefix" name="arrow-repeat"></sl-icon>
+                    Reconnect
+                  </sl-button>
+                  <sl-button
+                    size="small"
+                    variant="danger"
+                    outline
+                    name="jira-disconnect"
+                    .loading=${busy}
+                    ?disabled=${busy || this.jiraStatus?.state === 'disconnected'}
+                    @click=${this.disconnectJira}
+                  >
+                    <sl-icon slot="prefix" name="plug"></sl-icon>
+                    Disconnect
+                  </sl-button>
+                </div>
+              `
+            : ''
+        }
+      `;
+    }
+    return html`
+      <div style="margin-bottom: 1rem;">
+        <sl-button
+          variant="primary"
+          size="large"
+          name="jira-connect"
+          style="width: 100%;"
+          .loading=${this.managedBusy}
+          @click=${this.startJiraConnect}
+        >
+          <sl-icon slot="prefix" name="shield-lock"></sl-icon>
+          Connect Jira
+        </sl-button>
+        <p
+          style="text-align: center; margin: 0.75rem 0 0.5rem 0; color: var(--console-meta-color); font-size: var(--sl-font-size-small);"
+        >
+          Recommended: Atlassian consent with automatic token renewal and
+          webhooks
+        </p>
+      </div>
+      <details class="jira-manual-fallback" style="margin-bottom: 1rem;">
+        <summary
+          style="cursor: pointer; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small);"
+        >
+          Use an API token instead (not renewed automatically)
+        </summary>
+        <sl-input
+          label="URL"
+          name="url"
+          .value=${this.trackerUrl}
+          @sl-input=${(e: any) => (this.trackerUrl = e.target.value)}
+          placeholder="e.g., https://your-site.atlassian.net"
+        ></sl-input>
+        <sl-input
+          label="Jira Username"
+          name="username"
+          .value=${this.trackerUsername}
+          @sl-input=${(e: any) => (this.trackerUsername = e.target.value)}
+        ></sl-input>
+        <sl-input
+          type="password"
+          password-toggle
+          label="API key"
+          name="api_key"
+          .value=${this.trackerToken}
+          @sl-input=${(e: any) => (this.trackerToken = e.target.value)}
+        ></sl-input>
+      </details>
     `;
   }
 
@@ -1877,7 +2338,29 @@ export class AddTrackerModal extends LitElement {
       return;
     }
 
+    if (
+      this.trackerType === 'jira' &&
+      this.offersJiraConnect &&
+      !this.isManagedJira &&
+      !this.jiraConnectHandle &&
+      !this.trackerToken
+    ) {
+      this.isLoading = false;
+      this.errorMessage =
+        'Connect Jira, or expand the API token option and enter a token.';
+      return;
+    }
+
     try {
+      if (this.isManagedJira && this.tracker && !this.jiraCloudOAuthEnabled) {
+        // Provider unavailable: edit the stored scope offline, as for Bitbucket.
+        this.seedScopeFromExistingRules();
+        return;
+      }
+      if (this.isManagedJira) {
+        await this.bindJiraSiteAndPreview();
+        return;
+      }
       if (
         this.isManagedBitbucket &&
         this.tracker &&
@@ -2240,6 +2723,18 @@ export class AddTrackerModal extends LitElement {
       trackerData.auth_type = 'managed_oauth';
       trackerData.api_key = 'unchanged';
     }
+    if (this.isManagedJira) {
+      // The managed Jira tracker already exists (created by the consent
+      // completion). The site binding is pinned server-side; only name and
+      // scope are saved, never a username or token.
+      trackerData.auth_type = 'managed_oauth';
+      trackerData.api_key = 'unchanged';
+      trackerData.config = {};
+      trackerData.connection_details = {};
+      if (this.jiraStatus?.site_url) {
+        trackerData.url = this.jiraStatus.site_url;
+      }
+    }
     if (bitbucketDcDetails) {
       // The tracker URL is the canonical instance URL (origin plus context
       // path); it must match connection_details.instance_url on the backend.
@@ -2252,7 +2747,8 @@ export class AddTrackerModal extends LitElement {
 
     try {
       let response;
-      const existingId = this.tracker?.id ?? this.managedTrackerId;
+      const existingId =
+        this.tracker?.id ?? this.managedTrackerId ?? this.jiraManagedTrackerId;
       if (existingId) {
         response = await this._api.updateTracker(existingId, trackerData);
       } else {
