@@ -1,3 +1,4 @@
+{{- if not .Values.agentExecution.kubeconfigSecret -}}
 {{- if .Values.agentExecution.rbac.create -}}
 {{- $agentNamespace := .Values.agentExecution.namespace.create | ternary .Values.agentExecution.namespace.name .Release.Namespace -}}
 ---
@@ -50,4 +51,6 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "preloop.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
+
 {{- end }}

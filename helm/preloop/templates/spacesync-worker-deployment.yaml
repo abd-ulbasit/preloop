@@ -95,7 +95,7 @@ spec:
             - name: AGENT_MEMORY_REQUEST
               value: {{ $.Values.agentExecution.limitRange.container.defaultRequestMemory | quote }}
             - name: AGENT_EXECUTION_NAMESPACE
-              value: {{ $.Values.agentExecution.namespace.create | ternary $.Values.agentExecution.namespace.name $.Release.Namespace | quote }}
+              value: {{ include "preloop.executionNamespace" $ | quote }}
             {{- if $.Values.agentExecution.runtimeClassName }}
             - name: AGENT_RUNTIME_CLASS_NAME
               value: {{ $.Values.agentExecution.runtimeClassName | quote }}

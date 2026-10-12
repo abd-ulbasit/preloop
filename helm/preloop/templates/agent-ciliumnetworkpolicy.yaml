@@ -1,3 +1,4 @@
+{{- if not .Values.agentExecution.kubeconfigSecret -}}
 {{- $np := .Values.agentExecution.networkPolicy -}}
 {{- $cilium := $np.cilium | default dict -}}
 {{- if and $np.enabled $cilium.enabled -}}
@@ -131,4 +132,6 @@ spec:
         - {{ . | quote }}
         {{- end }}
   {{- end }}
+{{- end }}
+
 {{- end }}

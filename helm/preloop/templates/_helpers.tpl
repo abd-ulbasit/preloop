@@ -243,3 +243,12 @@ Shared OTLP env for API and gateway (one values schema).
   value: {{ .Values.agentExecution.gatewayUrl | quote }}
 {{- end }}
 {{- end -}}
+
+{{/* namespace.create governs local provisioning, not a remote destination. */}}
+{{- define "preloop.executionNamespace" -}}
+{{- if or .Values.agentExecution.kubeconfigSecret .Values.agentExecution.namespace.create -}}
+{{- .Values.agentExecution.namespace.name -}}
+{{- else -}}
+{{- .Release.Namespace -}}
+{{- end -}}
+{{- end -}}

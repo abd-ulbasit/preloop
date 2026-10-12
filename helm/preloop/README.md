@@ -991,7 +991,9 @@ namespace-scoped identity with `jobs` create/get/delete, `jobs/status` get,
 `pods` get/list, `pods/log` get, `pods/exec` get, and `networkpolicies`
 get/list/create/delete access for verification. `jobs/status` is a separate
 subresource: access to `jobs` alone does not allow completion polling. Do not mount these credentials into
-agent Pods. Existing chart namespace/RBAC/network-policy templates operate on
-the control-plane cluster; they do not provision the remote cluster. Drain
+agent Pods. When the execution kubeconfig is configured, `agentExecution.namespace.name`
+selects the remote destination even when `namespace.create` is false, and the
+chart skips local agent namespace/RBAC/quota/network-policy resources. Provision
+those resources separately in the execution cluster. Drain
 existing hosted executions before changing clusters, including before rollback,
 because existing runtime references do not record their cluster.
