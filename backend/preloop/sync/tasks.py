@@ -678,13 +678,12 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
         org_ids = [org.id for org in organizations]
 
         # Find all projects under this tracker (either directly or through organizations)
+        # Projects belong to a tracker through their organization (Project
+        # has no tracker_id column).
         projects = (
-            db.query(Project)
-            .filter(
-                (Project.tracker_id == tracker_id)
-                | (Project.organization_id.in_(org_ids) if org_ids else False)
-            )
-            .all()
+            db.query(Project).filter(Project.organization_id.in_(org_ids)).all()
+            if org_ids
+            else []
         )
         project_ids = [proj.id for proj in projects]
 

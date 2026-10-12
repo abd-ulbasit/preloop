@@ -19,7 +19,6 @@ from preloop.models.crud import (
     crud_organization,
     crud_project,
     crud_tracker,
-    crud_webhook,
 )
 from preloop.models.db.session import get_db_session, _safe_close_db_session
 from preloop.models.crud.project import find_repository_projects, repository_host
@@ -413,13 +412,19 @@ def _resolve_webhook_project(
 
 
 def _managed_jira_webhook_ids(db: Session, tracker: models.Tracker) -> set[str]:
-    """Dynamic webhook ids this managed Jira tracker registered."""
-    ids: set[str] = set()
-    for project in crud_project.get_for_tracker(db, tracker_id=tracker.id):
-        row = crud_webhook.get_by_project_id(db, project_id=project.id)
-        if row is not None and row.external_id:
-            ids.add(str(row.external_id))
-    return ids
+    """Dynamic webhook ids this managed Jira tracker registered (one query)."""
+    rows = (
+        db.query(models.Webhook.external_id)
+        .join(models.Project, models.Webhook.project_id == models.Project.id)
+        .join(
+            models.Organization,
+            models.Project.organization_id == models.Organization.id,
+        )
+        .filter(models.Organization.tracker_id == tracker.id)
+        .distinct()
+        .all()
+    )
+    return {str(row[0]) for row in rows if row[0]}
 
 
 def _verify_managed_jira_delivery(

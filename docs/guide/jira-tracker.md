@@ -54,9 +54,10 @@ webhook API. Preloop registers one dynamic webhook per tracker
 (`POST /rest/api/3/webhook`) with a JQL filter that covers every bound
 project (`project IN (...)`) and the events `jira:issue_created`,
 `jira:issue_updated`, `jira:issue_deleted`, `comment_created` and
-`comment_updated`. Dynamic webhooks expire after 30 days; every sync calls
-`PUT /rest/api/3/webhook/refresh` to extend them, and a changed project set
-replaces the webhook. Deleting the tracker deletes the webhook.
+`comment_updated`. Dynamic webhooks expire after 30 days. Every sync checks
+that the app still owns the webhook (`GET /rest/api/3/webhook`) and extends it
+(`PUT /rest/api/3/webhook/refresh`); a webhook removed on the Jira side or a
+changed project set is replaced. Deleting the tracker deletes the webhook.
 
 Deliveries carry `Authorization: Bearer <JWT>` signed with the app's client
 secret, plus `matchedWebhookIds`. Preloop accepts a delivery only when the

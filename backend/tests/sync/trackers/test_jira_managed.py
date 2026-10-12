@@ -275,6 +275,8 @@ def test_handle_jira_error_maps_status():
 def test_dynamic_webhook_jql():
     assert JiraTracker.dynamic_webhook_jql(["prj"]) == 'project = "PRJ"'
     assert JiraTracker.dynamic_webhook_jql(["B", "A", "a"]) == 'project IN ("A", "B")'
+    # Project.identifier is Jira's numeric id; it is valid JQL too.
+    assert JiraTracker.dynamic_webhook_jql(["10000"]) == 'project = "10000"'
     with pytest.raises(ValueError):
         JiraTracker.dynamic_webhook_jql(['A" OR project = "B'])
     with pytest.raises(ValueError):
@@ -354,11 +356,17 @@ async def test_sync_dynamic_webhooks_registers_then_refreshes_then_reregisters(
 ):
     crud = FakeWebhookCrud()
     monkeypatch.setattr("preloop.sync.trackers.jira.crud_webhook", crud)
-    created = iter([1000, 1001])
+    created = iter([1000, 1001, 1002])
     seen: List[httpx.Request] = []
+    live = {"ids": []}
 
     def handler(request):
         seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"values": [{"id": i} for i in live["ids"]], "isLast": True},
+            )
         if request.method == "POST":
             return httpx.Response(
                 200,
@@ -371,23 +379,35 @@ async def test_sync_dynamic_webhooks_registers_then_refreshes_then_reregisters(
         return httpx.Response(202)
 
     tracker = managed_tracker(FakeSource(["tok"]), handler)
-    p1 = SimpleNamespace(id=uuid.uuid4(), identifier="PRJ")
-    p2 = SimpleNamespace(id=uuid.uuid4(), identifier="OPS")
+    # Jira projects store the numeric id as identifier and the key as slug.
+    p1 = SimpleNamespace(id=uuid.uuid4(), identifier="10000", slug="PRJ")
+    p2 = SimpleNamespace(id=uuid.uuid4(), identifier="10001", slug="OPS")
     url = "https://preloop.example/api/v1/private/webhooks/jira/org"
 
     first = await tracker.sync_dynamic_webhooks(None, [p1], url)
     assert first["action"] == "registered" and first["webhook_id"] == "1000"
     assert crud.rows[p1.id].secret == ""
+    post = [r for r in seen if r.method == "POST"][-1]
+    assert json.loads(post.content)["webhooks"][0]["jqlFilter"] == 'project = "PRJ"'
 
+    live["ids"] = [1000]
     second = await tracker.sync_dynamic_webhooks(None, [p1], url)
     assert second["action"] == "refreshed"
     assert seen[-1].method == "PUT"
 
-    third = await tracker.sync_dynamic_webhooks(None, [p1, p2], url)
+    # Removed on the Jira side (or purged after expiry): re-registered, not
+    # refreshed forever.
+    live["ids"] = []
+    third = await tracker.sync_dynamic_webhooks(None, [p1], url)
     assert third == {"action": "registered", "webhook_id": "1001"}
-    assert {crud.rows[p.id].external_id for p in (p1, p2)} == {"1001"}
+    assert not any(r.method == "PUT" for r in seen[-3:])
+
+    live["ids"] = [1001]
+    fourth = await tracker.sync_dynamic_webhooks(None, [p1, p2], url)
+    assert fourth == {"action": "registered", "webhook_id": "1002"}
+    assert {crud.rows[p.id].external_id for p in (p1, p2)} == {"1002"}
     assert seen[-1].method == "DELETE"
-    assert json.loads(seen[-1].content) == {"webhookIds": [1000]}
+    assert json.loads(seen[-1].content) == {"webhookIds": [1001]}
 
 
 def _dynamic_payload(items):

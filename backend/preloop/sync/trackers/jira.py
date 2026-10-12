@@ -68,7 +68,9 @@ _URL_RE = re.compile(r"https?://[^\s<>\"]+")
 ATLASSIAN_API_GATEWAY = "https://api.atlassian.com"
 MANAGED_HTTP_TIMEOUT_SECONDS = 20.0
 _CLOUD_ID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
-_PROJECT_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,99}")
+# A Jira project key ("PRJ") or a numeric project id ("10000"); both are
+# valid on the left of ``project =`` / ``project IN`` in dynamic-webhook JQL.
+_PROJECT_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,99}|[0-9]{1,18}")
 # Events a managed tracker subscribes to with a dynamic webhook.
 DYNAMIC_WEBHOOK_EVENTS = (
     "jira:issue_created",
@@ -455,7 +457,8 @@ class JiraTracker(BaseTracker):
         Dynamic webhooks accept only ``project`` with ``=``/``IN`` here.
 
         Raises:
-            ValueError: No keys, or a key that is not a Jira project key.
+            ValueError: No keys, or a value that is neither a Jira project key
+                nor a numeric project id.
         """
         keys = sorted({str(k).strip().upper() for k in project_keys if str(k).strip()})
         if not keys:
@@ -504,6 +507,33 @@ class JiraTracker(BaseTracker):
                 "Jira rejected the dynamic webhook: " + "; ".join(map(str, errors))
             )
         return str(created)
+
+    @staticmethod
+    def _project_jql_key(project: Any) -> str:
+        """The Jira project key (``Project.slug``), else the numeric id.
+
+        ``Project.identifier`` holds Jira's numeric project id; the key is the
+        slug. Either is valid JQL, the key reads better in Jira's UI.
+        """
+        return str(getattr(project, "slug", None) or project.identifier)
+
+    async def list_dynamic_webhook_ids(self) -> set[str]:
+        """Ids of the dynamic webhooks this app registered (bounded pages)."""
+        ids: set[str] = set()
+        start = 0
+        for _ in range(10):
+            page = await self._make_request(
+                "GET",
+                "webhook",
+                params={"startAt": start, "maxResults": 100},
+                api_version="3",
+            )
+            values = (page or {}).get("values") or [] if isinstance(page, dict) else []
+            ids.update(str(v.get("id")) for v in values if isinstance(v, dict))
+            if not values or (page or {}).get("isLast", True):
+                break
+            start += len(values)
+        return ids
 
     async def refresh_dynamic_webhooks(self, webhook_ids: List[str]) -> Optional[str]:
         """Extend dynamic webhooks by another 30 days.
@@ -557,11 +587,19 @@ class JiraTracker(BaseTracker):
         )
         if coverage_ok:
             webhook_id = next(iter(existing_ids))
-            expires = await self.refresh_dynamic_webhooks([webhook_id])
-            return {"action": "refreshed", "webhook_id": webhook_id, "expires": expires}
+            # A stored row is not proof: the webhook may have been removed on
+            # the Jira side or purged after expiry. Refresh only one that the
+            # app still owns; otherwise register a replacement below.
+            if webhook_id in await self.list_dynamic_webhook_ids():
+                expires = await self.refresh_dynamic_webhooks([webhook_id])
+                return {
+                    "action": "refreshed",
+                    "webhook_id": webhook_id,
+                    "expires": expires,
+                }
 
         webhook_id = await self.register_dynamic_webhook(
-            webhook_url, [project.identifier for project in projects]
+            webhook_url, [self._project_jql_key(project) for project in projects]
         )
         stale = [i for i in existing_ids if i != webhook_id]
         for row in rows.values():
@@ -590,30 +628,6 @@ class JiraTracker(BaseTracker):
                     type(e).__name__,
                 )
         return {"action": "registered", "webhook_id": webhook_id}
-
-    async def unregister_dynamic_webhooks(self, db: Session) -> Dict[str, int]:
-        """Delete this tracker's dynamic webhooks remotely and their rows."""
-        results = {"deleted": 0, "failed": 0}
-        rows = []
-        for proj in crud_project.get_for_tracker(db, tracker_id=self.tracker_id):
-            row = crud_webhook.get_by_project_id(db, project_id=proj.id)
-            if row is not None:
-                rows.append(row)
-        ids = sorted({row.external_id for row in rows})
-        try:
-            await self.delete_dynamic_webhooks(ids)
-        except Exception as e:  # noqa: BLE001 - reported, rows kept for retry
-            logger.warning(
-                "Could not delete Jira dynamic webhooks for tracker %s: %s",
-                self.tracker_id,
-                type(e).__name__,
-            )
-            results["failed"] = len(ids)
-            return results
-        for row in rows:
-            crud_webhook.remove(db, id=row.id)
-        results["deleted"] = len(ids)
-        return results
 
     async def test_connection(self) -> TrackerConnection:
         """Test the connection to the tracker."""
