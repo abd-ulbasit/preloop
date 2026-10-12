@@ -519,6 +519,44 @@ class CRUDAIModel(CRUDBase[AIModel]):
             .all()
         )
 
+    def get_selectable_for_account(
+        self,
+        db: Session,
+        *,
+        account_id: uuid.UUID | str,
+        include_built_in: bool = False,
+    ) -> list[AIModel]:
+        """List account models plus the active Cloud built-in, when enabled.
+
+        Retired system rows remain stored for historical references, but cannot
+        be selected for new work. OSS callers opt out by default.
+        """
+        from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
+
+        own = self.model.account_id == account_id
+        visible = own
+        if include_built_in:
+            built_in = (
+                self.model.account_id.is_(None)
+                & (self.model.meta_data["gateway"]["enabled"].astext == "true")
+                & (
+                    self.model.meta_data["gateway"]["model_alias"].astext
+                    == BUILT_IN_MODEL_ALIAS
+                )
+            )
+            visible = or_(own, built_in)
+        return (
+            db.query(self.model)
+            .options(joinedload(self.model.credentials_secret))
+            .filter(visible)
+            .order_by(
+                self.model.account_id.is_(None).asc(),
+                self.model.created_at.asc(),
+                self.model.id.asc(),
+            )
+            .all()
+        )
+
     def get_for_account(
         self,
         db: Session,

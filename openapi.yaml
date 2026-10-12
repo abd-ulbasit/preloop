@@ -20345,6 +20345,10 @@ components:
             credentials, which only authorize their owner's interactive traffic and
             must never be auto-selected as a default.
           default: false
+        is_built_in:
+          type: boolean
+          title: Is Built In
+          default: false
       type: object
       required:
       - id

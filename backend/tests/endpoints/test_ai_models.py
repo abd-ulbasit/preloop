@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from preloop.api.endpoints import ai_models
+from preloop.models import models
 from preloop.schemas.ai_model import (
     AIModelCreate,
     AIModelRead,
@@ -91,7 +92,7 @@ async def test_list_ai_models(mock_account: Account, mocker: MockerFixture):
         "preloop.api.endpoints.ai_models.crud_ai_model",
         new_callable=MagicMock,
     )
-    mock_crud_ai_model.get_by_account.return_value = []
+    mock_crud_ai_model.get_selectable_for_account.return_value = []
 
     # Act
     result = await maybe_await(
@@ -100,8 +101,8 @@ async def test_list_ai_models(mock_account: Account, mocker: MockerFixture):
 
     # Assert
     assert isinstance(result, list)
-    mock_crud_ai_model.get_by_account.assert_called_once_with(
-        db=mocker.ANY, account_id=mock_account.account_id
+    mock_crud_ai_model.get_selectable_for_account.assert_called_once_with(
+        db=mocker.ANY, account_id=mock_account.account_id, include_built_in=False
     )
 
 
@@ -800,7 +801,7 @@ def test_ai_models_credential_health_and_secret_redaction(mock_account, mocker):
     model_active.credentials_secret = secret_active
 
     mock_crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
-    mock_crud.get_by_account.return_value = [model_error, model_active]
+    mock_crud.get_selectable_for_account.return_value = [model_error, model_active]
     mock_crud.get.side_effect = lambda db, id: (
         model_error
         if id == model_error.id
@@ -1141,3 +1142,188 @@ def test_put_ai_model_rejects_codex_ws_override_on_non_codex_model(
     assert response.status_code == 400, response.text
     assert "openai-codex" in response.json()["detail"]
     crud.update.assert_not_called()
+
+
+@pytest.fixture
+def built_in_model() -> models.AIModel:
+    """A system model with private operator routing metadata."""
+    from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
+
+    return models.AIModel(
+        id=uuid.uuid4(),
+        name="DeepSeek V4.1 Flash",
+        description="Preloop hosted model",
+        provider_name="qwen",
+        model_identifier="deepseek-v4.1-flash",
+        account_id=None,
+        is_default=True,
+        api_key="private-operator-key",
+        api_endpoint="https://operator.example.com/v1",
+        credentials_secret_id=uuid.uuid4(),
+        meta_data={
+            "gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS},
+            "provider_runtime": {"private_key": "private-routing-data"},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_builtin_catalog_uses_hosted_capability(
+    mock_account: Account,
+    mocker: MockerFixture,
+    built_in_model: models.AIModel,
+    enabled: bool,
+) -> None:
+    """Discovery follows the deployment capability, independent of account plan."""
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=enabled
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = [built_in_model] if enabled else []
+    result = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    crud.get_selectable_for_account.assert_called_once_with(
+        db=mocker.ANY, account_id=mock_account.account_id, include_built_in=enabled
+    )
+    assert len(result) == int(enabled)
+    if enabled:
+        public = result[0].model_dump()
+        assert public["is_built_in"] is True
+        assert public["has_api_key"] is True
+        assert public["supports_server_side_generation"] is True
+        assert public["credentials_secret_id"] is None
+        assert public["api_endpoint"] is None
+        assert "private" not in str(public)
+
+
+@pytest.mark.asyncio
+async def test_builtin_read_does_not_allow_mutations(
+    mock_account: Account, mocker: MockerFixture, built_in_model: models.AIModel
+) -> None:
+    """A model visible to all Cloud accounts is never owned by those accounts."""
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get.return_value = built_in_model
+    result = await maybe_await(
+        ai_models.get_ai_model(
+            model_id=built_in_model.id, db=MagicMock(), current_user=mock_account
+        )
+    )
+    assert result.is_built_in
+    for operation in (
+        lambda: ai_models.update_ai_model(
+            model_id=built_in_model.id,
+            ai_model_in=AIModelUpdate(name="Changed"),
+            db=MagicMock(),
+            current_user=mock_account,
+        ),
+        lambda: ai_models.delete_ai_model(
+            model_id=built_in_model.id,
+            db=MagicMock(),
+            current_user=mock_account,
+        ),
+        lambda: ai_models.export_ai_model_credentials(
+            model_id=built_in_model.id,
+            db=MagicMock(),
+            current_user=mock_account,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await maybe_await(operation())
+        assert exc.value.status_code == 404
+    crud.update.assert_not_called()
+    crud.remove.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enabled, retired, alias",
+    [
+        (False, False, "qwen/deepseek-v4.1-flash-hosted"),
+        (True, True, "qwen/deepseek-v4.1-flash-hosted"),
+        (True, False, "openai/legacy-hosted"),
+    ],
+)
+async def test_unavailable_builtin_cannot_be_read(
+    mock_account: Account,
+    mocker: MockerFixture,
+    built_in_model: models.AIModel,
+    enabled: bool,
+    retired: bool,
+    alias: str,
+) -> None:
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=enabled
+    )
+    built_in_model.meta_data = {
+        "gateway": {"enabled": not retired, "model_alias": alias}
+    }
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get.return_value = built_in_model
+    with pytest.raises(HTTPException) as exc:
+        await maybe_await(
+            ai_models.get_ai_model(
+                model_id=built_in_model.id, db=MagicMock(), current_user=mock_account
+            )
+        )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_builtin_catalog_preserves_shared_models(
+    mock_account: Account, mocker: MockerFixture, built_in_model: models.AIModel
+) -> None:
+    from preloop.schemas.resource_share import SharedResourceRead
+
+    shared = SharedResourceRead(
+        id=uuid.uuid4(),
+        resource_type="ai_model",
+        name="Shared model",
+        owner_name="Example team",
+        provider="openai",
+        identifier="example-model",
+    )
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = [built_in_model]
+    mocker.patch(
+        "preloop.models.crud.resource_share.crud_resource_share.public_list",
+        return_value=[shared],
+    )
+    result = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    assert result[0] is shared
+    assert result[1].is_built_in
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin", [False, True])
+async def test_unpriced_builtin_catalog_is_safe(
+    mock_account: Account,
+    mocker: MockerFixture,
+    built_in_model: models.AIModel,
+    is_admin: bool,
+) -> None:
+    mock_account.is_superuser = is_admin
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.hosted_model_selectable", return_value=False
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = [built_in_model]
+    result = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    assert len(result) == int(is_admin)
+    if is_admin:
+        assert result[0].is_built_in and result[0].unpriced
+        assert "private" not in str(result[0].model_dump())
