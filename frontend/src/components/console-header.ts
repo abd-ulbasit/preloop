@@ -160,6 +160,10 @@ export class ConsoleHeader extends LitElement {
    * moments where this tab has to assume it missed something.
    */
   private refreshLiveCounts = (): void => {
+    // A focus or visibility read already covered the gap, so the connect
+    // fallback must not issue those two counts again.
+    clearTimeout(this.initialLiveCountsTimer);
+    this.initialLiveCountsTimer = undefined;
     this.refreshPendingApprovals();
     void this.loadRunningExecutions();
   };
