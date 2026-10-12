@@ -191,6 +191,12 @@ export class AuditView extends AuthedElement {
   // Filters
   @state() private _eventTypeFilters: string[] = [];
   @state() private _outcomeFilters: string[] = [];
+  /**
+   * Several outcomes match a row that carries any of them, not all of them.
+   * Set by a link (`outcome_match=any`), such as the Overview's "Failures and
+   * denials" card, and kept until the filters are cleared.
+   */
+  @state() private _outcomeMatchAny = false;
   @state() private _toolNameFilter = '';
   @state() private _startDate = '';
   @state() private _endDate = '';
@@ -377,6 +383,9 @@ export class AuditView extends AuthedElement {
     }
     for (const o of this._outcomeFilters) {
       params.append('outcome', o);
+    }
+    if (this._outcomeMatchAny && this._outcomeFilters.length > 1) {
+      params.set('outcome_match', 'any');
     }
     if (this._toolNameFilter) params.set('tool_name', this._toolNameFilter);
     if (this._startDate)
@@ -581,6 +590,7 @@ export class AuditView extends AuthedElement {
     const params = new URLSearchParams(window.location.search);
     this._eventTypeFilters = params.getAll('event_type');
     this._outcomeFilters = params.getAll('outcome');
+    this._outcomeMatchAny = params.get('outcome_match') === 'any';
     this._toolNameFilter = params.get('tool_name') ?? '';
     this._startDate = validFilterDate(params.get('start_date'));
     this._endDate = validFilterDate(params.get('end_date'));
@@ -631,6 +641,7 @@ export class AuditView extends AuthedElement {
     replaceListFilters({
       event_type: this._eventTypeFilters,
       outcome: this._outcomeFilters,
+      outcome_match: this._outcomeMatchAny ? 'any' : null,
       tool_name: this._toolNameFilter,
       start_date: this._startDate,
       end_date: this._endDate,
@@ -683,6 +694,7 @@ export class AuditView extends AuthedElement {
     this._cancelToolSearch();
     this._eventTypeFilters = [];
     this._outcomeFilters = [];
+    this._outcomeMatchAny = false;
     this._toolNameFilter = '';
     this._startDate = '';
     this._endDate = '';
@@ -1589,6 +1601,11 @@ export class AuditView extends AuthedElement {
           clearable
           multiple
           max-options-visible="2"
+          help-text=${
+            this._outcomeMatchAny && this._outcomeFilters.length > 1
+              ? 'Rows with any of these'
+              : ''
+          }
           .value=${this._outcomeFilters}
           @sl-change=${(e: Event) => {
             const sel = e.target as any;

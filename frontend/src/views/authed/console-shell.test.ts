@@ -123,6 +123,60 @@ describe('ConsoleShell', () => {
     invalidateApiCaches();
   });
 
+  describe('one scroller', () => {
+    // Overview, Audit and Spend scrolled to the end lifted the whole shell
+    // and left a blank band under it: the hidden status region a view
+    // appends after its content was absolutely positioned against the
+    // document, so it extended the page behind the shell's own scroller.
+    let bodyMargin = '';
+    beforeEach(() => {
+      // As main.css does for the app; the test page keeps the UA margin.
+      bodyMargin = document.body.style.margin;
+      document.body.style.margin = '0';
+    });
+    afterEach(() => {
+      document.body.style.margin = bodyMargin;
+      window.scrollTo(0, 0);
+    });
+
+    it('keeps the document exactly one window tall and reaches the last row', async () => {
+      const el = (await fixture(
+        html`<console-shell
+          ><div class="tall-view">
+            <div style="height: 4000px">rows</div>
+            <div class="last-row" style="height: 40px">last</div>
+            <span
+              style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"
+              >Overview ready.</span
+            >
+          </div></console-shell
+        >`
+      )) as ConsoleShell;
+      await waitUntil(
+        () => el.shadowRoot?.querySelector('.main-content slot') != null,
+        'the view outlet did not render'
+      );
+      await el.updateComplete;
+      const main = el.shadowRoot!.querySelector('.main-content') as HTMLElement;
+
+      main.scrollTop = main.scrollHeight;
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      expect(document.documentElement.scrollHeight).to.equal(
+        window.innerHeight
+      );
+      expect(window.scrollY).to.equal(0);
+      expect(main.scrollHeight).to.be.greaterThan(main.clientHeight);
+      const last = el.querySelector('.last-row') as HTMLElement;
+      const lastBox = last.getBoundingClientRect();
+      const mainBox = main.getBoundingClientRect();
+      expect(lastBox.bottom).to.be.at.most(mainBox.bottom + 1);
+      expect(lastBox.top).to.be.at.least(mainBox.top);
+      expect(Math.round(mainBox.bottom)).to.equal(window.innerHeight);
+    });
+  });
+
   describe('window chrome', () => {
     it('drops the sidebar, the header and the bell for ?window=1', async () => {
       const originalUrl = window.location.pathname + window.location.search;

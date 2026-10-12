@@ -615,8 +615,69 @@ describe('DashboardView', () => {
     // their own tests hold their contents.
     expect(element.shadowRoot?.querySelector('inventory-card')).to.exist;
     expect(element.shadowRoot?.querySelector('activity-feed')).to.exist;
-    expect(element.shadowRoot?.textContent).to.contain('Audit exceptions');
+    expect(element.shadowRoot?.textContent).to.contain('Failures and denials');
     expect(element.shadowRoot?.textContent).to.contain('need attention');
+  });
+
+  it('lists failures and denials with their real reason, never "allow"', async () => {
+    const at = new Date().toISOString();
+    const call = (id: string, status: string) => ({
+      correlation_id: `c-${id}`,
+      // What core reported before it showed a failed call's own status.
+      outcome: 'allow',
+      primary_event: {
+        id,
+        action: 'tool_call',
+        status,
+        timestamp: at,
+        details: {
+          tool_name: 'update_pull_request',
+          runtime_principal_name: 'reviewer-bot',
+          error_reason: status === 'failed' ? 'HTTP 422' : undefined,
+        },
+      },
+      sub_events: [
+        {
+          id: `p-${id}`,
+          action: 'policy_allow',
+          status: 'allow',
+          timestamp: at,
+          details: { decision: 'allow' },
+        },
+      ],
+    });
+    auditResponse = {
+      groups: [
+        call('f1', 'failed'),
+        call('f2', 'failed'),
+        call('ok', 'executed'),
+      ],
+      total: 2,
+    };
+    const element = await mountDashboard();
+    await waitUntil(
+      () => element.shadowRoot?.querySelector('.exceptions-card') != null,
+      'failures card did not render'
+    );
+    const card = element.shadowRoot!.querySelector('.exceptions-card')!;
+    const text = card.textContent!.replace(/\s+/g, ' ');
+    expect(text).to.contain('Failures and denials');
+    expect(text).to.contain('reviewer-bot · update_pull_request');
+    expect(text).to.contain('×2');
+    expect(text).to.contain('HTTP 422');
+    expect(text).to.not.match(/\ballow\b/i);
+    const badges = [...card.querySelectorAll('sl-badge')];
+    expect(badges.map((b) => b.textContent!.trim())).to.deep.equal(['Failed']);
+    expect(card.querySelectorAll('.exception-row')).to.have.length(1);
+    const row = card.querySelector('a.row-primary') as HTMLAnchorElement;
+    expect(row.getAttribute('href')).to.contain('event=f1');
+    const footer = [...card.querySelectorAll('a')].find((a) =>
+      a.textContent!.includes('See all in Audit')
+    )!;
+    const url = new URL(footer.getAttribute('href')!, 'http://x');
+    expect(url.searchParams.getAll('outcome')).to.include('failed');
+    expect(url.searchParams.get('outcome_match')).to.equal('any');
+    expect(url.searchParams.get('start_date')).to.match(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('publishes the attention counts when the inputs land, not while rendering', async () => {
@@ -744,7 +805,7 @@ describe('DashboardView', () => {
 
     const content = element.shadowRoot?.textContent || '';
     expect(content).to.not.contain('Gateway failures needing attention');
-    expect(content).to.not.contain('Audit exceptions');
+    expect(content).to.not.contain('Failures and denials');
   });
 
   it('shows usage first with the global budgets under it', async () => {

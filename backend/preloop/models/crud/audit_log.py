@@ -32,6 +32,8 @@ PRIMARY_ACTIONS = (
 # The grouped total is counted per branch and summed, which is only right
 # while no action can match both branches.
 assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
+# Tool call statuses that mean the call ran and did not succeed.
+_FAILED_TOOL_CALL_STATUSES = ("failed", "upstream_error")
 # The only ``details`` keys the grouped timeline reads to build groups.
 _GROUPING_DETAIL_KEYS = ("correlation_id", "decision", "approval_id", "estimated_cost")
 
@@ -398,6 +400,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         limit: int = 50,
         event_type_filter: Optional[List[str]] = None,
         outcome_filter: Optional[List[str]] = None,
+        outcome_match: str = "all",
         tool_name_filter: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
@@ -421,6 +424,9 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 ``"config:mcp_server"`` match ``configuration_change`` events
                 whose ``details->config_type`` equals the suffix.
             outcome_filter: Filter by outcome(s) ('allow', 'deny', 'require_approval', etc.)
+            outcome_match: ``"all"`` (default) keeps a group only when every
+                outcome in ``outcome_filter`` appears in its chain; ``"any"``
+                keeps it when at least one does ("failed or denied").
             tool_name_filter: Filter by tool name (substring match)
             start_date: Filter by start date
             consent_ref: Exact delegated grant consent reference
@@ -430,6 +436,10 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             Tuple of (list of group dicts, total primary event count)
         """
         account_id_str = str(account_id) if isinstance(account_id, UUID) else account_id
+        if outcome_match not in ("all", "any"):
+            raise ValueError(
+                f"outcome_match must be 'all' or 'any', not {outcome_match!r}"
+            )
 
         # Step 1: Fetch primary events (tool_call + non-tool standalone events)
         # Tool calls are the primary grouping anchors.
@@ -660,6 +670,15 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         outcome = "expired"
                         all_outcomes.add("expired")
 
+                # A tool call that ran and then failed shows that failure, not
+                # the "allow" that let it run: the decision is still in the
+                # chain (and matched by an "allow" filter), but the row has to
+                # say what happened. Otherwise a failure reads "allow".
+                if event.action == "tool_call" and event.status in (
+                    _FAILED_TOOL_CALL_STATUSES
+                ):
+                    outcome = event.status
+
                 # The post-approval tool execution (async path) is the most
                 # recent meaningful event in the chain — promote it to the
                 # final outcome shown on the row so users can see at a glance
@@ -670,10 +689,18 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         if sub.status:
                             all_outcomes.add(sub.status)
 
-            # Apply outcome filter — match only if *all* selected outcomes
-            # appear somewhere in the chain (AND semantics).
-            if outcome_filter and not set(outcome_filter).issubset(all_outcomes):
-                continue
+            # Apply outcome filter: by default every selected outcome must
+            # appear somewhere in the chain (AND); with outcome_match="any"
+            # one is enough (OR).
+            if outcome_filter:
+                wanted = set(outcome_filter)
+                matched = (
+                    bool(wanted & all_outcomes)
+                    if outcome_match == "any"
+                    else wanted.issubset(all_outcomes)
+                )
+                if not matched:
+                    continue
 
             event_cost = _audit_event_estimated_cost(event.details)
             if min_cost is not None and event_cost < min_cost:
