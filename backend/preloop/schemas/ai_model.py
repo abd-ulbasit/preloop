@@ -396,7 +396,7 @@ class AIModelInDBBase(BaseModel):
 class AIModelRead(AIModelInDBBase):
     """Schema for reading AIModel entries, including timestamps."""
 
-    pass
+    is_built_in: bool = False
 
 
 class AIModelCredentialExportResponse(BaseModel):

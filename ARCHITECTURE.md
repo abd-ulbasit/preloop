@@ -664,3 +664,13 @@ membership's verification flag no longer verify a Person. Credential backfill
 cannot safely be reversed into membership cascades; downgrade refuses and rollback
 uses a forward repair. Membership expansion policy and enterprise endpoints stay
 in EE; core identity ownership and retention need no plugin registration.
+
+
+Cloud's hosted-model capability adds the active built-in
+`qwen/deepseek-v4.1-flash-hosted` to the account model catalog and flow selectors.
+The model is read-only, and retired system rows remain available only for
+historical references. OSS deployments do not expose built-ins by default.
+Built-in detail usage is scoped to the requesting account; operator credentials
+and routing metadata are never included in the public catalog. Preset cloning
+prefers a usable account model and otherwise binds the built-in. Hosted allowance
+and Free's one-time credit continue to be enforced by the gateway at execution.

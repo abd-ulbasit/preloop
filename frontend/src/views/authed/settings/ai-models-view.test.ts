@@ -119,6 +119,63 @@ describe('AIModelsView', () => {
     localStorage.clear();
   });
 
+  it('lists the built-in alongside account models and excludes it from mutations', async () => {
+    const element = (await fixture(
+      html`<ai-models-view></ai-models-view>`
+    )) as AIModelsView;
+    await waitUntil(() => !(element as any).isLoading);
+    const internal = element as unknown as {
+      models: AIModel[];
+      currentView: string;
+      selection: {
+        order: string[];
+        toggleAll: (selected: boolean) => void;
+        selectedItems: AIModel[];
+      };
+      modelActions: (model: AIModel) => { id: string }[];
+    };
+    const builtIn = {
+      id: 'builtin-model',
+      name: 'DeepSeek V4.1 Flash',
+      provider_name: 'qwen',
+      model_identifier: 'deepseek-v4.1-flash',
+      is_built_in: true,
+      meta_data: {
+        gateway: {
+          enabled: true,
+          model_alias: 'qwen/deepseek-v4.1-flash-hosted',
+        },
+      },
+    } as AIModel;
+    internal.models = [...internal.models, builtIn];
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelectorAll('.model-row')).to.have.lengthOf(
+      2
+    );
+    expect(element.shadowRoot?.textContent).to.contain('Built-in');
+    expect(element.shadowRoot?.querySelector('hosted-allowance')).to.equal(
+      null
+    );
+    expect(
+      internal.modelActions(builtIn).map((action) => action.id)
+    ).to.deep.equal(['view']);
+    expect(internal.selection.order).to.deep.equal(['model-1']);
+    internal.selection.toggleAll(true);
+    expect(
+      internal.selection.selectedItems.map((model) => model.id)
+    ).to.deep.equal(['model-1']);
+    internal.currentView = 'cards';
+    await element.updateComplete;
+    expect(
+      element.shadowRoot?.querySelectorAll('.model-card')
+    ).to.have.lengthOf(2);
+    const builtInCard = element.shadowRoot?.querySelector(
+      '[data-model-id="builtin-model"]'
+    );
+    expect(builtInCard?.textContent).to.contain('Built-in');
+    expect(builtInCard?.querySelector('list-select-checkbox')).to.equal(null);
+  });
+
   it('links each configured model to its observability detail page', async () => {
     const element = (await fixture(
       html`<ai-models-view></ai-models-view>`

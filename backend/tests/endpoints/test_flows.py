@@ -619,7 +619,7 @@ async def test_clone_preset(mock_account: Account, mocker: MockerFixture):
         is_default=True,
         credentials_secret_id=uuid.uuid4(),
     )
-    mock_crud_ai_model.get_by_account.return_value = [account_model]
+    mock_crud_ai_model.get_selectable_for_account.return_value = [account_model]
 
     # Convert mock_account.id to string for validation
     mock_account.id = str(mock_account.id)
@@ -669,7 +669,7 @@ async def test_clone_preset_prefers_default_model(
         api_key="k",
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
-    mock_crud_ai_model.get_by_account.return_value = [newer, default]
+    mock_crud_ai_model.get_selectable_for_account.return_value = [newer, default]
     mock_crud_flow.create.return_value = MagicMock()
 
     await maybe_await(
@@ -700,7 +700,7 @@ async def test_clone_preset_skips_credential_less_models(
     gateway = _make_ai_model(
         mock_account.account_id, meta_data={"gateway": {"enabled": True}}
     )
-    mock_crud_ai_model.get_by_account.return_value = [bare, gateway]
+    mock_crud_ai_model.get_selectable_for_account.return_value = [bare, gateway]
     mock_crud_flow.create.return_value = MagicMock()
 
     await maybe_await(
@@ -726,7 +726,7 @@ async def test_clone_preset_no_usable_model_fails_at_clone_time(
     )
     mock_crud_flow.get.return_value = _make_preset(flow_id)
     mock_crud_flow.get_by_name_and_account.return_value = None
-    mock_crud_ai_model.get_by_account.return_value = []
+    mock_crud_ai_model.get_selectable_for_account.return_value = []
 
     with pytest.raises(HTTPException) as exc_info:
         await maybe_await(
@@ -759,7 +759,19 @@ async def test_clone_preset_keeps_visible_preset_model(
     mock_crud_flow.get_by_name_and_account.return_value = None
     mock_account.id = str(mock_account.id)
 
-    global_model = _make_ai_model(None, api_key="k")  # account_id=None: global
+    mocker.patch(
+        "preloop.api.endpoints.flows.built_in_models_enabled", return_value=True
+    )
+    global_model = _make_ai_model(
+        None,
+        api_key="k",
+        meta_data={
+            "gateway": {
+                "enabled": True,
+                "model_alias": "qwen/deepseek-v4.1-flash-hosted",
+            }
+        },
+    )
     mock_crud_ai_model.get.return_value = global_model
     mock_crud_flow.create.return_value = MagicMock()
 
@@ -769,7 +781,7 @@ async def test_clone_preset_keeps_visible_preset_model(
 
     flow_in = mock_crud_flow.create.call_args.kwargs["flow_in"]
     assert flow_in.ai_model_id == preset_model_id
-    mock_crud_ai_model.get_by_account.assert_not_called()
+    mock_crud_ai_model.get_selectable_for_account.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -790,7 +802,7 @@ async def test_clone_preset_codex_needs_endpoint_for_custom_provider(
     endpointless = _make_ai_model(
         mock_account.account_id, provider_name="acme", api_key="k"
     )
-    mock_crud_ai_model.get_by_account.return_value = [endpointless]
+    mock_crud_ai_model.get_selectable_for_account.return_value = [endpointless]
 
     with pytest.raises(HTTPException) as exc_info:
         await maybe_await(
@@ -3643,3 +3655,51 @@ def test_run_preset_triage_batch_forwards_targets(
     assert result.results is not None
     assert len(result.results) == 2
     assert result.results[1].error == "Issue not found"
+
+
+@pytest.mark.parametrize("agent_type", ["codex", "openhands"])
+def test_clone_binds_builtin_without_account_models(
+    mocker: MockerFixture, agent_type: str
+) -> None:
+    """Cloud accounts can clone presets without supplying provider keys."""
+    mocker.patch(
+        "preloop.api.endpoints.flows.built_in_models_enabled", return_value=True
+    )
+    crud = mocker.patch("preloop.api.endpoints.flows.crud_ai_model")
+    built_in = _make_ai_model(
+        None,
+        provider_name="qwen",
+        meta_data={
+            "gateway": {
+                "enabled": True,
+                "model_alias": "qwen/deepseek-v4.1-flash-hosted",
+            }
+        },
+    )
+    crud.get_selectable_for_account.return_value = [built_in]
+    preset = _make_preset(uuid.uuid4())
+    preset.agent_type = agent_type
+    assert (
+        flows._resolve_clone_model_binding(MagicMock(), preset, uuid.uuid4())
+        == built_in.id
+    )
+    assert crud.get_selectable_for_account.call_args.kwargs["include_built_in"] is True
+
+
+def test_clone_prefers_account_model_over_builtin(mocker: MockerFixture) -> None:
+    mocker.patch(
+        "preloop.api.endpoints.flows.built_in_models_enabled", return_value=True
+    )
+    crud = mocker.patch("preloop.api.endpoints.flows.crud_ai_model")
+    account_id = uuid.uuid4()
+    own = _make_ai_model(account_id, api_key="own-key")
+    built_in = _make_ai_model(
+        None, is_default=True, meta_data={"gateway": {"enabled": True}}
+    )
+    crud.get_selectable_for_account.return_value = [built_in, own]
+    assert (
+        flows._resolve_clone_model_binding(
+            MagicMock(), _make_preset(uuid.uuid4()), account_id
+        )
+        == own.id
+    )

@@ -3,7 +3,6 @@ import { tableScrollStyles } from '../../../styles/table-scroll';
 import { formatUsd, formatUsdExact } from '../../../utils/money';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import { EditPermissions } from '../../../controllers/edit-permissions';
-import '../../../components/hosted-allowance';
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { when } from 'lit/directives/when.js';
@@ -901,7 +900,9 @@ export class AIModelsView extends LitElement {
    * are no longer on the page.
    */
   protected willUpdate(): void {
-    this.selection.setItems(this.visibleModels);
+    this.selection.setItems(
+      this.visibleModels.filter((model) => !model.is_built_in)
+    );
   }
 
   private get providerOptions(): string[] {
@@ -1038,8 +1039,6 @@ export class AIModelsView extends LitElement {
             : ''
         }
       </view-header>
-      <hosted-allowance show-models></hosted-allowance>
-      <h2>Your models</h2>
       <div class="column-layout narrow">
         <div class="main-column">
           <div class="page">
@@ -1179,6 +1178,7 @@ export class AIModelsView extends LitElement {
 
   /** One checkbox shape for the row and the card. */
   private renderSelectCheckbox(model: AIModel) {
+    if (model.is_built_in) return null;
     return html`<list-select-checkbox
       item-id=${model.id}
       label=${`Select ${model.name}`}
@@ -1273,7 +1273,7 @@ export class AIModelsView extends LitElement {
   }
 
   private modelActions(model: AIModel): ResourceAction[] {
-    if (sharedFrom(model)) {
+    if (model.is_built_in || sharedFrom(model)) {
       return [
         { id: 'view', label: 'View', icon: 'eye', href: this.modelHref(model) },
       ];
@@ -1389,7 +1389,7 @@ export class AIModelsView extends LitElement {
     return html`
       <div class="cell-stack">
         <a class="model-link" href=${this.modelHref(model)}> ${model.name} </a>
-        ${sharedFromBadge(model)}
+        ${model.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
         <div class="model-identifier" title=${alias || model.model_identifier}>
           ${alias || model.model_identifier}
         </div>
@@ -1751,7 +1751,8 @@ export class AIModelsView extends LitElement {
             <a class="model-link" href=${this.modelHref(model)}>
               ${model.name}
             </a>
-            ${sharedFromBadge(model)} ${this.renderDefaultControl(model)}
+            ${model.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
+            ${this.renderDefaultControl(model)}
           </div>
           <div class="model-identifier">
             ${this.getGatewayAlias(model) || model.model_identifier}
@@ -1840,6 +1841,7 @@ export class AIModelsView extends LitElement {
   }
 
   openEditModal(model: AIModel) {
+    if (model.is_built_in) return;
     if (!this.editPermissions.allows('edit_ai_models')) return;
     this.editingModel = model;
     this.isModalOpen = true;
@@ -1856,12 +1858,14 @@ export class AIModelsView extends LitElement {
   }
 
   openDeleteConfirm(model: AIModel) {
+    if (model.is_built_in) return;
     if (!this.editPermissions.allows('delete_ai_models')) return;
     this.modelToDelete = model;
     this.isDeleteConfirmOpen = true;
   }
 
   async handleSetDefault(model: AIModel) {
+    if (model.is_built_in) return;
     try {
       await updateAIModel(model.id, { is_default: true });
       await this.fetchModels();
