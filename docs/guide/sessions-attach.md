@@ -119,6 +119,29 @@ list the goods-receipt workflows for nord
   model call. `/mode` asks the server again and prints the current mode.
 - Approvals work as before: `a` and `d` decide while something is pending.
 
+### Runner-hosted sessions
+
+A session a personal runner hosts (Copilot CLI, Cursor CLI, Devin CLI; see
+[Remote sessions](runners/remote-sessions.md)) is in command mode too, without
+a managed agent: a typed line is posted to
+`POST /api/v1/runner-sessions/{session_id}/turns`. There is no Agent Control
+command to follow, so the turn's states come from the session's own timeline
+as it streams: `queued`, `started`, then `finished` or `failed`. The agent's
+messages print as `reply` lines and its tool calls as `tool` lines. When the
+session ends or fails, attach prints `session ended` and exits.
+
+```text
+fix the failing parser test
+-- turn c8092f26 queued
+12:00:05 command  turn c8092f26 queued: fix the failing parser test
+12:00:06 command  turn c8092f26 started
+12:00:09 reply    from the agent: Looking at the parser.
+12:00:10 tool     copilot_cli/edit  requested
+12:00:31 command  turn c8092f26 finished
+12:01:00 end      session ended
+-- session ended; detaching
+```
+
 Command mode needs all of: the session is open, it belongs to a managed agent
 (by its source or its runtime principal), the agent kind takes Agent Control
 commands, the agent is active, its Agent Control plugin is verified, and the

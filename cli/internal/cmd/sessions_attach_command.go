@@ -14,7 +14,9 @@ package cmd
 // After a command is accepted its delivery state is followed until it is
 // terminal: queued, delivered, started, finished (or failed, expired,
 // cancelled). The turn's own model and tool events arrive on the session
-// stream like any other event.
+// stream like any other event. A runner-session turn has no Agent Control
+// command to follow: its queued, started and finished (or failed) states
+// arrive on the session stream as timeline rows.
 
 import (
 	"context"
