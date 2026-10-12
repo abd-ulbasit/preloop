@@ -10,7 +10,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from preloop.services.mcp_client_pool import get_mcp_client_pool
+from preloop.services.mcp_client_pool import (
+    get_mcp_client_pool,
+    describe_mcp_connection_error,
+)
 from preloop.models.models.mcp_server import MCPServer
 from preloop.models.models.mcp_tool import MCPTool
 from preloop.models.crud import crud_mcp_server, crud_mcp_tool, crud_tool_configuration
@@ -123,12 +126,13 @@ async def scan_mcp_server_tools(
         # Update server with error status
         was_healthy = mcp_server.status != "error"
         mcp_server.status = "error"
-        mcp_server.last_error = str(e)
+        diagnostic = describe_mcp_connection_error(e)
+        mcp_server.last_error = diagnostic
         db.commit()
         # An owner that turned unhealthy no longer owns its names.
         recompute_and_audit(db, str(mcp_server.account_id), user)
 
-        logger.warning("Failed to scan MCP server %s: %s", mcp_server.name, e)
+        logger.warning("Failed to scan MCP server %s: %s", mcp_server.name, diagnostic)
         try:
             from preloop.sync.tasks import notify_admins
 
@@ -139,9 +143,9 @@ async def scan_mcp_server_tools(
                 subject=f"MCP server scan failed: {mcp_server.name}",
                 message=(
                     "Preloop could not scan configured MCP server "
-                    f"{mcp_server.name} ({mcp_server.url}). "
+                    f"{mcp_server.name}. "
                     f"The server was marked unhealthy and cached tools will be used. "
-                    f"Error: {e}"
+                    f"Error: {diagnostic}"
                 ),
             )
         except Exception as notify_error:

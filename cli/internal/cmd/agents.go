@@ -490,6 +490,8 @@ type runtimeSessionTokenResponse struct {
 }
 
 type mcpServerResponse struct {
+	Status     string                 `json:"status,omitempty"`
+	LastError  string                 `json:"last_error,omitempty"`
 	ID         string                 `json:"id"`
 	Name       string                 `json:"name"`
 	URL        string                 `json:"url"`
@@ -5132,7 +5134,10 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 			result.Skipped = append(result.Skipped, name)
 			continue
 		}
-		if _, ok := existingByName[name]; ok {
+		if existing, ok := existingByName[name]; ok {
+			if warning := importedMCPServerWarning(name, existing); warning != "" {
+				result.Warnings = append(result.Warnings, warning)
+			}
 			result.Reused = append(result.Reused, name)
 			continue
 		}
@@ -5141,6 +5146,9 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 			return nil, fmt.Errorf("failed to add discovered MCP server %q: %w", name, err)
 		}
 		result.Added = append(result.Added, name)
+		if warning := importedMCPServerWarning(name, created); warning != "" {
+			result.Warnings = append(result.Warnings, warning)
+		}
 		if importMode == "command" {
 			result.ImportedFromCommand = append(result.ImportedFromCommand, name)
 		}
@@ -5151,6 +5159,15 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 	sort.Strings(result.Skipped)
 	sort.Strings(result.Warnings)
 	return result, nil
+}
+
+// importedMCPServerWarning distinguishes registration from a usable connection.
+// Do not echo last_error: older servers can store raw credential-bearing URLs.
+func importedMCPServerWarning(name string, server mcpServerResponse) string {
+	if server.Status == "error" || (server.Status != "active" && server.LastError != "") {
+		return fmt.Sprintf("MCP server %q is registered, but Preloop could not connect or discover its tools. Check connectivity and authentication in the console, then rescan. Localhost servers must be reachable from the Preloop host; locally cached sign-ins may require reconnecting in Preloop.", name)
+	}
+	return ""
 }
 
 func normalizeDiscoveredTransport(server MCPDef) string {
