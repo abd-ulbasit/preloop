@@ -1,6 +1,7 @@
 """CRUD operations for AuditLog model."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
@@ -15,6 +16,8 @@ from .base import CRUDBase
 # tool_call row was written for the same correlation_id.
 STANDALONE_POLICY_ACTIONS = ("policy_deny", "policy_require_approval")
 _GROUP_ANCHOR_ACTIONS = ("tool_call", *STANDALONE_POLICY_ACTIONS)
+# The only ``details`` keys the grouped timeline reads to build groups.
+_GROUPING_DETAIL_KEYS = ("correlation_id", "decision", "approval_id", "estimated_cost")
 
 
 def _audit_event_estimated_cost(details: Optional[Dict[str, Any]]) -> float:
@@ -28,6 +31,52 @@ def _audit_event_estimated_cost(details: Optional[Dict[str, Any]]) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _narrow_audit_rows(query: Any) -> List[SimpleNamespace]:
+    """Run ``query`` for the grouping fields only, not the full row.
+
+    Grouping and outcome evaluation read four keys of ``details``. Tool call
+    rows carry arguments and results in ``details``, so loading the full row
+    for the 5000-event outcome window moved megabytes per request (#1592).
+    The returned objects expose the attributes the grouping code reads, with
+    ``details`` trimmed to those keys; :func:`_hydrate_groups` swaps in the
+    full rows for the page that is returned.
+    """
+    rows = query.with_entities(
+        AuditLog.id,
+        AuditLog.action,
+        AuditLog.status,
+        AuditLog.timestamp,
+        *(AuditLog.details[key].label(key) for key in _GROUPING_DETAIL_KEYS),
+    ).all()
+    return [
+        SimpleNamespace(
+            id=row.id,
+            action=row.action,
+            status=row.status,
+            timestamp=row.timestamp,
+            details={
+                key: getattr(row, key)
+                for key in _GROUPING_DETAIL_KEYS
+                if getattr(row, key) is not None
+            },
+        )
+        for row in rows
+    ]
+
+
+def _hydrate_groups(db: Session, groups: List[Dict[str, Any]]) -> None:
+    """Replace the narrow rows of the returned groups with full rows, in place."""
+    ids = {group["primary_event"].id for group in groups}
+    for group in groups:
+        ids.update(sub.id for sub in group["sub_events"])
+    if not ids:
+        return
+    full = {row.id: row for row in db.query(AuditLog).filter(AuditLog.id.in_(ids))}
+    for group in groups:
+        group["primary_event"] = full[group["primary_event"].id]
+        group["sub_events"] = [full[sub.id] for sub in group["sub_events"]]
 
 
 class CRUDAuditLog(CRUDBase[AuditLog]):
@@ -442,13 +491,13 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         if outcome_filter:
             # When outcome_filter is used, we must evaluate the outcomes of groups.
             # To avoid OOM, limit the search space to the most recent 5000 primary events.
-            primary_events = (
-                primary_query.order_by(AuditLog.timestamp.desc()).limit(5000).all()
+            primary_events = _narrow_audit_rows(
+                primary_query.order_by(AuditLog.timestamp.desc()).limit(5000)
             )
             total = 0  # Will be recalculated after filtering
         elif min_cost is not None or max_cost is not None:
-            primary_events = (
-                primary_query.order_by(AuditLog.timestamp.desc()).limit(5000).all()
+            primary_events = _narrow_audit_rows(
+                primary_query.order_by(AuditLog.timestamp.desc()).limit(5000)
             )
             total = 0
         else:
@@ -456,11 +505,10 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             total = primary_query.count()
 
             # Fetch the page of primary events
-            primary_events = (
+            primary_events = _narrow_audit_rows(
                 primary_query.order_by(AuditLog.timestamp.desc())
                 .offset(skip)
                 .limit(limit)
-                .all()
             )
 
         if not primary_events:
@@ -478,7 +526,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         sub_events_map: Dict[str, List[AuditLog]] = {}
         if correlation_ids:
             # 3a: Fetch events that directly carry a correlation_id
-            direct_subs = (
+            direct_subs = _narrow_audit_rows(
                 db.query(AuditLog)
                 .filter(
                     AuditLog.account_id == account_id_str,
@@ -488,7 +536,6 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                     AuditLog.action != "tool_call",
                 )
                 .order_by(AuditLog.timestamp.asc())
-                .all()
             )
 
             for sub in direct_subs:
@@ -512,7 +559,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         approval_id_to_cid[aid] = cid
 
             if approval_id_to_cid:
-                chained_subs = (
+                chained_subs = _narrow_audit_rows(
                     db.query(AuditLog)
                     .filter(
                         AuditLog.account_id == account_id_str,
@@ -522,7 +569,6 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         AuditLog.action != "approval_created",  # already fetched
                     )
                     .order_by(AuditLog.timestamp.asc())
-                    .all()
                 )
 
                 for sub in chained_subs:
@@ -611,6 +657,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             total = len(groups)
             groups = groups[skip : skip + limit]
 
+        _hydrate_groups(db, groups)
         return groups, total
 
     def count_by_account(

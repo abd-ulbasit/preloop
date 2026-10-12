@@ -3,9 +3,11 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from preloop.models.crud import crud_audit_log, crud_account, crud_user
+from preloop.models.models.audit_log import AuditLog
 
 
 @pytest.fixture
@@ -662,3 +664,39 @@ class TestGroupedStandalonePolicyDecisions:
             db_session, account_id=test_account.id, outcome_filter=["deny"]
         )
         assert {g["correlation_id"] for g in groups} == {"c-deny", "c-both"}
+
+    def test_groups_are_built_narrow_and_return_full_rows(
+        self, db_session: Session, test_account, events
+    ):
+        """Only the returned page is loaded in full (#1592).
+
+        Grouping reads four ``details`` keys, so the 5000-event outcome
+        window is fetched without the rest of ``details``. The page that is
+        returned must still carry complete ORM rows, sub-events included.
+        """
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        engine = db_session.get_bind()
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            groups, _ = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, outcome_filter=["deny"]
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        by_cid = {g["correlation_id"]: g for g in groups}
+        both = by_cid["c-both"]
+        assert isinstance(both["primary_event"], AuditLog)
+        assert both["primary_event"].details["tool_name"] == "rm"
+        assert all(isinstance(sub, AuditLog) for sub in both["sub_events"])
+        assert both["sub_events"][0].details["tool_name"] == "rm"
+        # Only the final hydration selects the details column itself.
+        full_row_reads = [
+            s for s in statements if "audit_log.details AS audit_log_details" in s
+        ]
+        assert len(full_row_reads) == 1
+        assert "audit_log.id IN" in full_row_reads[0]
