@@ -235,7 +235,7 @@ describe('AddTrackerModal managed Jira Cloud', () => {
     expect(body.auth_type).to.equal('managed_oauth');
     expect(body.api_key).to.equal('unchanged');
     expect(body.connection_details).to.deep.equal({});
-    expect(body.url).to.equal(SITE);
+    expect(body).to.not.have.property('url');
     expect(JSON.stringify(body)).to.not.contain('username');
   });
 

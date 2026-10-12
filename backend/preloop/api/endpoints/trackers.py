@@ -1008,6 +1008,10 @@ async def update_tracker(
                 detail=MANAGED_TRACKER_TOKEN_DETAIL,
             )
         details = update_data.get("connection_details")
+        if tracker.tracker_type == TrackerType.JIRA.value:
+            # The row URL is the grant's canonical instance; the provider
+            # plugin owns it (reconnect checks it), the site lives in details.
+            update_data.pop("url", None)
         if details is not None and tracker.tracker_type == TrackerType.JIRA.value:
             update_data["connection_details"] = _merge_managed_jira_details(
                 dict(tracker.connection_details or {}), dict(details)

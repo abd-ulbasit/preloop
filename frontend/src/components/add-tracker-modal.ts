@@ -2731,9 +2731,9 @@ export class AddTrackerModal extends LitElement {
       trackerData.api_key = 'unchanged';
       trackerData.config = {};
       trackerData.connection_details = {};
-      if (this.jiraStatus?.site_url) {
-        trackerData.url = this.jiraStatus.site_url;
-      }
+      // The row URL is the grant's canonical instance (the Atlassian API
+      // gateway), owned by the provider; links use connection_details.site_url.
+      delete trackerData.url;
     }
     if (bitbucketDcDetails) {
       // The tracker URL is the canonical instance URL (origin plus context
