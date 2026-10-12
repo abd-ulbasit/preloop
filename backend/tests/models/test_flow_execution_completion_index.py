@@ -1,12 +1,68 @@
 """Completion monitoring can page failures without sorting the whole table."""
 
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import event, text
+from alembic.operations import Operations
+from sqlalchemy import Engine, event, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_flow_execution
+
+
+def _completion_migration() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "preloop/models/alembic/versions"
+        / "20261014_flow_execution_completion_index.py"
+    )
+    spec = importlib.util.spec_from_file_location("completion_index_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _upgrade_completion_index(module: ModuleType, connection: Connection) -> None:
+    connection.commit()
+    context = MigrationContext.configure(connection)
+    with context.begin_transaction(), Operations.context(context):
+        module.upgrade()
+
+
+def test_migration_repairs_invalid_interrupted_index(db_engine: Engine) -> None:
+    """A retried concurrent build must rebuild rather than skip an invalid index."""
+    migration = _completion_migration()
+    name = "ix_flow_execution_status_completion"
+    with db_engine.connect().execution_options(
+        isolation_level="AUTOCOMMIT"
+    ) as connection:
+        valid_query = text(
+            "SELECT indisvalid FROM pg_index WHERE indexrelid = CAST(:name AS regclass)"
+        )
+        assert connection.execute(valid_query, {"name": name}).scalar() is True
+        connection.execute(
+            text(
+                "UPDATE pg_index SET indisvalid = false "
+                "WHERE indexrelid = CAST(:name AS regclass)"
+            ),
+            {"name": name},
+        )
+        try:
+            assert connection.execute(valid_query, {"name": name}).scalar() is False
+            _upgrade_completion_index(migration, connection)
+            assert connection.execute(valid_query, {"name": name}).scalar() is True
+            # The normal retry must also be harmless when the index is valid.
+            _upgrade_completion_index(migration, connection)
+            assert connection.execute(valid_query, {"name": name}).scalar() is True
+        finally:
+            # Preserve the shared test schema even if an assertion fails.
+            _upgrade_completion_index(migration, connection)
 
 
 def test_completion_index_remains_in_model_metadata(db_session: Session) -> None:
