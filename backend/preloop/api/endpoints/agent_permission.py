@@ -139,8 +139,20 @@ def _origin_runtime_session_id(
     identity: PermissionIdentity, source: Optional[str], session_id: str
 ) -> Optional[str]:
     """Link a hook session only to a recorded session in the caller's account."""
+    from preloop.services.agent_session_lineage import runner_session_for_external
+
     source_type = {"codex_cli": "codex"}.get(source or "", source)
     with get_session_factory()() as db:
+        # A runner-hosted harness (#1482) reports the id the runner minted;
+        # its approvals and notes belong on the runner session itself.
+        hosted = runner_session_for_external(
+            db,
+            account_id=identity.account_id,
+            external_session_id=session_id,
+            actor_user_id=identity.user_id,
+        )
+        if hosted is not None:
+            return str(hosted.id)
         principal_type = identity.runtime_principal_type
         principal_id = identity.runtime_principal_id
         if (not principal_type or not principal_id) and identity.runtime_session_id:
@@ -346,6 +358,9 @@ def _record_session_cwd(
                 models.RuntimeSession.id == runtime_session_id,
                 models.RuntimeSession.account_id == identity.account_id,
                 models.RuntimeSession.cwd.is_distinct_from(value),
+                # A runner session shows its workspace label, never the host
+                # path the runner's harness reports (#1482).
+                models.RuntimeSession.session_source_type != "runner_session",
             ).update({models.RuntimeSession.cwd: value}, synchronize_session=False)
             db.commit()
     except Exception:
@@ -754,6 +769,7 @@ def _register_session_start(
             parent_session_id=payload.parent_session_id,
             first_prompt=payload.first_prompt,
             alias=payload.alias,
+            actor_user_id=identity.user_id,
         )
 
 

@@ -654,7 +654,10 @@ def _apply_state(
     now = _now()
     _touch(row, now)
     if message.harness_session_id:
+        learned = row.harness_session_id != message.harness_session_id
         row.harness_session_id = message.harness_session_id
+        if learned and state not in ("ended", "failed"):
+            _link_hook_sessions(db, row)
     if state == "failed":
         code = message.error_code or "unknown"
         detail = str(raw.get("detail") or "")[:512] or None
@@ -691,6 +694,34 @@ def _apply_state(
         row.active_turn_id = row.pending_turn.get("turn_id")
     db.add(row)
     return []
+
+
+def _link_hook_sessions(db: Session, row: models.RunnerRemoteSession) -> None:
+    """Fold sessions the harness hooks opened before the id arrived.
+
+    The harness's approval and session-start hooks key their calls by the
+    harness session id. When they reached the server first they opened a
+    session of their own; its timeline moves onto the runner session so
+    approvals and notes show up there (#1482).
+    """
+    from preloop.services.agent_session_lineage import (
+        fold_hook_sessions_into_runner,
+    )
+
+    if row.runtime_session_id is None or not row.harness_session_id:
+        return
+    target = db.get(models.RuntimeSession, row.runtime_session_id)
+    if target is None:
+        return
+    db.flush()
+    folded = fold_hook_sessions_into_runner(
+        db,
+        account_id=row.account_id,
+        external_session_id=row.harness_session_id,
+        target=target,
+    )
+    if folded:
+        logger.info("Folded %d hook session(s) into runner session %s", folded, row.id)
 
 
 def _apply_event(

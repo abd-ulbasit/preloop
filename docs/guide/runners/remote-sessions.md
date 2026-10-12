@@ -62,7 +62,10 @@ The following tool-grant and environment details describe Copilot sessions.
 - A session is shown in **Sessions** like any other governed session: turns,
   agent messages, tool calls, approvals and usage. `preloop sessions attach`
   opens it in command mode: a typed line is the next turn, `/note <text>` sends
-  a note.
+  a note. The approval hook's calls are attached to the runner session itself,
+  so its approvals and notes appear on that session's timeline rather than as
+  a second session, even when the hook reaches Preloop before the runner
+  reports the Copilot session id.
 
 ## Enable sessions on the host
 

@@ -223,7 +223,10 @@ the next heartbeat or at once from the replica holding the socket; the runner
 with `--session-id` then `--resume`, only for harnesses the host user enabled
 with `preloop runner sessions enable`. Each session pairs with a
 `RuntimeSession` of source type `runner_session`, which
-`resolve_session_control_mode` puts in command mode. See
+`resolve_session_control_mode` puts in command mode. Hook calls that carry the
+runner-reported `harness_session_id` resolve to that runtime session while it is
+live (`agent_session_lineage.runner_session_for_external`); a session a hook
+opened before the id arrived is folded into it. See
 [Remote sessions](docs/guide/runners/remote-sessions.md).
 
 Runner registration and heartbeats report `docker_available` from a five-second `docker ps` probe. Container leases require that capability, including explicitly pinned runners. The CRUD layer excludes paused runners from selection and slot claims; leasing rechecks scheduling preferences after locking the row. Capability tags are derived from the current daemon result and enabled, signed-in harness inventory alongside custom labels. `accept_untagged` defaults to false and `paused` defaults to false; console scheduling edits persist independently of the process's registration and heartbeat. Automatic routing uses hosted compute when no private runner accepts the job.

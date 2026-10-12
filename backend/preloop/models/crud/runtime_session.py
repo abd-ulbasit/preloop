@@ -403,6 +403,77 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             db.flush()
         return db_obj
 
+    def fold_into(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        source_session_id: Any,
+        target_session_id: Any,
+    ) -> bool:
+        """Move one session's timeline onto another and delete the source.
+
+        Used when two rows turn out to record one conversation, for example a
+        hook that registered a runner-hosted harness session before the
+        server learned the harness id (#1482). Timeline rows (activities,
+        approvals, operator notes and commands, usage, artifacts, agent and
+        desktop links) and lineage children are re-pointed to the target;
+        derived rows that cascade (search documents, optimisation results)
+        are rebuilt for the target and go with the source. Both rows must
+        belong to ``account_id``. Flushes; the caller commits.
+
+        Returns:
+            True when the source existed and was folded.
+        """
+        if source_session_id == target_session_id:
+            return False
+        rows = (
+            db.query(self.model)
+            .filter(
+                self.model.account_id == account_id,
+                self.model.id.in_([source_session_id, target_session_id]),
+            )
+            .all()
+        )
+        by_id = {row.id: row for row in rows}
+        source = by_id.get(source_session_id)
+        target = by_id.get(target_session_id)
+        if source is None or target is None:
+            return False
+        repoint = (
+            models.RuntimeSessionActivity,
+            models.ApprovalRequest,
+            models.AgentControlCommand,
+            models.ApiUsage,
+            models.RuntimeSessionArtifact,
+            models.ManagedAgent,
+            models.DesktopView,
+        )
+        for model in repoint:
+            column = getattr(model, "runtime_session_id", None)
+            if column is None:
+                continue
+            db.query(model).filter(column == source.id).update(
+                {column: target.id}, synchronize_session=False
+            )
+        db.query(self.model).filter(
+            self.model.account_id == account_id,
+            self.model.parent_session_id == source.id,
+            self.model.id != target.id,
+        ).update({self.model.parent_session_id: target.id}, synchronize_session=False)
+        if target.parent_session_id == source.id:
+            target.parent_session_id = None
+        if source.last_activity_at and (
+            target.last_activity_at is None
+            or source.last_activity_at > target.last_activity_at
+        ):
+            target.last_activity_at = source.last_activity_at
+        db.add(target)
+        db.flush()
+        db.delete(source)
+        db.flush()
+        return True
+
     def upsert_by_source(
         self,
         db: Session,
