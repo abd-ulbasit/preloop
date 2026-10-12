@@ -1,3 +1,4 @@
+import { render } from 'lit';
 import { fixture, html, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 
@@ -1027,5 +1028,28 @@ describe('ApiUsageView', () => {
     await (element as any).sessionPages.goTo(2);
     expect(sessionUrls().at(-1)).to.contain('session_offset=20');
     expect((element as any).sessionPages.total).to.equal(60);
+  });
+
+  it('pages the flow breakdown ten at a time', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    const flows = Array.from({ length: 12 }, (_, i) => ({
+      flow_id: `flow-${i}`,
+      flow_name: `Flow ${i}`,
+      request_count: 100 - i,
+      estimated_cost: 1,
+      token_usage: null,
+    }));
+    const host = document.createElement('div');
+    render((element as any).renderFlowBreakdown(flows), host);
+    expect(host.querySelectorAll('.breakdown-row')).to.have.length(10);
+    const pager = host.querySelector('table-pagination') as HTMLElement & {
+      total: number;
+    };
+    expect(pager.total).to.equal(12);
+    (element as any).flowPage = 1;
+    render((element as any).renderFlowBreakdown(flows), host);
+    expect(host.querySelectorAll('.breakdown-row')).to.have.length(2);
   });
 });

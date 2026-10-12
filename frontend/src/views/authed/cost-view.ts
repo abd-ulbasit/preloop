@@ -62,6 +62,7 @@ import {
   renderDataTableToolbar,
 } from '../../table';
 import type { ListColumn } from '../../table';
+import type { RowData } from '@tanstack/table-core';
 import '../../table/data-table';
 import { sessionCountLabel } from '../../utils/session-count';
 import {
@@ -135,7 +136,31 @@ type SortColumn<T> = {
   label: string;
   numeric: boolean;
   value: (row: T) => number | string;
+  /** The cell body; defaults to the value as text. */
+  cell?: (row: T) => unknown;
 };
+
+/**
+ * The Spend tabs' column shape, as a `ListColumn` for the shared table:
+ * numbers sort as numbers and stay out of the search, names sort A to Z.
+ */
+export function sortColumnsToList<T extends RowData>(
+  columns: readonly SortColumn<T>[]
+): Array<ListColumn<T>> {
+  return columns.map((column, index) => ({
+    id: column.key,
+    header: column.label,
+    hideable: index !== 0,
+    numeric: column.numeric,
+    sort: column.numeric ? 'number' : 'text',
+    firstSort: column.numeric ? 'desc' : 'asc',
+    value: column.value,
+    searchText: column.numeric
+      ? () => ''
+      : (row: T) => String(column.value(row)),
+    cell: column.cell ?? ((row: T) => String(column.value(row))),
+  }));
+}
 
 // Aggregated row for the Agents tab (agent sessions or full flow totals).
 type AgentGroupRow = {
@@ -311,11 +336,6 @@ export class CostView extends AuthedElement {
   private readyBreakdowns = new Set<CostUsageBreakdown>();
   private pendingBreakdowns = new Map<CostUsageBreakdown, Promise<void>>();
   // Per-tab sort state. Keys reference the column identifiers used in each tab.
-  @state() private agentSort: SortState = { key: 'cost', dir: 'desc' };
-  @state() private toolSort: SortState = {
-    key: 'total_cost',
-    dir: 'desc',
-  };
   /**
    * Sessions in the period, paged on the server by session with the total
    * from the server (#1585); the table sorts and searches the page it shows.
@@ -326,6 +346,32 @@ export class CostView extends AuthedElement {
       breakdowns: ['sessions'],
       sessionPage,
     })
+  );
+
+  /** Spend by agent, model, tool and user: the same table as Sessions. */
+  readonly agentTable = this.spendTable<AgentGroupRow>(
+    'cost-agents',
+    (row) => row.key,
+    this.agentColumns(),
+    'cost'
+  );
+  readonly modelTable = this.spendTable<GatewayUsageByModel>(
+    'cost-models',
+    (row) => `${row.provider_name ?? ''}/${row.model_alias ?? ''}`,
+    this.modelColumns(),
+    'cost'
+  );
+  readonly toolTable = this.spendTable<GatewayUsageByTool>(
+    'cost-tools',
+    (row) => `${row.server_name ?? ''}/${row.tool_name}`,
+    this.toolColumns(),
+    'total_cost'
+  );
+  readonly userTable = this.spendTable<UserGroupRow>(
+    'cost-users',
+    (row) => row.username,
+    this.userColumns(),
+    'cost'
   );
 
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
@@ -341,9 +387,7 @@ export class CostView extends AuthedElement {
     defaultSorting: [{ id: 'last_activity', desc: true }],
     columns: this.sessionColumns(),
   });
-  @state() private userSort: SortState = { key: 'cost', dir: 'desc' };
   @state() private importedSort: SortState = { key: 'cost', dir: 'desc' };
-  @state() private modelSort: SortState = { key: 'cost', dir: 'desc' };
   // Copilot is an import, so its tab waits for a connection: a Copilot
   // connection, or a Copilot provider billing connection. Checked once per
   // visit; the Imports destination in Spend settings reveals it to set one up.
@@ -2886,88 +2930,65 @@ export class CostView extends AuthedElement {
     }
   }
 
-  private renderModelsTab() {
-    const columns: SortColumn<GatewayUsageByModel>[] = [
+  private modelColumns(): SortColumn<GatewayUsageByModel>[] {
+    return [
       {
         key: 'model',
         label: 'Model',
         numeric: false,
         value: (r) => r.model_alias || '',
+        cell: (row) =>
+          html`<div class="model-name">
+              ${row.model_alias || 'Unnamed model'}
+            </div>
+            <div class="model-provider">
+              ${row.provider_name || 'Unknown provider'}
+            </div>`,
       },
       {
         key: 'requests',
         label: 'Requests',
         numeric: true,
         value: (r) => r.request_count,
+        cell: (r) => this.formatNumber(r.request_count),
       },
       {
         key: 'tokens',
         label: 'Tokens',
         numeric: true,
         value: (r) => r.token_usage?.total_tokens ?? 0,
+        cell: (r) =>
+          html`<token-figures
+            .usage=${r.token_usage}
+            expanded
+          ></token-figures>`,
       },
       {
         key: 'cost',
         label: 'Cost',
         numeric: true,
         value: (r) => r.estimated_cost,
+        cell: (r) =>
+          html`<span title=${formatUsdExact(r.estimated_cost)}
+            >${formatUsd(r.estimated_cost)}</span
+          >`,
       },
     ];
-    const rows = this.sortRows(
-      this.summary?.usage_by_model ?? [],
-      columns,
-      this.modelSort
-    );
+  }
+
+  private renderModelsTab() {
+    const rows = this.summary?.usage_by_model ?? [];
     if (!rows.length) {
       return html`<div class="empty">
         No model-level usage is available for this period.
       </div>`;
     }
-    return html`<div class="analytics-table-wrap">
-      <div class="table-scroll">
-        <table class="styled-table" aria-label="Spend by model">
-          <thead>
-            <tr>
-              ${columns.map((column) =>
-                this.renderSortableHeader(
-                  column,
-                  this.modelSort,
-                  (key) =>
-                    (this.modelSort = this.toggleSort(this.modelSort, key))
-                )
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(
-              (row) =>
-                html`<tr>
-                  <td>
-                    <div class="model-name">
-                      ${row.model_alias || 'Unnamed model'}
-                    </div>
-                    <div class="model-provider">
-                      ${row.provider_name || 'Unknown provider'}
-                    </div>
-                  </td>
-                  <td>${this.formatNumber(row.request_count)}</td>
-                  <td>
-                    <token-figures
-                      .usage=${row.token_usage}
-                      expanded
-                    ></token-figures>
-                  </td>
-                  <td>
-                    <span title=${formatUsdExact(row.estimated_cost)}
-                      >${formatUsd(row.estimated_cost)}</span
-                    >
-                  </td>
-                </tr>`
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
+    return this.renderSpendTable(
+      this.modelTable,
+      rows,
+      'Spend by model',
+      'models'
+    );
   }
 
   private openSpendSetting(destination: string) {
@@ -3161,84 +3182,104 @@ export class CostView extends AuthedElement {
     `;
   }
 
-  private renderAgentsTab() {
-    const columns: SortColumn<AgentGroupRow>[] = [
-      { key: 'name', label: 'Agent', numeric: false, value: (r) => r.name },
+  private spendTable<T extends RowData>(
+    listId: string,
+    getRowId: (row: T) => string,
+    columns: readonly SortColumn<T>[],
+    defaultSort: string
+  ): ListTable<T> {
+    return new ListTable<T>(this, {
+      listId,
+      getRowId,
+      pageSize: 25,
+      defaultSorting: [{ id: defaultSort, desc: true }],
+      columns: sortColumnsToList(columns),
+    });
+  }
+
+  /** One Spend tab: the shared toolbar, table and pager. */
+  private renderSpendTable<T extends RowData>(
+    table: ListTable<T>,
+    rows: T[],
+    label: string,
+    noun: string
+  ) {
+    table.data = rows;
+    return html`
+      ${renderDataTableToolbar({
+        table,
+        searchPlaceholder: `Search ${noun}`,
+        searchLabel: `Search ${label.toLowerCase()}`,
+        count: `${table.totalRows ?? rows.length} ${noun}`,
+      })}
+      <div class="analytics-table-wrap">
+        <data-table
+          .table=${table}
+          .rows=${table.rows}
+          .stickyHeader=${false}
+          label=${label}
+          noun=${noun}
+        ></data-table>
+      </div>
+    `;
+  }
+
+  private agentColumns(): SortColumn<AgentGroupRow>[] {
+    return [
+      {
+        key: 'name',
+        label: 'Agent',
+        numeric: false,
+        value: (r) => r.name,
+        cell: (row) =>
+          row.agentId
+            ? html`<a
+                href=${`/console/agents/${encodeURIComponent(row.agentId)}`}
+                >${row.name}</a
+              >`
+            : row.flowId
+              ? html`<a
+                  href=${`/console/flows/${encodeURIComponent(row.flowId)}`}
+                  >${row.name}</a
+                >`
+              : row.name,
+      },
       {
         key: 'requests',
         label: 'Requests',
         numeric: true,
         value: (r) => r.requests,
+        cell: (r) => this.formatNumber(r.requests),
       },
       {
         key: 'tokens',
         label: 'Tokens',
         numeric: true,
         value: (r) => r.totalTokens,
+        cell: (r) =>
+          html`<token-figures .usage=${r.tokenUsage} expanded></token-figures>`,
       },
-      { key: 'cost', label: 'Cost', numeric: true, value: (r) => r.cost },
+      {
+        key: 'cost',
+        label: 'Cost',
+        numeric: true,
+        value: (r) => r.cost,
+        cell: (r) =>
+          html`<span title=${formatUsdExact(r.cost)}
+            >${formatUsd(r.cost)}</span
+          >`,
+      },
     ];
-    const rows = this.sortRows(
-      this.buildAgentGroups(),
-      columns,
-      this.agentSort
-    );
+  }
+
+  private renderAgentsTab() {
+    const rows = this.buildAgentGroups();
     if (!rows.length) {
       return html`<div class="empty">No agent-attributed usage yet.</div>`;
     }
     return html`
       <div class="tab-panel-body">
-        <div class="analytics-table-wrap">
-          <div class="table-scroll">
-            <table class="styled-table" aria-label="Spend by agent">
-              <thead>
-                <tr>
-                  ${columns.map((column) =>
-                    this.renderSortableHeader(
-                      column,
-                      this.agentSort,
-                      (key) =>
-                        (this.agentSort = this.toggleSort(this.agentSort, key))
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map(
-                  (row) => html`
-                    <tr>
-                      <td>
-                        ${
-                          row.agentId
-                            ? html`<a
-                                href=${`/console/agents/${encodeURIComponent(row.agentId)}`}
-                                >${row.name}</a
-                              >`
-                            : row.flowId
-                              ? html`<a
-                                  href=${`/console/flows/${encodeURIComponent(row.flowId)}`}
-                                  >${row.name}</a
-                                >`
-                              : row.name
-                        }
-                      </td>
-                      <td>${this.formatNumber(row.requests)}</td>
-                      <td>
-                        <token-figures
-                          .usage=${row.tokenUsage}
-                          expanded
-                        ></token-figures>
-                      </td>
-                      <td>
-                        ${html`<span title=${formatUsdExact(row.cost)}>${formatUsd(row.cost)}</span>`}
-                      </td>
-                    </tr>
-                  `
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        ${this.renderSpendTable(this.agentTable, rows, 'Spend by agent', 'agents')}
       </div>
     `;
   }
@@ -3250,120 +3291,81 @@ export class CostView extends AuthedElement {
     return row.estimated_schema_cost / Math.max(row.schema_injections, 1);
   }
 
-  private renderToolsTab() {
-    const columns: SortColumn<GatewayUsageByTool>[] = [
+  private toolColumns(): SortColumn<GatewayUsageByTool>[] {
+    const money = (value: number) =>
+      html`<span title=${formatUsdExact(value)}>${formatUsd(value)}</span>`;
+    return [
       {
         key: 'tool',
         label: 'Tool',
         numeric: false,
         value: (r) => r.tool_name,
+        cell: (row) =>
+          html`<div>${row.tool_name}</div>
+            ${
+              row.server_name
+                ? html`<div class="cell-subtitle">${row.server_name}</div>`
+                : nothing
+            }`,
       },
       {
         key: 'invocations',
         label: 'Invocations',
         numeric: true,
         value: (r) => r.invocation_count,
+        cell: (r) => this.formatNumber(r.invocation_count),
       },
       {
         key: 'failed',
         label: 'Failed',
         numeric: true,
         value: (r) => r.failed_invocations,
+        cell: (r) => this.formatNumber(r.failed_invocations),
       },
       {
         key: 'schema_tokens',
         label: 'Schema tokens',
         numeric: true,
         value: (r) => r.schema_tokens_total,
+        cell: (r) => this.formatNumber(r.schema_tokens_total),
       },
       {
         key: 'total_cost',
         label: 'Total cost',
         numeric: true,
         value: (r) => r.estimated_schema_cost,
+        cell: (r) => money(r.estimated_schema_cost),
       },
       {
         key: 'definition_cost',
         label: 'Definition cost',
         numeric: true,
         value: (r) => this.perDefinitionCost(r),
+        cell: (r) => money(this.perDefinitionCost(r)),
       },
       {
         key: 'avg_cost',
         label: 'Avg / invocation',
         numeric: true,
         value: (r) => r.avg_cost_per_invocation,
+        cell: (r) => money(r.avg_cost_per_invocation),
       },
     ];
-    const rows = this.sortRows(
-      this.summary?.usage_by_tool || [],
-      columns,
-      this.toolSort
-    );
+  }
+
+  private renderToolsTab() {
+    const rows = this.summary?.usage_by_tool || [];
     return html`
       <div class="tab-panel-body">
         ${this.renderToolCostFlagsNotice()}
         ${
           rows.length
-            ? html`
-                <div class="analytics-table-wrap">
-                  <div class="table-scroll">
-                    <table class="styled-table" aria-label="Tool schema cost">
-                      <thead>
-                        <tr>
-                          ${columns.map((column) =>
-                            this.renderSortableHeader(
-                              column,
-                              this.toolSort,
-                              (key) =>
-                                (this.toolSort = this.toggleSort(
-                                  this.toolSort,
-                                  key
-                                ))
-                            )
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        ${rows.map(
-                          (row) => html`
-                            <tr>
-                              <td>
-                                <div>${row.tool_name}</div>
-                                ${
-                                  row.server_name
-                                    ? html`<div class="cell-subtitle">
-                                        ${row.server_name}
-                                      </div>`
-                                    : nothing
-                                }
-                              </td>
-                              <td>
-                                ${this.formatNumber(row.invocation_count)}
-                              </td>
-                              <td>
-                                ${this.formatNumber(row.failed_invocations)}
-                              </td>
-                              <td>
-                                ${this.formatNumber(row.schema_tokens_total)}
-                              </td>
-                              <td>
-                                ${html`<span title=${formatUsdExact(row.estimated_schema_cost)}>${formatUsd(row.estimated_schema_cost)}</span>`}
-                              </td>
-                              <td>
-                                ${html`<span title=${formatUsdExact(this.perDefinitionCost(row))}>${formatUsd(this.perDefinitionCost(row))}</span>`}
-                              </td>
-                              <td>
-                                ${html`<span title=${formatUsdExact(row.avg_cost_per_invocation)}>${formatUsd(row.avg_cost_per_invocation)}</span>`}
-                              </td>
-                            </tr>
-                          `
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              `
+            ? this.renderSpendTable(
+                this.toolTable,
+                rows,
+                'Tool schema cost',
+                'tools'
+              )
             : html`<div class="empty">No tool usage recorded yet.</div>`
         }
       </div>
@@ -3416,6 +3418,9 @@ export class CostView extends AuthedElement {
         header: 'Session',
         hideable: false,
         firstSort: 'asc',
+        // Untitled sessions show their id: one line, the rest on hover.
+        truncate: true,
+        minWidth: 160,
         value: (row) => this.getSessionTitle(row),
         cell: (row) =>
           row.runtime_session_id
@@ -3497,8 +3502,8 @@ export class CostView extends AuthedElement {
     ];
   }
 
-  private renderUsersTab() {
-    const columns: SortColumn<UserGroupRow>[] = [
+  private userColumns(): SortColumn<UserGroupRow>[] {
+    return [
       {
         key: 'username',
         label: 'User',
@@ -3510,6 +3515,7 @@ export class CostView extends AuthedElement {
         label: 'Requests',
         numeric: true,
         value: (r) => r.requests,
+        cell: (r) => this.formatNumber(r.requests),
       },
       // Tokens before cost here too: this is a spend table, and the volume
       // is what the money was spent on.
@@ -3518,10 +3524,24 @@ export class CostView extends AuthedElement {
         label: 'Tokens',
         numeric: true,
         value: (r) => r.tokenUsage?.total_tokens || 0,
+        cell: (r) =>
+          html`<token-figures .usage=${r.tokenUsage} expanded></token-figures>`,
       },
-      { key: 'cost', label: 'Cost', numeric: true, value: (r) => r.cost },
+      {
+        key: 'cost',
+        label: 'Cost',
+        numeric: true,
+        value: (r) => r.cost,
+        cell: (r) =>
+          html`<span title=${formatUsdExact(r.cost)}
+            >${formatUsd(r.cost)}</span
+          >`,
+      },
     ];
-    const rows = this.sortRows(this.buildUserGroups(), columns, this.userSort);
+  }
+
+  private renderUsersTab() {
+    const rows = this.buildUserGroups();
     if (!rows.length) {
       return html`<div class="empty">No user-attributed usage yet.</div>`;
     }
@@ -3541,43 +3561,7 @@ export class CostView extends AuthedElement {
               </sl-alert>`
             : nothing
         }
-        <div class="analytics-table-wrap">
-          <div class="table-scroll">
-            <table class="styled-table" aria-label="Spend by user">
-              <thead>
-                <tr>
-                  ${columns.map((column) =>
-                    this.renderSortableHeader(
-                      column,
-                      this.userSort,
-                      (key) =>
-                        (this.userSort = this.toggleSort(this.userSort, key))
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map(
-                  (row) => html`
-                    <tr>
-                      <td>${row.username}</td>
-                      <td>${this.formatNumber(row.requests)}</td>
-                      <td>
-                        <token-figures
-                          .usage=${row.tokenUsage}
-                          expanded
-                        ></token-figures>
-                      </td>
-                      <td>
-                        ${html`<span title=${formatUsdExact(row.cost)}>${formatUsd(row.cost)}</span>`}
-                      </td>
-                    </tr>
-                  `
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        ${this.renderSpendTable(this.userTable, rows, 'Spend by user', 'users')}
       </div>
     `;
   }

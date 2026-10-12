@@ -10,6 +10,11 @@ import {
   type ListTable,
 } from './list-table';
 
+function textOf(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'string' ? value : String(value);
+}
+
 /** How far one arrow key moves a resize handle. */
 const KEYBOARD_RESIZE_STEP = 16;
 
@@ -43,7 +48,16 @@ function renderListHeader<TRow extends RowData>(
   return html`
     <th
       class=${classes}
-      style=${header.width ? `width: ${header.width}px` : nothing}
+      style=${
+        header.width || column.minWidth
+          ? [
+              header.width ? `width: ${header.width}px` : '',
+              column.minWidth ? `min-width: ${column.minWidth}px` : '',
+            ]
+              .filter(Boolean)
+              .join('; ')
+          : nothing
+      }
       aria-sort=${header.ariaSort}
       scope="col"
     >
@@ -55,6 +69,7 @@ function renderListHeader<TRow extends RowData>(
                 class="sort-button"
                 data-sort-key=${column.id}
                 title=${column.headerTitle || 'Sorts the rows on this page'}
+                aria-label=${column.headerLabel || nothing}
                 @click=${(event: MouseEvent) =>
                   table.toggleSort(column.id, event.shiftKey)}
               >
@@ -139,6 +154,17 @@ export function renderListCells<TRow extends RowData>(
     const classes = [column.cellClass ?? '', column.numeric ? 'numeric' : '']
       .filter(Boolean)
       .join(' ');
+    if (column.truncate) {
+      const title =
+        column.cellTitle?.(row) ??
+        column.searchText?.(row) ??
+        textOf(column.value?.(row));
+      // The cut happens on an inner block, so the cell itself never
+      // overflows and the row stays one line.
+      return html`<td class=${classes || nothing} title=${title || nothing}>
+        <span class="cell-truncate">${column.cell(row)}</span>
+      </td>`;
+    }
     const title = column.cellTitle?.(row);
     return html`<td class=${classes || nothing} title=${title || nothing}>
       ${column.cell(row)}

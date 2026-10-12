@@ -3,7 +3,7 @@ import type { LitElement } from 'lit';
 import sinon from 'sinon';
 import '../../components/view-header.ts';
 import './cost-view.ts';
-import { CostView } from './cost-view';
+import { CostView, sortColumnsToList } from './cost-view';
 import { RepriceJobStatusElement } from '../../components/reprice-job-status';
 import { invalidateApiCaches } from '../../api';
 
@@ -854,10 +854,13 @@ describe('CostView', () => {
     const requestsHeader = Array.from(table!.querySelectorAll('th')).find(
       (th) => th.textContent?.trim().startsWith('Requests')
     ) as HTMLElement;
-    requestsHeader.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter' })
-    );
+    (requestsHeader.querySelector('.sort-button') as HTMLElement).click();
     await element.updateComplete;
+    await (
+      table!.closest('data-table') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      }
+    ).updateComplete;
     expect(names()).to.deep.equal(['claude-test', 'gpt-test']);
   });
 
@@ -2507,5 +2510,23 @@ describe('CostView', () => {
       );
       expect(notice(element)?.querySelector('sl-button')).to.not.exist;
     });
+  });
+});
+
+describe('sortColumnsToList', () => {
+  it('maps a Spend column to a shared-table column', () => {
+    const [name, cost] = sortColumnsToList<{ name: string; cost: number }>([
+      { key: 'name', label: 'Agent', numeric: false, value: (r) => r.name },
+      { key: 'cost', label: 'Cost', numeric: true, value: (r) => r.cost },
+    ]);
+    expect(name.id).to.equal('name');
+    expect(name.hideable).to.equal(false);
+    expect(name.firstSort).to.equal('asc');
+    expect(name.searchText!({ name: 'Builder', cost: 1 })).to.equal('Builder');
+    expect(cost.numeric).to.equal(true);
+    expect(cost.sort).to.equal('number');
+    expect(cost.firstSort).to.equal('desc');
+    expect(cost.searchText!({ name: 'x', cost: 12 })).to.equal('');
+    expect(cost.cell({ name: 'x', cost: 12 })).to.equal('12');
   });
 });

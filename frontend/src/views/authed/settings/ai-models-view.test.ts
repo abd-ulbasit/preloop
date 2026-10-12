@@ -852,7 +852,7 @@ describe('AIModelsView attention dismissals', () => {
 
   const healthBadge = (element: AIModelsView) =>
     element.shadowRoot!.querySelector(
-      'tr[data-model-id="model-1"] sl-badge.status-chip'
+      'tr[data-selection-id="model-1"] sl-badge.status-chip'
     ) as HTMLElement;
 
   it('flags a failing model nobody has acknowledged', async () => {
@@ -994,7 +994,7 @@ describe('AIModelsView attention dismissals', () => {
     const element = await mount();
 
     const menu = element.shadowRoot!.querySelector(
-      'tr[data-model-id="model-1"] .dismiss-dropdown sl-menu'
+      'tr[data-selection-id="model-1"] .dismiss-dropdown sl-menu'
     )!;
     menu.dispatchEvent(
       new CustomEvent('sl-select', { detail: { item: { value: 'snoozed' } } })
@@ -1064,7 +1064,7 @@ describe('AIModelsView attention dismissals', () => {
 
     const selectMenuItem = async (element: AIModelsView, value: string) => {
       const menu = element.shadowRoot!.querySelector(
-        'tr[data-model-id="model-1"] .dismiss-dropdown sl-menu'
+        'tr[data-selection-id="model-1"] .dismiss-dropdown sl-menu'
       )!;
       menu.dispatchEvent(
         new CustomEvent('sl-select', { detail: { item: { value } } })
@@ -1202,7 +1202,7 @@ describe('AIModelsView attention dismissals', () => {
       // The menu offers only the claim that is still open.
       const values = [
         ...element.shadowRoot!.querySelectorAll(
-          'tr[data-model-id="model-1"] .dismiss-dropdown sl-menu sl-menu-item'
+          'tr[data-selection-id="model-1"] .dismiss-dropdown sl-menu sl-menu-item'
         ),
       ].map((item) => item.getAttribute('value'));
       expect(values).to.eql(['unpriced-expected', 'unpriced-snoozed']);
@@ -1228,7 +1228,7 @@ describe('AIModelsView attention dismissals', () => {
 
       const values = [
         ...element.shadowRoot!.querySelectorAll(
-          'tr[data-model-id="model-1"] .dismiss-dropdown sl-menu sl-menu-item'
+          'tr[data-selection-id="model-1"] .dismiss-dropdown sl-menu sl-menu-item'
         ),
       ].map((item) => item.getAttribute('value'));
       expect(values).to.eql([

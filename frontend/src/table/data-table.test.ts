@@ -552,3 +552,40 @@ describe('data-table: rowDetail and available()', () => {
     expect(q(host, 'tbody tr[data-row]').textContent).to.contain('note k0');
   });
 });
+
+describe('data-table: truncate and minWidth', () => {
+  it('cuts a long cell on an inner block with the full text on hover', async () => {
+    const table = new ListTable<Key>(
+      { addController() {}, requestUpdate() {} } as never,
+      {
+        listId: `trunc-${++counter}`,
+        getRowId: (row) => row.id,
+        columns: [
+          {
+            id: 'name',
+            header: 'Name',
+            truncate: true,
+            minWidth: 120,
+            value: (row) => row.name,
+            cell: (row) => row.name,
+          },
+        ],
+      }
+    );
+    table.data = [{ id: 'a', name: 'x'.repeat(400), scope: 'read', uses: 1 }];
+    const el = await fixture<HTMLElement>(
+      html`<div style="width: 400px">
+        <data-table .table=${table} .rows=${table.rows}></data-table>
+      </div>`
+    );
+    const dataTable = el.querySelector('data-table') as LitElement;
+    await dataTable.updateComplete;
+    const td = el.querySelector('td')!;
+    expect(td.title).to.equal('x'.repeat(400));
+    expect(td.querySelector('.cell-truncate')).to.exist;
+    const th = el.querySelector('th')!;
+    expect(th.getAttribute('style')).to.contain('min-width: 120px');
+    // The handle sits inside the header, so the header does not overflow.
+    expect(th.scrollWidth).to.be.at.most(th.clientWidth + 2);
+  });
+});
