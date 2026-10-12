@@ -31,6 +31,7 @@ import {
   recordFreePlanChoice,
   coalesceKey,
   getUsageNudges,
+  getAccountGatewayUsageSearch,
   getAccountGatewayUsageSummary,
   getAccountRuntimeSessionActivityTimeline,
   getCostAnalyticsSummary,
@@ -152,6 +153,21 @@ describe('api', () => {
       const url = new URL(fetchStub.firstCall.args[0], window.location.origin);
       expect(url.searchParams.get('include_breakdown')).to.equal('false');
       expect(url.searchParams.has('breakdown')).to.equal(false);
+    });
+
+    it('lists gateway interactions without the count unless asked (#1582)', async () => {
+      fetchStub.resolves(new Response('{}', { status: 200 }));
+      await getAccountGatewayUsageSearch({ limit: 10, startDate: 'x' });
+      let url = new URL(fetchStub.lastCall.args[0], window.location.origin);
+      expect(url.pathname).to.equal('/api/v1/account/gateway-usage/search');
+      expect(url.searchParams.get('include_total')).to.equal('false');
+      expect(url.searchParams.get('limit')).to.equal('10');
+      expect(url.searchParams.get('start_date')).to.equal('x');
+
+      fetchStub.resolves(new Response('{}', { status: 200 }));
+      await getAccountGatewayUsageSearch({ includeTotal: true });
+      url = new URL(fetchStub.lastCall.args[0], window.location.origin);
+      expect(url.searchParams.has('include_total')).to.equal(false);
     });
   });
 

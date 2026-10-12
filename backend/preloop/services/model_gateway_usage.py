@@ -548,6 +548,7 @@ class ModelGatewayUsageService:
         session_source_type: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
+        include_total: bool = True,
     ) -> AccountGatewayUsageSearchResponse:
         """Search or list indexed gateway interactions for one account."""
         start_date, end_date = self._normalize_period(start_date, end_date)
@@ -570,12 +571,14 @@ class ModelGatewayUsageService:
             session_source_type=session_source_type,
             limit=limit,
             offset=offset,
+            include_total=include_total,
         )
         return AccountGatewayUsageSearchResponse(
             period_start=start_date,
             period_end=end_date,
             query=query,
             total=results["total"],
+            has_more=results["has_more"],
             limit=limit,
             offset=offset,
             items=[self._search_row_to_schema(item) for item in results["items"]],

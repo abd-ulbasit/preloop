@@ -1447,6 +1447,14 @@ def search_account_gateway_usage(
     session_source_type: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    include_total: bool = Query(
+        True,
+        description=(
+            "False skips counting every match in the window (the slow part "
+            "on a busy account); `total` is then null and `has_more` says "
+            "whether another page exists."
+        ),
+    ),
 ):
     """Search or list indexed gateway interactions for the current account."""
     return ModelGatewayUsageService(db).search_account_interactions(
@@ -1463,6 +1471,7 @@ def search_account_gateway_usage(
         session_source_type=session_source_type,
         limit=limit,
         offset=offset,
+        include_total=include_total,
     )
 
 

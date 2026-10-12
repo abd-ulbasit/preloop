@@ -538,6 +538,27 @@ def test_account_gateway_usage_search_lists_recent_documents_without_query(
     assert body["items"][0]["provider_name"] == "openai"
     assert body["items"][0]["outcome"] == "error"
 
+    # Without the count (#1582): the same page, no total, and has_more from
+    # one extra row.
+    listed = client.get(
+        "/api/v1/account/gateway-usage/search",
+        params={"limit": 1, "include_total": "false"},
+    ).json()
+    assert listed["total"] is None
+    assert listed["has_more"] is True
+    assert [item["api_usage_id"] for item in listed["items"]] == [str(second_usage.id)]
+    last = client.get(
+        "/api/v1/account/gateway-usage/search",
+        params={"limit": 1, "offset": 1, "include_total": "false"},
+    ).json()
+    assert last["has_more"] is False
+    assert [item["api_usage_id"] for item in last["items"]] == [str(first_usage.id)]
+    counted = client.get(
+        "/api/v1/account/gateway-usage/search", params={"limit": 1}
+    ).json()
+    assert counted["total"] == 2
+    assert counted["has_more"] is True
+
 
 def test_account_runtime_sessions_endpoints(client, db_session, test_user):
     """Runtime session explorer endpoints should list and drill into sessions."""
