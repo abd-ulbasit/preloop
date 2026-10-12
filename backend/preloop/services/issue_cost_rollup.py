@@ -1845,6 +1845,7 @@ def _sort_rollups(
     *,
     sort: str,
     descending: bool,
+    tracker_labels: Optional[dict[uuid.UUID, str]] = None,
 ) -> list[models.IssueCostRollup]:
     """Order issue rows by one key, rows without a value last.
 
@@ -1871,7 +1872,8 @@ def _sort_rollups(
         if sort == "issue":
             return (rollup.issue_key or "").lower()
         if sort == "tracker":
-            return str(rollup.tracker_id)
+            # The label the column shows: the tracker name, else its type.
+            return (tracker_labels or {}).get(rollup.tracker_id, "").lower()
         return totals.cost
 
     present = [r for r in rollups if value(r) is not None]
@@ -1979,7 +1981,25 @@ def build_report(
         )
     total_issues = len(rollups)
     all_project_ids = [pid for pid in per_project if pid]
-    rollups = _sort_rollups(rollups, per_issue, sort=sort, descending=descending)
+    tracker_labels: Optional[dict[uuid.UUID, str]] = None
+    if sort == "tracker":
+        tracker_names, _, _ = crud_issue_cost.names(
+            db,
+            tracker_ids=list({rollup.tracker_id for rollup in rollups}),
+            project_ids=[],
+            flow_ids=[],
+        )
+        tracker_labels = {
+            tracker_id: name or kind
+            for tracker_id, (name, kind) in tracker_names.items()
+        }
+    rollups = _sort_rollups(
+        rollups,
+        per_issue,
+        sort=sort,
+        descending=descending,
+        tracker_labels=tracker_labels,
+    )
     if page_size is not None:
         rollups = rollups[offset : offset + page_size]
     elif offset:

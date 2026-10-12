@@ -1355,7 +1355,7 @@ describe('ApprovalsView', () => {
       await select(element, ['ar-1', 'ar-2']);
       expect((element as any).selectedIds.length).to.equal(2);
 
-      (element as any).searchQuery = 'write_file';
+      (element as any).toolFilter = 'write_file';
       (element as any).applyFilters();
       await element.updateComplete;
 
@@ -1572,6 +1572,18 @@ describe('ApprovalsView', () => {
       expect((element as any).historyRequests[0].id).to.equal('ar-50');
     });
 
+    it('re-reads the account counts after a decision', async () => {
+      stubServer(60);
+      const element = await mountView();
+      const statsCalls = () =>
+        fetchStub
+          .getCalls()
+          .filter((call) => String(call.args[0]).endsWith('/stats')).length;
+      const before = statsCalls();
+      (element as any).applyResolution('waiting-1', { status: 'approved' });
+      await waitUntil(() => statsCalls() === before + 1, 'stats re-read');
+    });
+
     it('sends status, tool and search to the server and restarts at page one', async () => {
       window.history.replaceState(
         null,
@@ -1590,6 +1602,11 @@ describe('ApprovalsView', () => {
       expect(last.get('skip')).to.equal('0');
       expect(last.get('status')).to.equal('approved');
       expect(last.get('tool_name')).to.equal('needle_tool');
+      // What is waiting is searched on the server too.
+      const pending = listCalls().filter(
+        (params) => params.get('status') === 'pending'
+      );
+      expect(pending.at(-1)!.get('q')).to.equal('deploy');
     });
   });
 });

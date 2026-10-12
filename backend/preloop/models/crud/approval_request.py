@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Union
 from uuid import UUID
 from sqlalchemy import Text, and_, cast, func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Query, Session, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -199,7 +199,8 @@ class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
         runtime_session_id: Optional[Union[UUID, str]] = None,
         tool_name: Optional[str] = None,
         search: Optional[str] = None,
-    ):
+    ) -> "Query[ApprovalRequest]":
+        """The account's requests with the list filters applied, unordered."""
         query = db.query(self.model).filter(self.model.account_id == account_id)
 
         if execution_id:

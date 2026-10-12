@@ -2353,3 +2353,26 @@ def test_gateway_only_issue_is_metered_without_seat_label(world: World) -> None:
     )
     assert csv_row["billing_mode"] == "metered"
     assert csv_row["premium_requests"] == ""
+
+
+def test_tracker_sort_uses_the_label_the_column_shows() -> None:
+    """Sorting on Tracker orders by the shown name, not the tracker id."""
+    from types import SimpleNamespace
+
+    from preloop.services.issue_cost_rollup import _sort_rollups, _Totals
+
+    ids = [uuid.uuid4() for _ in range(3)]
+    trackers = [uuid.uuid4() for _ in range(3)]
+    rollups = [
+        SimpleNamespace(id=rid, tracker_id=tid)
+        for rid, tid in zip(ids, trackers, strict=False)
+    ]
+    labels = {trackers[0]: "Jira", trackers[1]: "github", trackers[2]: "GitLab"}
+    ordered = _sort_rollups(
+        rollups,  # type: ignore[arg-type]
+        {rid: _Totals() for rid in ids},
+        sort="tracker",
+        descending=False,
+        tracker_labels=labels,
+    )
+    assert [labels[row.tracker_id] for row in ordered] == ["github", "GitLab", "Jira"]

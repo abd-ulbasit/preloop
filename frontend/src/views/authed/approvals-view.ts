@@ -590,6 +590,8 @@ export class ApprovalsView extends AuthedElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    if (this.statsTimer !== null) window.clearTimeout(this.statsTimer);
+    this.statsTimer = null;
     window.removeEventListener('popstate', this.onFilterPopState);
     if (this.filterSearchTimer !== null)
       window.clearTimeout(this.filterSearchTimer);
@@ -861,12 +863,19 @@ export class ApprovalsView extends AuthedElement {
         return;
       }
 
-      // Add to the beginning of the list
-      this.approvalRequests = [newApproval, ...this.approvalRequests];
       this.newApprovalCount++;
       this.accessibilityStatus.announce(
         `${this.newApprovalCount} new approval ${this.newApprovalCount === 1 ? 'request' : 'requests'}.`
       );
+      this.refreshStatsSoon();
+      // The server owns the text search; a row it has not matched is not
+      // pushed into a searched list, the list is asked again instead.
+      if (this.searchQuery.trim()) {
+        void this.loadApprovalRequests();
+        return;
+      }
+      // Add to the beginning of the list
+      this.approvalRequests = [newApproval, ...this.approvalRequests];
       this.applyFilters();
       this.calculateStats();
     }
@@ -898,7 +907,23 @@ export class ApprovalsView extends AuthedElement {
         this.applyFilters();
         this.calculateStats();
       }
+      this.refreshStatsSoon();
     }
+  }
+
+  private statsTimer: number | null = null;
+
+  /**
+   * Re-read the account counts shortly after a decision or a live status
+   * change, so the strip moves with the list. Bursts of events cost one
+   * request.
+   */
+  private refreshStatsSoon() {
+    if (this.statsTimer !== null) return;
+    this.statsTimer = window.setTimeout(() => {
+      this.statsTimer = null;
+      if (this.isConnected) void this.loadStats();
+    }, 500);
   }
 
   /**
@@ -924,15 +949,22 @@ export class ApprovalsView extends AuthedElement {
     };
   }
 
+  /** Tool and text search, which the server applies to both lists. */
+  private filterParams(): Record<string, string> {
+    const params: Record<string, string> = {};
+    if (this.toolFilter !== 'all') params.tool_name = this.toolFilter;
+    if (this.searchQuery.trim()) params.q = this.searchQuery.trim();
+    return params;
+  }
+
   /** The history query: the status, tool and search filters, one page. */
   private historyParams(): Record<string, string> {
     const params: Record<string, string> = {
+      ...this.filterParams(),
       limit: String(this.historyPageSize),
       skip: String(this.historyPage * this.historyPageSize),
     };
     if (this.statusFilter !== 'all') params.status = this.statusFilter;
-    if (this.toolFilter !== 'all') params.tool_name = this.toolFilter;
-    if (this.searchQuery.trim()) params.q = this.searchQuery.trim();
     return params;
   }
 
@@ -956,6 +988,7 @@ export class ApprovalsView extends AuthedElement {
     try {
       const [pending, history] = await Promise.all([
         this.fetchPage({
+          ...this.filterParams(),
           status: 'pending',
           limit: String(APPROVAL_REQUESTS_PAGE_LIMIT),
         }),
@@ -1126,19 +1159,9 @@ export class ApprovalsView extends AuthedElement {
       filtered = filtered.filter((r) => r.tool_name === this.toolFilter);
     }
 
-    // Search query (searches tool name, execution ID, and reasoning)
-    if (this.searchQuery.trim()) {
-      const query = this.searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (r) =>
-          r.tool_name.toLowerCase().includes(query) ||
-          r.summary?.toLowerCase().includes(query) ||
-          r.managed_agent_name?.toLowerCase().includes(query) ||
-          r.execution_id?.toLowerCase().includes(query) ||
-          r.agent_reasoning?.toLowerCase().includes(query) ||
-          JSON.stringify(r.tool_args).toLowerCase().includes(query)
-      );
-    }
+    // The text search is the server's (`q`): matching it here again, on a
+    // different rendering of the arguments, could drop rows the server
+    // counted.
 
     this.filteredRequests = filtered;
 
@@ -1293,6 +1316,7 @@ export class ApprovalsView extends AuthedElement {
     ];
     this.applyFilters();
     this.calculateStats();
+    this.refreshStatsSoon();
   }
 
   /**
