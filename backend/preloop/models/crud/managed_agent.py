@@ -367,6 +367,16 @@ def _usage_aggregate_for_principal(
 class CRUDManagedAgent(CRUDBase[ManagedAgent]):
     """CRUD helpers for account-scoped managed-agent registry entries."""
 
+    def remove_registry_entry(
+        self, db: Session, *, agent: ManagedAgent, commit: bool = True
+    ) -> None:
+        """Delete a resolved registry entry, allowing an atomic audited removal."""
+        db.delete(agent)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+
     def get_visible_target(self, db: Session, *, account_id: Any, agent_id: Any) -> Any:
         """Resolve an own or currently shared target for execution only."""
         from preloop.models.crud.resource_share import crud_resource_share

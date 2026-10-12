@@ -206,7 +206,10 @@ class TestScanMCPServerTools:
 
         assert result == [cached_tool]
         assert mock_server.status == "error"
-        assert mock_server.last_error == "Connection failed"
+        assert mock_server.last_error == (
+            "MCP connection failed (Exception). "
+            "Verify the endpoint, authentication and MCP protocol, then rescan."
+        )
         assert mock_db.commit.called
         mock_notify.assert_called_once()
 
