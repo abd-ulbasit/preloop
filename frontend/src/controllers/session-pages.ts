@@ -108,13 +108,16 @@ export class SessionPages implements ReactiveController {
     }
   }
 
-  /** Sessions on this page (a session can span several model rows). */
+  /**
+   * Sessions on this page, counted the way the server pages them: a runtime
+   * session and flow execution pair, which can span several model rows.
+   */
   get sessionsOnPage(): number {
     return new Set(
-      this.rows.map(
-        (row) =>
-          row.runtime_session_id ??
-          `${row.session_source_type ?? ''}:${row.session_source_id ?? ''}`
+      this.rows.map((row) =>
+        row.runtime_session_id || row.flow_execution_id
+          ? `${row.runtime_session_id ?? ''}|${row.flow_execution_id ?? ''}`
+          : `${row.session_source_type ?? ''}:${row.session_source_id ?? ''}`
       )
     ).size;
   }
