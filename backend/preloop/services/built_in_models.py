@@ -27,7 +27,7 @@ def is_available_built_in_model(model: models.AIModel) -> bool:
     )
 
 
-def public_built_in_model(model: models.AIModel) -> AIModelRead:
+def public_built_in_model(model: models.AIModel | AIModelRead) -> AIModelRead:
     """Expose a selectable model without operator credentials or routing metadata."""
     return AIModelRead(
         id=model.id,
@@ -38,6 +38,7 @@ def public_built_in_model(model: models.AIModel) -> AIModelRead:
         model_kind=model.model_kind,
         is_default=model.is_default,
         is_built_in=True,
+        unpriced=getattr(model, "unpriced", False),
         has_api_key=model.has_api_key,
         supports_server_side_generation=model.supports_server_side_generation,
         updated_at=model.updated_at,

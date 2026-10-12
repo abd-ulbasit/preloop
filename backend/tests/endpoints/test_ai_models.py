@@ -1271,3 +1271,59 @@ async def test_unavailable_builtin_cannot_be_read(
             )
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_builtin_catalog_preserves_shared_models(
+    mock_account: Account, mocker: MockerFixture, built_in_model: models.AIModel
+) -> None:
+    from preloop.schemas.resource_share import SharedResourceRead
+
+    shared = SharedResourceRead(
+        id=uuid.uuid4(),
+        resource_type="ai_model",
+        name="Shared model",
+        owner_name="Example team",
+        provider="openai",
+        identifier="example-model",
+    )
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = [built_in_model]
+    mocker.patch(
+        "preloop.models.crud.resource_share.crud_resource_share.public_list",
+        return_value=[shared],
+    )
+    result = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    assert result[0] is shared
+    assert result[1].is_built_in
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin", [False, True])
+async def test_unpriced_builtin_catalog_is_safe(
+    mock_account: Account,
+    mocker: MockerFixture,
+    built_in_model: models.AIModel,
+    is_admin: bool,
+) -> None:
+    mock_account.is_superuser = is_admin
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.built_in_models_enabled", return_value=True
+    )
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.hosted_model_selectable", return_value=False
+    )
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = [built_in_model]
+    result = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    assert len(result) == int(is_admin)
+    if is_admin:
+        assert result[0].is_built_in and result[0].unpriced
+        assert "private" not in str(result[0].model_dump())

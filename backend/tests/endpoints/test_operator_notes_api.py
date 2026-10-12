@@ -37,6 +37,7 @@ from preloop.utils.encryption import encrypt_value
 
 NOTES_URL = "/api/v1/operator-notes"
 PENDING_URL = "/api/v1/agents/notes/pending"
+SESSION_END_URL = "/api/v1/agents/session-end"
 TOKEN_URL = "/api/v1/auth/runtime-sessions/token"
 PERMISSION_CHECK_URL = "/api/v1/agents/permission-check"
 
@@ -564,6 +565,7 @@ def test_permission_check_carries_a_pending_note(client, db_session, test_user):
         db_session, account_id=test_user.account_id, note_id=note_id
     )
     assert stored.delivery_channel == operator_notes.CHANNEL_HOOK
+    assert stored.delivery_event == operator_notes.EVENT_PRE_TOOL_USE
 
 
 def test_expired_notes_are_not_handed_to_a_hook(client, db_session, test_user):
@@ -587,3 +589,582 @@ def test_expired_notes_are_not_handed_to_a_hook(client, db_session, test_user):
     )
 
     assert response.json()["notes"] == []
+
+
+# --- lifecycle events and session end (#1551) -------------------------------
+
+
+def test_hook_pull_records_the_lifecycle_event(client, db_session, test_user):
+    """The Stop pull stamps the event, so a rescue is distinguishable."""
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    note_id = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Ship the fix."}
+    ).json()["note_id"]
+
+    response = client.post(
+        PENDING_URL,
+        json={"channel": "hook", "event": "stop"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    stored = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=note_id
+    )
+    assert stored.status == "delivered"
+    assert stored.delivery_event == "stop"
+
+
+def test_hook_pull_rejects_an_unknown_lifecycle_event(client):
+    token = _issue_runtime_token(client)
+    response = client.post(
+        PENDING_URL,
+        json={"channel": "hook", "event": "whenever"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+
+
+def test_session_end_marks_session_only_notes_undeliverable(
+    client, db_session, test_user
+):
+    """A note whose only session ended fails; an agent note keeps waiting."""
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    session_note_id = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Too late."}
+    ).json()["note_id"]
+    # A note addressed to the agent with no session waits for the next run and
+    # must survive this session ending.
+    agent_note_id = operator_notes.new_note_id()
+    crud_agent_control_command.create_note(
+        db_session,
+        account_id=test_user.account_id,
+        managed_agent_id=agent.id,
+        runtime_session_id=None,
+        note_id=agent_note_id,
+        body="Wait for the next run.",
+        envelope={"kind": "message"},
+        author_display="Test User",
+        author_auth_method="jwt",
+        created_by_user_id=None,
+        expires_at=None,
+    )
+
+    response = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": "laptop", "reason": "exit"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["marked"] == 1
+    assert body["runtime_session_id"] == str(agent.runtime_session_id)
+    ended = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=session_note_id
+    )
+    assert ended.status == "undeliverable"
+    assert operator_notes.note_state(ended) == "undeliverable"
+    still_waiting = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=agent_note_id
+    )
+    assert still_waiting.status == "pending"
+
+
+def test_session_end_requires_a_runtime_bearer(client):
+    assert client.post(SESSION_END_URL, json={"reason": "exit"}).status_code == 401
+
+
+# Delivery receipt acceptance (#1550).
+def test_receipt_read_includes_nullable_transition_timestamps(client, agent):
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Check receipts."}
+    ).json()
+    response = client.get(f"{NOTES_URL}/{created['note_id']}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "pending"
+    assert body["created_at"]
+    for field in (
+        "claimed_at",
+        "expired_at",
+        "undeliverable_at",
+        "undeliverable_reason",
+    ):
+        assert body[field] is None
+
+
+def test_receipt_read_hides_foreign_notes(client, db_session, agent):
+    foreign = crud_account.create(
+        db_session, obj_in={"organization_name": "Receipt foreign account"}
+    )
+    foreign_agent = crud_managed_agent.create_custom_agent(
+        db_session, account_id=foreign.id, display_name="Foreign", commit=True
+    )
+    note = crud_agent_control_command.create_note(
+        db_session,
+        account_id=foreign.id,
+        managed_agent_id=foreign_agent.id,
+        runtime_session_id=None,
+        note_id="foreign-receipt",
+        body="private",
+        envelope={},
+        author_display="Author",
+        author_auth_method="jwt",
+        created_by_user_id=None,
+        expires_at=None,
+    )
+    assert client.get(f"{NOTES_URL}/{note.command_id}").status_code == 404
+    own = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Own."}
+    ).json()
+    assert client.get(f"{NOTES_URL}/{own['note_id']}").status_code == 200
+
+
+def test_receipt_deferred_claim_ack_is_idempotent_and_scoped(
+    client, db_session, test_user
+):
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Carry me later."}
+    ).json()
+    headers = {"Authorization": f"Bearer {token}"}
+    claimed = client.post(
+        PENDING_URL, json={"channel": "hook", "defer_delivery": True}, headers=headers
+    )
+    assert claimed.status_code == 200, claimed.text
+    receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert receipt["state"] == "claimed"
+    assert receipt["claimed_at"] and receipt["delivered_at"] is None
+    ack_url = "/api/v1/agents/notes/ack"
+    ack = client.post(
+        ack_url,
+        json={"note_ids": [created["note_id"], "unknown"], "session_id": "laptop"},
+        headers=headers,
+    )
+    assert ack.status_code == 200, ack.text
+    delivered = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert delivered["state"] == "delivered" and delivered["delivered_at"]
+    again = client.post(
+        ack_url, json={"note_ids": [created["note_id"]]}, headers=headers
+    )
+    assert again.status_code == 200
+    assert (
+        client.get(f"{NOTES_URL}/{created['note_id']}").json()["delivered_at"]
+        == delivered["delivered_at"]
+    )
+    unclaimed = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Still pending."}
+    ).json()
+    assert (
+        client.post(
+            ack_url, json={"note_ids": [unclaimed["note_id"]]}, headers=headers
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(f"{NOTES_URL}/{unclaimed['note_id']}").json()["state"] == "pending"
+    )
+
+
+def test_receipt_claimed_session_end_is_undeliverable(client, db_session, test_user):
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Too late."}
+    ).json()
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post(
+        PENDING_URL, json={"channel": "hook", "defer_delivery": True}, headers=headers
+    )
+    response = client.post(SESSION_END_URL, json={"reason": "exit"}, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["marked"] == 1
+    receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert receipt["state"] == "undeliverable"
+    assert (
+        receipt["undeliverable_at"]
+        and receipt["undeliverable_reason"] == "session_ended"
+    )
+    assert client.post(SESSION_END_URL, json={}, headers=headers).json()["marked"] == 0
+
+
+def test_receipt_state_filter_and_expiry_timestamp(client, db_session, agent):
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Expire."}
+    ).json()
+    note = crud_agent_control_command.get_note(
+        db_session, account_id=agent.account_id, note_id=created["note_id"]
+    )
+    note.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.flush()
+    expired = client.get(
+        NOTES_URL, params={"agent_id": str(agent.id), "state": "expired"}
+    ).json()["notes"]
+    assert [row["note_id"] for row in expired] == [created["note_id"]]
+    assert expired[0]["expired_at"]
+    assert (
+        client.get(
+            NOTES_URL, params={"agent_id": str(agent.id), "state": "pending"}
+        ).json()["notes"]
+        == []
+    )
+
+
+def test_receipt_ack_ignores_another_agents_claim(client, db_session, test_user):
+    first_token = _issue_runtime_token(client)
+    second_token = client.post(
+        TOKEN_URL,
+        json={
+            "session_source_type": "claude_code",
+            "session_source_id": "other-laptop",
+            "session_reference": "/other",
+            "runtime_principal_name": "Other worker",
+        },
+    ).json()["token"]
+    other = (
+        db_session.query(ManagedAgent)
+        .filter(
+            ManagedAgent.account_id == test_user.account_id,
+            ManagedAgent.session_source_id == "other-laptop",
+        )
+        .one()
+    )
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(other.id), "text": "Private claim."}
+    ).json()
+    second_headers = {"Authorization": f"Bearer {second_token}"}
+    assert (
+        client.post(
+            PENDING_URL,
+            json={"channel": "hook", "defer_delivery": True},
+            headers=second_headers,
+        ).status_code
+        == 200
+    )
+    ack = client.post(
+        "/api/v1/agents/notes/ack",
+        json={"note_ids": [created["note_id"]], "session_id": "other-laptop"},
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    assert ack.status_code == 200 and ack.json() == {"ok": True}
+    assert client.get(f"{NOTES_URL}/{created['note_id']}").json()["state"] == "claimed"
+
+
+def test_receipt_undeliverable_webhook_emitted_once(client, db_session, test_user):
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    secret = generate_secret()
+    db_session.add(
+        WebhookEndpoint(
+            account_id=test_user.account_id,
+            url="https://example.com/receipt",
+            secret_encrypted=encrypt_value(secret),
+            secret_hint=secret_hint(secret),
+            event_types=["agent.note_undeliverable"],
+            active=True,
+            source=SOURCE_ACCOUNT,
+        )
+    )
+    db_session.flush()
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Never carried."}
+    ).json()
+    headers = {"Authorization": f"Bearer {token}"}
+    for _ in range(2):
+        assert client.post(SESSION_END_URL, json={}, headers=headers).status_code == 200
+    rows = (
+        db_session.query(WebhookDelivery)
+        .filter(
+            WebhookDelivery.account_id == test_user.account_id,
+            WebhookDelivery.event_type == "agent.note_undeliverable",
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].payload["data"]["note_id"] == created["note_id"]
+    assert rows[0].payload["data"]["undeliverable_reason"] == "session_ended"
+
+
+def test_receipt_permission_request_defers_claim(client, db_session, test_user):
+    from unittest.mock import AsyncMock, patch
+
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    created = client.post(
+        NOTES_URL,
+        json={"agent_id": str(agent.id), "text": "Read on next carrying hook."},
+    ).json()
+    with patch(
+        "preloop.api.endpoints.agent_permission.request_agent_permission",
+        AsyncMock(return_value=("allow", "Allowed", None, False)),
+    ):
+        response = client.post(
+            PERMISSION_CHECK_URL,
+            json={
+                "source": "codex_cli",
+                "tool_name": "Bash",
+                "evaluation_phase": "permission_request",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200, response.text
+    assert created["note_id"] in response.json()["operator_note"]
+    receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert receipt["state"] == "claimed" and receipt["delivered_at"] is None
+
+
+def test_receipt_spool_dropped_records_reason(client, db_session, test_user):
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Dropped spool."}
+    ).json()
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post(
+        PENDING_URL, json={"channel": "hook", "defer_delivery": True}, headers=headers
+    )
+    response = client.post(
+        "/api/v1/agents/notes/ack",
+        json={
+            "note_ids": [created["note_id"]],
+            "undeliverable_reason": "spool_dropped",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert receipt["state"] == "undeliverable"
+    assert receipt["undeliverable_reason"] == "spool_dropped"
+    assert receipt["undeliverable_at"] and receipt["delivered_at"] is None
+
+
+@pytest.mark.parametrize(
+    "source,phase,event,decision,expected",
+    [
+        ("codex_cli", "pre_tool_use", "PreToolUse", "allow", "delivered"),
+        ("copilot_cli", "permission_request", None, "allow", "claimed"),
+        ("cursor", "permission_request", "beforeShellExecution", "allow", "claimed"),
+        ("cursor", "pre_tool_use", "preToolUse", "allow", "delivered"),
+        ("cursor", "pre_tool_use", "preToolUse", "ask", "claimed"),
+    ],
+)
+def test_receipt_permission_carrier_controls_delivery(
+    client, db_session, test_user, source, phase, event, decision, expected
+):
+    from unittest.mock import AsyncMock, patch
+
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Carrier receipt."}
+    ).json()
+    with patch(
+        "preloop.api.endpoints.agent_permission.request_agent_permission",
+        AsyncMock(return_value=(decision, "Decision", None, False)),
+    ):
+        response = client.post(
+            PERMISSION_CHECK_URL,
+            json={
+                "source": source,
+                "tool_name": "Bash",
+                "evaluation_phase": phase,
+                "hook_event_name": event,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200, response.text
+    receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
+    assert receipt["state"] == expected
+    assert receipt["claimed_at"]
+    if expected == "delivered":
+        assert receipt["claimed_at"] == receipt["delivered_at"]
+    else:
+        assert receipt["delivered_at"] is None
+
+
+SESSION_START_URL = "/api/v1/agents/session-start"
+
+
+def _start_run(client, token: str, external_id: str) -> str:
+    response = client.post(
+        SESSION_START_URL,
+        json={"session_id": external_id, "source": "claude_code"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["runtime_session_id"]
+
+
+def test_session_start_pull_claims_notes_for_the_registered_run(
+    client, db_session, test_user
+):
+    """A note sent to a `claude -p` run before its first tool call lands at
+    SessionStart, even when the token is bound to the agent's identity
+    session rather than the run."""
+    token = _issue_runtime_token(client)
+    run_id = _start_run(client, token, "run-early")
+    note_id = client.post(
+        NOTES_URL, json={"runtime_session_id": run_id, "text": "Use eu-west-1."}
+    ).json()["note_id"]
+
+    response = client.post(
+        PENDING_URL,
+        json={"channel": "hook", "event": "session_start", "session_id": "run-early"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [n["note_id"] for n in response.json()["notes"]] == [note_id]
+    stored = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=note_id
+    )
+    assert stored.status == "delivered"
+    assert stored.delivery_event == "session_start"
+    assert str(stored.runtime_session_id) == run_id
+
+
+def test_session_end_sweeps_the_run_named_by_the_harness(client, db_session, test_user):
+    """SessionEnd fails the run's notes in one request, keyed by the harness
+    session id the hook knows."""
+    token = _issue_runtime_token(client)
+    run_id = _start_run(client, token, "run-late")
+    note_id = client.post(
+        NOTES_URL, json={"runtime_session_id": run_id, "text": "Too late."}
+    ).json()["note_id"]
+
+    response = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": "run-late", "reason": "other"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"runtime_session_id": run_id, "marked": 1}
+    stored = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=note_id
+    )
+    assert stored.status == "undeliverable"
+
+
+def test_session_end_cannot_reach_another_principals_session(
+    client, db_session, test_user
+):
+    """The body names a harness id, never a session the caller does not own:
+    a same-account session keyed on the bare id (an importer row with no
+    runtime principal) is not ended and its notes stay pending."""
+    from preloop.models.crud import crud_runtime_session
+
+    token = _issue_runtime_token(client)
+    foreign = crud_runtime_session.create(
+        db_session,
+        obj_in={
+            "account_id": test_user.account_id,
+            "session_source_type": "claude_code",
+            "session_source_id": "someone-elses-run",
+            "started_at": datetime.now(UTC),
+        },
+    )
+    note_id = operator_notes.new_note_id()
+    crud_agent_control_command.create_note(
+        db_session,
+        account_id=test_user.account_id,
+        managed_agent_id=_runtime_agent(db_session, test_user).id,
+        runtime_session_id=foreign.id,
+        note_id=note_id,
+        body="Not yours to fail.",
+        envelope={"kind": "message"},
+        author_display="Test User",
+        author_auth_method="jwt",
+        created_by_user_id=None,
+        expires_at=None,
+    )
+
+    response = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": "someone-elses-run", "reason": "exit"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    # Nothing the caller owns matched, so nothing is ended: not the foreign
+    # session and not the token's own identity session either.
+    assert response.status_code == 200, response.text
+    assert response.json() == {"runtime_session_id": None, "marked": 0}
+    db_session.expire_all()
+    assert crud_runtime_session.get(db_session, id=foreign.id).ended_at is None
+    stored = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=note_id
+    )
+    assert stored.status == "pending"
+
+
+def test_receipt_durable_hook_ack_uses_its_agents_current_session(
+    client, db_session, test_user
+):
+    from unittest.mock import AsyncMock, patch
+    from preloop.models.crud import crud_api_key
+
+    _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    _, token = crud_api_key.create_runtime_key(
+        db_session,
+        name="durable-receipt",
+        account_id=test_user.account_id,
+        user_id=test_user.id,
+        context_data={"managed_agent_id": str(agent.id)},
+    )
+    db_session.commit()
+    created = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Durable hook receipt."}
+    ).json()
+    headers = {"Authorization": f"Bearer {token}"}
+    with patch(
+        "preloop.api.endpoints.agent_permission.request_agent_permission",
+        AsyncMock(return_value=("allow", "Allowed", None, False)),
+    ):
+        response = client.post(
+            PERMISSION_CHECK_URL,
+            json={
+                "source": "codex_cli",
+                "tool_name": "Bash",
+                "evaluation_phase": "permission_request",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 200, response.text
+    assert created["note_id"] in response.json()["operator_note"]
+    ack = client.post(
+        "/api/v1/agents/notes/ack",
+        json={"note_ids": [created["note_id"]]},
+        headers=headers,
+    )
+    assert ack.status_code == 200, ack.text
+    assert (
+        client.get(f"{NOTES_URL}/{created['note_id']}").json()["state"] == "delivered"
+    )
+
+
+def test_operator_ending_a_session_fails_its_session_only_notes(
+    client, db_session, test_user
+):
+    """Ending a run from the console is a session end too: notes addressed
+    only to it move to undeliverable in the same request."""
+    token = _issue_runtime_token(client)
+    run_id = _start_run(client, token, "run-console-end")
+    note_id = client.post(
+        NOTES_URL, json={"runtime_session_id": run_id, "text": "Never read."}
+    ).json()["note_id"]
+
+    response = client.patch(
+        f"/api/v1/runtime-sessions/{run_id}", json={"action": "end"}
+    )
+
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+    stored = crud_agent_control_command.get_note(
+        db_session, account_id=test_user.account_id, note_id=note_id
+    )
+    assert stored.status == "undeliverable"

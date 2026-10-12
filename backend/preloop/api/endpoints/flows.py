@@ -107,6 +107,7 @@ from preloop.services.built_in_models import (
     built_in_models_enabled,
     is_available_built_in_model,
 )
+from preloop.services.hosted_spend_guard import hosted_model_selectable
 from preloop.services.model_routing import validate_stored_model_routing
 from preloop.services.product_provenance import (
     ProductProvenanceError,
@@ -667,9 +668,13 @@ def _resolve_clone_model_binding(
     """
     if preset.ai_model_id:
         model = crud_ai_model.get(db, id=str(preset.ai_model_id))
-        if model is not None and (
-            str(model.account_id) == str(account_id)
-            or (built_in_models_enabled() and is_available_built_in_model(model))
+        if (
+            model is not None
+            and hosted_model_selectable(model)
+            and (
+                str(model.account_id) == str(account_id)
+                or (built_in_models_enabled() and is_available_built_in_model(model))
+            )
         ):
             return cast(uuid.UUID, preset.ai_model_id)
 
@@ -679,6 +684,7 @@ def _resolve_clone_model_binding(
             db, account_id=account_id, include_built_in=built_in_models_enabled()
         )
         if _model_usable_for_agent(model, preset.agent_type)
+        and hosted_model_selectable(model)
     ]
     if candidates:
         candidates.sort(

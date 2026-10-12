@@ -3703,3 +3703,28 @@ def test_clone_prefers_account_model_over_builtin(mocker: MockerFixture) -> None
         )
         == own.id
     )
+
+
+def test_clone_does_not_bind_unpriced_builtin(mocker: MockerFixture) -> None:
+    mocker.patch(
+        "preloop.api.endpoints.flows.built_in_models_enabled", return_value=True
+    )
+    mocker.patch(
+        "preloop.api.endpoints.flows.hosted_model_selectable", return_value=False
+    )
+    crud = mocker.patch("preloop.api.endpoints.flows.crud_ai_model")
+    built_in = _make_ai_model(
+        None,
+        meta_data={
+            "gateway": {
+                "enabled": True,
+                "model_alias": "qwen/deepseek-v4.1-flash-hosted",
+            }
+        },
+    )
+    crud.get.return_value = built_in
+    crud.get_selectable_for_account.return_value = [built_in]
+    preset = _make_preset(uuid.uuid4(), ai_model_id=built_in.id)
+    with pytest.raises(HTTPException) as exc:
+        flows._resolve_clone_model_binding(MagicMock(), preset, uuid.uuid4())
+    assert exc.value.status_code == 422

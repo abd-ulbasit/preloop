@@ -67,6 +67,7 @@ from preloop.services.model_gateway_usage import (
 )
 from preloop.services.runtime_session_explorer import RuntimeSessionExplorerService
 from preloop.utils.permissions import require_permission
+from preloop.services.hosted_spend_guard import hosted_model_selectable
 from preloop.services.ai_model_provider import (
     ERROR_SUBSCRIPTION_OAUTH,
     ProviderAuthError,
@@ -107,7 +108,14 @@ def _get_readable_ai_model(
     model = crud_ai_model.get(db=db, id=model_id)
     if model and (
         model.account_id == current_user.account_id
-        or (built_in_models_enabled() and is_available_built_in_model(model))
+        or (
+            built_in_models_enabled()
+            and is_available_built_in_model(model)
+            and (
+                hosted_model_selectable(model)
+                or getattr(current_user, "is_superuser", False) is True
+            )
+        )
     ):
         return model
     raise HTTPException(404, "AI Model not found")
@@ -310,13 +318,40 @@ def list_ai_models(
         db, account_id=current_user.account_id, resource_type="ai_model"
     )
     own_models = [model for model in models if model.account_id is not None]
-    built_in = [
-        public_built_in_model(model) for model in models if model.account_id is None
-    ]
-    return [
+    built_in = [model for model in models if model.account_id is None]
+    visible = [
         *filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*own_models, *shared]),
         *built_in,
     ]
+    priced = _apply_tariff_visibility(
+        visible, is_admin=getattr(current_user, "is_superuser", False) is True
+    )
+    return [
+        public_built_in_model(row)
+        if not isinstance(row, SharedResourceRead) and row.account_id is None
+        else row
+        for row in priced
+    ]
+
+
+def _apply_tariff_visibility(
+    rows: List, *, is_admin: bool
+) -> List[SharedResourceRead | AIModelRead]:
+    """Hide hosted models with no verified operator tariff from pickers.
+
+    Non-admin callers never see them, so a model that would be refused at
+    request time is not offered at selection time. Platform admins keep them,
+    marked ``unpriced``, so an operator can find and fix the gap.
+    """
+    result: List = []
+    for row in rows:
+        if hosted_model_selectable(row):
+            result.append(row)
+        elif is_admin:
+            result.append(
+                AIModelRead.model_validate(row).model_copy(update={"unpriced": True})
+            )
+    return result
 
 
 @router.get(
@@ -359,6 +394,12 @@ def get_ai_models_overview(
         account_id=current_user.account_id,
         include_built_in=built_in_models_enabled(),
     )
+    models = [
+        model
+        for model in models
+        if hosted_model_selectable(model)
+        or getattr(current_user, "is_superuser", False) is True
+    ]
     if not models:
         return AIModelsOverviewResponse(
             period_start=period_start, period_end=period_end, models=[]
