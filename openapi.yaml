@@ -17989,6 +17989,481 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/desktop/endpoints:
+    get:
+      tags:
+      - Desktop Views
+      summary: List Desktop Endpoints
+      description: Desktop endpoints in the caller's account, filtered by linkage.
+      operationId: list_desktop_endpoints_api_v1_desktop_endpoints_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: managed_agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Managed Agent Id
+      - name: runner_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runner Id
+      - name: runtime_session_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runtime Session Id
+      - name: state
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^(online|offline)$
+          - type: 'null'
+          title: State
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Desktop Endpoints Api V1 Desktop Endpoints Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/desktop/endpoints/{endpoint_id}/views:
+    post:
+      tags:
+      - Desktop Views
+      summary: Create Desktop View
+      description: Open a view-only desktop view on one endpoint.
+      operationId: create_desktop_view_api_v1_desktop_endpoints__endpoint_id__views_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: endpoint_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesktopViewCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Desktop View Api V1 Desktop Endpoints  Endpoint
+                  Id  Views Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/agents/{agent_id}/desktop-views:
+    post:
+      tags:
+      - Desktop Views
+      summary: Create Agent Desktop View
+      description: Open a view on the most recently seen online desktop of an agent.
+      operationId: create_agent_desktop_view_api_v1_agents__agent_id__desktop_views_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesktopViewCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Agent Desktop View Api V1 Agents  Agent Id  Desktop
+                  Views Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/desktop/views/{view_id}:
+    get:
+      tags:
+      - Desktop Views
+      summary: Get Desktop View
+      description: State of one of the caller's desktop views.
+      operationId: get_desktop_view_api_v1_desktop_views__view_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Desktop View Api V1 Desktop Views  View Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+    delete:
+      tags:
+      - Desktop Views
+      summary: Delete Desktop View
+      description: End a desktop view (idempotent).
+      operationId: delete_desktop_view_api_v1_desktop_views__view_id__delete
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/agents/{agent_id}/desktop-views/{view_id}:
+    get:
+      tags:
+      - Desktop Views
+      summary: Get Agent Desktop View
+      description: Agent-scoped alias of ``GET /desktop/views/{view_id}``.
+      operationId: get_agent_desktop_view_api_v1_agents__agent_id__desktop_views__view_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Agent Desktop View Api V1 Agents  Agent Id  Desktop
+                  Views  View Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+    delete:
+      tags:
+      - Desktop Views
+      summary: Delete Agent Desktop View
+      description: Agent-scoped alias of ``DELETE /desktop/views/{view_id}``.
+      operationId: delete_agent_desktop_view_api_v1_agents__agent_id__desktop_views__view_id__delete
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/desktop/views/{view_id}/control:
+    post:
+      tags:
+      - Desktop Views
+      summary: Request Desktop Control
+      description: Take control of the desktop (self-confirmed with a reason).
+      operationId: request_desktop_control_api_v1_desktop_views__view_id__control_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesktopControlRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Request Desktop Control Api V1 Desktop Views  View
+                  Id  Control Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/agents/{agent_id}/desktop-views/{view_id}/control:
+    post:
+      tags:
+      - Desktop Views
+      summary: Request Agent Desktop Control
+      description: Agent-scoped alias of ``POST /desktop/views/{view_id}/control``.
+      operationId: request_agent_desktop_control_api_v1_agents__agent_id__desktop_views__view_id__control_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesktopControlRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Request Agent Desktop Control Api V1 Agents  Agent
+                  Id  Desktop Views  View Id  Control Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/desktop/views/{view_id}/control/release:
+    post:
+      tags:
+      - Desktop Views
+      summary: Release Desktop Control
+      description: Return the view to view-only.
+      operationId: release_desktop_control_api_v1_desktop_views__view_id__control_release_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/agents/{agent_id}/desktop-views/{view_id}/control/release:
+    post:
+      tags:
+      - Desktop Views
+      summary: Release Agent Desktop Control
+      description: Agent-scoped alias of ``POST /desktop/views/{view_id}/control/release``.
+      operationId: release_agent_desktop_control_api_v1_agents__agent_id__desktop_views__view_id__control_release_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: view_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: View Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/agents/permission-check:
     post:
       tags:
@@ -27289,6 +27764,33 @@ components:
       - deployment_evidence
       title: DeploymentVerificationRequest
       description: An authenticated deployment record, never inferred from issue closure.
+    DesktopControlRequest:
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 3
+          title: Reason
+      type: object
+      required:
+      - reason
+      title: DesktopControlRequest
+    DesktopViewCreate:
+      properties:
+        duration_seconds:
+          anyOf:
+          - type: integer
+            minimum: 60.0
+          - type: 'null'
+          title: Duration Seconds
+        runtime_session_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runtime Session Id
+      type: object
+      title: DesktopViewCreate
     DetectorTimeoutFailMode:
       type: string
       enum:

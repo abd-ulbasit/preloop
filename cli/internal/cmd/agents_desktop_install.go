@@ -150,6 +150,13 @@ func (o desktopInstallOptions) osReleasePath() string {
 	return "/etc/os-release"
 }
 
+func (o desktopInstallOptions) output() io.Writer {
+	if o.Output != nil {
+		return o.Output
+	}
+	return os.Stdout
+}
+
 func (o desktopInstallOptions) now() time.Time {
 	if o.Now != nil {
 		return o.Now().UTC()
@@ -461,6 +468,12 @@ type desktopManifest struct {
 	VNC         desktopVNCInfo `json:"vnc"`
 	Browser     string         `json:"browser"`
 	InstalledAt string         `json:"installed_at"`
+	// EndpointID is the stable desktop endpoint id written by
+	// `preloop desktop serve`; reinstalling keeps it (#870).
+	EndpointID string `json:"endpoint_id,omitempty"`
+	// DesktopAgentID is the managed agent the stored desktop credential is
+	// bound to, so re-running enable does not mint another one.
+	DesktopAgentID string `json:"desktop_agent_id,omitempty"`
 }
 
 type desktopVNCInfo struct {
@@ -470,8 +483,15 @@ type desktopVNCInfo struct {
 }
 
 func writeDesktopManifest(home, browser string, now time.Time) error {
+	path := filepath.Join(home, ".preloop", "desktop.json")
+	var previous desktopManifest
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &previous)
+	}
 	manifest := desktopManifest{
-		Display: desktopDisplay,
+		EndpointID:     previous.EndpointID,
+		DesktopAgentID: previous.DesktopAgentID,
+		Display:        desktopDisplay,
 		VNC: desktopVNCInfo{
 			Host: desktopVNCHost,
 			Port: desktopVNCPort,
@@ -485,7 +505,7 @@ func writeDesktopManifest(home, browser string, now time.Time) error {
 		return err
 	}
 	data = append(data, '\n')
-	return writeDesktopFile(filepath.Join(home, ".preloop", "desktop.json"), string(data), 0o600)
+	return writeDesktopFile(path, string(data), 0o600)
 }
 
 // applyDesktopDisplay exports DISPLAY=:99 where this CLI already persists
