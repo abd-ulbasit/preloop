@@ -146,11 +146,17 @@ func TestSpawnAliasFallbackRegistersFromPermissionEventOnce(t *testing.T) {
 	testenv.SetHome(t, home)
 	t.Setenv(sessionAliasEnvVar, "brief-fallback")
 	t.Setenv("CLAUDE_ENV_FILE", "")
-	calls := 0
+	registrations := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
 		var payload map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
+		// Session start also pulls pending notes. Only the registration
+		// must happen once and carry the alias.
+		if !strings.HasSuffix(r.URL.Path, "/agents/session-start") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		registrations++
 		if payload["alias"] != "brief-fallback" || payload["session_id"] != "native-thread" {
 			t.Errorf("payload=%v", payload)
 		}
@@ -161,7 +167,7 @@ func TestSpawnAliasFallbackRegistersFromPermissionEventOnce(t *testing.T) {
 	event := []byte(`{"thread_id":"native-thread","cwd":"/tmp/work"}`)
 	registerSpawnFromPermissionHook(permissionSourceCodexCLI, event)
 	registerSpawnFromPermissionHook(permissionSourceCodexCLI, event)
-	if calls != 1 {
-		t.Fatalf("want one registration, got %d", calls)
+	if registrations != 1 {
+		t.Fatalf("want one registration, got %d", registrations)
 	}
 }
