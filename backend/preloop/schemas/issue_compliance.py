@@ -1,8 +1,8 @@
 """Schemas for IssueComplianceResult model."""
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Any, Dict, List, Optional
 import json
 
 
@@ -52,6 +52,19 @@ class IssueComplianceResultResponse(IssueComplianceResultBase):
         return v
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class IssueComplianceBatchRequest(BaseModel):
+    """Stored compliance results for a page of issues, in one call."""
+
+    issue_ids: List[str] = Field(..., max_length=200)
+    prompt_name: str
+
+
+class IssueComplianceBatchResponse(BaseModel):
+    """Stored results keyed by issue id. Unscored issues are absent."""
+
+    results: Dict[str, IssueComplianceResultResponse]
 
 
 class ComplianceSuggestionResponse(BaseModel):

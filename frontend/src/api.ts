@@ -1,4 +1,5 @@
 import { LitElement } from 'lit';
+import { withSafeIcon } from './utils/icon-name';
 import { Router } from './router';
 import { DEFAULT_SIMILARITY_THRESHOLD } from './config';
 import { PermissionError, permissionErrorFromResponse } from './permissions';
@@ -3441,14 +3442,17 @@ export async function listProjectsForOrg(
 
 export async function getDuplicateIssues(
   status: 'opened' | 'closed' | 'all' = 'opened'
-) {
+): Promise<DuplicatePair[]> {
+  // Exact path, no trailing slash: "/issue-duplicates/" answers with a
+  // redirect that a TLS-terminating proxy turns into a blocked http:// URL.
   const response = await fetchWithAuth(
-    `/api/v1/issue-duplicates/?status=${status}`
+    `/api/v1/issue-duplicates?status=${status}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch duplicate issues');
   }
-  return response.json();
+  const data = await response.json();
+  return Array.isArray(data?.duplicates) ? data.duplicates : [];
 }
 
 export async function getIssueCount(): Promise<{ total_issues: number }> {
@@ -4328,7 +4332,8 @@ export async function getFlowSummaries(
   const query = params.toString() ? `?${params.toString()}` : '';
   const response = await fetchWithAuth(`/api/v1/flows/summary${query}`);
   if (!response.ok) throw new Error('Failed to fetch flow summaries');
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4361,7 +4366,8 @@ export async function getFlows(
   if (!response.ok) {
     throw new Error('Failed to fetch flows');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4401,7 +4407,7 @@ export async function getFlow(flowId: string): Promise<any> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow');
   }
-  return response.json();
+  return withSafeIcon(await response.json());
 }
 
 /**
@@ -4546,7 +4552,8 @@ export async function getFlowPresets(): Promise<any[]> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow presets');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /** One page of executions plus how many rows the filters matched. */
@@ -5698,6 +5705,27 @@ export async function getIssueCompliance(
     throw new Error('Failed to fetch issue compliance');
   }
   return response.json();
+}
+
+/**
+ * Stored compliance results for a page of issues in one request. Never
+ * triggers model calls; unscored issues are simply absent from the map.
+ */
+export async function getIssueComplianceBatch(
+  issueIds: string[],
+  promptName: string
+): Promise<Record<string, IssueComplianceResult>> {
+  if (issueIds.length === 0) return {};
+  const response = await fetchWithAuth('/api/v1/issue_compliance/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issue_ids: issueIds, prompt_name: promptName }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch issue compliance');
+  }
+  const data = await response.json();
+  return data?.results ?? {};
 }
 
 export async function getComplianceImprovementSuggestion(

@@ -2,6 +2,7 @@ import { ConsoleStatus } from '../../../controllers/console-status';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { getDuplicateIssues } from '../../../api';
+import type { DuplicatePair } from '../../../types';
 import '@shoelace-style/shoelace/dist/components/alert/alert.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/menu/menu.js';
@@ -28,11 +29,25 @@ export class DuplicatesView extends LitElement {
   `;
 
   @state()
-  private issues: any[] = [];
+  private pairs: DuplicatePair[] = [];
 
-  async connectedCallback() {
+  @state()
+  private error: string | null = null;
+
+  connectedCallback() {
     super.connectedCallback();
-    this.issues = await getDuplicateIssues();
+    void this.load();
+  }
+
+  /** A failed request is a message on the page, never an unhandled rejection. */
+  async load() {
+    try {
+      this.pairs = await getDuplicateIssues();
+      this.error = null;
+    } catch (error) {
+      console.warn('Failed to fetch duplicate issues:', error);
+      this.error = 'Could not load duplicate issues. Try again later.';
+    }
   }
 
   render() {
@@ -43,21 +58,31 @@ export class DuplicatesView extends LitElement {
         </div>
         <div class="container">
           ${
-            this.issues.length > 0
+            this.error
               ? html`
-                  <sl-menu>
-                    ${this.issues.map(
-                      (issue) =>
-                        html`<sl-menu-item>${issue.title}</sl-menu-item>`
-                    )}
-                  </sl-menu>
-                `
-              : html`
-                  <sl-alert variant="primary" open>
-                    <sl-icon slot="icon" name="info-circle"></sl-icon>
-                    No duplicate issues found.
+                  <sl-alert variant="danger" open>
+                    <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                    ${this.error}
                   </sl-alert>
                 `
+              : this.pairs.length > 0
+                ? html`
+                    <sl-menu>
+                      ${this.pairs.map(
+                        (pair) =>
+                          html`<sl-menu-item
+                            >${pair.issue1.title} /
+                            ${pair.issue2.title}</sl-menu-item
+                          >`
+                      )}
+                    </sl-menu>
+                  `
+                : html`
+                    <sl-alert variant="primary" open>
+                      <sl-icon slot="icon" name="info-circle"></sl-icon>
+                      No duplicate issues found.
+                    </sl-alert>
+                  `
           }
         </div>
       </div>
