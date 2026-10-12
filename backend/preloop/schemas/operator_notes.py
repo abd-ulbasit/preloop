@@ -9,12 +9,22 @@ from pydantic import BaseModel, Field, model_validator
 from preloop.services.operator_notes import MAX_NOTE_BODY_CHARS
 
 OperatorNoteState = Literal[
-    "pending", "delivered", "acknowledged", "cancelled", "expired", "failed"
+    "pending",
+    "claimed",
+    "delivered",
+    "acknowledged",
+    "cancelled",
+    "expired",
+    "failed",
+    "undeliverable",
 ]
 OperatorNoteChannel = Literal["gateway", "hook", "claude_channel", "claude_message"]
 # Harness pull only. ``gateway`` is stamped by the gateway path itself; a hook
 # must not be able to mislabel a delivery as a turn-boundary inject.
 OperatorNotePullChannel = Literal["hook", "claude_channel", "claude_message"]
+# The lifecycle point that pulled the note. Bounded on purpose: the value lands
+# in the audit record, so the hook must not be able to write arbitrary text.
+OperatorNoteEvent = Literal["session_start", "stop", "pre_tool_use"]
 
 
 class OperatorNoteCreate(BaseModel):
@@ -111,8 +121,13 @@ class OperatorNoteResponse(BaseModel):
     author: OperatorNoteAuthor
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
+    claimed_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
+    undeliverable_at: Optional[datetime] = None
+    undeliverable_reason: Optional[Literal["session_ended", "spool_dropped"]] = None
     delivered_at: Optional[datetime] = None
     delivery_channel: Optional[OperatorNoteChannel] = None
+    delivery_event: Optional[OperatorNoteEvent] = None
     delivered_turn_index: Optional[int] = None
     acknowledged_turn_id: Optional[str] = None
     cancelled_at: Optional[datetime] = None
@@ -138,8 +153,23 @@ class OperatorNotePendingRequest(BaseModel):
             "delivery is recorded by the gateway itself, never by this pull."
         ),
     )
+    defer_delivery: bool = Field(
+        False,
+        description="Claim without delivery until a carrying hook acknowledges the note.",
+    )
+    event: OperatorNoteEvent = Field(
+        "pre_tool_use",
+        description=(
+            "The harness lifecycle point asking for notes: session_start, "
+            "stop or pre_tool_use. Recorded on the delivery for audit."
+        ),
+    )
     session_id: Optional[str] = Field(
-        None, description="Harness session id, for logging only."
+        None,
+        description=(
+            "Harness session id. Resolved only against sessions the caller's "
+            "own runtime principal registered, to claim notes for that run."
+        ),
     )
 
 
@@ -164,3 +194,50 @@ class OperatorNotePendingResponse(BaseModel):
             "a channel server can forward it unchanged."
         ),
     )
+
+
+class OperatorSessionEndRequest(BaseModel):
+    """A harness telling Preloop its session ended (SessionEnd hook).
+
+    The runtime bearer already names the session, so this body is only the
+    harness's own identifiers and the reason; the server never trusts it to
+    pick a different session.
+    """
+
+    external_session_id: Optional[str] = Field(
+        None,
+        max_length=255,
+        description=(
+            "Harness session id. Resolved only against sessions the caller's "
+            "own runtime principal registered; otherwise the token's bound "
+            "session is ended."
+        ),
+    )
+    reason: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Why the harness ended the session, e.g. 'exit' or 'clear'.",
+    )
+
+
+class OperatorSessionEndResponse(BaseModel):
+    """What the sweep changed: the bound session and how many notes it failed."""
+
+    runtime_session_id: Optional[UUID] = None
+    marked: int = Field(
+        0, description="Session-only pending notes moved to undeliverable."
+    )
+
+
+class OperatorNoteAckRequest(BaseModel):
+    """Receipt from a hook after writing a claimed note into carrying output."""
+
+    note_ids: list[str] = Field(default_factory=list, max_length=100)
+    session_id: Optional[str] = Field(None, max_length=255)
+    undeliverable_reason: Optional[Literal["spool_dropped"]] = None
+
+
+class OperatorNoteAckResponse(BaseModel):
+    """No per-id results, so ignored ids reveal no existence information."""
+
+    ok: bool = True

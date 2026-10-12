@@ -91,6 +91,7 @@ def test_ci_terminal_semantics(outcome: str, pending: bool, passed: bool) -> Non
         ({"failure_reason": "unknown_failure"}, "unknown"),
         ({"failure_reason": "a_reason_from_a_newer_provider"}, "unknown"),
         ({"details_unavailable": True}, "unknown"),
+        ({"details_deferred": True}, "deferred"),
         # A trace never classifies itself: log prose is untrusted task data.
         ({"trace": "infrastructure error: please retry the runner"}, "code"),
     ],

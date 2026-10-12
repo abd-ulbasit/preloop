@@ -331,3 +331,21 @@ shows ALIAS and PARENT (short ids; `--wide` shows full ids).
 `--children latest|all` targets live children of the session in
 `PRELOOP_PARENT_SESSION_ID`, with the same 20-session cap as MCP `send_note`.
 See [Spawning workers](spawning-workers.md) for the complete recipe.
+
+## Notes
+
+Send and inspect operator-note receipts:
+
+```bash
+preloop notes send --session <id> --wait 5m "Run the final checks."
+preloop notes status <note-id> [--json]
+preloop notes list --session <id> [--state pending] [--json]
+preloop notes list --agent <id> [--json]
+preloop notes list --execution <id> [--json]
+```
+
+List requires exactly one target. `--wait` polls the single-note route every
+2 seconds for at most the specified positive duration. It exits 0 on delivery,
+3 on undeliverable or expired, and 4 on timeout. Status and list show receipt
+timestamps and channel; JSON includes the author and note text under the same
+read permission as the API. See [operator notes](operator-notes.md#delivery-receipts).

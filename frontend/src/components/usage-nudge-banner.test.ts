@@ -203,6 +203,11 @@ describe('usage-nudge-banner', () => {
     const text = el.shadowRoot!.textContent ?? '';
     expect(text).to.contain('2 of 3 agents');
     expect(text).to.contain('10.2M of 20M analysis tokens this month');
+    const explanation = el.shadowRoot
+      ?.querySelector('[data-nudge="byok_ingest_tokens_monthly"] .message')
+      ?.getAttribute('title');
+    expect(explanation).to.contain('OpenAI totals include cached prompts');
+    expect(explanation).to.contain('provider keys or subscriptions');
     const link = el.shadowRoot!.querySelector<HTMLAnchorElement>('a.plans')!;
     expect(link.getAttribute('href')).to.contain('feature=max_agents');
   });

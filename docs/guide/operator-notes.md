@@ -64,8 +64,29 @@ NOTE
 `--expires-in 2h` overrides the 24 hour default. `--json` emits the note id
 and the target and nothing else, for scripts. A refusal prints the server's
 reason, including an unresolvable target and the rate limit, and exits
-non-zero. The CLI sends notes and does not read them: listing a note's
-delivery state and cancelling one stay in the console and the API.
+non-zero. Track a receipt or list the notes for a target:
+
+```bash
+preloop notes status <note-id> --json
+preloop notes list --session <session-id> --state claimed
+preloop notes list --agent <agent-id> --json
+preloop notes list --execution <execution-id>
+preloop notes send --session <session-id> --wait 5m "Run the final checks."
+```
+
+`status` prints state, channel, creation time and delivery or terminal time.
+`list` takes exactly one target and optionally filters by `--state`. Both accept
+`--json` for the receipt fields, including the author and transition timestamps.
+Against an older server, a status-route 404 prints "server does not support note
+status, or the note was not found in this account"; the same response cannot
+distinguish a missing note from an unsupported route.
+
+`send --wait` polls only that note's status, every two seconds, for at most the
+positive duration. Exit codes are 0 for delivered (or acknowledged), 3 for
+undeliverable or expired, and 4 for timeout. Other errors exit 1. With `--json`,
+waiting returns the final receipt as one JSON document; without waiting it
+keeps the note-id-and-target output. Delivery means the carrying output was
+written, not that the model followed the instruction.
 
 ### Finding the session to steer
 
@@ -118,14 +139,17 @@ overrides the 24 hour default; a note nobody delivered in a day is stale advice,
 and expiring visibly beats rotting silently.
 
 - `GET /api/v1/operator-notes?agent_id=...` (or `runtime_session_id`,
-  `execution_id`) lists notes newest first with their delivery state.
+  `execution_id`) lists notes newest first with their delivery state and receipt
+  timestamps. Add `state=pending` (or another public state) to filter before
+  the result limit is applied.
+- `GET /api/v1/operator-notes/{note_id}` reads one receipt with the same account
+  and permission checks; foreign and missing ids both return 404.
 - `POST /api/v1/operator-notes/{note_id}/cancel` withdraws one that has not
   been delivered. Cancelling is a state, never a delete. A delivered note
   cannot be unsent, so cancelling one returns it unchanged and you can see why.
 
 Mobile is out of scope for now. The iOS and Android clients already hold an
-account session, so they need no new backend: the three endpoints above are the
-whole surface.
+account session, so they can use the same account-scoped endpoints above.
 
 ## A note from an agent
 
@@ -367,13 +391,20 @@ with the managed-agent runtime bearer token and returns the claimed notes three
 ways at once: the raw envelopes, the rendered block, and a ready
 `notifications/claude/channel` event. `channel` is one of `hook`,
 `claude_channel` or `claude_message`; `gateway` is recorded only by the
-gateway path. Call it from the hook or bridge process, never from the model.
-Claiming is the delivery: what it returns is marked delivered, audited and
-evented before it leaves.
+gateway path. `event` names the harness lifecycle point that asked
+(`session_start`, `stop` or `pre_tool_use`) and is stamped on the delivery, so
+a Stop rescue is distinguishable from the ordinary next-tool-call path. Call it
+from the hook or bridge process, never from the model. Gateway and carrying
+hooks record claim and delivery together. A non-carrying hook uses
+`defer_delivery=true` and gets a `claimed` receipt. After writing the block into
+carrying output, it posts `/api/v1/agents/notes/ack` with `note_ids` and the
+harness `session_id`. Receipt failures do not change the tool decision. Foreign,
+unclaimed and already finished ids are silently ignored.
 
 | Harness | What fires | How to pick the note up |
 | --- | --- | --- |
 | Claude Code | `PreToolUse`, installed by `preloop agents onboard --approvals` | `operator_note` on the permission-check response, written into `hookSpecificOutput.additionalContext` |
+| Claude Code (session start / stop) | `SessionStart`, `Stop` and `SessionEnd`, installed by `preloop agents onboard --approvals` | `SessionStart` (and the first `UserPromptSubmit`) pulls `/agents/notes/pending` with `event=session_start` and returns `hookSpecificOutput.additionalContext`, so a note sent before the run starts lands before the first tool call. `Stop` pulls with `event=stop` and, when something is pending, blocks the stop once with the rendered block as the continuation reason, so the model reads it and may act. `SessionEnd` posts `/agents/session-end`, which marks a note whose only session ended `undeliverable` instead of letting it expire |
 | Claude Code (channels) | An MCP channel server you run | `POST /agents/notes/pending`, then push `channel_event` as `notifications/claude/channel`. The harness wraps our block in its own `<channel source= severity=>` tag |
 | Claude Code (cross-session messaging) | A bridge process holding `CLAUDE_CODE_MESSAGING_TOKEN`, with `crossSessionInbound: accept` on headless `-p` workers | `POST /agents/notes/pending`, then post `text` to the session inbox socket. The harness delivers it between tool calls |
 | Codex CLI | `PreToolUse` and `PermissionRequest` | `operator_note` on the permission-check response, written into the `PreToolUse` `hookSpecificOutput.additionalContext`. `PermissionRequest` has no field for it, so a note claimed there rides the next `PreToolUse` |
@@ -402,9 +433,48 @@ in `cli/internal/cmd/testdata/operator-notes/`.
 The channel and inbox bridges remain a follow-up: they need a process the
 operator runs, not a hook Preloop already installs.
 
-A note whose harness fires no tool call and makes no model call is not
-delivered, and its state stays `pending` until it expires. There is no path
-that pushes into a process that is not asking Preloop anything.
+A note whose harness fires no tool call and makes no model call would never be
+delivered. On Claude Code two more hooks close that gap: a note sent before the
+run starts rides `SessionStart`, and a note that arrives after the last tool
+call is rescued by `Stop`, which keeps the headless run alive for one more step
+so the model can read it. At most three Stop blocks are spent per session, so a
+stream of notes cannot pin a worker in a loop; past that cap the note waits and
+`SessionEnd` marks it `undeliverable` rather than letting it sit `pending` until
+its 24h expiry and look like the agent ignored it. A note addressed to the
+*agent* with no session is untouched by a session ending: it keeps waiting for
+the agent's next run.
+
+The lifecycle hooks are installed for Claude Code only. Codex CLI 0.162 has
+`Stop`, `SessionStart` and `SessionEnd` hook events too, but `onboard
+--approvals` does not wire them yet, so a Codex note still relies on
+`PreToolUse` and, if the session ends first, expires after 24h. Cursor CLI is
+unchanged. The Claude Code input and output shapes for these events are pinned
+in `cli/internal/cmd/testdata/operator-notes/claude-code-lifecycle.json`.
+
+A Stop block is only spent when `stop_hook_active` is false, which Claude Code
+sets on the stop that follows a block. A headless `claude -p` run therefore
+continues for at most one extra model step per stop, and a note that arrives
+during that step waits for `SessionEnd`. If the hook names a run the caller's
+credential never registered, `session-end` changes nothing. There is still no path that pushes into a process that is
+not asking Preloop anything.
+
+## Delivery receipts
+
+| State | Meaning | Receipt time |
+| --- | --- | --- |
+| `pending` | Waiting for a carrying call or hook | `created_at` |
+| `claimed` | A non-carrying hook has spooled the block for this session | `claimed_at` |
+| `delivered` | Included in the gateway request or written into carrying hook output | `claimed_at`, `delivered_at`, `delivery_channel` |
+| `acknowledged` | The harness recorded the model's acknowledgment | `delivered_at`, `acknowledged_turn_id` |
+| `expired` | An uncarried note passed its TTL | `expired_at` |
+| `cancelled` | The operator withdrew a pending note | `cancelled_at` |
+| `undeliverable` | The only target session ended, or the local spool dropped the block | `undeliverable_at`, `undeliverable_reason` |
+
+`undeliverable_reason` is `session_ended` or `spool_dropped`. A session end sweeps
+pending and claimed notes for that exact session. Agent notes that still have
+no session keep waiting for the next run. Existing rows keep their state and
+have null values for the new receipt columns. The console shows the state and
+available transition times, with undeliverable distinct from expired.
 
 ## What the model sees
 
@@ -509,7 +579,7 @@ bodies are stored in the clear, exactly as approval comments are, because both
 are operator text that has to be readable in the audit trail and in the
 timeline. Do not put secrets in a note; use the credential store.
 
-Two audit actions, both written in the same transaction as the thing they
+Four audit actions, all written in the same transaction as the thing they
 describe:
 
 | Action | Written when |
@@ -517,9 +587,10 @@ describe:
 | `agent.note_sent` | Before the API tells the author it worked |
 | `agent.note_delivered` | Before the request carrying the note leaves Preloop |
 | `agent.note_scope_denied` | Instead of a note, when an agent's target was out of [its scope](#which-agent-may-note-which-target) |
+| `agent.note_undeliverable` | When session-only notes can no longer arrive (`session_ended`), or a local spool drops a claimed block (`spool_dropped`) |
 
-The same two arrive as webhook events, `agent.note_sent` and
-`agent.note_delivered` (see [webhooks](webhooks.md)), and each delivery is
+Three arrive as webhook events, `agent.note_sent`, `agent.note_delivered` and
+`agent.note_undeliverable` (see [webhooks](webhooks.md)), and each delivery is
 written to the runtime session timeline where it landed, with its channel and
 turn index, so the execution view shows the note in the stream of what the
 agent was doing when it arrived.

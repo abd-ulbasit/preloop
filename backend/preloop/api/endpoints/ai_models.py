@@ -67,6 +67,7 @@ from preloop.services.model_gateway_usage import (
 )
 from preloop.services.runtime_session_explorer import RuntimeSessionExplorerService
 from preloop.utils.permissions import require_permission
+from preloop.services.hosted_spend_guard import hosted_model_selectable
 from preloop.services.ai_model_provider import (
     ERROR_SUBSCRIPTION_OAUTH,
     ProviderAuthError,
@@ -286,7 +287,30 @@ def list_ai_models(
     shared = crud_resource_share.public_list(
         db, account_id=current_user.account_id, resource_type="ai_model"
     )
-    return filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*models, *shared])
+    visible = filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*models, *shared])
+    return _apply_tariff_visibility(
+        visible, is_admin=getattr(current_user, "is_superuser", False) is True
+    )
+
+
+def _apply_tariff_visibility(
+    rows: List, *, is_admin: bool
+) -> List[SharedResourceRead | AIModelRead]:
+    """Hide hosted models with no verified operator tariff from pickers.
+
+    Non-admin callers never see them, so a model that would be refused at
+    request time is not offered at selection time. Platform admins keep them,
+    marked ``unpriced``, so an operator can find and fix the gap.
+    """
+    result: List = []
+    for row in rows:
+        if hosted_model_selectable(row):
+            result.append(row)
+        elif is_admin:
+            result.append(
+                AIModelRead.model_validate(row).model_copy(update={"unpriced": True})
+            )
+    return result
 
 
 @router.get(
