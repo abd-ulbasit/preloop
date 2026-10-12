@@ -55,6 +55,14 @@ import type {
 } from '../../types';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  renderDataTableToolbar,
+} from '../../table';
+import type { ListColumn } from '../../table';
+import '../../table/data-table';
+import {
   resolvePreviousTimeRange,
   resolveTimeRange,
   timeRangeShortLabel,
@@ -306,7 +314,22 @@ export class CostView extends AuthedElement {
     key: 'total_cost',
     dir: 'desc',
   };
-  @state() private sessionSort: SortState = { key: 'cost', dir: 'desc' };
+  /**
+   * Sessions in the period, up to 250: paged, searchable and sortable on the
+   * shared table instead of one 26,000 px column.
+   */
+  readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
+    listId: 'cost-sessions',
+    getRowId: (row) =>
+      String(
+        row.runtime_session_id ??
+          `${this.getSessionTitle(row)}:${row.last_activity_at ?? row.last_request_at ?? ''}`
+      ),
+    pageSize: 25,
+    defaultSorting: [{ id: 'cost', desc: true }],
+    url: { prefix: 'sessions' },
+    columns: this.sessionColumns(),
+  });
   @state() private userSort: SortState = { key: 'cost', dir: 'desc' };
   @state() private importedSort: SortState = { key: 'cost', dir: 'desc' };
   @state() private modelSort: SortState = { key: 'cost', dir: 'desc' };
@@ -341,6 +364,8 @@ export class CostView extends AuthedElement {
     [
       consoleDialogStyles,
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       css`
         :host {
           display: block;
@@ -3332,121 +3357,104 @@ export class CostView extends AuthedElement {
   }
 
   private renderSessionsTab() {
-    const columns: SortColumn<GatewayUsageBySession>[] = [
-      {
-        key: 'session',
-        label: 'Session',
-        numeric: false,
-        value: (r) => this.getSessionTitle(r),
-      },
-      {
-        key: 'owner',
-        label: 'Owner / agent',
-        numeric: false,
-        value: (r) => r.agent_name || r.flow_name || '—',
-      },
-      {
-        key: 'requests',
-        label: 'Requests',
-        numeric: true,
-        value: (r) => r.request_count,
-      },
-      {
-        key: 'tokens',
-        label: 'Tokens',
-        numeric: true,
-        value: (r) => r.token_usage?.total_tokens || 0,
-      },
-      {
-        key: 'cost',
-        label: 'Cost',
-        numeric: true,
-        value: (r) => r.estimated_cost,
-      },
-      {
-        key: 'last_activity',
-        label: 'Last activity',
-        numeric: true,
-        value: (r) =>
-          r.last_activity_at || r.last_request_at
-            ? parseUTCDate(
-                (r.last_activity_at || r.last_request_at) as string
-              ).getTime()
-            : 0,
-      },
-    ];
-    const rows = this.sortRows(
-      this.summary?.usage_by_session || [],
-      columns,
-      this.sessionSort
-    );
-    if (!rows.length) {
+    const sessions = this.summary?.usage_by_session || [];
+    if (!sessions.length) {
       return html`<div class="empty">No session-attributed usage yet.</div>`;
     }
+    this.sessionTable.data = sessions;
+    const total = this.sessionTable.totalRows ?? sessions.length;
     return html`
       <div class="tab-panel-body">
+        ${renderDataTableToolbar({
+          table: this.sessionTable,
+          searchPlaceholder: 'Search sessions, agents or flows',
+          searchLabel: 'Search sessions',
+          count: `${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'}`,
+        })}
         <div class="analytics-table-wrap">
-          <div class="table-scroll">
-            <table class="styled-table" aria-label="Session spend">
-              <thead>
-                <tr>
-                  ${columns.map((column) =>
-                    this.renderSortableHeader(
-                      column,
-                      this.sessionSort,
-                      (key) =>
-                        (this.sessionSort = this.toggleSort(
-                          this.sessionSort,
-                          key
-                        ))
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map(
-                  (row) => html`
-                    <tr>
-                      <td>
-                        ${
-                          row.runtime_session_id
-                            ? html`<a
-                                href="/console/runtime-sessions?sessionId=${row.runtime_session_id}"
-                                >${this.getSessionTitle(row)}</a
-                              >`
-                            : this.getSessionTitle(row)
-                        }
-                      </td>
-                      <td>${this.renderSessionSubjects(row)}</td>
-                      <td>${this.formatNumber(row.request_count)}</td>
-                      <td>
-                        <token-figures
-                          .usage=${row.token_usage || null}
-                          expanded
-                        ></token-figures>
-                      </td>
-                      <td>
-                        ${html`<span title=${formatUsdExact(row.estimated_cost)}>${formatUsd(row.estimated_cost)}</span>`}
-                      </td>
-                      <td>
-                        ${
-                          row.last_activity_at || row.last_request_at
-                            ? parseUTCDate(
-                                (row.last_activity_at ||
-                                  row.last_request_at) as string
-                              ).toLocaleString()
-                            : '—'
-                        }
-                      </td>
-                    </tr>
-                  `
-                )}
-              </tbody>
-            </table>
-          </div>
+          <data-table
+            .table=${this.sessionTable}
+            .rows=${this.sessionTable.rows}
+            label="Session spend"
+            noun="sessions"
+          ></data-table>
         </div>
       </div>
     `;
+  }
+
+  private sessionColumns(): Array<ListColumn<GatewayUsageBySession>> {
+    const lastActivity = (row: GatewayUsageBySession) =>
+      row.last_activity_at || row.last_request_at || '';
+    return [
+      {
+        id: 'session',
+        header: 'Session',
+        hideable: false,
+        firstSort: 'asc',
+        value: (row) => this.getSessionTitle(row),
+        cell: (row) =>
+          row.runtime_session_id
+            ? html`<a
+                href="/console/runtime-sessions?sessionId=${row.runtime_session_id}"
+                >${this.getSessionTitle(row)}</a
+              >`
+            : this.getSessionTitle(row),
+      },
+      {
+        id: 'owner',
+        header: 'Owner / agent',
+        firstSort: 'asc',
+        value: (row) => row.agent_name || row.flow_name || '',
+        cell: (row) => this.renderSessionSubjects(row),
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.request_count,
+        searchText: () => '',
+        cell: (row) => this.formatNumber(row.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.token_usage?.total_tokens || 0,
+        searchText: () => '',
+        cell: (row) =>
+          html`<token-figures
+            .usage=${row.token_usage || null}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.estimated_cost,
+        searchText: () => '',
+        cell: (row) =>
+          html`<span title=${formatUsdExact(row.estimated_cost)}
+            >${formatUsd(row.estimated_cost)}</span
+          >`,
+      },
+      {
+        id: 'last_activity',
+        header: 'Last activity',
+        sort: 'number',
+        value: (row) =>
+          lastActivity(row) ? parseUTCDate(lastActivity(row)).getTime() : 0,
+        searchText: () => '',
+        cell: (row) =>
+          lastActivity(row)
+            ? parseUTCDate(lastActivity(row)).toLocaleString()
+            : '-',
+      },
+    ];
   }
 
   private renderUsersTab() {

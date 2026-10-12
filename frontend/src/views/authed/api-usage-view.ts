@@ -41,6 +41,16 @@ import type {
   GatewayUsageBySession,
 } from '../../types';
 import consoleStyles from '../../styles/console-styles.css?inline';
+import { tableScrollStyles } from '../../styles/table-scroll';
+import { totalTokensOf } from '../../components/token-figures';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  renderDataTableToolbar,
+} from '../../table';
+import type { ListColumn } from '../../table';
+import '../../table/data-table';
 import { shortExecutionId } from '../../utils/execution-subject';
 import {
   isHistoryUnavailable,
@@ -129,10 +139,39 @@ export class ApiUsageView extends LitElement {
 
   private searchRequestId = 0;
   /** Long lists show their first rows until the reader asks for all. */
-  @state() private expandedLists = new Set<'days' | 'models' | 'sessions'>();
+  @state() private expandedLists = new Set<'days'>();
+
+  /**
+   * Runtime sessions in the period: up to 250 from the summary, so they are
+   * paged, sortable and searchable rather than one 45,000 px column.
+   */
+  readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
+    listId: 'api-usage-sessions',
+    getRowId: (session) => this.sessionRowId(session),
+    pageSize: 10,
+    pageSizes: [10, 25, 50],
+    defaultSorting: [{ id: 'last_activity', desc: true }],
+    url: { prefix: 'sessions' },
+    columns: this.sessionColumns(),
+  });
+
+  /** Models in the period, most expensive first, paged at ten. */
+  readonly modelTable = new ListTable<GatewayUsageByModel>(this, {
+    listId: 'api-usage-models',
+    getRowId: (model) =>
+      `${model.provider_name ?? ''}/${model.model_alias ?? ''}`,
+    pageSize: 10,
+    pageSizes: [10, 25, 50],
+    defaultSorting: [{ id: 'cost', desc: true }],
+    url: { prefix: 'models' },
+    columns: this.modelColumns(),
+  });
 
   static styles = [
+    tableScrollStyles,
     unsafeCSS(consoleStyles),
+    listTableStyles,
+    dataTableStyles,
     css`
       :host {
         display: block;
@@ -1202,10 +1241,11 @@ export class ApiUsageView extends LitElement {
 
   /**
    * The first `limit` rows of a long list, plus a toggle to show the rest.
-   * grid: migrate to the shared data table (paging) when it lands.
+   * Only the daily bars use it now: they read as a chart, not a table.
+   * Models and sessions are on the shared data table.
    */
   private windowed<T>(
-    key: 'days' | 'models' | 'sessions',
+    key: 'days',
     rows: T[],
     limit: number
   ): { visible: T[]; toggle: unknown } {
@@ -1286,56 +1326,69 @@ export class ApiUsageView extends LitElement {
         </div>
       `;
     }
+    this.modelTable.data = models;
+    return html`<data-table
+      class="model-breakdown"
+      .table=${this.modelTable}
+      .rows=${this.modelTable.rows}
+      .stickyHeader=${false}
+      label="Usage by model"
+      noun="models"
+    ></data-table>`;
+  }
 
-    const sortedModels = [...models].sort(
-      (left, right) =>
-        right.estimated_cost - left.estimated_cost ||
-        right.request_count - left.request_count
-    );
-
-    const { visible: shownModels, toggle } = this.windowed(
-      'models',
-      sortedModels,
-      10
-    );
-
-    return html`
-      <div class="breakdown-list model-breakdown">
-        <div class="breakdown-header">
-          <div>Model</div>
-          <div class="cell-numeric">Requests</div>
-          <div class="cell-numeric">Tokens</div>
-          <div class="cell-numeric">Cost</div>
-        </div>
-        ${shownModels.map(
-          (model) => html`
-            <div class="breakdown-row">
-              <div class="breakdown-primary">
-                <div class="breakdown-name">
-                  ${model.model_alias || 'Unnamed model'}
-                </div>
-                <div class="breakdown-secondary">
-                  ${model.provider_name || 'Unknown provider'}
-                </div>
-              </div>
-              <div class="cell-numeric">
-                ${this.formatNumber(model.request_count)}
-              </div>
-              <div class="cell-numeric">
-                <token-figures
-                  .usage=${model.token_usage}
-                  expanded
-                ></token-figures>
-              </div>
-              <div class="cell-numeric">
-                ${html`<span title=${formatUsdExact(model.estimated_cost)}>${formatUsd(model.estimated_cost)}</span>`}
-              </div>
+  private modelColumns(): Array<ListColumn<GatewayUsageByModel>> {
+    return [
+      {
+        id: 'model',
+        header: 'Model',
+        hideable: false,
+        firstSort: 'asc',
+        value: (model) => model.model_alias || '',
+        searchText: (model) =>
+          `${model.model_alias ?? ''} ${model.provider_name ?? ''}`,
+        cell: (model) =>
+          html`<div class="breakdown-primary">
+            <div class="breakdown-name">
+              ${model.model_alias || 'Unnamed model'}
             </div>
-          `
-        )}
-      </div>
-      ${toggle}
-    `;
+            <div class="breakdown-secondary">
+              ${model.provider_name || 'Unknown provider'}
+            </div>
+          </div>`,
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (model) => model.request_count,
+        cell: (model) => this.formatNumber(model.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (model) => totalTokensOf(model.token_usage),
+        cell: (model) =>
+          html`<token-figures
+            .usage=${model.token_usage}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (model) => model.estimated_cost,
+        cell: (model) =>
+          html`<span title=${formatUsdExact(model.estimated_cost)}
+            >${formatUsd(model.estimated_cost)}</span
+          >`,
+      },
+    ];
   }
 
   private renderFlowBreakdown(flows: GatewayUsageByFlow[]) {
@@ -1401,106 +1454,152 @@ export class ApiUsageView extends LitElement {
         </div>
       `;
     }
-
-    const sortedSessions = [...sessions].sort(
-      (left, right) =>
-        parseUTCDate(
-          this.getSessionLastActivity(right) || '1970-01-01T00:00:00Z'
-        ).getTime() -
-          parseUTCDate(
-            this.getSessionLastActivity(left) || '1970-01-01T00:00:00Z'
-          ).getTime() || right.request_count - left.request_count
-    );
-
-    const { visible: shownSessions, toggle: sessionToggle } = this.windowed(
-      'sessions',
-      sortedSessions,
-      10
-    );
-
+    this.sessionTable.data = sessions;
+    const total = this.sessionTable.totalRows ?? sessions.length;
     return html`
-      <div class="session-list">
-        <div class="session-header">
-          <div>Runtime session</div>
-          <div class="cell-numeric">Requests</div>
-          <div class="cell-numeric">Tokens</div>
-          <div class="cell-numeric">Cost</div>
-          <div>Last activity</div>
-        </div>
-        ${shownSessions.map((session) => {
-          const sourceType = this.getSessionSourceType(session);
-          const sourceId = this.getSessionSourceId(session);
-          const lastActivity = this.getSessionLastActivity(session);
-          const flowBacked = this.isFlowBackedSession(session);
-          const sessionHref = this.getRuntimeSessionHref(session);
-
-          return html`
-            <div class="session-row">
-              <div class="session-primary">
-                <div class="breakdown-name">
-                  ${
-                    sessionHref
-                      ? html`<a class="session-link" href=${sessionHref}
-                          >${this.getSessionDisplayName(session)}</a
-                        >`
-                      : this.getSessionDisplayName(session)
-                  }
-                </div>
-                <div class="breakdown-secondary">
-                  ${session.model_alias || 'Unknown model'}
-                  ${session.provider_name ? `\u00b7 ${session.provider_name}` : ''}
-                </div>
-                ${
-                  sourceId
-                    ? html`
-                        <div class="session-meta">
-                          ${
-                            flowBacked
-                              ? html`Flow execution:
-                                  <a
-                                    class="session-link"
-                                    href=${`/console/flows/executions/${sourceId}`}
-                                    title=${sourceId}
-                                    >${this.shortSourceId(sourceId)}</a
-                                  >`
-                              : html`${this.getSessionSourceLabel(sourceType)}
-                                  <code title=${sourceId}
-                                    >${this.shortSourceId(sourceId)}</code
-                                  >`
-                          }
-                        </div>
-                      `
-                    : ''
-                }
-              </div>
-              <div
-                class="cell-numeric"
-                title=${this.formatNumber(session.request_count)}
-              >
-                ${this.formatCompactNumber(session.request_count)}
-              </div>
-              <div class="cell-numeric">
-                <token-figures
-                  .usage=${session.token_usage}
-                  expanded
-                ></token-figures>
-              </div>
-              <div class="cell-numeric">
-                ${html`<span title=${formatUsdExact(session.estimated_cost)}>${formatUsd(session.estimated_cost)}</span>`}
-              </div>
-              <div>
-                ${
-                  lastActivity
-                    ? this.formatDateTimeLabel(lastActivity)
-                    : 'Unknown'
-                }
-              </div>
-            </div>
-          `;
-        })}
-      </div>
-      ${sessionToggle}
+      ${renderDataTableToolbar({
+        table: this.sessionTable,
+        searchPlaceholder: 'Search sessions, models or sources',
+        searchLabel: 'Search runtime sessions',
+        count: `${total.toLocaleString()} ${total === 1 ? 'session' : 'sessions'}`,
+      })}
+      <data-table
+        class="session-list"
+        .table=${this.sessionTable}
+        .rows=${this.sessionTable.rows}
+        .stickyHeader=${false}
+        label="Recent runtime sessions"
+        noun="sessions"
+      ></data-table>
     `;
+  }
+
+  /** Stable across refreshes: the session id, else its source. */
+  private sessionRowId(session: GatewayUsageBySession): string {
+    const record = session as unknown as Record<string, unknown>;
+    return String(
+      record.runtime_session_id ??
+        record.session_id ??
+        `${this.getSessionSourceType(session)}:${this.getSessionSourceId(session)}:${session.model_alias ?? ''}`
+    );
+  }
+
+  private renderSessionIdentity(session: GatewayUsageBySession) {
+    const sourceType = this.getSessionSourceType(session);
+    const sourceId = this.getSessionSourceId(session);
+    const flowBacked = this.isFlowBackedSession(session);
+    const sessionHref = this.getRuntimeSessionHref(session);
+    return html`<div class="session-primary">
+      <div class="breakdown-name">
+        ${
+          sessionHref
+            ? html`<a class="session-link" href=${sessionHref}
+                >${this.getSessionDisplayName(session)}</a
+              >`
+            : this.getSessionDisplayName(session)
+        }
+      </div>
+      <div class="breakdown-secondary">
+        ${session.model_alias || 'Unknown model'}
+        ${session.provider_name ? `\u00b7 ${session.provider_name}` : ''}
+      </div>
+      ${
+        sourceId
+          ? html`
+              <div class="session-meta">
+                ${
+                  flowBacked
+                    ? html`Flow execution:
+                        <a
+                          class="session-link"
+                          href=${`/console/flows/executions/${sourceId}`}
+                          title=${sourceId}
+                          >${this.shortSourceId(sourceId)}</a
+                        >`
+                    : html`${this.getSessionSourceLabel(sourceType)}
+                        <code title=${sourceId}
+                          >${this.shortSourceId(sourceId)}</code
+                        >`
+                }
+              </div>
+            `
+          : ''
+      }
+    </div>`;
+  }
+
+  private sessionColumns(): Array<ListColumn<GatewayUsageBySession>> {
+    const lastActivity = (session: GatewayUsageBySession) => {
+      const value = this.getSessionLastActivity(session);
+      return value ? parseUTCDate(value).getTime() : 0;
+    };
+    return [
+      {
+        id: 'session',
+        header: 'Runtime session',
+        hideable: false,
+        firstSort: 'asc',
+        value: (session) => this.getSessionDisplayName(session),
+        searchText: (session) =>
+          [
+            this.getSessionDisplayName(session),
+            session.model_alias,
+            session.provider_name,
+            this.getSessionSourceId(session),
+            this.getSessionSourceLabel(this.getSessionSourceType(session)),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        cellClass: 'session-row',
+        cell: (session) => this.renderSessionIdentity(session),
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (session) => session.request_count,
+        searchText: () => '',
+        cellTitle: (session) => this.formatNumber(session.request_count),
+        cell: (session) => this.formatCompactNumber(session.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (session) => totalTokensOf(session.token_usage),
+        searchText: () => '',
+        cell: (session) =>
+          html`<token-figures
+            .usage=${session.token_usage}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (session) => session.estimated_cost,
+        searchText: () => '',
+        cell: (session) =>
+          html`<span title=${formatUsdExact(session.estimated_cost)}
+            >${formatUsd(session.estimated_cost)}</span
+          >`,
+      },
+      {
+        id: 'last_activity',
+        header: 'Last activity',
+        sort: 'number',
+        value: lastActivity,
+        searchText: () => '',
+        cell: (session) => {
+          const value = this.getSessionLastActivity(session);
+          return value ? this.formatDateTimeLabel(value) : 'Unknown';
+        },
+      },
+    ];
   }
 
   private renderSearchResults(

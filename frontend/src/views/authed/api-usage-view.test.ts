@@ -524,18 +524,22 @@ describe('ApiUsageView', () => {
     expect(root.querySelectorAll('.daily-row')).to.have.length(14);
     // The collapsed list keeps the most recent days.
     expect(root.querySelector('.daily-list')!.textContent).to.contain('30');
+    // Models page at ten on the shared table, most expensive first.
+    const modelRows = () =>
+      root.querySelectorAll('.model-breakdown tbody tr[data-row]');
+    expect(modelRows()).to.have.length(10);
+    const pager = root.querySelector(
+      '.model-breakdown table-pagination'
+    ) as HTMLElement & { updateComplete: Promise<unknown> };
+    await pager.updateComplete;
     expect(
-      root.querySelectorAll('.model-breakdown .breakdown-row')
-    ).to.have.length(10);
-    const toggle = root.querySelector(
-      'sl-button[data-list-toggle="models"]'
-    ) as HTMLElement;
-    expect(toggle.textContent!.trim()).to.equal('Show all 15');
-    toggle.click();
+      pager.shadowRoot!.querySelector('.range')!.textContent!.trim()
+    ).to.equal('1-10 of 15 models');
+    (pager.shadowRoot!.querySelector('sl-button.next') as HTMLElement).click();
     await element.updateComplete;
-    expect(
-      root.querySelectorAll('.model-breakdown .breakdown-row')
-    ).to.have.length(15);
+    expect(modelRows()).to.have.length(5);
+    element.modelTable.setPageIndex(0);
+    window.history.replaceState(null, '', window.location.pathname);
 
     // Provider snapshots get their own flexible row, not the 4-track grid
     // that squeezed the name to one letter per line.
@@ -557,9 +561,10 @@ describe('ApiUsageView', () => {
     );
     await element.updateComplete;
 
-    const headers = Array.from(
-      element.shadowRoot!.querySelectorAll('.breakdown-header')
-    ).map((header) => (header.textContent || '').replace(/\s+/g, ' ').trim());
+    const headers = [
+      ...Array.from(element.shadowRoot!.querySelectorAll('.breakdown-header')),
+      ...Array.from(element.shadowRoot!.querySelectorAll('data-table thead')),
+    ].map((header) => (header.textContent || '').replace(/\s+/g, ' ').trim());
     expect(headers.length).to.be.greaterThan(0);
     for (const header of headers) {
       expect(header.indexOf('Tokens')).to.be.greaterThan(-1);
@@ -567,7 +572,7 @@ describe('ApiUsageView', () => {
     }
 
     const figures = element.shadowRoot!.querySelector(
-      '.breakdown-row token-figures'
+      '.model-breakdown token-figures'
     ) as HTMLElement & { updateComplete: Promise<unknown> };
     expect(figures).to.exist;
     await figures.updateComplete;
@@ -592,7 +597,7 @@ describe('ApiUsageView', () => {
     (element as any).summary = { ...summary };
     await element.updateComplete;
     const updated = element.shadowRoot!.querySelector(
-      '.breakdown-row token-figures'
+      '.model-breakdown token-figures'
     ) as HTMLElement & { updateComplete: Promise<unknown> };
     await updated.updateComplete;
     expect(
