@@ -1753,10 +1753,8 @@ export class AIModelsView extends LitElement {
             <a class="model-link" href=${this.modelHref(model)}>
               ${model.name}
             </a>
-            <<<<<<< HEAD
             ${model.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
-            ======= ${sharedFromBadge(model)} ${unpricedBadge(model)} >>>>>>>
-            github/main ${this.renderDefaultControl(model)}
+            ${unpricedBadge(model)} ${this.renderDefaultControl(model)}
           </div>
           <div class="model-identifier">
             ${this.getGatewayAlias(model) || model.model_identifier}

@@ -140,6 +140,8 @@ describe('AIModelsView', () => {
       provider_name: 'qwen',
       model_identifier: 'deepseek-v4.1-flash',
       is_built_in: true,
+      unpriced: true,
+      is_default: true,
       meta_data: {
         gateway: {
           enabled: true,
@@ -172,7 +174,20 @@ describe('AIModelsView', () => {
     const builtInCard = element.shadowRoot?.querySelector(
       '[data-model-id="builtin-model"]'
     );
-    expect(builtInCard?.textContent).to.contain('Built-in');
+    const cardText = builtInCard?.textContent || '';
+    expect(cardText).to.not.match(/<<<<<<<|=======|>>>>>>>/);
+    const badgeLabels = Array.from(
+      builtInCard?.querySelectorAll('sl-badge') || []
+    ).map((badge) => badge.textContent?.trim());
+    expect(
+      badgeLabels.filter((label) => label === 'Built-in')
+    ).to.have.lengthOf(1);
+    expect(
+      badgeLabels.filter((label) => label === 'unpriced')
+    ).to.have.lengthOf(1);
+    expect(badgeLabels.filter((label) => label === 'Default')).to.have.lengthOf(
+      1
+    );
     expect(builtInCard?.querySelector('list-select-checkbox')).to.equal(null);
   });
 
