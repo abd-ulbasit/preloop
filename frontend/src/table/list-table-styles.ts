@@ -62,10 +62,12 @@ export const listTableStyles = css`
   /* A 9px grab strip on the cell's right edge, invisible until it is wanted:
      a visible rule on every header would draw the gray grid the console
      spent wave 4 removing. */
+  /* Inside the header cell: a handle that hangs past the edge makes every
+     resizable header overflow its cell by a few pixels. */
   .col-resize {
     position: absolute;
     top: 0;
-    right: -4px;
+    right: 0;
     width: 9px;
     height: 100%;
     cursor: col-resize;
@@ -77,7 +79,7 @@ export const listTableStyles = css`
     content: '';
     position: absolute;
     top: 25%;
-    left: 4px;
+    right: 0;
     width: 1px;
     height: 50%;
     background: var(--sl-color-neutral-400);
@@ -94,5 +96,12 @@ export const listTableStyles = css`
   }
   th:last-child .col-resize {
     display: none;
+  }
+  .cell-truncate {
+    display: block;
+    max-width: var(--cell-truncate-max, 32rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 `;

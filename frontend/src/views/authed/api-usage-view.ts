@@ -42,6 +42,7 @@ import type {
 } from '../../types';
 import { SessionPages } from '../../controllers/session-pages';
 import '../../table/table-state';
+import '../../table/table-pagination';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { totalTokensOf } from '../../components/token-figures';
@@ -162,6 +163,10 @@ export class ApiUsageView extends LitElement {
     // The page shows ten sessions under the cards, as it showed ten rows.
     10
   );
+
+  /** Flow rows, ten a page: the breakdown carries every flow of the period. */
+  @state() private flowPage = 0;
+  @state() private flowPageSize = 10;
 
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
     listId: 'api-usage-sessions',
@@ -689,6 +694,7 @@ export class ApiUsageView extends LitElement {
         .catch((error: unknown) =>
           console.error('Failed to load rate limit report:', error)
         );
+      this.flowPage = 0;
       // Sessions page on their own request, so a busy account's session
       // count never holds up the cards above them.
       void this.sessionPages.reset();
@@ -1393,6 +1399,16 @@ export class ApiUsageView extends LitElement {
         right.estimated_cost - left.estimated_cost
     );
 
+    const lastPage = Math.max(
+      0,
+      Math.ceil(sortedFlows.length / this.flowPageSize) - 1
+    );
+    const page = Math.min(this.flowPage, lastPage);
+    const pageFlows = sortedFlows.slice(
+      page * this.flowPageSize,
+      (page + 1) * this.flowPageSize
+    );
+
     return html`
       <div class="breakdown-list flow-breakdown">
         <div class="breakdown-header">
@@ -1401,7 +1417,7 @@ export class ApiUsageView extends LitElement {
           <div class="cell-numeric">Tokens</div>
           <div class="cell-numeric">Cost</div>
         </div>
-        ${sortedFlows.map(
+        ${pageFlows.map(
           (flow) => html`
             <div class="breakdown-row">
               <div class="breakdown-primary">
@@ -1428,6 +1444,21 @@ export class ApiUsageView extends LitElement {
           `
         )}
       </div>
+      <table-pagination
+        class="flow-pager"
+        page-index=${page}
+        page-size=${this.flowPageSize}
+        .pageSizes=${[10, 25, 50]}
+        .total=${sortedFlows.length}
+        page-rows=${pageFlows.length}
+        noun="flows"
+        @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
+          (this.flowPage = event.detail.pageIndex)}
+        @page-size-change=${(event: CustomEvent<{ pageSize: number }>) => {
+          this.flowPageSize = event.detail.pageSize;
+          this.flowPage = 0;
+        }}
+      ></table-pagination>
     `;
   }
 

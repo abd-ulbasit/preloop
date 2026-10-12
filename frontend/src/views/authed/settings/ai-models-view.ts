@@ -40,6 +40,14 @@ import {
 } from '../hierarchy/shared-badge';
 import { unpricedBadge } from '../../../components/unpriced-badge';
 import '../../../components/list-toolbar';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  type ListColumn,
+} from '../../../table';
+import '../../../table/data-table';
+import '../../../table/column-picker';
 import '../../../components/resource-actions';
 import '../../../components/token-figures';
 import type { ResourceAction } from '../../../components/resource-actions';
@@ -121,6 +129,19 @@ export class AIModelsView extends LitElement {
   /** Multi-select for the model table and the card grid. */
   readonly selection = new ListSelectionController<AIModel>(this, {
     idOf: (model) => model.id,
+  });
+
+  /**
+   * List mode on the shared table: the column picker can hide what a
+   * reader does not need, and every model list looks the same. Filtering and
+   * search stay with the toolbar above, which also drives the cards.
+   */
+  readonly modelTable = new ListTable<AIModel>(this, {
+    listId: 'ai-models',
+    getRowId: (model) => model.id,
+    pageSize: 0,
+    persist: ['columnVisibility', 'columnSizing', 'density'],
+    columns: this.modelColumns(),
   });
 
   private readonly INFO_ALERT_DISMISSED_KEY =
@@ -212,6 +233,8 @@ export class AIModelsView extends LitElement {
     [
       consoleDialogStyles,
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       css`
         table {
           width: 100%;
@@ -1117,6 +1140,23 @@ export class AIModelsView extends LitElement {
             <sl-option value="enabled">Enabled</sl-option>
             <sl-option value="disabled">Disabled</sl-option>
           </sl-select>
+          ${
+            this.effectiveView === 'list'
+              ? html`<column-picker
+                  .columns=${this.modelTable.pickerColumns}
+                  ?can-reset=${this.modelTable.hasColumnChanges}
+                  density=${this.modelTable.density}
+                  @column-toggle=${(event: CustomEvent) =>
+                    this.modelTable.setVisible(
+                      event.detail.id,
+                      event.detail.visible
+                    )}
+                  @columns-reset=${() => this.modelTable.resetColumns()}
+                  @density-change=${(event: CustomEvent) =>
+                    this.modelTable.setDensity(event.detail.density)}
+                ></column-picker>`
+              : null
+          }
           <span slot="count">${this.resultsLabel}</span>
           ${this.renderBulkBar()}
         </list-toolbar>
@@ -1335,44 +1375,54 @@ export class AIModelsView extends LitElement {
     `;
   }
 
+  private modelColumns(): Array<ListColumn<AIModel>> {
+    return [
+      {
+        id: 'name',
+        header: 'Name',
+        hideable: false,
+        minWidth: 200,
+        cell: (model) => this.renderNameCell(model),
+      },
+      {
+        id: 'provider',
+        header: 'Provider',
+        cell: (model) => this.renderProviderCell(model),
+      },
+      {
+        id: 'health',
+        header: 'Fleet health',
+        cell: (model) => this.renderHealthCell(model),
+      },
+      {
+        id: 'usage',
+        header: 'Usage',
+        cell: (model) => this.renderUsageCell(model),
+      },
+      {
+        id: 'default',
+        header: 'Default',
+        cell: (model) => this.renderDefaultControl(model),
+      },
+    ];
+  }
+
   private renderListView(models: AIModel[]) {
+    this.modelTable.data = models;
     return html`
       <sl-card class="table-card">
-        <div class="table-scroll">
-          <table
-            class="styled-table"
-            role="grid"
-            aria-multiselectable="true"
-            aria-label="AI models"
-          >
-            <thead>
-              <tr>
-                <th class="select-cell">
-                  <list-select-checkbox
-                    label="Select all models"
-                    ?checked=${this.selection.allSelected}
-                    ?indeterminate=${this.selection.someSelected}
-                    ?disabled=${this.selection.busy}
-                    @selection-toggle=${this.selection.handleToggleEvent}
-                  ></list-select-checkbox>
-                </th>
-                <th>Name</th>
-                <th>Provider</th>
-                <th>Fleet health</th>
-                <th>Usage</th>
-                <th>Default</th>
-                <th class="actions-cell">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${repeat(
-                models,
-                (model) => model.id,
-                (model) => this.renderModelRow(model)
-              )}
-            </tbody>
-          </table>
-        </div>
+        <data-table
+          .table=${this.modelTable}
+          .rows=${this.modelTable.rows}
+          .selection=${this.selection}
+          .rowSelectable=${(model: AIModel) => !model.is_built_in}
+          .rowActions=${(model: AIModel) => this.modelActions(model)}
+          .rowClass=${() => 'model-row'}
+          .rowLabel=${(model: AIModel) => model.name}
+          .stickyHeader=${false}
+          label="AI models"
+          noun="models"
+        ></data-table>
       </sl-card>
     `;
   }
@@ -1703,26 +1753,6 @@ export class AIModelsView extends LitElement {
             : null
         }
       </div>
-    `;
-  }
-
-  private renderModelRow(model: AIModel) {
-    const selected = this.selection.isSelected(model.id);
-    return html`
-      <tr
-        class="model-row"
-        data-model-id=${model.id}
-        data-selection-id=${model.id}
-        aria-selected=${selected ? 'true' : 'false'}
-      >
-        <td class="select-cell">${this.renderSelectCheckbox(model)}</td>
-        <td>${this.renderNameCell(model)}</td>
-        <td>${this.renderProviderCell(model)}</td>
-        <td>${this.renderHealthCell(model)}</td>
-        <td>${this.renderUsageCell(model)}</td>
-        <td>${this.renderDefaultControl(model)}</td>
-        <td class="actions-cell">${this.renderModelActions(model)}</td>
-      </tr>
     `;
   }
 
