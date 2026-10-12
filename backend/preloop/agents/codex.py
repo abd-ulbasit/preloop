@@ -770,9 +770,13 @@ exit $CODEX_EXIT_CODE
             self.logger.warning("No account API token provided for Preloop MCP access")
 
         # Set Preloop MCP URL (for Kubernetes, use the service DNS name or external URL)
-        codex_env["PRELOOP_MCP_URL"] = os.getenv(
-            "PRELOOP_MCP_URL_K8S",
-            os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+        codex_env["PRELOOP_MCP_URL"] = (
+            os.getenv("PRELOOP_EXECUTION_API_URL", "").rstrip("/") + "/mcp/v1"
+            if os.getenv("PRELOOP_EXECUTION_API_URL")
+            else os.getenv(
+                "PRELOOP_MCP_URL_K8S",
+                os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+            )
         )
 
         # Add MCP_TOOL_TIMEOUT_SEC for config.toml substitution

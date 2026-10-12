@@ -61,6 +61,7 @@ spec:
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           env:
+            {{- include "preloop.executionEnv" $ | nindent 12 }}
             - name: PRELOOP_URL
               value: {{ $.Values.environment.preloopUrl | quote }}
             - name: HOST
@@ -324,16 +325,26 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with $.Values.extraVolumeMounts }}
           volumeMounts:
+            {{- if $.Values.agentExecution.kubeconfigSecret }}
+            - name: execution-kubeconfig
+              mountPath: /var/run/preloop/execution
+              readOnly: true
+            {{- end }}
+            {{- with $.Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml $.Values.worker.resources | nindent 12 }}
-      {{- with $.Values.extraVolumes }}
       volumes:
+        {{- if $.Values.agentExecution.kubeconfigSecret }}
+        - name: execution-kubeconfig
+          secret:
+            secretName: {{ $.Values.agentExecution.kubeconfigSecret }}
+        {{- end }}
+        {{- with $.Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       {{- with $.Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

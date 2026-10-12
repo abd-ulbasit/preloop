@@ -1365,16 +1365,24 @@ class ContainerAgentExecutor(AgentExecutor):
             raise RuntimeError("kubernetes_asyncio is not installed")
 
         if not self._k8s_initialized:
-            # Load in-cluster config when running inside K8s, otherwise load from kubeconfig
-            try:
-                config.load_incluster_config()
-                self.logger.info("Loaded in-cluster Kubernetes config")
-            except config.ConfigException:
-                await config.load_kube_config(config_file=os.environ.get("KUBECONFIG"))
-                self.logger.info("Loaded Kubernetes config from kubeconfig")
-
-            # Create ApiClient for proper resource management
-            self._k8s_api_client = client.ApiClient()
+            # Keep execution credentials private to this executor. Other application
+            # clients must continue to use the control-plane cluster.
+            configuration = client.Configuration()
+            execution_kubeconfig = os.getenv("PRELOOP_EXECUTION_KUBECONFIG")
+            if execution_kubeconfig:
+                await config.load_kube_config(
+                    config_file=execution_kubeconfig,
+                    client_configuration=configuration,
+                )
+            else:
+                try:
+                    config.load_incluster_config(client_configuration=configuration)
+                except config.ConfigException:
+                    await config.load_kube_config(
+                        config_file=os.environ.get("KUBECONFIG"),
+                        client_configuration=configuration,
+                    )
+            self._k8s_api_client = client.ApiClient(configuration=configuration)
             self._k8s_batch_api = client.BatchV1Api(self._k8s_api_client)
             self._k8s_core_api = client.CoreV1Api(self._k8s_api_client)
             self._k8s_initialized = True
@@ -1910,6 +1918,8 @@ class ContainerAgentExecutor(AgentExecutor):
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",
+                priority_class_name=os.getenv("PRELOOP_EXECUTION_PRIORITY_CLASS")
+                or None,
                 # Sandbox runtime and node placement for the agent pod.
                 # ``None`` omits the key, which is what keeps a stock
                 # install on the node default.

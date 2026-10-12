@@ -167,7 +167,9 @@ def default_model_gateway_url() -> str:
         The base URL agents and execution contexts should call for OpenAI
         shaped gateway traffic.
     """
-    configured_url = os.getenv("PRELOOP_MODEL_GATEWAY_URL")
+    configured_url = os.getenv("PRELOOP_EXECUTION_GATEWAY_URL") or os.getenv(
+        "PRELOOP_MODEL_GATEWAY_URL"
+    )
     if configured_url:
         return configured_url
 

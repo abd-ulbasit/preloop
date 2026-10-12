@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import hashlib
 import io
 import json
@@ -294,6 +295,8 @@ async def _check_kubernetes(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
                     restart_policy="Never",
+                    priority_class_name=os.getenv("PRELOOP_EXECUTION_PRIORITY_CLASS")
+                    or None,
                     # Repository code runs in this Job too, so it gets the
                     # same sandbox runtime and node placement as agent pods
                     # (issue #1076). ``None`` omits the key, which keeps a

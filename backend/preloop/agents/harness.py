@@ -92,7 +92,9 @@ class ExtensionHarnessAgent(ContainerAgentExecutor):
         mcp_url = os.getenv(
             "PRELOOP_MCP_URL_K8S" if self.use_kubernetes else "PRELOOP_MCP_URL"
         )
-        if mcp_url:
+        if self.use_kubernetes and os.getenv("PRELOOP_EXECUTION_API_URL"):
+            api_url = os.environ["PRELOOP_EXECUTION_API_URL"].rstrip("/")
+        elif mcp_url:
             api_url = mcp_url.removesuffix("/mcp/v1")
         mcp_config = MCPConfigService.generate_mcp_config(
             context.get("allowed_mcp_servers") or [],

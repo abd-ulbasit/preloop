@@ -223,3 +223,23 @@ Shared OTLP env for API and gateway (one values schema).
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/* Execution-only settings; never change control-plane Kubernetes credentials. */}}
+{{- define "preloop.executionEnv" -}}
+{{- if .Values.agentExecution.kubeconfigSecret }}
+- name: PRELOOP_EXECUTION_KUBECONFIG
+  value: /var/run/preloop/execution/kubeconfig
+{{- end }}
+{{- if .Values.agentExecution.priorityClassName }}
+- name: PRELOOP_EXECUTION_PRIORITY_CLASS
+  value: {{ .Values.agentExecution.priorityClassName | quote }}
+{{- end }}
+{{- if .Values.agentExecution.apiUrl }}
+- name: PRELOOP_EXECUTION_API_URL
+  value: {{ .Values.agentExecution.apiUrl | quote }}
+{{- end }}
+{{- if .Values.agentExecution.gatewayUrl }}
+- name: PRELOOP_EXECUTION_GATEWAY_URL
+  value: {{ .Values.agentExecution.gatewayUrl | quote }}
+{{- end }}
+{{- end -}}

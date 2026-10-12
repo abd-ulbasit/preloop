@@ -891,6 +891,13 @@ cleanup:
 
 # Agent execution configuration
 agentExecution:
+  # Existing Secret with key kubeconfig; credentials target the execution cluster.
+  # Provision its namespace, quotas and RBAC there before enabling this option.
+  kubeconfigSecret: ""
+  priorityClassName: ""
+  # Public or privately routed endpoints reachable from the execution cluster.
+  apiUrl: ""
+  gatewayUrl: ""
   # Namespace for running agent containers
   namespace:
     # If true, creates a separate namespace for agent execution (recommended for production)

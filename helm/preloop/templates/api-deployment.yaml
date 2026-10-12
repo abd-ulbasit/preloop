@@ -57,6 +57,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "preloop.executionEnv" . | nindent 12 }}
             - name: PRELOOP_URL
               value: {{ .Values.environment.preloopUrl | quote }}
             - name: HOST
@@ -396,6 +397,11 @@ spec:
               containerPort: 8000
               protocol: TCP
           volumeMounts:
+            {{- if .Values.agentExecution.kubeconfigSecret }}
+            - name: execution-kubeconfig
+              mountPath: /var/run/preloop/execution
+              readOnly: true
+            {{- end }}
             {{- if .Values.profiling.enabled }}
             - name: profiling-storage
               mountPath: /tmp/profiling
@@ -434,6 +440,11 @@ spec:
             successThreshold: 1
             failureThreshold: 2
       volumes:
+        {{- if .Values.agentExecution.kubeconfigSecret }}
+        - name: execution-kubeconfig
+          secret:
+            secretName: {{ .Values.agentExecution.kubeconfigSecret }}
+        {{- end }}
       {{- if .Values.profiling.enabled }}
         - name: profiling-storage
           persistentVolumeClaim:

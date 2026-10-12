@@ -638,9 +638,13 @@ exit $GEMINI_EXIT_CODE
             self.logger.warning("No account API token provided for Preloop MCP access")
 
         # Set Preloop MCP URL (for Kubernetes)
-        gemini_env["PRELOOP_MCP_URL"] = os.getenv(
-            "PRELOOP_MCP_URL_K8S",
-            os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+        gemini_env["PRELOOP_MCP_URL"] = (
+            os.getenv("PRELOOP_EXECUTION_API_URL", "").rstrip("/") + "/mcp/v1"
+            if os.getenv("PRELOOP_EXECUTION_API_URL")
+            else os.getenv(
+                "PRELOOP_MCP_URL_K8S",
+                os.getenv("PRELOOP_MCP_URL", "http://preloop-api:8000/mcp/v1"),
+            )
         )
 
         # Add MCP_TOOL_TIMEOUT_SEC
