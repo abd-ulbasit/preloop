@@ -10,7 +10,10 @@ import sinon from 'sinon';
 import { invalidateApiCaches } from '../api';
 import { loadShoelaceTokens } from '../utils/test-shoelace-theme';
 import type { ApprovalRequest, RuntimeSessionActivityItem } from '../types';
+import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 import './new-runner-session-dialog';
+import './preloop-session-observer';
+import './runner-session-controls';
 import './operator-note-composer';
 import './session-approval-card';
 import './session-chat-view';
@@ -188,6 +191,7 @@ for (const phone of PHONES) {
           const url = typeof input === 'string' ? input : input.toString();
           if (url.includes('/session-options')) return json(SESSION_OPTIONS);
           if (url.includes('/operator-notes')) return json({ notes: [] });
+          if (url.includes('/approval-requests')) return json([]);
           return json({});
         });
     });
@@ -321,6 +325,92 @@ for (const phone of PHONES) {
         composer.shadowRoot!.querySelector('[data-testid="note-send"]'),
         'Send'
       );
+    });
+
+    it('keeps the runner session composer, Send and attach hint on screen', async () => {
+      const sessionId = '0b8f6c1e-2d4a-4f5b-9c3d-1a2b3c4d5e6f';
+      const controls = await fixture(
+        html`<runner-session-controls
+          session-id=${sessionId}
+        ></runner-session-controls>`
+      );
+      await waitUntil(
+        () => controls.shadowRoot!.querySelector('operator-note-composer'),
+        'composer'
+      );
+      const composer = controls.shadowRoot!.querySelector(
+        'operator-note-composer'
+      )!;
+      await (composer as any).updateComplete;
+      await frames();
+      expectNoPageOverflow(controls.shadowRoot!);
+      const input = composer.shadowRoot!.querySelector(
+        '[data-testid="note-input"]'
+      )!;
+      expect(input.getBoundingClientRect().right).to.be.at.most(
+        window.innerWidth
+      );
+      expect(input.getBoundingClientRect().height).to.be.at.least(MIN_TAP);
+      expectTappable(
+        composer.shadowRoot!.querySelector('[data-testid="note-send"]'),
+        'Send'
+      );
+      const copy = controls.shadowRoot!.querySelector('sl-copy-button')!;
+      expectTappable(
+        copy.shadowRoot!.querySelector('[part~="button"]'),
+        'Copy'
+      );
+    });
+
+    it('keeps Stop on screen as a large tap target', async () => {
+      sinon.stub(unifiedWebSocketManager, 'connect').resolves();
+      const subscribe = sinon
+        .stub(unifiedWebSocketManager, 'subscribe')
+        .returns(() => undefined);
+      try {
+        const id = '0b8f6c1e-2d4a-4f5b-9c3d-1a2b3c4d5e6f';
+        const observer = await fixture(
+          html`<preloop-session-observer
+            .sessions=${[
+              {
+                id,
+                session_source_type: 'runner_session',
+                session_source_id: 'remote-1',
+                runtime_principal_name: 'Jane laptop',
+                started_at: '2026-10-13T10:00:00Z',
+                last_activity_at: '2026-10-13T10:05:00Z',
+                ended_at: null,
+                is_active_now: true,
+                activity_status: 'active_now',
+                total_requests: 0,
+                successful_requests: 0,
+                failed_requests: 0,
+                token_usage: {
+                  prompt_tokens: 0,
+                  completion_tokens: 0,
+                  total_tokens: 0,
+                },
+                estimated_cost: 0,
+              },
+            ]}
+            .features=${{ endSession: true }}
+          ></preloop-session-observer>`
+        );
+        const stopSelector = '[data-testid="runner-session-stop"]';
+        await waitUntil(
+          () => observer.shadowRoot!.querySelector(stopSelector),
+          'Stop rendered'
+        );
+        const stop = observer.shadowRoot!.querySelector(stopSelector);
+        await frames();
+        expect(document.documentElement.scrollWidth).to.be.at.most(
+          window.innerWidth
+        );
+        expectTappable(stop, 'Stop');
+      } finally {
+        (unifiedWebSocketManager.connect as sinon.SinonStub).restore();
+        subscribe.restore();
+      }
     });
   });
 }

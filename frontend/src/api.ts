@@ -5529,6 +5529,56 @@ export function stopRunnerSession(
   );
 }
 
+/** How a line typed on a runtime session is delivered (GET .../control). */
+export interface RuntimeSessionControl {
+  runtime_session_id: string;
+  mode: 'command' | 'note';
+  reason_code:
+    | 'session_ended'
+    | 'not_managed'
+    | 'unsupported_kind'
+    | 'agent_inactive'
+    | 'no_control_plugin'
+    | 'control_offline'
+    | null;
+  reason: string | null;
+  send_path: string | null;
+  managed_agent_id: string | null;
+  agent_name: string | null;
+  agent_kind: string | null;
+}
+
+export async function getRuntimeSessionControl(
+  runtimeSessionId: string
+): Promise<RuntimeSessionControl> {
+  const response = await fetchWithAuth(
+    `/api/v1/runtime-sessions/${encodeURIComponent(runtimeSessionId)}/control`
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(errorData, 'Failed to read the session control mode')
+    );
+  }
+  return response.json();
+}
+
+/**
+ * The runner session a server-named ``send_path`` points at, or null.
+ *
+ * Mirrors ``runnerSessionSendPathRe`` in the CLI's attach command: a control
+ * response may only ever send to the runner session turn endpoint.
+ */
+const RUNNER_TURN_PATH_RE =
+  /^\/api\/v1\/runner-sessions\/([0-9a-fA-F-]{36})\/turns$/;
+
+export function runnerTurnSessionId(
+  sendPath: string | null | undefined
+): string | null {
+  const match = RUNNER_TURN_PATH_RE.exec(sendPath || '');
+  return match ? match[1] : null;
+}
+
 export async function sendCommandToExecution(
   executionId: string,
   command: string,

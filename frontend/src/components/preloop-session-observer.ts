@@ -40,6 +40,7 @@ import {
   submitRuntimeSessionOptimizationJob,
   summarizeRuntimeSessionGatewayEvent,
   updateAccountRuntimeSession,
+  stopRunnerSession,
 } from '../api';
 import type {
   AIModel,
@@ -82,6 +83,7 @@ import {
 import { confirmDialog } from './confirm-dialog';
 import { reducedMotionStyles } from '../styles/reduced-motion';
 import './session-chat-view';
+import './runner-session-controls';
 import './talk-button';
 import './session-list-panel';
 import './session-replay-panel';
@@ -274,6 +276,10 @@ export class PreloopSessionObserver extends LitElement {
    */
   @property({ attribute: false })
   talkAgent: ManagedAgentSummary | null = null;
+
+  /** Runner session ids a graceful stop was already requested for. */
+  @state()
+  private stoppingRunnerSessions: ReadonlySet<string> = new Set();
 
   @state()
   private observedSessions: ObservedSession[] = [];
@@ -660,6 +666,18 @@ export class PreloopSessionObserver extends LitElement {
          button so it is not next to the button beside it. */
       .mode-row .destructive {
         margin-left: var(--sl-spacing-large);
+      }
+
+      /* Stop and End session are one destructive group (#1483). */
+      .mode-row .destructive + .destructive {
+        margin-left: 0;
+      }
+
+      /* Phone: 44px tap target for Stop (DESIGN.md D24). */
+      @media (max-width: 720px) {
+        sl-button.runner-stop {
+          --sl-input-height-small: 44px;
+        }
       }
 
       .content {
@@ -1841,6 +1859,56 @@ export class PreloopSessionObserver extends LitElement {
     }
   }
 
+  /** Whether the active session is a runner-hosted session still running. */
+  private isLiveRunnerSession(session: ObservedSession | null): boolean {
+    return Boolean(
+      session &&
+      session.sourceType === 'runner_session' &&
+      isUuid(session.id) &&
+      !this.isSessionEnded(session)
+    );
+  }
+
+  /**
+   * Stop the runner-hosted session: graceful first, and a second press while
+   * it is stopping offers to kill the harness.
+   */
+  private async stopActiveRunnerSession(): Promise<void> {
+    const session = this.activeSession;
+    if (!session || !this.isLiveRunnerSession(session)) return;
+    const kill = this.stoppingRunnerSessions.has(session.id);
+    const confirmed = await confirmDialog(
+      kill
+        ? {
+            title: 'Kill session',
+            message: `Kill session "${session.title}" now?`,
+            detail:
+              'A stop was already requested. Killing ends the agent process on your runner without letting it finish its turn.',
+            confirmLabel: 'Kill',
+            variant: 'danger',
+          }
+        : {
+            title: 'Stop session',
+            message: `Stop session "${session.title}"?`,
+            detail:
+              'The runner asks the agent to finish its current turn and exit. What it did so far stays.',
+            confirmLabel: 'Stop',
+            variant: 'danger',
+          }
+    );
+    if (!confirmed) return;
+    try {
+      await stopRunnerSession(session.id, kill ? 'kill' : 'graceful');
+      this.stoppingRunnerSessions = new Set([
+        ...this.stoppingRunnerSessions,
+        session.id,
+      ]);
+    } catch (error) {
+      this.error =
+        error instanceof Error ? error.message : 'Failed to stop the session';
+    }
+  }
+
   private async endActiveSession(): Promise<void> {
     if (!this.activeSession || !this.activeSession.canLoadEvents) return;
     // DESIGN "Destructive actions": the shared dialog, never window.confirm.
@@ -2399,6 +2467,32 @@ export class PreloopSessionObserver extends LitElement {
   }
 
   /**
+   * Steering for a runner-hosted session (#1483): the note/turn box and the
+   * attach command, under the thread in every replay mode. Any other session
+   * renders nothing here.
+   */
+  private renderRunnerSessionControls() {
+    const session = this.activeSession;
+    if (
+      !session ||
+      session.sourceType !== 'runner_session' ||
+      !isUuid(session.id)
+    ) {
+      return nothing;
+    }
+    return html`<runner-session-controls
+      session-id=${session.id}
+      @runner-turn-sent=${() => this.refreshAfterSend()}
+      @operator-note-sent=${() => this.refreshAfterSend()}
+    ></runner-session-controls>`;
+  }
+
+  /** Put the line the operator just sent on the open thread. */
+  private refreshAfterSend(): void {
+    if (this.activeSessionId) void this.refreshActivity(this.activeSessionId);
+  }
+
+  /**
    * A session that has finished, or has gone quiet long enough that the
    * server no longer calls it active. Nothing streams into it, so there is
    * nothing to follow and (once it has ended) nothing to end. Same rule as a
@@ -2693,6 +2787,20 @@ export class PreloopSessionObserver extends LitElement {
             Refresh
           </sl-button>
           ${
+            session && this.isLiveRunnerSession(session)
+              ? html`<sl-button
+                  class="destructive runner-stop"
+                  data-testid="runner-session-stop"
+                  size="small"
+                  variant="danger"
+                  outline
+                  @click=${() => void this.stopActiveRunnerSession()}
+                >
+                  ${this.stoppingRunnerSessions.has(session.id) ? 'Kill' : 'Stop'}
+                </sl-button>`
+              : nothing
+          }
+          ${
             endAction
               ? html`
                   <!-- DESIGN "Destructive actions": danger outline, last in
@@ -2979,6 +3087,7 @@ export class PreloopSessionObserver extends LitElement {
               ? this.loadOptimizationActions(this.activeSessionId)
               : undefined}
         ></session-replay-panel>
+        ${this.renderRunnerSessionControls()}
         ${
           this.enabledFeatures.similarSessions && this.activeSessionId
             ? html`
