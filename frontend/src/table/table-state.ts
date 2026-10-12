@@ -37,7 +37,8 @@ export class TableState extends LitElement {
     }
     sl-icon {
       font-size: 1.75rem;
-      color: var(--sl-color-neutral-400);
+      color: var(--console-meta-color, var(--sl-color-neutral-600));
+      opacity: 0.7;
       margin-bottom: var(--sl-spacing-x-small);
     }
     :host([kind='error']) sl-icon {
