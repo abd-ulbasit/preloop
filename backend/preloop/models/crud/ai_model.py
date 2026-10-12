@@ -666,13 +666,19 @@ class CRUDAIModel(CRUDBase[AIModel]):
         )
 
     def get_all_for_account(
-        self, db: Session, *, account_id: uuid.UUID | str
+        self,
+        db: Session,
+        *,
+        account_id: uuid.UUID | str,
+        include_retired: bool = False,
     ) -> list[AIModel]:
         """Get account models and non-retired system defaults.
 
         Global rows explicitly retired via ``meta_data.retired=true`` or the
         existing ``meta_data.gateway.enabled=false`` marker remain available through
         ``get`` for historical references but cannot serve new model discovery.
+        Historical pricing and spend accounting can opt into retired rows with
+        ``include_retired=True``. New routing and discovery keep the default.
         Account-owned models ignore this operator-only retirement marker.
 
         Results are ordered deterministically: account-owned models before system
@@ -699,7 +705,11 @@ class CRUDAIModel(CRUDBase[AIModel]):
                 )
                 .all()
             )
-            return [row for row in rows if not self._is_retired_system_model(row)]
+            return [
+                row
+                for row in rows
+                if include_retired or not self._is_retired_system_model(row)
+            ]
         # Models shared from another account (account hook H3) sit between
         # the account's own models and system defaults, so an own alias
         # shadows a shared one and a shared alias shadows a system one.
@@ -716,7 +726,11 @@ class CRUDAIModel(CRUDBase[AIModel]):
             )
             .all()
         )
-        return [row for row in rows if not self._is_retired_system_model(row)]
+        return [
+            row
+            for row in rows
+            if include_retired or not self._is_retired_system_model(row)
+        ]
 
     def update(
         self,

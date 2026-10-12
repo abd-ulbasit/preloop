@@ -1,5 +1,6 @@
 """Retired global models preserve history without serving new default selection."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -130,3 +131,57 @@ def test_selectable_catalog_and_built_in_availability_share_retirement(
     assert selected == [active, own]
     assert not is_available_built_in_model(retired)
     assert is_available_built_in_model(active)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_historical_discovery_keeps_retired_rows(shared: bool) -> None:
+    retired = _model(retired=True)
+    own = _model(owned=True)
+    with patch(
+        "preloop.plugins.account_hooks.extra_visible_ids",
+        return_value=[own.id] if shared else [],
+    ):
+        assert crud_ai_model.get_all_for_account(
+            _database([own, retired]), account_id=own.account_id, include_retired=True
+        ) == [own, retired]
+
+
+def test_historical_replay_resolves_retired_gateway_alias() -> None:
+    from preloop.services.replay_savings_service import resolve_payload_ai_model
+
+    retired = _model(retired=True)
+    retired.meta_data["gateway"] = {"enabled": False, "model_alias": "old/model"}
+    account = models.Account(id=uuid4())
+    with patch("preloop.plugins.account_hooks.extra_visible_ids", return_value=[]):
+        assert (
+            resolve_payload_ai_model(
+                _database([retired]), account=account, payload={"model": "old/model"}
+            )
+            is retired
+        )
+
+
+def test_trial_spend_includes_retired_hosted_model_usage() -> None:
+    from preloop.services.model_gateway_budget import ModelGatewayBudgetService
+
+    retired = _model(retired=True)
+    retired.meta_data["hosted"] = True
+    retired.meta_data["gateway"] = {"enabled": False}
+    db = _database([retired])
+    service = ModelGatewayBudgetService(db, MagicMock())
+    now = datetime.now(timezone.utc)
+    with (
+        patch("preloop.plugins.account_hooks.extra_visible_ids", return_value=[]),
+        patch(
+            "preloop.services.model_gateway_budget.crud_api_usage.get_gateway_usage_by_model",
+            return_value=[{"estimated_cost": 0.25}],
+        ) as usage,
+    ):
+        assert (
+            service._get_trial_hosted_model_spend(
+                account_id=str(uuid4()), start=now, end=now
+            )
+            == 0.25
+        )
+    assert usage.call_args.kwargs["ai_model_ids"] == [str(retired.id)]
+    assert usage.call_args.kwargs["limit"] is None

@@ -415,7 +415,7 @@ class ModelGatewayBudgetService:
         hosted_model_ids = {
             str(model.id)
             for model in crud_ai_model.get_all_for_account(
-                self.db, account_id=account_id
+                self.db, account_id=account_id, include_retired=True
             )
             if self._is_built_in_hosted_model(model)
         }

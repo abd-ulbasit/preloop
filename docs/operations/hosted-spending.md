@@ -146,6 +146,7 @@ Keep global model rows referenced by historical executions or usage records.
 Retire them through the CRUD layer by setting `meta_data.gateway.enabled` to
 `false`; the explicit `meta_data.retired=true` marker is also supported. Retired
 global models are excluded from account model discovery and automatic default
-selection, while reads by ID continue to work for historical references.
+selection. Reads by ID and explicit historical-pricing/spend-accounting queries
+continue to include them, so retirement does not erase past usage from caps.
 Account-owned provider configurations remain available independently of these
 operator markers.
