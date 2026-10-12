@@ -63,3 +63,39 @@ def test_remote_gateway_precedes_cluster_local_settings(monkeypatch):
     monkeypatch.setenv("PRELOOP_EXECUTION_GATEWAY_URL", "https://example.com/openai/v1")
     monkeypatch.setenv("PRELOOP_MODEL_GATEWAY_URL_K8S", "http://gateway.svc/openai/v1")
     assert default_model_gateway_url() == "https://example.com/openai/v1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_name", ["codex", "gemini", "opencode"])
+async def test_remote_mcp_wins_after_allowed_tool_environment_merge(
+    monkeypatch, agent_name
+):
+    import importlib
+    import json
+
+    classes = {
+        "codex": "CodexAgent",
+        "gemini": "GeminiAgent",
+        "opencode": "OpenCodeAgent",
+    }
+    module = importlib.import_module("preloop.agents." + agent_name)
+    agent = getattr(module, classes[agent_name])({})
+    monkeypatch.setenv("PRELOOP_EXECUTION_API_URL", "https://example.com")
+    monkeypatch.setenv("PRELOOP_URL", "http://control-plane.svc")
+    monkeypatch.setenv("PRELOOP_MCP_URL_K8S", "http://api.svc/mcp/v1")
+    monkeypatch.setattr(
+        agent, "_build_" + agent_name + "_script", Mock(return_value="true")
+    )
+    monkeypatch.setattr(agent, "_prepare_environment", AsyncMock(return_value={}))
+    context = {
+        "allowed_mcp_servers": ["preloop-mcp"],
+        "account_api_token": "synthetic-token",
+    }
+    with patch.object(
+        ContainerAgentExecutor, "_start_kubernetes_pod", AsyncMock(return_value="job")
+    ):
+        await agent._start_kubernetes_pod(context)
+    env = context["_codex_env" if agent_name == "codex" else "_agent_env"]
+    assert env["PRELOOP_MCP_URL"] == "https://example.com/mcp/v1"
+    config = json.loads(env["MCP_CONFIG_JSON"])
+    assert config["mcpServers"]["preloop-mcp"]["url"] == "https://example.com/mcp/v1"

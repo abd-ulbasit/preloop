@@ -662,12 +662,14 @@ exit $GEMINI_EXIT_CODE
             mcp_env = MCPConfigService.generate_mcp_environment_vars(
                 allowed_mcp_servers, allowed_mcp_tools
             )
+            mcp_env.pop("PRELOOP_MCP_URL", None)
             gemini_env.update(mcp_env)
 
             mcp_config = MCPConfigService.generate_mcp_config(
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
+                preloop_url=os.getenv("PRELOOP_EXECUTION_API_URL") or None,
             )
             gemini_env["MCP_CONFIG_JSON"] = json.dumps(mcp_config)
 
