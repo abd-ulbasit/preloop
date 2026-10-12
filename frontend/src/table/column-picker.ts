@@ -35,6 +35,7 @@ export interface ColumnPickerItem {
  *
  * @fires column-toggle - `{ detail: { id, visible } }`
  * @fires columns-reset - the operator asked for the list's own layout back
+ * @fires density-change - `{ detail: { density } }`
  */
 @customElement('column-picker')
 export class ColumnPicker extends LitElement {
@@ -48,6 +49,13 @@ export class ColumnPicker extends LitElement {
   /** Offers Reset only when something differs from the declared layout. */
   @property({ type: Boolean, attribute: 'can-reset' })
   canReset = false;
+
+  /**
+   * Row density, when the list offers it. Unset hides the choice, so lists
+   * that predate it look the same.
+   */
+  @property({ type: String })
+  density: 'comfortable' | 'compact' | '' = '';
 
   static styles = css`
     :host {
@@ -99,6 +107,24 @@ export class ColumnPicker extends LitElement {
             `
           )}
           ${
+            this.density
+              ? html`
+                  <sl-divider></sl-divider>
+                  <sl-menu-label>Density</sl-menu-label>
+                  ${(['comfortable', 'compact'] as const).map(
+                    (density) =>
+                      html`<sl-menu-item
+                        type="checkbox"
+                        data-density=${density}
+                        value=${`__density__${density}`}
+                        ?checked=${this.density === density}
+                        >${density === 'compact' ? 'Compact' : 'Comfortable'}</sl-menu-item
+                      >`
+                  )}
+                `
+              : nothing
+          }
+          ${
             this.canReset
               ? html`
                   <sl-divider></sl-divider>
@@ -146,6 +172,20 @@ export class ColumnPicker extends LitElement {
       this.dispatchEvent(
         new CustomEvent('columns-reset', { bubbles: true, composed: true })
       );
+      return;
+    }
+    const density = item.getAttribute('data-density');
+    if (density) {
+      // A radio pair drawn as checkboxes: put the checks back as the list
+      // says and let the list decide.
+      this.dispatchEvent(
+        new CustomEvent('density-change', {
+          detail: { density },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      this.requestUpdate();
       return;
     }
     const id = item.getAttribute('data-column');

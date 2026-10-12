@@ -32,6 +32,10 @@ export interface StoredTablePreferences {
   columnSizing?: Record<string, number>;
   /** Sorts, when the list opts into remembering them. */
   sorting?: StoredSort[];
+  /** Rows per page, for lists that page. */
+  pageSize?: number;
+  /** Row height. */
+  density?: 'comfortable' | 'compact';
 }
 
 interface StoredRecord extends StoredTablePreferences {
@@ -75,6 +79,17 @@ export function readTablePreferences(
     columnOrder: plainStrings(record.columnOrder),
     columnSizing: plainNumbers(record.columnSizing),
     sorting: plainSorts(record.sorting),
+    pageSize:
+      typeof record.pageSize === 'number' &&
+      Number.isInteger(record.pageSize) &&
+      record.pageSize > 0 &&
+      record.pageSize <= 500
+        ? record.pageSize
+        : undefined,
+    density:
+      record.density === 'compact' || record.density === 'comfortable'
+        ? record.density
+        : undefined,
   };
 }
 
