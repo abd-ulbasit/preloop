@@ -1538,6 +1538,7 @@ export class ApiUsageView extends LitElement {
         id: 'session',
         header: 'Runtime session',
         hideable: false,
+        width: 320,
         firstSort: 'asc',
         value: (session) => this.getSessionDisplayName(session),
         searchText: (session) =>
@@ -1569,6 +1570,18 @@ export class ApiUsageView extends LitElement {
         numeric: true,
         sort: 'number',
         value: (session) => totalTokensOf(session.token_usage),
+        searchText: () => '',
+        cell: (session) =>
+          html`<token-figures
+            total-only
+            .usage=${session.token_usage}
+          ></token-figures>`,
+      },
+      {
+        id: 'tokens_detail',
+        header: 'Token breakdown',
+        group: 'Tokens',
+        visible: false,
         searchText: () => '',
         cell: (session) =>
           html`<token-figures

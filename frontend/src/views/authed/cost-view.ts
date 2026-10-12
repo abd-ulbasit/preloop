@@ -3426,6 +3426,18 @@ export class CostView extends AuthedElement {
         searchText: () => '',
         cell: (row) =>
           html`<token-figures
+            total-only
+            .usage=${row.token_usage || null}
+          ></token-figures>`,
+      },
+      {
+        id: 'tokens_detail',
+        header: 'Token breakdown',
+        group: 'Tokens',
+        visible: false,
+        searchText: () => '',
+        cell: (row) =>
+          html`<token-figures
             .usage=${row.token_usage || null}
             expanded
           ></token-figures>`,
