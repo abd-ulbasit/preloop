@@ -184,6 +184,11 @@ export interface AIModel {
   description?: string | null;
   provider_name: string;
   model_kind?: 'llm' | 'stt' | 'tts';
+  /**
+   * Hosted model with no verified operator tariff. Only platform admins
+   * receive these rows; the models page shows an "unpriced" badge.
+   */
+  unpriced?: boolean;
   api_key?: string;
   has_api_key?: boolean;
   /**

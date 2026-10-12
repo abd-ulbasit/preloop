@@ -7,11 +7,15 @@ the code, the class and the sentence are defined once here rather than three
 times in three repositories.
 """
 
+import logging
 from typing import Any, Optional
 
+from preloop.models.models.ai_model import AIModel
 from preloop.plugins import get_plugin_manager
 from preloop.services.model_gateway_errors import GatewayProvider, ModelGatewayAPIError
 from preloop.services.upstream_errors import ERROR_CLASS_HOSTED_TARIFF_UNCONFIGURED
+
+logger = logging.getLogger(__name__)
 
 #: OpenAI-shaped ``error.code`` for the refusal. Distinct from
 #: ``hosted_metering_unavailable`` (a temporary ledger problem, worth a retry):
@@ -90,3 +94,35 @@ def guard_unmetered_hosted_call(model: Any) -> None:
     meter = get_plugin_manager().get_service("hosted_spend")
     if meter is not None:
         meter.guard_unmetered(model)
+
+
+def hosted_model_selectable(model: Any) -> bool:
+    """Whether a model may be offered in a "what can I pick" answer.
+
+    Only deployment-provided hosted models can be unselectable, and only when
+    the hosted metering plugin is loaded (billing enforcement on) and its
+    ``selectable(model)`` hook says the operator has not verified a tariff.
+    Core never reads the tariff flag itself; with no plugin, or a plugin
+    without the hook, every model stays selectable.
+
+    Args:
+        model: The AI model row to classify.
+
+    Returns:
+        False only for a hosted model the metering plugin rejects.
+    """
+    from preloop.services.model_gateway_budget import is_built_in_hosted_model
+
+    if not isinstance(model, AIModel) or not is_built_in_hosted_model(model):
+        return True
+    meter = get_plugin_manager().get_service("hosted_spend")
+    selectable = getattr(meter, "selectable", None) if meter is not None else None
+    if not callable(selectable):
+        return True
+    try:
+        return bool(selectable(model))
+    except Exception:
+        # A metering failure must not take every model picker down; fail open
+        # to the pre-hook behavior (the request-time guard still refuses).
+        logger.exception("hosted_spend.selectable failed for model %s", model.id)
+        return True
