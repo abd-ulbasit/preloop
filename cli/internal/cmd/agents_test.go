@@ -3047,6 +3047,7 @@ func TestGenericAdapterValidateManagedConfigSupportsOpenCodeGateway(t *testing.T
 func TestApplyClaudeManagedGatewayConfiguresEnv(t *testing.T) {
 	plan := managedMCPEnrollmentPlan{
 		ManagedDocument: map[string]interface{}{
+			"env": map[string]interface{}{"CLAUDE_CODE_SIMPLE": "1"},
 			"mcpServers": map[string]interface{}{
 				"preloop": map[string]interface{}{
 					"url": "https://preloop.example/mcp/v1",
@@ -3079,8 +3080,8 @@ func TestApplyClaudeManagedGatewayConfiguresEnv(t *testing.T) {
 	if env["CLAUDE_CODE_USE_BEDROCK"] != "0" {
 		t.Fatalf("expected managed Claude config to disable Bedrock mode: %#v", env)
 	}
-	if env["CLAUDE_CODE_SIMPLE"] != "1" {
-		t.Fatalf("expected managed Claude config to enable simple mode: %#v", env)
+	if _, exists := env["CLAUDE_CODE_SIMPLE"]; exists {
+		t.Fatal("managed Claude config must remove simple mode so MCP tools and hooks load")
 	}
 	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "0" || env["DISABLE_TELEMETRY"] != "1" {
 		t.Fatalf("expected managed Claude config to disable telemetry: %#v", env)
@@ -3438,6 +3439,54 @@ func TestGenericAdapterValidateManagedConfigSupportsClaudeGateway(t *testing.T) 
 	}
 	if got := result["gateway_model_alias"]; got != "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0" {
 		t.Fatalf("unexpected Claude gateway model alias: %#v", got)
+	}
+}
+
+func TestClaudeValidationRejectsSimpleMode(t *testing.T) {
+	adapter := managedMCPAdapterForAgent(AgentConfig{Name: "Claude Code"})
+	for _, value := range []string{"1", "true", "yes", "0", "false", ""} {
+		t.Run(value, func(t *testing.T) {
+			doc := map[string]interface{}{
+				"mcpServers": map[string]interface{}{
+					"preloop": map[string]interface{}{
+						"url":       "https://preloop.example/mcp/v1",
+						"transport": "http",
+						"headers":   map[string]interface{}{"Authorization": "Bearer test-token"},
+					},
+				},
+				"env": map[string]interface{}{"CLAUDE_CODE_SIMPLE": value},
+			}
+			result := adapter.ValidateManagedConfig(doc, "https://preloop.example")
+			want := value == "0" || value == "false" || value == ""
+			if result["validation_passed"] != want {
+				t.Fatalf("simple mode %q: got %+v, want validation_passed=%v", value, result, want)
+			}
+			if !want && !strings.Contains(fmt.Sprint(result["error"]), "CLAUDE_CODE_SIMPLE") {
+				t.Fatalf("expected actionable simple-mode diagnostic, got %+v", result)
+			}
+		})
+	}
+}
+
+func TestClaudeMCPOnboardingRepairsSimpleMode(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "settings.json")
+	content := []byte(`{"env":{"CLAUDE_CODE_SIMPLE":"1","USER_SETTING":"keep"}}`)
+	if err := os.WriteFile(configPath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := buildManagedMCPEnrollmentPlan(
+		AgentConfig{Name: "Claude Code", ConfigPath: configPath},
+		"https://preloop.example", "test-token",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := plan.ManagedDocument["env"].(map[string]interface{})
+	if _, exists := env["CLAUDE_CODE_SIMPLE"]; exists {
+		t.Fatal("MCP-only onboarding must repair simple mode without model routing")
+	}
+	if env["USER_SETTING"] != "keep" {
+		t.Fatal("onboarding must preserve unrelated environment settings")
 	}
 }
 

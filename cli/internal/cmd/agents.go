@@ -4140,6 +4140,12 @@ func buildManagedMCPEnrollmentPlan(agent AgentConfig, baseURL, token string) (ma
 	if err != nil {
 		return managedMCPEnrollmentPlan{}, err
 	}
+	if isClaudeCodeAgent(agent) {
+		if env, ok := asObjectMap(managedDoc["env"]); ok {
+			// Repair older enrollments even when model routing is skipped.
+			delete(env, "CLAUDE_CODE_SIMPLE")
+		}
+	}
 	container, err := adapter.EnsureServerContainer(managedDoc)
 	if err != nil {
 		return managedMCPEnrollmentPlan{}, err
@@ -4488,7 +4494,9 @@ func applyClaudeManagedGateway(
 	delete(env, "ANTHROPIC_AUTH_TOKEN")
 	env["ANTHROPIC_API_KEY"] = token
 	env["CLAUDE_CODE_USE_BEDROCK"] = "0"
-	env["CLAUDE_CODE_SIMPLE"] = "1"
+	// Simple mode skips automatic MCP discovery and hooks. Remove the value
+	// written by older onboarding versions so managed tools and approvals load.
+	delete(env, "CLAUDE_CODE_SIMPLE")
 	env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "0"
 	env["DISABLE_TELEMETRY"] = "1"
 	env["OTEL_METRICS_EXPORTER"] = "none"
@@ -6595,6 +6603,14 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(a.agent.Name), "claude code") {
+		// A registered server cannot load automatically in simple mode.
+		// Configuration validation must catch this even when the gateway works.
+		env, _ := asObjectMap(doc["env"])
+		simple := strings.ToLower(strings.TrimSpace(fmt.Sprint(env["CLAUDE_CODE_SIMPLE"])))
+		if simple == "1" || simple == "true" || simple == "yes" {
+			result["validation_passed"] = false
+			result["error"] = "CLAUDE_CODE_SIMPLE disables automatic MCP loading and hooks; re-onboard Claude Code and restart it."
+		}
 		expectedGatewayURL := strings.TrimRight(baseURL, "/") + "/anthropic"
 		result["expected_gateway_url"] = expectedGatewayURL
 		result["gateway_provider_ok"] = false
