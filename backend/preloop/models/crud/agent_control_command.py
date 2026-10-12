@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -38,11 +38,11 @@ class SessionNoteSummary:
     latest_note_at: Optional[datetime]
 
 
-# Pending still will, delivered and acked already did. Cancelled, expired and
+# Pending and claimed still will, delivered and acked already did. Cancelled, expired and
 # failed never steered, so they do not belong on the sessions-list badge.
 # ``list_notes`` still returns those rows: the composer is the history of what
 # was written, including a withdrawal.
-NOTE_STATUSES_THAT_STEER = ("pending", "delivered", "acked")
+NOTE_STATUSES_THAT_STEER = ("pending", "claimed", "delivered", "acked")
 
 
 class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
@@ -416,7 +416,7 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
             AgentControlCommand.status == "pending",
             AgentControlCommand.expires_at.isnot(None),
             AgentControlCommand.expires_at <= now,
-        ).update({"status": "expired"}, synchronize_session="fetch")
+        ).update({"status": "expired", "expired_at": now}, synchronize_session="fetch")
         if commit:
             db.commit()
         return int(expired)
@@ -525,6 +525,7 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
         managed_agent_id: Optional[Union[uuid.UUID, str]] = None,
         runtime_session_id: Optional[Union[uuid.UUID, str]] = None,
         limit: int = 50,
+        state: Optional[str] = None,
     ) -> List[AgentControlCommand]:
         """List notes for an agent or a session, newest first.
 
@@ -544,6 +545,11 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
         if runtime_session_id is not None:
             query = query.filter(
                 AgentControlCommand.runtime_session_id == runtime_session_id
+            )
+        if state is not None:
+            query = query.filter(
+                AgentControlCommand.status
+                == ("acked" if state == "acknowledged" else state)
             )
         return (
             query.order_by(
@@ -604,6 +610,8 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
         delivery_channel: str,
         runtime_session_id: Optional[Union[uuid.UUID, str]] = None,
         turn_index: Optional[int] = None,
+        delivery_event: Optional[str] = None,
+        defer_delivery: bool = False,
         commit: bool = False,
     ) -> bool:
         """Take one pending note for delivery, exactly once.
@@ -612,16 +620,23 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
         gateway requests for the same session cannot both win: the loser
         matches zero rows and delivers nothing. Callers must only render a
         note this returned ``True`` for.
+
+        ``delivery_event`` records which harness lifecycle point pulled the
+        note (``session_start``, ``stop``, ``pre_tool_use``); it is NULL for
+        the gateway, which has no hook event to name.
         """
         values: Dict[str, Any] = {
-            "status": "delivered",
-            "delivered_at": delivered_at,
+            "status": "claimed" if defer_delivery else "delivered",
+            "claimed_at": delivered_at,
+            "delivered_at": None if defer_delivery else delivered_at,
             "delivery_channel": delivery_channel,
         }
         if turn_index is not None:
             values["delivered_turn_index"] = turn_index
         if runtime_session_id is not None:
             values["runtime_session_id"] = runtime_session_id
+        if delivery_event is not None:
+            values["delivery_event"] = delivery_event
         claimed = (
             db.query(AgentControlCommand)
             .filter(
@@ -634,6 +649,111 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
         if commit:
             db.commit()
         return int(claimed) == 1
+
+    def mark_session_notes_undeliverable(
+        self,
+        db: Session,
+        *,
+        account_id: Union[uuid.UUID, str],
+        runtime_session_id: Union[uuid.UUID, str],
+        reason: Optional[str] = None,
+        commit: bool = True,
+        transitioned_notes: Optional[List[AgentControlCommand]] = None,
+    ) -> int:
+        """Fail every note addressed only to this session, in one statement.
+
+        Called when a session ends: a note targeted at that exact session can
+        no longer reach it, so it must not sit ``pending`` until its 24h
+        expiry and then look like the agent ignored it. A note addressed to
+        the *agent* with no session (``runtime_session_id IS NULL``) is
+        untouched: it waits for the agent's next run, which is a different
+        promise and still keeps it.
+
+        Only ``pending`` and ``claimed`` rows move. A delivered note already reached the
+        model and stays delivered. Returns how many rows changed so the
+        caller can report one number.
+        """
+        values: Dict[str, Any] = {
+            "status": "undeliverable",
+            "undeliverable_at": datetime.now(timezone.utc),
+            "undeliverable_reason": "session_ended",
+        }
+        if reason:
+            values["last_error"] = reason[:2000]
+        statement = (
+            update(AgentControlCommand)
+            .where(
+                AgentControlCommand.account_id == account_id,
+                AgentControlCommand.kind == "note",
+                AgentControlCommand.runtime_session_id == runtime_session_id,
+                AgentControlCommand.status.in_(["pending", "claimed"]),
+            )
+            .values(values)
+            .returning(AgentControlCommand)
+        )
+        notes = list(db.scalars(statement.execution_options(populate_existing=True)))
+        if transitioned_notes is not None:
+            transitioned_notes.extend(notes)
+        if commit:
+            db.commit()
+        return len(notes)
+
+    def expire_notes(
+        self, db: Session, *, account_id: Union[uuid.UUID, str], now: datetime
+    ) -> int:
+        """Expire uncarried notes on read and claim, preserving receipt timestamps."""
+        return int(
+            db.query(AgentControlCommand)
+            .filter(
+                AgentControlCommand.account_id == account_id,
+                AgentControlCommand.kind == "note",
+                AgentControlCommand.status.in_(["pending", "claimed"]),
+                AgentControlCommand.expires_at.isnot(None),
+                AgentControlCommand.expires_at <= now,
+            )
+            .update(
+                {"status": "expired", "expired_at": now}, synchronize_session="fetch"
+            )
+        )
+
+    def finish_claimed_note(
+        self,
+        db: Session,
+        *,
+        account_id: Union[uuid.UUID, str],
+        managed_agent_id: Union[uuid.UUID, str],
+        runtime_session_id: Union[uuid.UUID, str],
+        note_id: str,
+        now: datetime,
+        undeliverable_reason: Optional[str] = None,
+    ) -> Optional[AgentControlCommand]:
+        """Atomically acknowledge only this authenticated agent session's claim."""
+        values = (
+            {
+                "status": "undeliverable",
+                "undeliverable_at": now,
+                "undeliverable_reason": undeliverable_reason,
+            }
+            if undeliverable_reason
+            else {"status": "delivered", "delivered_at": now}
+        )
+        changed = (
+            db.query(AgentControlCommand)
+            .filter(
+                AgentControlCommand.account_id == account_id,
+                AgentControlCommand.managed_agent_id == managed_agent_id,
+                AgentControlCommand.runtime_session_id == runtime_session_id,
+                AgentControlCommand.command_id == note_id,
+                AgentControlCommand.kind == "note",
+                AgentControlCommand.status == "claimed",
+            )
+            .update(values, synchronize_session="fetch")
+        )
+        return (
+            self.get_note(db, account_id=account_id, note_id=note_id)
+            if changed
+            else None
+        )
 
     def cancel_note(
         self,

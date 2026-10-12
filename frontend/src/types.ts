@@ -804,11 +804,13 @@ export interface OperatorNote {
    */
   state:
     | 'pending'
+    | 'claimed'
     | 'delivered'
     | 'acknowledged'
     | 'cancelled'
     | 'expired'
-    | 'failed';
+    | 'failed'
+    | 'undeliverable';
   text: string;
   managed_agent_id?: string | null;
   runtime_session_id?: string | null;
@@ -822,9 +824,15 @@ export interface OperatorNote {
   };
   created_at?: string | null;
   expires_at?: string | null;
+  claimed_at?: string | null;
+  expired_at?: string | null;
+  undeliverable_at?: string | null;
+  undeliverable_reason?: 'session_ended' | 'spool_dropped' | null;
   delivered_at?: string | null;
   /** Which transport carried it: gateway, hook, or a Claude Code channel. */
   delivery_channel?: string | null;
+  /** Which harness lifecycle point pulled it: session_start, stop, pre_tool_use. */
+  delivery_event?: string | null;
   delivered_turn_index?: number | null;
   acknowledged_turn_id?: string | null;
   cancelled_at?: string | null;
