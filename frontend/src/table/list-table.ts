@@ -386,6 +386,16 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     host.addController(this);
   }
 
+  /**
+   * How test failure messages print the model. Chai walks an object graph to
+   * describe it, and tanstack's table is large enough that an assertion
+   * failing on a view element holding one hangs the browser instead of
+   * failing.
+   */
+  [Symbol.for('chai/inspect')](): string {
+    return `ListTable(${this.listId})`;
+  }
+
   hostConnected(): void {
     // Nothing to subscribe to: every state change comes back through
     // onStateChange, which already asks the host to repaint.
@@ -409,8 +419,20 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     return this.table.getPrePaginatedRowModel().rows.length;
   }
 
+  /**
+   * Views commonly derive the rows in `willUpdate` (`keys.filter(...)`), so
+   * every pass hands over a new array with the same rows. Treating that as
+   * new data would rebuild the row model on every paint, and a repaint per
+   * rebuild is a loop; the same rows in the same order are not a change.
+   */
   set data(rows: TRow[]) {
     if (rows === this.rowsData) return;
+    if (
+      rows.length === this.rowsData.length &&
+      rows.every((row, index) => row === this.rowsData[index])
+    ) {
+      return;
+    }
     this.rowsData = rows;
     this.table.setOptions((options) => ({ ...options, data: rows }));
     // A refetch that shrank the list must not strand the operator on a page

@@ -411,6 +411,43 @@ describe('<data-table>', () => {
   });
 });
 
+@customElement('test-derived-rows-host')
+class DerivedRowsHost extends LitElement {
+  static styles = dataTableStyles;
+  renders = 0;
+  table = new ListTable<Key>(this, {
+    listId: `dt-derived-${++counter}`,
+    columns: COLUMNS,
+    getRowId: (row) => row.id,
+    pageSize: 10,
+  });
+  protected willUpdate() {
+    // A fresh array every pass, the way views derive their visible rows.
+    this.table.data = KEYS.filter(() => true);
+  }
+  render() {
+    this.renders++;
+    return html`<data-table
+      .table=${this.table}
+      .rows=${this.table.rows}
+    ></data-table>`;
+  }
+}
+
+describe('<data-table> with rows derived per update', () => {
+  it('settles instead of repainting forever', async () => {
+    const el = await fixture<DerivedRowsHost>(
+      html`<test-derived-rows-host></test-derived-rows-host>`
+    );
+    await aTimeout(50);
+    expect(el.renders).to.be.lessThan(4);
+    el.table.setPageIndex(1);
+    await aTimeout(50);
+    expect(el.renders).to.be.lessThan(6);
+    expect(el.table.rows[0].id).to.equal('k10');
+  });
+});
+
 describe('<table-pagination>', () => {
   it('cursor mode shows a range without a total', async () => {
     const el = await fixture<TablePagination>(
