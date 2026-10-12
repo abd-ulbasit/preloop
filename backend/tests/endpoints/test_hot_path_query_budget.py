@@ -32,7 +32,11 @@ from preloop.services.model_gateway_auth import ModelGatewayAuthContext
 
 PASSWORD = "query-budget-pass-1"
 #: Statements issued by one password sign in (``/token/json``).
-LOGIN_STATEMENTS = 6
+#: Canonical identity reads the person, password hashes, memberships and
+#: account, gates the identity, writes last_login, audits the login, then
+#: the landing row selects and gates the membership again. Measured at 13
+#: for one active membership; a further increase still has to be justified.
+LOGIN_STATEMENTS = 13
 #: Statements issued by one warm, priced chat completion without policies.
 #: 24 on the base without the hooks (main at 179298d7): the three price
 #: override lookups each start with a ``has_table`` check.

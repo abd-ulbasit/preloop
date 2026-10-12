@@ -2,7 +2,7 @@
 
 Account hierarchy (subaccounts, grants, sharing, access rules, pooled
 billing) is implemented by an extension. A few of its decisions sit on open
-source request paths: sign in and password reset, "sign out everywhere",
+source request paths: sign in, "sign out everywhere",
 gateway model resolution, tool policy, runner dispatch, budgets, the kill
 switch, the trial gate and usage summaries. Each of those paths consults one
 of the registries below.
@@ -29,8 +29,8 @@ request paths, so they should answer from an index or a per-account cache.
 
 Hooks:
 
-* H1 :class:`LoginRowSelector`: which user row a sign in, verification or
-  reset acts on.
+* H1 :class:`LoginRowSelector`: which eligible membership a password sign-in
+  lands on. Verification/recovery proofs name their canonical Person directly.
 * H2 :data:`RevokeFanout`: other user rows whose sessions a revoke also ends.
 * H3 :class:`VisibilityProvider`: ids owned by another account but visible
   in this one.
@@ -106,36 +106,13 @@ class LoginRowSelector:
         Args:
             db: Database session of the request.
             user: Row whose credentials or link were verified.
-            purpose: ``login``, ``verify_email`` or ``reset_password``.
+            purpose: ``login`` on built-in authentication paths.
 
         Returns:
-            The row the session is minted for, or the change applies to.
-            For ``verify_email`` and ``reset_password`` it must hold the
-            same address as ``user``: the link only proves that address,
-            and any other row makes the link invalid.
+            The eligible membership the session is minted for. It must share
+            the authenticated Person; core validates identity and account gates.
         """
         return user
-
-    def select_email_rows(
-        self,
-        db: "Session",
-        *,
-        email: str,
-        rows: Sequence["User"],
-        purpose: LoginPurpose,
-    ) -> Sequence["User"]:
-        """Return the rows an address-based request acts on.
-
-        Args:
-            db: Database session of the request.
-            email: Address from the request.
-            rows: Every row holding the address, oldest first.
-            purpose: ``resend_verification`` or ``forgot_password``.
-
-        Returns:
-            The rows to mail a link to. Each link names its own row.
-        """
-        return rows
 
 
 _login_row_selector: Optional[LoginRowSelector] = None
@@ -158,16 +135,6 @@ def select_login_row(db: "Session", user: "User", *, purpose: LoginPurpose) -> "
     if selector is None:
         return user
     return selector.select_row(db, user=user, purpose=purpose)
-
-
-def select_email_rows(
-    db: "Session", email: str, rows: Sequence["User"], *, purpose: LoginPurpose
-) -> Sequence["User"]:
-    """Apply H1 to the rows holding an address; unchanged when unset."""
-    selector = _login_row_selector
-    if selector is None:
-        return rows
-    return selector.select_email_rows(db, email=email, rows=rows, purpose=purpose)
 
 
 # ---------------------------------------------------------------------------

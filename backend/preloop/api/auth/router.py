@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutErro
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import bootstrap
+from preloop.api.auth.identity import login_membership, require_active_identity
 from preloop.api.auth.email_verification import (
     check_resend_rate_limit,
     enforce_verified_email,
@@ -71,7 +72,11 @@ from preloop.utils.agent_kind import (
     is_valid_agent_kind,
     normalize_agent_kind,
 )
-from preloop.utils.email import send_password_reset_email, send_verification_email
+from preloop.utils.email import (
+    EmailError,
+    send_password_reset_email,
+    send_verification_email,
+)
 from preloop.utils.tokens import (
     TokenError,
     create_email_verification_token,
@@ -80,6 +85,7 @@ from preloop.utils.tokens import (
     verify_onboarding_claim_token,
     verify_user_token,
 )
+from preloop.models.crud.person import IdentityConflictError, IdentityUnavailableError
 from preloop.models.crud import (
     AmbiguousEmailError,
     crud_account,
@@ -87,6 +93,7 @@ from preloop.models.crud import (
     crud_cli_session,
     crud_team,
     crud_user,
+    crud_person,
     crud_api_key,
     crud_api_usage,
     crud_managed_agent,
@@ -101,8 +108,6 @@ from preloop.models.db.session import get_db_session
 from preloop.models import models
 from pydantic import BaseModel, ValidationError
 from preloop.plugins.account_hooks import (
-    get_login_row_selector,
-    select_email_rows,
     select_login_row,
 )
 from preloop.services.account_realtime import (
@@ -757,50 +762,34 @@ async def register(
         )
 
 
-def _user_for_token(session: Session, token: str, token_type: str) -> UserModel:
-    """The user row a verification or reset link acts on.
+def _person_for_token(session: Session, token: str, token_type: str) -> Any:
+    """Validate identity, expected address and version without email-based routing.
 
-    The token names the row by id, never by address: one address can hold a
-    row in several accounts. It also carries the address it was mailed to,
-    and a row whose address has since changed does not honour it, so an old
-    link cannot verify or reset whatever address the row holds now.
-
-    A login row selector (account hook H1) may move the link to another row,
-    but only to one that holds the same address: the link proves possession
-    of that address and nothing else, so it can never verify or reset a row
-    whose address it did not prove.
-
-    Args:
-        session: Database session.
-        token: The token from the link.
-        token_type: "email_verification" or "password_reset".
-
-    Returns:
-        The user row the token names, or the row the selector chose.
-
-    Raises:
-        TokenError: If the token is invalid, no longer matches its row, or
-            the selected row holds a different address.
-        HTTPException: 404 if the row no longer exists.
+    Old row-bound links remain usable only before the identity has changed.
+    They never reroute through an EE hook or another equal-email identity.
     """
     claims = verify_user_token(token, token_type)
-    user = crud_user.get(session, id=claims.user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
+    if claims.person_id is not None:
+        person = crud_person.get(session, id=claims.person_id)
+        if claims.user_id is not None:
+            origin = crud_user.get(session, id=claims.user_id)
+            if origin is None or origin.person_id != claims.person_id:
+                raise TokenError("This link is no longer valid. Request a new one.")
+    else:
+        origin = crud_user.get(session, id=claims.user_id)
+        person = (
+            crud_person.resolve_for_membership(session, membership_id=origin.id)
+            if origin is not None
+            else None
         )
-    if (user.email or "").lower() != claims.email.lower():
-        raise TokenError(
-            "This link is no longer valid. Request a new one and use that instead."
-        )
-    purpose = "verify_email" if token_type == "email_verification" else "reset_password"
-    selected = select_login_row(session, user, purpose=purpose)
-    if selected is not user and (selected.email or "").lower() != claims.email.lower():
-        raise TokenError(
-            "This link is no longer valid. Request a new one and use that instead."
-        )
-    return selected
+    if (
+        person is None
+        or person.identity_status == "quarantined"
+        or (person.email or "").strip().lower() != claims.email.strip().lower()
+        or person.auth_generation != claims.auth_generation
+    ):
+        raise TokenError("This link is no longer valid. Request a new one.")
+    return person
 
 
 @router.post("/verify-email", status_code=status.HTTP_200_OK)
@@ -828,19 +817,20 @@ async def verify_email(
     """
     try:
         session = db
-        user = _user_for_token(session, verification_data.token, "email_verification")
+        person = _person_for_token(
+            session, verification_data.token, "email_verification"
+        )
 
-        # Update email verification status
-        if not user.email_verified:
-            user = crud_user.update(
-                session, db_obj=user, obj_in={"email_verified": True}
-            )
-
+        claims = verify_user_token(verification_data.token, "email_verification")
+        person = crud_person.verify_email(
+            session,
+            person_id=person.id,
+            expected_email=claims.email,
+            expected_generation=claims.auth_generation,
+        )
         response: Dict[str, Any] = {"message": "Email verified successfully"}
-        # A deactivated user verifying an address is still verified, but it
-        # buys no session: is_active is the account-level decision and this
-        # endpoint must not reopen it.
-        if user.is_active:
+        user = login_membership(session, person)
+        if user is not None:
             generation = user_auth_generation(user)
             access_token = create_access_token(
                 data={"sub": str(user.id), "scopes": []},
@@ -864,7 +854,7 @@ async def verify_email(
         # "User not found" from _user_for_token is a real answer, not a
         # server error, so it must not fall into the handler below.
         raise
-    except TokenError as e:
+    except (TokenError, IdentityConflictError, IdentityUnavailableError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -912,23 +902,22 @@ def resend_verification(
     email = (verification_data.email or "").strip()
     check_resend_rate_limit(get_client_ip(request) or "", email.lower())
 
-    # One address can hold a row in several accounts. Each unverified row
-    # gets its own link, bound to that row, so following one never verifies
-    # another.
-    rows = select_email_rows(
-        db,
-        email,
-        crud_user.list_by_email(db, email=email),
-        purpose="resend_verification",
-    )
-    for user in rows:
-        if user.email_verified:
+    for person in crud_person.list_by_email(db, email=email):
+        if (
+            person.email_verified_at is not None
+            or person.identity_status == "quarantined"
+        ):
             continue
+        token = create_email_verification_token(
+            person.email,
+            person_id=person.id,
+            auth_generation=person.auth_generation,
+        )
         background_tasks.add_task(
             _send_verification_email_task,
-            user_email=user.email,
-            user_id=user.id,
-            username=user.username,
+            user_email=person.email,
+            token=token,
+            username=person.username,
         )
     return {
         "message": (
@@ -938,37 +927,37 @@ def resend_verification(
 
 
 def _send_verification_email_task(
-    user_email: str, user_id: UUID, username: Optional[str] = None
+    user_email: str, token: str, username: Optional[str] = None
 ) -> None:
-    """Mint a verification token and mail it, swallowing sender failures.
-
-    Args:
-        user_email: Address to verify.
-        user_id: The row the link verifies.
-        username: That row's username, named in the message.
-    """
+    """Mail one canonical proof without aborting other background messages."""
     try:
-        token = create_email_verification_token(user_email, user_id=user_id)
         send_verification_email(user_email=user_email, token=token, username=username)
-    except Exception as error:
+    except EmailError as error:
         logger.error("Failed to resend verification email: %s", error)
+
+
+def _send_password_reset_email_task(
+    user_email: str, token: str, username: Optional[str] = None
+) -> None:
+    """Keep a transient sender failure local to this identity's reset message."""
+    try:
+        send_password_reset_email(user_email=user_email, token=token, username=username)
+    except EmailError as error:
+        logger.error("Failed to send password reset email: %s", error)
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
 async def forgot_password(
     reset_data: PasswordResetRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db_session),
 ) -> Dict[str, str]:
-    """Send a password reset email for every user row holding the address.
+    """Send one bound recovery proof per canonical identity at the address.
 
-    ``user.email`` is not unique: an address invited into a second account
-    holds a second row there, with its own password. This never chooses one
-    of them. Every row holding the address gets its own message, whose link
-    is bound to that row and names its username, so the person resets the
-    account they mean by following that account's link. Each link goes to
-    the address its own row holds, the inbox that row already trusts for a
-    reset, so no row is reachable from an inbox it does not name.
+    Explicitly linked memberships share one message. Independent provisional
+    people sharing an address receive separate messages naming their chosen
+    usernames; account selectors cannot reroute an identity proof.
 
     Args:
         reset_data: Password reset request with email.
@@ -977,19 +966,22 @@ async def forgot_password(
     Returns:
         The same neutral message whether or not the address is registered.
     """
-    rows = select_email_rows(
-        db,
-        reset_data.email,
-        crud_user.list_by_email(db, email=reset_data.email),
-        purpose="forgot_password",
+    check_resend_rate_limit(
+        get_client_ip(request) or "", reset_data.email.strip().lower()
     )
-    for user in rows:
-        token = create_password_reset_token(user.email, user_id=user.id)
+    for person in crud_person.list_by_email(db, email=reset_data.email):
+        if person.identity_status == "quarantined":
+            continue
+        token = create_password_reset_token(
+            person.email,
+            person_id=person.id,
+            auth_generation=person.auth_generation,
+        )
         background_tasks.add_task(
-            send_password_reset_email,
-            user_email=user.email,
+            _send_password_reset_email_task,
+            user_email=person.email,
             token=token,
-            username=user.username,
+            username=person.username,
         )
     return {
         "message": "If your email is registered, you will receive a password reset link"
@@ -1014,18 +1006,21 @@ async def reset_password(
     """
     try:
         session = db
-        user = _user_for_token(session, reset_data.token, "password_reset")
-
-        # Update password
-        user.hashed_password = get_password_hash(reset_data.new_password)
-        session.commit()
+        person = _person_for_token(session, reset_data.token, "password_reset")
+        claims = verify_user_token(reset_data.token, "password_reset")
+        crud_person.set_password(
+            session,
+            person_id=person.id,
+            hashed_password=get_password_hash(reset_data.new_password),
+            expected_generation=claims.auth_generation,
+        )
 
         return {"message": "Password reset successfully"}
     except HTTPException:
         # "User not found" from _user_for_token is a real answer, not a
         # server error, so it must not fall into the handler below.
         raise
-    except TokenError as e:
+    except (TokenError, IdentityConflictError, IdentityUnavailableError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -1039,16 +1034,18 @@ async def reset_password(
 
 
 async def _landing_row(user: UserModel, db: Session) -> UserModel:
-    """The row a password sign-in lands on (the checked row unless H1 says).
-
-    Without a registered login row selector this returns ``user`` without
-    leaving the event loop or touching the database.
-    """
-    if get_login_row_selector() is None:
-        return user
+    """Select an eligible membership and always gate its identity off the loop."""
     from preloop.api.loop_safety import run_db_off_loop
 
-    return await run_db_off_loop(lambda: select_login_row(db, user, purpose="login"))
+    def select_and_gate() -> UserModel:
+        selected = select_login_row(db, user, purpose="login")
+        if selected.person_id != user.person_id:
+            raise HTTPException(status_code=401, detail="Invalid account selection")
+        require_active_identity(db, selected)
+        enforce_verified_email(selected, db)
+        return selected
+
+    return await run_db_off_loop(select_and_gate)
 
 
 @router.post("/token", response_model=Token)
@@ -1080,7 +1077,6 @@ async def login_form(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    enforce_verified_email(user)
     user = await _landing_row(user, db)
 
     # Create access token with user information
@@ -1137,7 +1133,6 @@ async def login_json(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    enforce_verified_email(user)
     user = await _landing_row(user, db)
 
     # Create access token with user information
@@ -1219,11 +1214,12 @@ def refresh_token(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+        require_active_identity(session, user)
         reject_stale_token_generation(user, token_data)
 
         # A session may not outlive the verification requirement either: a
         # user who was signed in when the setting went on stops rotating.
-        enforce_verified_email(user)
+        enforce_verified_email(user, db)
 
         # Enforce the sliding-session cap: rotation extends the session by
         # REFRESH_TOKEN_EXPIRE_DAYS each time, but the chain as a whole may
@@ -1288,8 +1284,9 @@ def revoke_all_sessions(
     are unchanged.
     """
     crud_cli_session.revoke_all(db, user_id=current_user.id, commit=False)
-    new_generation = crud_user.bump_auth_generation(db, user_id=current_user.id)
-    return {"auth_generation": new_generation}
+    person = crud_person.resolve_for_membership(db, membership_id=current_user.id)
+    person = crud_person.revoke_sessions(db, person_id=person.id)
+    return {"auth_generation": person.auth_generation}
 
 
 @router.post("/logout", response_model=LogoutResponse)
@@ -1414,16 +1411,18 @@ def change_current_user_password(
     passwords: PasswordChangeRequest,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
-):
+) -> None:
     """Change current user's password."""
-    if not verify_password(passwords.current_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect current password",
-        )
-    hashed_password = get_password_hash(passwords.new_password)
-    crud_user.update(
-        db, db_obj=current_user, obj_in={"hashed_password": hashed_password}
+    person = require_active_identity(db, current_user, lock=True)
+    if not any(
+        verify_password(passwords.current_password, password_hash)
+        for password_hash in crud_person.list_password_hashes(db, person_id=person.id)
+    ):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+    crud_person.set_password(
+        db,
+        membership_id=current_user.id,
+        hashed_password=get_password_hash(passwords.new_password),
     )
 
 
@@ -2176,18 +2175,23 @@ def _authenticate_user_sync(
 
     session = db
 
-    # Find user using CRUD layer
-    user = crud_user.get_by_username(session, username=username)
-
-    if not user:
+    try:
+        person = crud_person.resolve_login(session, identifier=username)
+    except IdentityConflictError:
         return None
-
-    if not verify_password(password, user.hashed_password):
+    if person is None or person.identity_status != "active":
         return None
-
-    if not user.is_active:
+    if not any(
+        verify_password(password, password_hash)
+        for password_hash in crud_person.list_password_hashes(
+            session, person_id=person.id
+        )
+    ):
         return None
-
+    user = login_membership(session, person)
+    if user is None:
+        return None
+    require_active_identity(session, user)
     # Capture old last_login before updating (for inactivity notification)
     old_last_login = user.last_login
 
@@ -2316,33 +2320,41 @@ async def complete_onboarding(
         stored_hash, hash_onboarding_claim_token(request.claim_token)
     ):
         raise _refuse_claim()
-    if user.hashed_password != "NEEDS_RESET":
+    person = crud_person.credential_owner(session, membership_id=user.id)
+    if person.hashed_password != "NEEDS_RESET":
         raise _refuse_claim()
 
-    # Check if the new username is taken by someone else using CRUD layer
-    updates: Dict[str, Any] = {
-        "hashed_password": get_password_hash(request.password),
-        # Spend the token. Everything below is one update, so the claim is
-        # consumed in the same transaction that sets the password.
-        "onboarding_claim_hash": None,
-    }
-    if user.username != request.username:
-        existing_user = crud_user.get_by_username(session, username=request.username)
-        if existing_user:
-            raise HTTPException(status_code=400, detail="Username is already taken.")
-        updates["username"] = request.username
-    if request.full_name is not None:
-        full_name = request.full_name.strip()
-        if full_name:
-            updates["full_name"] = full_name
-    # The address came off a completed checkout and the claim token proves
-    # this caller is the one who completed it, so an instance that requires
-    # verification must not hold the new customer at the login page. Note the
-    # narrow scope of the guarantee: the payment provider collected a card for
-    # the address, it did not verify the address.
-    if not user.email_verified:
-        updates["email_verified"] = True
-    user = crud_user.update(session, db_obj=user, obj_in=updates)
+    try:
+        # Lock/version-check the identity before consuming the account-bound claim.
+        person = crud_person.verify_email(
+            session,
+            person_id=person.id,
+            expected_email=claims["email"],
+            expected_generation=person.auth_generation,
+            commit=False,
+        )
+        profile_changes = {"username": request.username}
+        if request.full_name is not None and request.full_name.strip():
+            profile_changes["full_name"] = request.full_name.strip()
+        crud_person.update_profile(
+            session,
+            membership_id=user.id,
+            changes=profile_changes,
+            commit=False,
+        )
+        crud_user.consume_onboarding_claim(
+            session, user_id=user.id, expected_hash=stored_hash
+        )
+        crud_person.set_password(
+            session,
+            membership_id=user.id,
+            hashed_password=get_password_hash(request.password),
+            expected_generation=person.auth_generation,
+        )
+        require_active_identity(session, user)
+    except (IdentityConflictError, IdentityUnavailableError, ValueError):
+        session.rollback()
+        raise _refuse_claim()
 
     # Create access and refresh tokens for auto-login
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)

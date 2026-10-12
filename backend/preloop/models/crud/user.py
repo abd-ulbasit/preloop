@@ -36,6 +36,29 @@ class CRUDUser(CRUDBase[models.User]):
             record_capacity_change(db, str(obj_in["account_id"]))
         return super().create(db, obj_in=obj_in, commit=commit)
 
+    def consume_onboarding_claim(
+        self, db: Session, *, user_id: uuid.UUID, expected_hash: str
+    ) -> models.User:
+        """Consume a membership-bound checkout claim in the caller's transaction."""
+        import secrets
+
+        user = (
+            db.query(models.User)
+            .filter(models.User.id == user_id)
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if (
+            user is None
+            or not user.onboarding_claim_hash
+            or not secrets.compare_digest(user.onboarding_claim_hash, expected_hash)
+        ):
+            raise ValueError("Onboarding claim is no longer valid")
+        user.onboarding_claim_hash = None
+        db.flush()
+        return user
+
     def update(
         self, db: Session, *, db_obj: models.User, obj_in: dict[str, Any]
     ) -> models.User:

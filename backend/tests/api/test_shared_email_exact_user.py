@@ -1,10 +1,9 @@
-"""Verification and password reset act on one exact user row.
+"""Verification and password reset act on one exact canonical identity.
 
-``user.email`` is not unique: the enterprise invitation flow gives an address
-that is already registered a second row, with its own password, in the
-inviting account. Every test here therefore starts from two rows that share
-one address in two accounts, and pins down that a link issued for one row can
-never verify, or change the password of, the other.
+An address is not proof that provisional registrations are the same person.
+These tests create independent people sharing an address in two accounts and
+confirm that a link issued for one never verifies or recovers the other.
+Explicitly linked memberships sharing one identity are covered separately.
 """
 
 import ast
@@ -19,7 +18,8 @@ from sqlalchemy.orm import Session
 
 from preloop.api.auth import email_verification
 from preloop.api.auth.jwt import get_password_hash, verify_password
-from preloop.models.crud import crud_account, crud_user
+from preloop.models import models
+from preloop.models.crud import crud_account, crud_person, crud_user
 
 OLD_PASSWORD = "shared-address-old-1"
 NEW_PASSWORD = "shared-address-new-1"
@@ -54,6 +54,7 @@ def shared_pair(db_session: Session) -> Tuple[object, object]:
     first = _row(db_session, email=email, verified=False)
     second = _row(db_session, email=email, verified=False)
     assert first.account_id != second.account_id
+    assert first.person_id != second.person_id
     return first, second
 
 
@@ -85,6 +86,13 @@ def _captured_tokens(mock_sender) -> List[str]:
 def _reload(db: Session, user) -> object:
     db.expire_all()
     return crud_user.get(db, id=user.id)
+
+
+def _password(db: Session, user: models.User) -> str:
+    """Inspect the credential owner rather than the retired membership cache."""
+    person = crud_person.credential_owner(db, membership_id=user.id)
+    assert person.hashed_password is not None
+    return person.hashed_password
 
 
 class TestCrudNeverPicksARow:
@@ -201,7 +209,7 @@ class TestVerification:
 
 
 class TestPasswordReset:
-    """A reset link changes the password of the row it was issued for only."""
+    """A reset link changes only the password of the identity it was issued for."""
 
     def test_forgot_password_sends_one_bound_link_per_row(
         self, db_session: Session, anon_client: TestClient, shared_pair
@@ -212,8 +220,8 @@ class TestPasswordReset:
                 "/api/v1/auth/forgot-password", json={"email": first.email}
             )
         assert response.status_code == 200, response.text
-        # One message per row, each naming the username it resets, so the
-        # person picks by following the link for the account they mean.
+        # These are independent people, so each receives a separate proof
+        # naming the canonical username it recovers.
         assert len(sender.call_args_list) == 2
         named = {call.kwargs.get("username") for call in sender.call_args_list}
         assert named == {first.username, second.username}
@@ -238,10 +246,8 @@ class TestPasswordReset:
         )
 
         assert response.status_code == 200, response.text
-        assert verify_password(NEW_PASSWORD, _reload(db_session, first).hashed_password)
-        assert verify_password(
-            OLD_PASSWORD, _reload(db_session, second).hashed_password
-        )
+        assert verify_password(NEW_PASSWORD, _password(db_session, first))
+        assert verify_password(OLD_PASSWORD, _password(db_session, second))
 
     def test_reset_token_minted_for_the_second_row_lands_on_it(
         self, db_session: Session, anon_client: TestClient, shared_pair
@@ -257,10 +263,8 @@ class TestPasswordReset:
         )
 
         assert response.status_code == 200, response.text
-        assert verify_password(
-            NEW_PASSWORD, _reload(db_session, second).hashed_password
-        )
-        assert verify_password(OLD_PASSWORD, _reload(db_session, first).hashed_password)
+        assert verify_password(NEW_PASSWORD, _password(db_session, second))
+        assert verify_password(OLD_PASSWORD, _password(db_session, first))
 
     def test_reset_token_without_a_user_binding_is_refused(
         self, db_session: Session, anon_client: TestClient, shared_pair
@@ -277,13 +281,11 @@ class TestPasswordReset:
 
         assert response.status_code == 400, response.text
         for row in (first, second):
-            assert verify_password(
-                OLD_PASSWORD, _reload(db_session, row).hashed_password
-            )
+            assert verify_password(OLD_PASSWORD, _password(db_session, row))
 
 
 class TestMissingRow:
-    """A link for a row that no longer exists is a 404, never a 500."""
+    """An unresolvable legacy link is invalid and never reroutes by address."""
 
     @pytest.mark.parametrize(
         "path,mint_name,body",
@@ -296,7 +298,7 @@ class TestMissingRow:
             ),
         ],
     )
-    def test_deleted_row_answers_404(
+    def test_deleted_row_answers_invalid_link(
         self, anon_client: TestClient, path, mint_name, body
     ):
         from preloop.utils import tokens
@@ -305,8 +307,8 @@ class TestMissingRow:
 
         response = anon_client.post(path, json={"token": token, **body})
 
-        assert response.status_code == 404, response.text
-        assert response.json()["detail"] == "User not found"
+        assert response.status_code == 400, response.text
+        assert "no longer valid" in response.json()["detail"]
 
     def test_ambiguity_error_is_on_the_crud_package_surface(self):
         from preloop.models.crud import AmbiguousEmailError

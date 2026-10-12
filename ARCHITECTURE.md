@@ -665,6 +665,32 @@ cannot safely be reversed into membership cascades; downgrade refuses and rollba
 uses a forward repair. Membership expansion policy and enterprise endpoints stay
 in EE; core identity ownership and retention need no plugin registration.
 
+Human authentication resolves the canonical Person in core, independently of
+enterprise login hooks. Account memberships retain their original user IDs,
+account-scoped roles and JWT generation checks. Password and passkey sign-in,
+JWT refresh, OAuth code exchange and opaque OAuth access also require an active
+Person, membership and account. API keys retain their existing account-bound
+ownership and revocation semantics.
+
+Verification and recovery enumerate canonical identities by normalized email;
+explicitly linked provisional memberships receive one message with the chosen
+username. Equal-address unrelated identities remain separate. New links carry
+purpose, expiry, Person ID, expected email and identity generation. Consumption
+changes that generation; changed-address links and replay are refused. Old
+row-bound links resolve only their explicit Person link and remain usable only
+before an identity security change. Address-only links remain invalid.
+
+Passkeys are owned by Person; their nullable user ID records registration
+provenance. They remain manageable across eligible accounts and after that
+membership is removed. Reset, password change and sign-out-everywhere invalidate
+sessions across every membership without changing tenant permissions. Removing
+one membership leaves canonical credentials and other memberships intact.
+
+OAuth/SSO identities remain exempt from `REQUIRE_EMAIL_VERIFICATION` when a
+canonical PersonAuthIdentity provider credential exists. The exemption follows
+the Person across membership changes, never a mutable membership `user_source`
+flag, and does not itself mark the canonical email as verified. Local identities
+without a provider credential still require explicit email verification.
 
 Cloud's hosted-model capability adds the active built-in
 `qwen/deepseek-v4.1-flash-hosted` to the account model catalog and flow selectors.
