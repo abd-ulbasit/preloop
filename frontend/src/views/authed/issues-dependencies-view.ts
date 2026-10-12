@@ -35,7 +35,7 @@ import type {
   IssueStatus,
 } from '../../types';
 import consoleStyles from '../../styles/console-styles.css?inline';
-import '../../components/pagination-controls.ts';
+import '../../table/table-pagination';
 import { getStatusVariant } from '../../utils/verdict';
 import '../../components/view-header';
 
@@ -128,14 +128,16 @@ export class IssuesDependenciesView extends LitElement {
 
     try {
       const skip = (this._currentPage - 1) * this._pageSize;
-      const issues = await searchIssues({
+      // One row ahead: it says whether a next page exists.
+      const fetched = await searchIssues({
         project_ids: [this._selectedProjectId],
-        limit: this._pageSize,
+        limit: this._pageSize + 1,
         skip: skip,
         status: this._selectedStatus || undefined,
       });
+      this._hasMorePages = fetched.length > this._pageSize;
+      const issues = fetched.slice(0, this._pageSize);
       this._issues = issues;
-      this._hasMorePages = issues.length === this._pageSize;
 
       if (issues.length > 0) {
         this.fetchDependencies(issues.map((i) => i.id));
@@ -283,21 +285,19 @@ export class IssuesDependenciesView extends LitElement {
     this._updateUrl();
   }
 
-  private _goToNextPage() {
-    if (this._hasMorePages) {
-      this._currentPage++;
-      this.fetchIssues();
-      this._updateUrl();
-    }
-  }
+  /** The shared pager: a 0-based page index, the API pages from 1. */
+  private _onPageChange = (event: CustomEvent<{ pageIndex: number }>) => {
+    this._currentPage = event.detail.pageIndex + 1;
+    void this.fetchIssues();
+    this._updateUrl();
+  };
 
-  private _goToPreviousPage() {
-    if (this._currentPage > 1) {
-      this._currentPage--;
-      this.fetchIssues();
-      this._updateUrl();
-    }
-  }
+  private _onPageSizeChange = (event: CustomEvent<{ pageSize: number }>) => {
+    this._pageSize = event.detail.pageSize;
+    this._currentPage = 1;
+    void this.fetchIssues();
+    this._updateUrl();
+  };
 
   private _toggleRow(issueId: string) {
     if (this._expandedRowKey === issueId) {
@@ -648,13 +648,18 @@ export class IssuesDependenciesView extends LitElement {
           </table>
         </div>
       </sl-card>
-      <pagination-controls
-        .currentPage=${this._currentPage}
-        .hasMorePages=${this._hasMorePages}
-        .loading=${this._loadingIssues}
-        @prev-page=${this._goToPreviousPage}
-        @next-page=${this._goToNextPage}
-      ></pagination-controls>
+      <table-pagination
+        page-index=${this._currentPage - 1}
+        page-size=${this._pageSize}
+        .pageSizes=${[10, 25, 50]}
+        .total=${null}
+        page-rows=${this._issues.length}
+        ?has-next=${this._hasMorePages}
+        ?loading=${this._loadingIssues}
+        noun="issues"
+        @page-change=${this._onPageChange}
+        @page-size-change=${this._onPageSizeChange}
+      ></table-pagination>
     `;
   }
 

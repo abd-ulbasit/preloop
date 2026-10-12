@@ -39,6 +39,7 @@ import {
   type SigningKeyList,
 } from '../../../records-api';
 import { consoleDialogStyles } from '../../../styles/console-dialog';
+import '../../../table/table-pagination';
 import consoleStyles from '../../../styles/console-styles.css?inline';
 import {
   CHAIN_HONESTY,
@@ -92,8 +93,16 @@ export class RecordsView extends LitElement {
   @state() private verifyError: string | null = null;
 
   @state() private checkpoints: ChainCheckpoint[] = [];
-  @state() private checkpointCursor = 0;
-  @state() private checkpointsDone = false;
+  /**
+   * Keyset pages, oldest first: `checkpointAfter[i]` is the seq page i starts
+   * after, so Previous is a page already seen. The shared pager labels the
+   * direction ("Next" is newer checkpoints).
+   */
+  @state() private checkpointPage = 0;
+  @state() private checkpointPageSize = CHECKPOINT_PAGE;
+  @state() private checkpointAfter: Array<number | null> = [0];
+  @state() private checkpointsLoading = false;
+  @state() private checkpointError = '';
 
   @state() private keys: SigningKeyList | null = null;
   @state() private keysError: string | null = null;
@@ -273,7 +282,7 @@ export class RecordsView extends LitElement {
     this.permissionsReady = true;
     if (this.canAudit) {
       void this.loadStatus();
-      void this.loadCheckpoints(true);
+      void this.loadCheckpoints(0);
       void this.loadKeys();
     }
     if (this.canPolicies) {
@@ -300,25 +309,39 @@ export class RecordsView extends LitElement {
     }
   }
 
-  private async loadCheckpoints(reset: boolean): Promise<void> {
-    const after = reset ? 0 : this.checkpointCursor;
+  private async loadCheckpoints(pageIndex: number): Promise<void> {
+    const after = pageIndex === 0 ? 0 : this.checkpointAfter[pageIndex];
+    if (after === null || after === undefined) return;
+    this.checkpointsLoading = true;
+    this.checkpointError = '';
     try {
+      // One row more than the page: it says whether a next page exists, so
+      // Next never leads to an empty page.
       const page = await listAuditChainCheckpoints({
         afterSeq: after,
-        limit: CHECKPOINT_PAGE,
+        limit: this.checkpointPageSize + 1,
       });
-      const rows = Array.isArray(page) ? page : [];
-      this.checkpoints = reset ? rows : this.checkpoints.concat(rows);
-      this.checkpointsDone = rows.length < CHECKPOINT_PAGE;
+      const all = Array.isArray(page) ? page : [];
+      const hasMore = all.length > this.checkpointPageSize;
+      const rows = hasMore ? all.slice(0, this.checkpointPageSize) : all;
       const last = rows[rows.length - 1];
-      if (last) {
-        this.checkpointCursor = last.seq;
-      }
+      this.checkpoints = rows;
+      this.checkpointPage = pageIndex;
+      this.checkpointAfter = [
+        ...this.checkpointAfter.slice(0, pageIndex + 1),
+        hasMore && last ? last.seq : null,
+      ];
     } catch (err) {
-      if (reset) {
-        this.statusError =
-          err instanceof Error ? err.message : 'Could not load checkpoints';
+      const message =
+        err instanceof Error ? err.message : 'Could not load checkpoints';
+      if (pageIndex === 0) {
+        this.statusError = message;
+      } else {
+        // The current page stays; the error sits beside the pager.
+        this.checkpointError = message;
       }
+    } finally {
+      this.checkpointsLoading = false;
     }
   }
 
@@ -881,14 +904,30 @@ ${offlineAuditCommand(range)}</pre>
                 </table>
               </div>`
         }
+        <table-pagination
+          class="checkpoint-pager"
+          page-index=${this.checkpointPage}
+          page-size=${this.checkpointPageSize}
+          .pageSizes=${[25, 50, 100]}
+          .total=${null}
+          page-rows=${this.checkpoints.length}
+          ?has-next=${this.checkpointAfter[this.checkpointPage + 1] != null}
+          ?loading=${this.checkpointsLoading}
+          noun="checkpoints, oldest first"
+          @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
+            void this.loadCheckpoints(event.detail.pageIndex)}
+          @page-size-change=${(event: CustomEvent<{ pageSize: number }>) => {
+            this.checkpointPageSize = event.detail.pageSize;
+            this.checkpointAfter = [0];
+            void this.loadCheckpoints(0);
+          }}
+        ></table-pagination>
         ${
-          this.checkpointsDone
-            ? nothing
-            : html`<sl-button
-                size="small"
-                @click=${() => this.loadCheckpoints(false)}
-                >Newer checkpoints</sl-button
-              >`
+          this.checkpointError
+            ? html`<div data-testid="checkpoint-error">
+                ${this.renderError(this.checkpointError)}
+              </div>`
+            : nothing
         }
       </section>
     `;
