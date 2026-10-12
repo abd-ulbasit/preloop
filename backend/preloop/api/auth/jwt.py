@@ -712,6 +712,9 @@ def reject_revoked_token(db: Any, user: User, token_data: TokenData) -> None:
     Raises:
         HTTPException: 401 when the token was revoked either way.
     """
+    from preloop.api.auth.identity import require_active_identity
+
+    require_active_identity(db, user)
     reject_stale_token_generation(user, token_data)
     reject_revoked_cli_session(db, user, token_data)
     if account_hooks.is_token_revoked(db, user, token_data.claims):

@@ -3,8 +3,9 @@
 import json
 import time
 from contextlib import ExitStack
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,27 @@ from preloop.api.endpoints.oauth_server import (
     _issue_jwt_tokens,
     router,
 )
+
+
+@pytest.fixture(autouse=True)
+def canonical_identity_boundary(monkeypatch):
+    """Keep protocol unit tests independent of identity persistence."""
+    from preloop.models.crud import crud_person, crud_account
+
+    person = SimpleNamespace(
+        id=uuid4(),
+        username="protocol-person",
+        email="protocol@example.com",
+        identity_status="active",
+        email_verified_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        crud_person, "resolve_for_membership", lambda *args, **kwargs: person
+    )
+    monkeypatch.setattr(crud_person, "lock_for_session", lambda *args, **kwargs: person)
+    monkeypatch.setattr(
+        crud_account, "get", lambda *args, **kwargs: SimpleNamespace(is_active=True)
+    )
 
 
 # ---------------------------------------------------------------------------

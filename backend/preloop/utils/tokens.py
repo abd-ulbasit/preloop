@@ -30,7 +30,13 @@ class TokenError(Exception):
 
 
 def _create_user_token(
-    email: str, user_id: UUID | str, token_type: str, expire_minutes: int
+    email: str,
+    user_id: UUID | str | None,
+    token_type: str,
+    expire_minutes: int,
+    *,
+    person_id: UUID | str | None = None,
+    auth_generation: int = 0,
 ) -> str:
     """Mint a token bound to one user row and the address it was sent to.
 
@@ -39,17 +45,27 @@ def _create_user_token(
     does, and the ``sub`` claim keeps the address so the link stops working
     if that row's address changes before it is followed.
     """
+    if user_id is None and person_id is None:
+        raise TypeError("A person_id or legacy user_id is required")
     expire = datetime.now(UTC) + timedelta(minutes=expire_minutes)
     to_encode = {
         "sub": email,
-        "uid": str(user_id),
+        "uid": str(user_id) if user_id is not None else None,
+        "pid": str(person_id) if person_id is not None else None,
+        "gen": auth_generation,
         "exp": expire,
         "type": token_type,
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def create_email_verification_token(email: str, *, user_id: UUID | str) -> str:
+def create_email_verification_token(
+    email: str,
+    *,
+    user_id: UUID | str | None = None,
+    person_id: UUID | str | None = None,
+    auth_generation: int = 0,
+) -> str:
     """Create an email verification token for one user row.
 
     Args:
@@ -60,11 +76,22 @@ def create_email_verification_token(email: str, *, user_id: UUID | str) -> str:
         A JWT token.
     """
     return _create_user_token(
-        email, user_id, "email_verification", EMAIL_TOKEN_EXPIRE_MINUTES
+        email,
+        user_id,
+        "email_verification",
+        EMAIL_TOKEN_EXPIRE_MINUTES,
+        person_id=person_id,
+        auth_generation=auth_generation,
     )
 
 
-def create_password_reset_token(email: str, *, user_id: UUID | str) -> str:
+def create_password_reset_token(
+    email: str,
+    *,
+    user_id: UUID | str | None = None,
+    person_id: UUID | str | None = None,
+    auth_generation: int = 0,
+) -> str:
     """Create a password reset token for one user row.
 
     Args:
@@ -75,7 +102,12 @@ def create_password_reset_token(email: str, *, user_id: UUID | str) -> str:
         A JWT token.
     """
     return _create_user_token(
-        email, user_id, "password_reset", PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+        email,
+        user_id,
+        "password_reset",
+        PASSWORD_RESET_TOKEN_EXPIRE_MINUTES,
+        person_id=person_id,
+        auth_generation=auth_generation,
     )
 
 
@@ -83,8 +115,10 @@ def create_password_reset_token(email: str, *, user_id: UUID | str) -> str:
 class UserTokenClaims:
     """What a user-bound token names: one row, and the address it was sent to."""
 
-    user_id: UUID
+    user_id: UUID | None
     email: str
+    person_id: UUID | None = None
+    auth_generation: int = 0
 
 
 def _decode_typed_token(token: str, token_type: str) -> dict:
@@ -133,12 +167,23 @@ def verify_user_token(token: str, token_type: str) -> UserTokenClaims:
     """
     payload = _decode_typed_token(token, token_type)
     try:
-        user_id = UUID(str(payload.get("uid") or ""))
-    except ValueError:
+        user_id = UUID(str(payload["uid"])) if payload.get("uid") else None
+        person_id = UUID(str(payload["pid"])) if payload.get("pid") else None
+        generation = payload.get("gen", 0)
+        if type(generation) is not int or generation < 0:
+            raise ValueError("Invalid generation")
+        if user_id is None and person_id is None:
+            raise ValueError("Missing identity")
+    except (ValueError, TypeError):
         raise TokenError(
             "This link is no longer valid. Request a new one and use that instead."
         )
-    return UserTokenClaims(user_id=user_id, email=str(payload["sub"]))
+    return UserTokenClaims(
+        user_id=user_id,
+        email=str(payload["sub"]),
+        person_id=person_id,
+        auth_generation=generation,
+    )
 
 
 def verify_token(token: str, token_type: str) -> str:
