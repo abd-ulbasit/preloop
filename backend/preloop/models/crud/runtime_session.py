@@ -815,34 +815,68 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             session_query = session_query.filter(self.model.ended_at.isnot(None))
 
         total = session_query.count()
-        usage_links = self._account_usage_links(
-            db,
-            account_id=account_id,
-            start_date=start_date,
-            end_date=end_date,
-            ai_model_id=ai_model_id,
-        )
-        session_usage = aliased(ApiUsage, usage_links)
-
-        rows = (
-            self._account_sessions_query(
-                session_query=session_query,
-                usage_join=usage_links.c.session_id == self.model.id,
-                usage_model=session_usage,
-                summary_columns_available=self._summary_columns_available(db),
-                parent_session_id_available=self._parent_session_id_available(db),
+        link_filters = {
+            "account_id": account_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ai_model_id": ai_model_id,
+        }
+        # Pick the page on a narrow (session, last request) ranking first,
+        # then aggregate usage for those sessions only. Aggregating every
+        # session's full usage before the LIMIT took 30 s on a busy model
+        # detail page (#1584).
+        ranking_links = self._account_usage_links(db, narrow=True, **link_filters)
+        last_request = (
+            db.query(
+                ranking_links.c.session_id.label("session_id"),
+                func.max(ranking_links.c.timestamp).label("last_request_at"),
             )
+            .group_by(ranking_links.c.session_id)
+            .subquery("session_last_request")
+        )
+        page_ids = [
+            row.id
+            for row in session_query.outerjoin(
+                last_request, last_request.c.session_id == self.model.id
+            )
+            .with_entities(self.model.id)
             .order_by(
                 func.coalesce(
-                    func.max(session_usage.timestamp),
+                    last_request.c.last_request_at,
                     self.model.last_activity_at,
                     self.model.started_at,
-                ).desc()
+                ).desc(),
+                self.model.id.desc(),
             )
             .limit(limit)
             .offset(offset)
             .all()
-        )
+        ]
+        if page_ids:
+            usage_links = self._account_usage_links(
+                db, session_ids=page_ids, **link_filters
+            )
+            session_usage = aliased(ApiUsage, usage_links)
+            rows = (
+                self._account_sessions_query(
+                    session_query=session_query.filter(self.model.id.in_(page_ids)),
+                    usage_join=usage_links.c.session_id == self.model.id,
+                    usage_model=session_usage,
+                    summary_columns_available=self._summary_columns_available(db),
+                    parent_session_id_available=self._parent_session_id_available(db),
+                )
+                .order_by(
+                    func.coalesce(
+                        func.max(session_usage.timestamp),
+                        self.model.last_activity_at,
+                        self.model.started_at,
+                    ).desc(),
+                    self.model.id.desc(),
+                )
+                .all()
+            )
+        else:
+            rows = []
 
         session_ids = [str(row.id) for row in rows]
         latest_usage_by_session = _latest_gateway_usage_for_sessions(
@@ -900,6 +934,8 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         start_date: Optional[datetime],
         end_date: Optional[datetime],
         ai_model_id: Optional[str],
+        session_ids: Optional[Sequence[Any]] = None,
+        narrow: bool = False,
     ) -> Any:
         """Map account usage to sessions using disjoint, equality-join branches.
 
@@ -908,24 +944,42 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         for each session. Separate branches allow hash/index joins, including
         for the legacy UUID-to-text comparison. A row matching both paths for
         the same session is included only once.
+
+        Args:
+            db: Database session.
+            account_id: Account whose gateway usage is mapped.
+            start_date: Inclusive lower bound on usage time, if set.
+            end_date: Exclusive upper bound on usage time, if set.
+            ai_model_id: Restrict usage to one model, if set.
+            session_ids: Restrict both the direct and legacy attribution
+                branches to these sessions.
+            narrow: Select only the timestamp column, which is all the page
+                ranking reads.
         """
         # Keep the UNION narrow even if the planner materializes a branch.
         # Request/response metadata is only inspected by the exclusion filter.
-        usage = db.query(
-            ApiUsage.id,
-            ApiUsage.flow_id,
-            ApiUsage.flow_execution_id,
-            ApiUsage.model_alias,
-            ApiUsage.provider_name,
-            ApiUsage.status_code,
-            ApiUsage.prompt_tokens,
-            ApiUsage.completion_tokens,
-            ApiUsage.total_tokens,
-            ApiUsage.estimated_cost,
-            ApiUsage.timestamp,
-            ApiUsage.cache_read_tokens,
-            ApiUsage.cache_creation_tokens,
-        ).filter(
+        # ``narrow`` keeps only the timestamp, which is all the page ranking
+        # reads.
+        usage_columns = (
+            [ApiUsage.timestamp.label("timestamp")]
+            if narrow
+            else [
+                ApiUsage.id,
+                ApiUsage.flow_id,
+                ApiUsage.flow_execution_id,
+                ApiUsage.model_alias,
+                ApiUsage.provider_name,
+                ApiUsage.status_code,
+                ApiUsage.prompt_tokens,
+                ApiUsage.completion_tokens,
+                ApiUsage.total_tokens,
+                ApiUsage.estimated_cost,
+                ApiUsage.timestamp,
+                ApiUsage.cache_read_tokens,
+                ApiUsage.cache_creation_tokens,
+            ]
+        )
+        usage = db.query(*usage_columns).filter(
             ApiUsage.account_id == account_id,
             ApiUsage.action_type == "model_gateway",
             _exclude_internal_usage_condition(),
@@ -940,6 +994,8 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         direct = usage.add_columns(
             ApiUsage.runtime_session_id.label("session_id")
         ).filter(ApiUsage.runtime_session_id.isnot(None))
+        if session_ids is not None:
+            direct = direct.filter(ApiUsage.runtime_session_id.in_(session_ids))
         legacy = (
             usage.add_columns(RuntimeSession.id.label("session_id"))
             .join(
@@ -954,6 +1010,8 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 ApiUsage.runtime_session_id.is_distinct_from(RuntimeSession.id),
             )
         )
+        if session_ids is not None:
+            legacy = legacy.filter(RuntimeSession.id.in_(session_ids))
         return direct.union_all(legacy).subquery("session_usage_links")
 
     def _account_sessions_query(

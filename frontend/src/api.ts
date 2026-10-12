@@ -175,6 +175,7 @@ export function invalidateApiCaches(): void {
   // Whose plan question is settled is a fact about one person; signing out
   // and back in as somebody else must not inherit it.
   planChoiceSettled = null;
+  invalidateUsageNudges();
   // Drop coalesced GETs so a later caller cannot join a response that started
   // under a previous session or fetch stub.
   inFlightGets.clear();
@@ -208,6 +209,10 @@ if (typeof window !== 'undefined') {
   });
   window.addEventListener('auth-change', () => {
     invalidateApiCaches();
+  });
+  // A plan change moves every limit the nudges measure.
+  window.addEventListener('billing-subscription-changed', () => {
+    invalidateUsageNudges();
   });
 }
 
@@ -1047,6 +1052,36 @@ export const NO_USAGE_NUDGES: UsageNudges = {
  * on a banner nobody requested must not interrupt the page with a dialog.
  */
 export async function getUsageNudges(): Promise<UsageNudges> {
+  // The server caches this answer for 60 s per account and the banner asks on
+  // every console mount, so a fresh answer here is the server's cached one
+  // anyway. Reuse it instead of paying a round trip on each navigation
+  // (#1590).
+  const epoch = usageNudgesEpoch;
+  if (
+    usageNudgesCache &&
+    Date.now() - usageNudgesCache.at < USAGE_NUDGES_TTL_MS
+  ) {
+    return usageNudgesCache.value;
+  }
+  const value = await fetchUsageNudges();
+  if (epoch === usageNudgesEpoch) {
+    usageNudgesCache = { value, at: Date.now() };
+  }
+  return value;
+}
+
+/** How long one nudges answer is reused; matches the server cache. */
+const USAGE_NUDGES_TTL_MS = 60_000;
+let usageNudgesCache: { value: UsageNudges; at: number } | null = null;
+let usageNudgesEpoch = 0;
+
+/** Forget the reused nudges answer, so the next caller asks the server. */
+export function invalidateUsageNudges(): void {
+  usageNudgesCache = null;
+  usageNudgesEpoch += 1;
+}
+
+async function fetchUsageNudges(): Promise<UsageNudges> {
   try {
     const response = await fetchWithAuth('/api/v1/billing/nudges', {
       passive: true,

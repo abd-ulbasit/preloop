@@ -10,6 +10,7 @@ import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import './usage-nudge-banner.ts';
 import type { UsageNudgeBanner } from './usage-nudge-banner.ts';
 import type { UsageNudge } from '../api';
+import { invalidateUsageNudges } from '../api';
 import {
   clearNudgeDismissals,
   loadNudgeDismissals,
@@ -82,6 +83,7 @@ describe('usage-nudge-banner', () => {
 
   /** Serve one exact response body on `/billing/nudges`, as the server sent it. */
   function stubBody(body: unknown) {
+    invalidateUsageNudges();
     const original = window.fetch;
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -135,6 +137,9 @@ describe('usage-nudge-banner', () => {
     nudges: UsageNudge[] | 'missing',
     ladder: { threshold: number; bands: number[] } | null = null
   ) {
+    // Each stub is a new server answer; the client reuses one for a minute
+    // (#1590), so forget the previous one.
+    invalidateUsageNudges();
     const original = window.fetch;
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();

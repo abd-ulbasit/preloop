@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_
+from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import Session
 
 from preloop.models import models
@@ -807,6 +807,50 @@ class CRUDFlowRunner(CRUDBase[FlowRunner]):
             "online_runner_count": int(online),
             "last_runner_heartbeat": last.isoformat() if last else None,
         }
+
+    def counts_for_instances(
+        self, db: Session, *, instance_ids: List[UUID]
+    ) -> Dict[UUID, Dict[str, Any]]:
+        """``counts_for_instance`` for a page of instances in one grouped query.
+
+        The admin instances list asks for up to 500 rows; three queries per
+        row made that page cost 1500 round trips. Instances without runners
+        get zeros, exactly as the per-instance function returns.
+        """
+        cutoff = datetime.now(timezone.utc) - ONLINE_HEARTBEAT_TTL
+        result: Dict[UUID, Dict[str, Any]] = {
+            instance_id: {
+                "runner_count": 0,
+                "online_runner_count": 0,
+                "last_runner_heartbeat": None,
+            }
+            for instance_id in instance_ids
+        }
+        if not instance_ids:
+            return result
+        online_filter = and_(
+            FlowRunner.status.in_(("online", "busy")),
+            FlowRunner.last_heartbeat.isnot(None),
+            FlowRunner.last_heartbeat >= cutoff,
+        )
+        rows = (
+            db.query(
+                FlowRunner.instance_id,
+                func.count(FlowRunner.id),
+                func.count(FlowRunner.id).filter(online_filter),
+                func.max(FlowRunner.last_heartbeat),
+            )
+            .filter(FlowRunner.instance_id.in_(instance_ids))
+            .group_by(FlowRunner.instance_id)
+            .all()
+        )
+        for instance_id, total, online, last in rows:
+            result[instance_id] = {
+                "runner_count": int(total),
+                "online_runner_count": int(online),
+                "last_runner_heartbeat": last.isoformat() if last else None,
+            }
+        return result
 
     def counts_for_account(self, db: Session, *, account_id: UUID) -> Dict[str, Any]:
         cutoff = datetime.now(timezone.utc) - ONLINE_HEARTBEAT_TTL

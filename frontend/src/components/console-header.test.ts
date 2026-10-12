@@ -13,7 +13,10 @@ import {
   unifiedWebSocketManager,
 } from '../services/unified-websocket-manager';
 import './console-header.ts';
-import { PENDING_APPROVALS_EVENT } from './console-header.ts';
+import {
+  INITIAL_LIVE_COUNTS_FALLBACK_MS,
+  PENDING_APPROVALS_EVENT,
+} from './console-header.ts';
 import type { ConsoleHeader } from './console-header.ts';
 import { publishAttentionSummary } from '../utils/attention-summary';
 import { loadShoelaceTokens } from '../utils/test-shoelace-theme';
@@ -1161,6 +1164,41 @@ describe('console-header approval deadlines', () => {
     expect(approvalReads).to.equal(2);
     el.remove();
     expect(unsubscribeState.calledOnce).to.equal(true);
+  });
+
+  it('reads the bell counts once when it mounts while the socket connects', async () => {
+    // Before #1590 the mount read both counts and the CONNECTED callback that
+    // follows a moment later read them again: two identical requests each.
+    sinon
+      .stub(unifiedWebSocketManager, 'getState')
+      .returns(ConnectionState.CONNECTING);
+    approvals = [approval('waiting', 5_000)];
+    el = await fixture<ConsoleHeader>(html`<console-header></console-header>`);
+    await clock.tickAsync(0);
+    expect(approvalReads).to.equal(0);
+    changeState(ConnectionState.CONNECTED);
+    await flushApprovalReads(1);
+    expect(approvalReads).to.equal(1);
+    expect(names()).to.deep.equal(['waiting']);
+    // The fallback was cancelled by the connect.
+    await clock.tickAsync(INITIAL_LIVE_COUNTS_FALLBACK_MS);
+    expect(approvalReads).to.equal(1);
+  });
+
+  it('falls back to a direct read when the socket never connects', async () => {
+    sinon
+      .stub(unifiedWebSocketManager, 'getState')
+      .returns(ConnectionState.CONNECTING);
+    approvals = [approval('waiting', 60_000)];
+    el = await fixture<ConsoleHeader>(html`<console-header></console-header>`);
+    await clock.tickAsync(INITIAL_LIVE_COUNTS_FALLBACK_MS - 1);
+    expect(approvalReads).to.equal(0);
+    // The fallback fires, then the coalesced approvals refresh it schedules.
+    await clock.tickAsync(1);
+    await clock.tickAsync(1);
+    await flushApprovalReads(1);
+    expect(approvalReads).to.equal(1);
+    expect(names()).to.deep.equal(['waiting']);
   });
 
   it('cancels expiry work on removal and refreshes after the element reconnects', async () => {
