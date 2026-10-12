@@ -218,6 +218,21 @@ class ApiUsage(Base):
             postgresql_ops={"timestamp": "DESC"},
             postgresql_where=text("action_type = 'model_gateway'"),
         ),
+        # Trailing gateway spend per account (admin accounts list, spend
+        # sort). Covering + partial on the exact filter of
+        # exclude_replay_usage_condition so the sum is an index-only scan and
+        # never touches the wide meta_data column in the heap.
+        Index(
+            "ix_api_usage_gateway_spend",
+            "account_id",
+            "timestamp",
+            postgresql_include=["estimated_cost"],
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND "
+                "((meta_data ->> 'purpose') IS NULL OR "
+                "(meta_data ->> 'purpose') <> 'replay_validation')"
+            ),
+        ),
         Index(
             "ix_api_usage_rate_limited",
             "account_id",
