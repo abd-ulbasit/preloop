@@ -904,6 +904,56 @@ async def test_unread_actions_jobs_do_not_veto_a_confirmed_script_failure() -> N
     assert "details_unavailable" not in result.failures[2]
 
 
+@pytest.mark.asyncio
+async def test_stale_actions_read_still_blocks_beside_a_script_failure() -> None:
+    """One unreadable job vetoes the repair even when a sibling is code.
+
+    A confirmed script failure lets unread-over-budget jobs ride along. A
+    job whose detail read is missing or stale is different: it stays
+    unexplained, blocks the thread, and the deferred names are not appended.
+    """
+    from preloop.services.flow_feedback_provider import classify_checks
+
+    provider, _ = github_fixture()
+    checks = [
+        {
+            "id": index,
+            "name": f"job-{index}",
+            "head_sha": "head",
+            "app": {"slug": "github-actions"},
+            "conclusion": "failure",
+            "details_url": f"https://github.com/example/repo/actions/runs/1/job/{index}",
+        }
+        for index in range(1, 5)
+    ]
+
+    async def job(method: str, path: str, data: Any = None) -> dict[str, Any] | None:
+        del method, data
+        job_id = path.rsplit("/", 1)[-1]
+        if job_id != "1":
+            return {"head_sha": "stale", "steps": []}
+        return {
+            "head_sha": "head",
+            "check_run_url": "https://api.github.com/repos/example/repo/check-runs/1",
+            "steps": [
+                {"number": 1, "name": "Set up job", "conclusion": "success"},
+                {"number": 2, "name": "Run tests", "conclusion": "failure"},
+            ],
+        }
+
+    request = AsyncMock(side_effect=job)
+    enriched = await provider._github_job_details(
+        request, "/repositories/123", checks, "head", []
+    )
+    assert request.await_count == 2
+    unavailable = next(item for item in enriched if item["name"] == "job-2")
+    assert unavailable["details_unavailable"] is True
+    result = classify_checks(enriched, [])
+    assert result.blocked_reason == "ci_failure_unclassified"
+    assert [item["name"] for item in result.failures] == ["job-1"]
+    assert result.failures[0]["failure_reason"] == "script_failure"
+
+
 def test_deferred_actions_jobs_block_without_a_confirmed_script_failure() -> None:
     """Unread Actions jobs are not evidence for a repair on their own."""
     from preloop.services.flow_feedback_provider import classify_checks
