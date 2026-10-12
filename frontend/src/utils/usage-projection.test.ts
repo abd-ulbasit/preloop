@@ -187,6 +187,55 @@ describe('usage-projection', () => {
     }
   });
 
+  it('shapes this week by weekday from the window it asks for', () => {
+    // Tuesday evening: one prior week plus this one would be 8 days.
+    const tuesday = new Date('2026-10-13T20:00:00');
+    const request = usageSeriesRequest('this-week', tuesday)!;
+    const from = new Date(request.startDate);
+    const values = new Map<string, number>();
+    for (let t = from.getTime(); t < tuesday.getTime(); t += 86_400_000) {
+      const d = new Date(t);
+      values.set(d.toISOString().slice(0, 10), d.getUTCDay() % 6 ? 20 : 1);
+    }
+    const projection = buildUsageProjection({
+      range: 'this-week',
+      totalSoFar: 40,
+      values,
+      granularity: 'day',
+      now: tuesday,
+    })!;
+    expect(projection.status).to.equal('projected');
+    expect(projection.shape).to.equal('weekday');
+  });
+
+  it('keeps the hour-of-day shape on the real 7-day window with a quiet start', () => {
+    const now = new Date('2026-10-15T15:30:00Z');
+    const request = usageSeriesRequest('today', now)!;
+    const values = new Map<string, number>();
+    for (
+      let t = new Date(request.startDate).getTime();
+      t < now.getTime();
+      t += 3_600_000
+    ) {
+      const d = new Date(t);
+      const hour = d.getUTCHours();
+      // Nothing at night, so the first buckets with usage start hours late.
+      if (hour >= 9 && hour < 17) {
+        values.set(`${d.toISOString().slice(0, 13)}:00:00Z`, 10);
+      }
+    }
+    const projection = buildUsageProjection({
+      range: 'today',
+      totalSoFar: 60,
+      values,
+      granularity: 'hour',
+      now,
+    })!;
+    if (projection.status === 'projected') {
+      expect(projection.shape).to.equal('hour-of-day');
+    }
+  });
+
   it('asks for the prior period and caps today at 7 days of hours', () => {
     const month = usageSeriesRequest('this-month', now)!;
     expect(month.granularity).to.equal('day');

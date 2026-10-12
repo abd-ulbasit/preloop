@@ -122,12 +122,15 @@ export class UsageCard extends LitElement {
   @property({ type: Array }) policies: BudgetPolicy[] = [];
   @property({ type: Boolean }) loading = false;
   /**
-   * A range change is in flight and the card is showing the range before it.
+   * A range change is in flight and the data on hand belongs to the range
+   * before it.
    *
-   * Blanking the card on every range change threw away a true answer to ask
-   * for another one, and for the second or two in between the account looked
-   * like it had no usage at all. The numbers stay, dimmed, with a spinner in
-   * the header saying they are about to be replaced.
+   * Dimming the old numbers (#1598) went unnoticed, and they could sit under
+   * the new range's label. The label now names the new range at once; the
+   * headline, delta, secondary line and chart become skeletons (never a
+   * zero, so the account never looks idle); budgets, which do not depend on
+   * the range, only dim; and the range select shows a spinner in place of
+   * its chevron (#1610).
    */
   @property({ type: Boolean }) updating = false;
   @property({ type: String }) error: string | null = null;

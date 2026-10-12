@@ -30,8 +30,12 @@ export type ProjectionShape = 'weekday' | 'hour-of-day' | 'flat';
 
 /** Weekday and hour-of-day shapes need this much history to mean anything. */
 export const MIN_WEEKDAY_HISTORY_DAYS = 14;
-/** The hourly series is capped at 7 days, so that is all a shape can use. */
-export const MIN_HOURLY_HISTORY_DAYS = 7;
+/**
+ * The hourly series is capped at 7 days, and the span is measured from the
+ * first hour with usage, so a quiet first night must not cost the shape:
+ * six days of hours is plenty to know when the account is busy.
+ */
+export const MIN_HOURLY_HISTORY_DAYS = 6;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -89,7 +93,8 @@ export function usagePeriodBounds(
 /**
  * The one `/cost/timeseries` request the card makes for a range: the
  * current window plus, where a shape uses it, the history before it (the
- * prior period for a week or a month, the prior 7 days for today).
+ * prior month for a month, the prior two weeks for a week, the prior 7 days
+ * for today).
  */
 export function usageSeriesRequest(
   key: string,
@@ -108,8 +113,10 @@ export function usageSeriesRequest(
     // The server caps hourly windows at exactly 7 days.
     start = new Date(now.getTime() - 7 * DAY_MS);
   } else if (normalized === 'this-week') {
+    // Two prior weeks: the weekday shape needs 14 days, and one prior week
+    // plus a part-gone current one never reaches that.
     start = new Date(start.getTime());
-    start.setDate(start.getDate() - 7);
+    start.setDate(start.getDate() - 14);
   } else if (normalized === 'this-month') {
     start = new Date(start.getTime());
     start.setMonth(start.getMonth() - 1);
