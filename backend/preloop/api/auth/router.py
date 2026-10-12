@@ -21,7 +21,11 @@ from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutErro
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import bootstrap
-from preloop.api.auth.identity import login_membership, require_active_identity
+from preloop.api.auth.identity import (
+    login_membership,
+    require_active_identity,
+    require_session_profile_edit,
+)
 from preloop.api.auth.email_verification import (
     check_resend_rate_limit,
     enforce_verified_email,
@@ -1407,15 +1411,21 @@ def update_user_me(
 ) -> AuthUserResponse:
     """Update own user."""
     from preloop.models.crud import crud_person
-    from preloop.models.crud.person import IdentityConflictError
+    from preloop.models.crud.person import (
+        IdentityConflictError,
+        IdentityUnavailableError,
+    )
 
     changes = user_update.model_dump(exclude_unset=True)
+    require_session_profile_edit(current_user, changes)
     if any(changes.get(key) is None for key in ("username", "email") if key in changes):
         raise HTTPException(status_code=422, detail="Username and email cannot be null")
     try:
         crud_person.update_profile(db, membership_id=current_user.id, changes=changes)
     except IdentityConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IdentityUnavailableError as exc:
+        raise HTTPException(status_code=401, detail="Identity is unavailable") from exc
     return _build_auth_user_response(current_user, db)
 
 

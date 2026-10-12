@@ -48,7 +48,7 @@ class AdminUserCreate(UserBase):
 class AdminUserUpdate(BaseModel):
     """Schema for updating a user."""
 
-    model_config = ConfigDict(title="AdminUserUpdate", extra="forbid")
+    model_config = ConfigDict(title="AdminUserUpdate")
 
     username: Optional[str] = Field(None, min_length=3, max_length=50)
     email: Optional[EmailStr] = None
