@@ -226,6 +226,10 @@ with `preloop runner sessions enable`. Each session pairs with a
 `resolve_session_control_mode` puts in command mode. See
 [Remote sessions](docs/guide/runners/remote-sessions.md).
 
+Runner registration and heartbeats report `docker_available` from a five-second `docker ps` probe. Container leases require that capability, including explicitly pinned runners. The CRUD layer excludes paused runners from selection and slot claims; leasing rechecks scheduling preferences after locking the row. Capability tags are derived from the current daemon result and enabled, signed-in harness inventory alongside custom labels. `accept_untagged` defaults to false and `paused` defaults to false; console scheduling edits persist independently of the process's registration and heartbeat. Automatic routing uses hosted compute when no private runner accepts the job.
+
+Cursor remote sessions require host consent and the Preloop approval hooks. The host creates a chat with `cursor-agent create-chat` and uses `--resume` for each turn, with the same authorized workspace policy and process cancellation as Copilot sessions.
+
 Remote sessions on a personal runner (`docs/guide/runners/remote-sessions.md`)
 use a workspace policy that keeps paths on the host: the operator lists
 directories with `preloop runner dirs add` (stored in `~/.preloop/runner.json`,
@@ -584,6 +588,10 @@ replay deny. Legacy authentication and upstream grant introspection keep their
 existing behavior. Real concurrency regressions use independent transactions and
 private schemas in the isolated CI PostgreSQL database.
 
+Devin CLI host execution uses bounded ATIF exports for completion and stores the
+CLI-created session id before subsequent remote turns. Model inference stays on
+Cognition; managed MCP and permission hooks use Preloop.
+
 Optional deployments may register `analytics_detail_policy` to reduce derived
 gateway analytics after a monthly quota is exhausted. The post-response path
 keeps token/cost accounting, audit and session activity, marks affected rows
@@ -695,7 +703,9 @@ without a provider credential still require explicit email verification.
 Cloud's hosted-model capability adds the active built-in
 `qwen/deepseek-v4.1-flash-hosted` to the account model catalog and flow selectors.
 The model is read-only, and retired system rows remain available only for
-historical references. OSS deployments do not expose built-ins by default.
+historical references. The catalog lists built-ins first; their Default badge
+appears only when the system row is default and the account has no configured
+default of the same service kind. OSS deployments do not expose built-ins by default.
 Built-in detail usage is scoped to the requesting account; operator credentials
 and routing metadata are never included in the public catalog. Preset cloning
 prefers a usable account model and otherwise binds the built-in. Hosted allowance

@@ -34,6 +34,7 @@ var harnessVersionRe = regexp.MustCompile(`\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.]+)?`)
 
 // discoveryHarnessIDs maps `preloop agents discover` names to harness ids.
 var discoveryHarnessIDs = map[string]string{
+	"Devin":            "devin_cli",
 	"Copilot CLI":      "copilot_cli",
 	"Claude Code":      "claude_code",
 	"Codex CLI":        "codex_cli",
@@ -44,6 +45,7 @@ var discoveryHarnessIDs = map[string]string{
 }
 
 var harnessDisplayNames = map[string]string{
+	"devin_cli":      "Devin CLI",
 	"copilot_cli":    "GitHub Copilot CLI",
 	"cursor_cli":     "Cursor CLI",
 	"claude_code":    "Claude Code",
@@ -72,6 +74,7 @@ type harnessInventoryDeps struct {
 	Discover    func() []AgentConfig
 	Resolve     func(name string) (string, error)
 	Version     func(executable string) string
+	DevinStatus func(executable string) (string, []string)
 	CursorLogin func(executable string) string
 	Handwritten []hostExecProfile
 	// HandwrittenErr means the profile file exists but is invalid; no
@@ -169,6 +172,7 @@ func defaultHarnessInventoryDeps() harnessInventoryDeps {
 		},
 		Version:        probeHarnessVersion,
 		CursorLogin:    probeCursorLogin,
+		DevinStatus:    probeDevinStatus,
 		Handwritten:    handwritten,
 		HandwrittenErr: err != nil,
 		Harnesses:      harnesses,
@@ -372,6 +376,8 @@ func handwrittenHarnesses(profiles []hostExecProfile) (map[string]bool, map[stri
 
 func generatedProfileName(harness string) string {
 	switch harness {
+	case hostExecHarnessDevin:
+		return "devin"
 	case hostExecHarnessCopilot:
 		return "copilot"
 	case hostExecHarnessCursor:
@@ -410,6 +416,9 @@ func buildHarnessInventory(d harnessInventoryDeps) harnessInventory {
 	}
 
 	if entry, ok := buildCopilotEntry(d, discovered); ok {
+		entries[entry.Harness] = entry
+	}
+	if entry, ok := buildDevinEntry(d); ok {
 		entries[entry.Harness] = entry
 	}
 	if entry, ok := buildCursorEntry(d); ok {
@@ -542,8 +551,8 @@ func buildCursorEntry(d harnessInventoryDeps) (harnessInventoryEntry, bool) {
 		LoginState:   harnessLoginUnknown,
 		LoginSource:  "unknown",
 		Governance:   "unknown",
-		SupportLevel: harnessSupportFlowsOnly,
-		SessionMode:  "none",
+		SupportLevel: harnessSupportFlowsSessions,
+		SessionMode:  "resume",
 		Billing:      "seat",
 	}
 	if d.Version != nil {
@@ -616,6 +625,8 @@ func generatedHostExecProfiles(inv harnessInventory) []hostExecProfile {
 		}
 		executable := ""
 		switch entry.Harness {
+		case hostExecHarnessDevin:
+			executable = "devin"
 		case hostExecHarnessCopilot:
 			executable = "copilot"
 		case hostExecHarnessCursor:

@@ -76,6 +76,7 @@ def test_register_stores_the_advertisement_without_paths(
     assert body["capabilities"] == {
         "host_exec_profiles": PROFILES,
         "authorized_directories": DIRECTORIES,
+        "docker_available": False,
     }
     saved = crud_flow_runner.get(
         db_session, id=UUID(runner_id), account_id=str(test_user.account_id)
@@ -90,7 +91,10 @@ def test_register_without_the_field_advertises_no_directories(
 ) -> None:
     with _client(db_session, test_user) as client:
         runner_id, _token, body = _register(client, host_exec_profiles=PROFILES)
-        assert body["capabilities"] == {"host_exec_profiles": PROFILES}
+        assert body["capabilities"] == {
+            "host_exec_profiles": PROFILES,
+            "docker_available": False,
+        }
         # A current CLI registers directories, then an older CLI (or a
         # rollback) resumes the same runner without the field: the stale
         # list must not survive, because that process cannot host sessions.
@@ -114,7 +118,10 @@ def test_register_without_the_field_advertises_no_directories(
             },
         )
         assert response.status_code == 200, response.text
-        assert response.json()["capabilities"] == {"host_exec_profiles": PROFILES}
+        assert response.json()["capabilities"] == {
+            "host_exec_profiles": PROFILES,
+            "docker_available": False,
+        }
     db_session.expire_all()
     saved = crud_flow_runner.get(db_session, id=UUID(runner_id))
     assert "authorized_directories" not in saved.capabilities

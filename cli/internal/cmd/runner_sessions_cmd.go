@@ -31,6 +31,8 @@ Turn off any time: preloop runner sessions disable %[4]s
 
 var runnerSessionConsentNames = map[string][3]string{
 	hostExecHarnessCopilot: {"Copilot CLI", "GitHub Copilot\nCLI", "Copilot"},
+	hostExecHarnessCursor:  {"Cursor CLI", "Cursor CLI", "Cursor"},
+	hostExecHarnessDevin:   {"Devin CLI", "Devin CLI", "Devin"},
 }
 
 var runnerSessionsCmd = &cobra.Command{
@@ -76,6 +78,12 @@ func init() {
 // name as a convenience ("copilot").
 func runnerSessionHarnessArg(arg string) (string, error) {
 	harness := strings.ToLower(strings.TrimSpace(arg))
+	if harness == "devin" {
+		harness = hostExecHarnessDevin
+	}
+	if harness == "cursor" {
+		harness = hostExecHarnessCursor
+	}
 	if harness == "copilot" {
 		harness = hostExecHarnessCopilot
 	}

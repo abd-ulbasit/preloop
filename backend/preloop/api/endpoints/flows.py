@@ -115,6 +115,7 @@ from preloop.services.product_provenance import (
     validate_mapping_shape,
 )
 from preloop.services.runner_service import (
+    RunnerCapabilityError,
     derive_execution_runner,
     pool_from_session_reference,
     resolve_runner_pool,
@@ -380,7 +381,7 @@ def create_flow(
 
     try:
         validate_stored_model_routing(db, flow_in.agent_config, current_user.account_id)
-    except ModelRoutingError as exc:
+    except (ModelRoutingError, RunnerCapabilityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Delegation allowlist: every entry has to name a flow in this account.
@@ -2612,7 +2613,7 @@ async def trigger_flow_execution(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except TriageControllerError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except ModelRoutingError as exc:
+        except (ModelRoutingError, RunnerCapabilityError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except FlowHaltActiveError:
             raise _halted_response()
@@ -2631,7 +2632,7 @@ async def trigger_flow_execution(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except TriageControllerError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ModelRoutingError as exc:
+    except (ModelRoutingError, RunnerCapabilityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FlowHaltActiveError:
         raise _halted_response()
@@ -2706,7 +2707,7 @@ async def retry_flow_execution(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except TriageControllerError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ModelRoutingError as exc:
+    except (ModelRoutingError, RunnerCapabilityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FlowHaltActiveError:
         raise _halted_response()
@@ -2902,7 +2903,7 @@ def update_flow(
             validate_stored_model_routing(
                 db, flow_in.agent_config, current_user.account_id
             )
-        except ModelRoutingError as exc:
+        except (ModelRoutingError, RunnerCapabilityError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Only validate the allowlist when this write carries one: an update that
@@ -3302,7 +3303,7 @@ async def trigger_flow_via_webhook(
             test_mode=False,
             trigger_event_data=event_data,
         )
-    except ModelRoutingError as exc:
+    except (ModelRoutingError, RunnerCapabilityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FlowHaltActiveError:
         # The account kill switch halts new executions (#157): nothing was

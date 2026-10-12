@@ -2082,3 +2082,45 @@ async def test_flow_run_authorizer_denies_before_execution_creation(
         assert calls == [(context, "flow:run", flow)]
     finally:
         reset_account_hooks()
+
+
+@pytest.mark.asyncio
+async def test_container_trigger_is_refused_before_execution_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    flow_trigger_service: FlowTriggerService,
+    sample_flow: MagicMock,
+) -> None:
+    from types import SimpleNamespace
+
+    from preloop.models.crud.flow_runner import crud_flow_runner
+    from preloop.services.runner_service import RunnerCapabilityError
+
+    sample_flow.runner_pool = "workstation"
+    sample_flow.agent_type = "codex"
+    sample_flow.agent_config = {}
+    monkeypatch.setattr(
+        "preloop.services.flow_trigger_service.crud_flow.get",
+        lambda *args, **kwargs: sample_flow,
+    )
+    monkeypatch.setattr(
+        "preloop.services.flow_trigger_service.flows_halted", lambda *args: False
+    )
+    monkeypatch.setattr(
+        "preloop.services.flow_trigger_service.prepare_execution_routing",
+        lambda db, flow, details, **kwargs: details,
+    )
+    monkeypatch.setattr(flow_trigger_service, "_authorize_flow_run", AsyncMock())
+    monkeypatch.setattr(
+        crud_flow_runner,
+        "find_matching",
+        lambda *args, **kwargs: [
+            SimpleNamespace(capabilities={"docker_available": False})
+        ],
+    )
+    create = MagicMock()
+    monkeypatch.setattr(
+        "preloop.services.flow_trigger_service.crud_flow_execution.create", create
+    )
+    with pytest.raises(RunnerCapabilityError, match="working Docker daemon"):
+        await flow_trigger_service.trigger_flow(sample_flow.id)
+    create.assert_not_called()

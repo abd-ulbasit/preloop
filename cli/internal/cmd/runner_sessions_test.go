@@ -663,8 +663,8 @@ func TestRunnerSessionsEnableCommand(t *testing.T) {
 	if _, ok := doc["authorized_directories"]; !ok {
 		t.Fatalf("enable must keep other keys")
 	}
-	if _, err := runnerSessionHarnessArg("cursor_cli"); err == nil {
-		t.Fatalf("cursor sessions are not in this version")
+	if harness, err := runnerSessionHarnessArg("cursor_cli"); err != nil || harness != hostExecHarnessCursor {
+		t.Fatalf("cursor sessions should be supported: %v", err)
 	}
 }
 

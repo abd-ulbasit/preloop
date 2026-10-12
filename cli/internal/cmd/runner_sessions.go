@@ -77,6 +77,8 @@ const (
 // for in this version, with the name shown in the host notice.
 var runnerSessionHarnesses = map[string]string{
 	hostExecHarnessCopilot: "GitHub Copilot CLI",
+	hostExecHarnessCursor:  "Cursor CLI",
+	hostExecHarnessDevin:   "Devin CLI",
 }
 
 // runnerSessionActor is who started the session, as the server names them.
@@ -477,7 +479,7 @@ func newRunnerSessionManager(out io.Writer) *runnerSessionManager {
 	m := &runnerSessionManager{
 		sessions:   map[string]*runnerRemoteSession{},
 		notify:     make(chan struct{}, 1),
-		adapters:   map[string]sessionHarnessAdapter{hostExecHarnessCopilot: newCopilotSessionAdapter()},
+		adapters:   map[string]sessionHarnessAdapter{hostExecHarnessCopilot: newCopilotSessionAdapter(), hostExecHarnessCursor: &cursorSessionAdapter{}, hostExecHarnessDevin: &devinSessionAdapter{}},
 		now:        time.Now,
 		stateDir:   dir,
 		loadConfig: loadRunnerConfigDoc,
@@ -992,6 +994,9 @@ func (m *runnerSessionManager) finishTurn(sessionID, turnID string, result runne
 	session.current = nil
 	session.ActiveTurnID = ""
 	session.LastActivityAt = m.now()
+	if result.HarnessSessionID != "" {
+		session.HarnessSessionID = result.HarnessSessionID
+	}
 	if result.SessionCreated {
 		session.SessionCreated = true
 	}

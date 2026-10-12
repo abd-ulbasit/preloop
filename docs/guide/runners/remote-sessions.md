@@ -7,19 +7,43 @@ owner or an account admin) start from Preloop. The session runs on the runner's
 machine, as the user the runner runs as, with that user's own installed agent
 CLI and its own login. Preloop never sees or stores the agent's credentials.
 
-In 0.17.0 the runner hosts **GitHub Copilot CLI** sessions. Claude Code and
+The runner hosts **GitHub Copilot CLI**, **Cursor CLI**, and **Devin CLI** sessions. Claude Code and
 Codex keep their existing Agent Control sidecars
-(`preloop agents install-plugin`). More runner-hosted harnesses follow in
-0.18.0.
+(`preloop agents install-plugin`).
 
 ## How a session works
 
 | Harness | Mode | How a turn runs | Verified |
 |---|---|---|---|
 | `copilot_cli` | resume | One `copilot -p` process per turn. Turn 1 creates the session with `--session-id=<uuid>`; every later turn continues it with `--resume=<uuid>`. | Copilot CLI 1.0.95: resume mode, verified 2026-10-11 |
+| `cursor_cli` | resume | The host runs `cursor-agent create-chat`, then `cursor-agent --print --output-format stream-json --resume <chat-id>` for each turn. | Adapter tests with a fake CLI; live session behavior unverified |
+
+| `devin_cli` | resume | One `devin -p --export <file>` process per turn. The first ATIF export supplies the session id; subsequent turns use `--resume <id>`. | Devin CLI 3000.11.3 command reference and fake CLI tests; live model turns unverified |
+
+Devin requires the `PreToolUse` and `PermissionRequest` Preloop hooks. Its user MCP config is `~/.config/devin/mcp_config.json` (or `$XDG_CONFIG_HOME/devin/mcp_config.json`; `%APPDATA%/devin/mcp_config.json` on Windows). Existing commented config files are supported. Enable sessions with:
+
+```bash
+preloop agents onboard Devin --approvals
+preloop runner sessions enable devin_cli
+preloop runner dirs add /path/to/project --harness devin_cli
+```
+
+Devin native flows use the generated `devin` profile or a local named profile whose executable is `devin`. The inventory probes `devin auth status` and `devin models list --format json`, retaining only login state and model ids. Optional `agent_config.devin_model` must be mapped by that profile. Model calls use Cognition directly and are not metered by Preloop. Devin profiles do not accept arbitrary CLI flags, tool grants, managed PR publication, or flow continuation; remote sessions support native resume. Install Devin 3000.3 or later for the dedicated MCP config layout.
+
+Cursor sessions also require the host's `preToolUse`, `beforeShellExecution` and `beforeMCPExecution` Preloop hooks. Enable them explicitly:
+
+```bash
+preloop agents onboard Cursor --approvals
+preloop runner sessions enable cursor_cli
+preloop runner dirs add /path/to/project --harness cursor_cli
+```
+
+Choose **New session** on the runner in the console, then **Cursor CLI**. A paused runner refuses new sessions. Native sessions do not require Docker.
 
 - One turn runs at a time. A second turn sent while one is running is refused
   with `turn_in_progress`.
+The following tool-grant and environment details describe Copilot sessions.
+
 - The session uuid is minted by the runner, never by the server, so a session
   can only ever continue a conversation it created.
 - Every run passes `--no-remote`, so GitHub's own remote control cannot steer

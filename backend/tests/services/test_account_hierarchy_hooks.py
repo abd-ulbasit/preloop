@@ -589,8 +589,18 @@ def test_h4_runner_accept_skips_a_denied_runner(
         "preloop.models.crud.crud_flow_execution.admit_runtime_start",
         lambda *args, **kwargs: True,
     )
-    denied = SimpleNamespace(id=uuid.uuid4(), status="online", free_slots=1)
-    accepted = SimpleNamespace(id=uuid.uuid4(), status="online", free_slots=1)
+    denied = SimpleNamespace(
+        id=uuid.uuid4(),
+        status="online",
+        free_slots=1,
+        capabilities={"docker_available": True},
+    )
+    accepted = SimpleNamespace(
+        id=uuid.uuid4(),
+        status="online",
+        free_slots=1,
+        capabilities={"docker_available": True},
+    )
     claimed: list[Any] = []
     monkeypatch.setattr(
         crud_flow_runner, "find_matching", lambda db, **kwargs: [denied, accepted]
