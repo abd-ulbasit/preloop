@@ -707,7 +707,10 @@ A profile read carries `person_id` separately from `id` (the current account
 membership) and `account_id`. Names, email verification and avatars come from the
 canonical Person. Self profile and avatar edits update that Person from either
 membership; an email change follows the canonical verification/conflict contract
-and revokes every session. Tenant membership administration changes account
+and revokes every session. Username and recovery-email edits require an
+authenticated login session; API keys may edit display names but cannot change
+those identifiers through either OSS or EE profile routes. An unavailable
+canonical self profile returns 401. Tenant membership administration changes account
 access, not another person's profile or credentials.
 
 The core identity directory searches canonical fields inside one account for

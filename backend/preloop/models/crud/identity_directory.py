@@ -65,7 +65,13 @@ class IdentityDirectory:
         skip: int = 0,
         limit: int = 100,
     ) -> tuple[list[models.User], int]:
-        """Search canonical profiles, returning only the named account's rows."""
+        """Search canonical profiles, returning account-scoped membership actors.
+
+        These ORM rows retain legacy usernames and membership IDs for CRUD,
+        roles and audit compatibility. Display callers must project canonical
+        fields with ``projections_for_memberships``; they must not serialize
+        membership profile caches as the human's identity.
+        """
         query = (
             db.query(models.User)
             .join(models.Person, models.Person.id == models.User.person_id)

@@ -77,6 +77,14 @@ def test_account_search_uses_identity_without_sibling_rows(db_session: Session) 
     )
     assert total == 1 and [row.id for row in found] == [child.id]
     assert child.username != parent.person.username
+    profiles, _ = identity_directory.projections_for_memberships(
+        db_session, membership_ids=[row.id for row in found]
+    )
+    assert set(profiles) == {child.id}
+    assert profiles[child.id].person_id == parent.person_id
+    assert profiles[child.id].username == parent.person.username
+    # The display projection never changes the original membership actor.
+    assert found[0] is child and child.username != profiles[child.id].username
     assert (
         identity_directory.account_members(
             db_session, account_id=child.account_id, search=child.username

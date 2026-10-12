@@ -290,7 +290,14 @@ def _build_auth_user_response(user: UserModel, db: Session) -> AuthUserResponse:
     """Build the profile payload returned by the ``/users/me`` endpoints."""
     from preloop.models.crud import crud_person
 
-    profile = crud_person.profile_for_membership(db, membership_id=user.id)
+    try:
+        profile = crud_person.profile_for_membership(db, membership_id=user.id)
+    except IdentityUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Identity is unavailable",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
     return AuthUserResponse(
         id=user.id,
         person_id=profile.person_id,
