@@ -18,6 +18,14 @@ import type { BudgetPolicy } from '../api';
 import type { AccountGatewayUsageSummaryResponse } from '../types';
 import { budgetTrackStyles, renderBudgetTrack } from '../styles/budget-track';
 import {
+  isCalendarTimeRange,
+  normalizeTimeRangeKey,
+  timeRangeComparisonLabel,
+  timeRangeShortLabel,
+  type TimeRangeKey,
+} from '../utils/time-range';
+import type { TimeRangeOption } from './time-range-select';
+import {
   budgetPeriodLabel,
   budgetForecastStyles,
   renderBudgetForecast,
@@ -25,7 +33,40 @@ import {
 
 export type UsageUnit = 'tokens' | 'dollars';
 
+let sparklineClipSeq = 0;
+
 export const USAGE_UNIT_STORAGE_KEY = 'overview_usage_unit';
+export const USAGE_RANGE_STORAGE_KEY = 'overview_usage_range';
+
+/**
+ * The Usage card's ranges: calendar-to-date first, so "This month" can line
+ * up with the monthly budget row, then the rolling windows.
+ */
+export const USAGE_RANGE_OPTIONS: TimeRangeOption[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'this-week', label: 'This week' },
+  { value: 'this-month', label: 'This month' },
+  { value: 'this-year', label: 'This year' },
+  { value: 'last-24h', label: '24h', dividerBefore: true },
+  { value: 'last-7', label: '7d' },
+  { value: 'last-30', label: '30d' },
+  { value: 'last-365', label: '1y' },
+];
+
+const USAGE_RANGE_KEYS = USAGE_RANGE_OPTIONS.map((option) => option.value);
+
+/** The range saved by the last visit, or 30d when none is saved or valid. */
+export function readStoredUsageRange(): TimeRangeKey {
+  try {
+    const stored = normalizeTimeRangeKey(
+      localStorage.getItem(USAGE_RANGE_STORAGE_KEY)
+    );
+    if (stored && USAGE_RANGE_KEYS.includes(stored)) return stored;
+  } catch {
+    // Storage unavailable: fall through to the default.
+  }
+  return 'last-30';
+}
 
 /** How long a wait has to be before the card explains it. */
 const LONG_RANGE_HINT_MS = 2000;
@@ -76,8 +117,8 @@ export class UsageCard extends LitElement {
    */
   @property({ type: Boolean }) updating = false;
   @property({ type: String }) error: string | null = null;
-  /** 'day' | 'week' | 'month' | 'year', shared with the rest of the page. */
-  @property({ type: String }) timeRange = 'month';
+  /** A `TimeRangeKey` (any spelling `utils/time-range` reads), shared with the page. */
+  @property({ type: String }) timeRange: string = 'last-30';
   @property({ type: Number }) toolCallsCount = 0;
 
   @state() private unit: UsageUnit = 'tokens';
@@ -129,6 +170,8 @@ export class UsageCard extends LitElement {
         align-items: center;
         display: flex;
         gap: var(--sl-spacing-small);
+        /* Wide enough for "This month", the longest range label. */
+        --time-range-select-width: 136px;
       }
 
       .title {
@@ -231,31 +274,32 @@ export class UsageCard extends LitElement {
         height: 40px;
       }
 
-      /* One deliberate motion on the Overview: the trend line draws itself
-         once, on the paint that first has data. Nothing loops, nothing
-         pulses. Under prefers-reduced-motion the line is simply there. */
+      /* One deliberate motion on the Overview: the trend reveals itself
+         once, left to right, on the paint that first has data. A clip
+         rectangle grows across the chart and uncovers the line and the area
+         together, so they always end at the same x. Nothing loops, nothing
+         pulses. Under prefers-reduced-motion the chart is simply there.
+
+         The reveal used to be a stroke-dasharray draw on the line alone.
+         With pathLength="1", vector-effect="non-scaling-stroke" and
+         preserveAspectRatio="none" the dash was measured in screen pixels,
+         so the finished line showed gaps while the area ran to the end. */
+      .sparkline-reveal {
+        transform-origin: 0 0;
+      }
+
       @media (prefers-reduced-motion: no-preference) {
-        .sparkline-line {
-          animation: sparkline-draw 300ms ease-out forwards;
-          stroke-dasharray: 1;
-          stroke-dashoffset: 1;
-        }
-
-        .sparkline-area {
-          animation: sparkline-fade 300ms ease-out forwards;
-          opacity: 0;
+        .sparkline-reveal {
+          animation: sparkline-reveal 300ms ease-out both;
         }
       }
 
-      @keyframes sparkline-draw {
-        to {
-          stroke-dashoffset: 0;
+      @keyframes sparkline-reveal {
+        from {
+          transform: scaleX(0);
         }
-      }
-
-      @keyframes sparkline-fade {
         to {
-          opacity: 0.12;
+          transform: scaleX(1);
         }
       }
 
@@ -346,7 +390,8 @@ export class UsageCard extends LitElement {
     }
     // Only a year: the shorter ranges are back before anybody would read a
     // sentence about them, and saying it there would be noise.
-    if (this.updating && this.timeRange === 'year') {
+    const key = normalizeTimeRangeKey(this.timeRange);
+    if (this.updating && (key === 'last-365' || key === 'this-year')) {
       if (this.longRangeTimer === null && !this.longRangeHint) {
         this.longRangeTimer = window.setTimeout(() => {
           this.longRangeTimer = null;
@@ -398,10 +443,14 @@ export class UsageCard extends LitElement {
   }
 
   private get rangeLabel(): string {
-    if (this.timeRange === 'day') return '24h';
-    if (this.timeRange === 'week') return '7d';
-    if (this.timeRange === 'year') return '1y';
-    return '30d';
+    return timeRangeShortLabel(this.timeRange);
+  }
+
+  /** "over the last 30d" for a rolling key, "this month" for a calendar key. */
+  private get rangeSpan(): string {
+    return isCalendarTimeRange(this.timeRange)
+      ? this.rangeLabel
+      : `over the last ${this.rangeLabel}`;
   }
 
   private setUnit(unit: UsageUnit): void {
@@ -539,12 +588,13 @@ export class UsageCard extends LitElement {
     const rounded = Math.round(change);
     if (rounded === 0) {
       return html`<div class="delta">
-        No change vs prior ${this.rangeLabel}
+        No change vs ${timeRangeComparisonLabel(this.timeRange)}
       </div>`;
     }
     const arrow = rounded > 0 ? '▲' : '▼';
     return html`<div class="delta">
-      ${arrow} ${Math.abs(rounded)}% vs prior ${this.rangeLabel}
+      ${arrow} ${Math.abs(rounded)}% vs
+      ${timeRangeComparisonLabel(this.timeRange)}
     </div>`;
   }
 
@@ -576,6 +626,9 @@ export class UsageCard extends LitElement {
       }${parts.join(' · ')}
     </div>`;
   }
+
+  /** Unique per card: the clip path id lives in this card's shadow root. */
+  private readonly sparklineClipId = `usage-sparkline-clip-${++sparklineClipSeq}`;
 
   /** Inline SVG: a trend line is worth more here than a charting library. */
   private renderSparkline() {
@@ -609,25 +662,39 @@ export class UsageCard extends LitElement {
         role="img"
         aria-label=${
           this.unit === 'dollars'
-            ? `Estimated spend per day over the last ${this.rangeLabel}`
-            : `Tokens per day over the last ${this.rangeLabel}`
+            ? `Estimated spend per day ${this.rangeSpan}`
+            : `Tokens per day ${this.rangeSpan}`
         }
       >
-        <polygon
-          class="sparkline-area"
-          points=${areaPoints}
-          fill="var(--sl-color-primary-500)"
-          opacity="0.12"
-        ></polygon>
-        <polyline
-          class="sparkline-line"
-          points=${points.join(' ')}
-          pathLength="1"
-          fill="none"
-          stroke="var(--sl-color-primary-500)"
-          stroke-width="1.5"
-          vector-effect="non-scaling-stroke"
-        ></polyline>
+        <defs>
+          <clipPath id=${this.sparklineClipId}>
+            <!-- A little taller than the viewBox so the stroke is never
+                 clipped at the top or bottom edge. -->
+            <rect
+              class="sparkline-reveal"
+              x="0"
+              y="-4"
+              width=${width}
+              height=${height + 8}
+            ></rect>
+          </clipPath>
+        </defs>
+        <g class="sparkline-shapes" clip-path="url(#${this.sparklineClipId})">
+          <polygon
+            class="sparkline-area"
+            points=${areaPoints}
+            fill="var(--sl-color-primary-500)"
+            opacity="0.12"
+          ></polygon>
+          <polyline
+            class="sparkline-line"
+            points=${points.join(' ')}
+            fill="none"
+            stroke="var(--sl-color-primary-500)"
+            stroke-width="1.5"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </g>
       </svg>
     `;
   }
@@ -804,13 +871,8 @@ export class UsageCard extends LitElement {
             ${this.renderUnitToggle()}
             <time-range-select
               ariaLabel="Usage time range"
-              .value=${this.timeRange}
-              .options=${[
-                { value: 'day', label: '24h' },
-                { value: 'week', label: '7d' },
-                { value: 'month', label: '30d' },
-                { value: 'year', label: '1y' },
-              ]}
+              .value=${normalizeTimeRangeKey(this.timeRange) ?? 'last-30'}
+              .options=${USAGE_RANGE_OPTIONS}
               @range-change=${this.handleRangeChange}
             ></time-range-select>
           </div>

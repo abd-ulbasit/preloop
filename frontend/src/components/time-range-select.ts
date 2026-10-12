@@ -1,12 +1,15 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 
 import '@shoelace-style/shoelace/dist/components/select/select.js';
+import '@shoelace-style/shoelace/dist/components/divider/divider.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 
 export interface TimeRangeOption {
   value: string;
   label: string;
+  /** Draw a divider above this option, to separate groups of ranges. */
+  dividerBefore?: boolean;
 }
 
 /**
@@ -85,7 +88,9 @@ export class TimeRangeSelect extends LitElement {
       >
         ${this.options.map(
           (option) =>
-            html`<sl-option value=${option.value}>${option.label}</sl-option>`
+            html`${
+                option.dividerBefore ? html`<sl-divider></sl-divider>` : nothing
+              }<sl-option value=${option.value}>${option.label}</sl-option>`
         )}
       </sl-select>
     `;

@@ -1,7 +1,12 @@
 import { expect, fixture, html, oneEvent } from '@open-wc/testing';
 import sinon from 'sinon';
 import './usage-card.ts';
-import { USAGE_UNIT_STORAGE_KEY } from './usage-card';
+import {
+  USAGE_RANGE_OPTIONS,
+  USAGE_RANGE_STORAGE_KEY,
+  USAGE_UNIT_STORAGE_KEY,
+  readStoredUsageRange,
+} from './usage-card';
 import type { UsageCard } from './usage-card';
 import type { BudgetPolicy } from '../api';
 import type { AccountGatewayUsageSummaryResponse } from '../types';
@@ -159,6 +164,72 @@ describe('usage-card', () => {
     expect(
       sparkline!.querySelector('polyline')!.getAttribute('points')!.split(' ')
     ).to.have.lengthOf(7);
+  });
+
+  it('draws the line and the area from the same points, revealed by one clip', async () => {
+    const element = await renderCard({
+      summary: summaryFixture({ requests_by_day: daysFixture(30) }),
+    });
+    const svg = element.shadowRoot!.querySelector('.sparkline')!;
+    const line = svg.querySelector('polyline')!;
+    const area = svg.querySelector('polygon')!;
+    const linePoints = line.getAttribute('points')!.split(' ');
+    const areaPoints = area.getAttribute('points')!.split(' ');
+    // The area is the line plus the two baseline corners that close it.
+    expect(areaPoints.slice(1, -1)).to.deep.equal(linePoints);
+
+    // No dash arithmetic left to go wrong under the non-uniform stretch.
+    expect(line.hasAttribute('pathLength')).to.be.false;
+    expect(line.hasAttribute('stroke-dasharray')).to.be.false;
+    expect(getComputedStyle(line).strokeDasharray).to.equal('none');
+
+    // Both shapes sit under the same clip, so they always end at the same x.
+    const group = line.parentElement!;
+    expect(area.parentElement).to.equal(group);
+    const clipRef = group.getAttribute('clip-path')!;
+    const clipId = clipRef.match(/url\(#(.+)\)/)![1];
+    const clip = element.shadowRoot!.getElementById(clipId)!;
+    expect(clip.tagName.toLowerCase()).to.equal('clippath');
+    expect(clip.querySelector('rect')!.getAttribute('width')).to.equal('100');
+  });
+
+  it('offers calendar ranges, then rolling ranges, split by a divider', async () => {
+    expect(USAGE_RANGE_OPTIONS.map((option) => option.label)).to.deep.equal([
+      'Today',
+      'This week',
+      'This month',
+      'This year',
+      '24h',
+      '7d',
+      '30d',
+      '1y',
+    ]);
+    expect(
+      USAGE_RANGE_OPTIONS.filter((option) => option.dividerBefore).map(
+        (option) => option.value
+      )
+    ).to.deep.equal(['last-24h']);
+
+    const element = await renderCard({ timeRange: 'this-month' });
+    const select = element.shadowRoot!.querySelector('time-range-select')!;
+    await select.updateComplete;
+    expect(select.shadowRoot!.querySelectorAll('sl-option')).to.have.lengthOf(
+      8
+    );
+    expect(select.shadowRoot!.querySelectorAll('sl-divider')).to.have.lengthOf(
+      1
+    );
+    expect(select.value).to.equal('this-month');
+    expect(text(element, '.primary-label')).to.contain('this month');
+  });
+
+  it('reads the saved range back, and ignores one it does not offer', () => {
+    localStorage.setItem(USAGE_RANGE_STORAGE_KEY, 'this-year');
+    expect(readStoredUsageRange()).to.equal('this-year');
+    localStorage.setItem(USAGE_RANGE_STORAGE_KEY, 'all');
+    expect(readStoredUsageRange()).to.equal('last-30');
+    localStorage.removeItem(USAGE_RANGE_STORAGE_KEY);
+    expect(readStoredUsageRange()).to.equal('last-30');
   });
 
   it('shows a budget row per global policy with the spend meter', async () => {
@@ -484,6 +555,33 @@ describe('usage-card', () => {
 
       // 584.3M against 500M is up 17%.
       expect(text(element, '.delta')).to.equal('▲ 17% vs prior 30d');
+    });
+
+    it('names the comparison in calendar terms for calendar ranges', async () => {
+      const prior = summaryFixture({
+        token_usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 500000000,
+        },
+      });
+      const month = await renderCard({
+        timeRange: 'this-month',
+        priorSummary: prior,
+        summary: summaryFixture({ requests_by_day: daysFixture(7) }),
+      });
+      expect(text(month, '.delta')).to.equal('▲ 17% vs prior month');
+      expect(
+        month
+          .shadowRoot!.querySelector('.sparkline')!
+          .getAttribute('aria-label')
+      ).to.equal('Tokens per day this month');
+
+      const today = await renderCard({
+        timeRange: 'today',
+        priorSummary: prior,
+      });
+      expect(text(today, '.delta')).to.equal('▲ 17% vs same hours yesterday');
     });
 
     it('points down when usage falls, and stays colour-free either way', async () => {
