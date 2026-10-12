@@ -3659,6 +3659,41 @@ async def summarize_account_runtime_session_gateway_event(
     )
 
 
+def _stop_runner_session_on_end(
+    db: Session, *, account_id: str, session: Any, actor_user_id: Any
+) -> None:
+    """Ask the runner to stop a runner-hosted session the operator ended (#1483).
+
+    Ending the runtime session only stamps ``ended_at`` and revokes its keys;
+    the harness on the runner would keep going. ``request_stop`` is idempotent,
+    a no-op for a session that is no longer live, and writes the
+    ``runner_session.stop_requested`` audit row once.
+
+    Args:
+        db: The request's database session.
+        account_id: The caller's account; the runner session must belong to it.
+        session: The ``RuntimeSession`` row that was just ended.
+        actor_user_id: The user who ended it, for the audit row.
+    """
+    from preloop.models.crud import crud_runner_remote_session
+    from preloop.services import runner_sessions
+
+    if session.session_source_type != runner_sessions.RUNNER_SESSION_SOURCE_TYPE:
+        return
+    row = crud_runner_remote_session.get_by_runtime_session(
+        db, account_id=account_id, runtime_session_id=session.id
+    )
+    if row is None or not row.is_live:
+        return
+    runner_sessions.request_stop(
+        db,
+        row,
+        actor_user_id=actor_user_id,
+        mode="graceful",
+        reason="ended_by_operator",
+    )
+
+
 @router.patch(
     "/runtime-sessions/{runtime_session_id}",
     response_model=RuntimeSessionSummary,
@@ -3710,6 +3745,13 @@ async def update_account_runtime_session(
     )
     emit_session_ended(db, updated, reason="operator")
     db.commit()
+
+    _stop_runner_session_on_end(
+        db,
+        account_id=str(account.id),
+        session=updated,
+        actor_user_id=current_user.id,
+    )
 
     crud_api_key.deactivate_runtime_keys_for_session(
         db,
