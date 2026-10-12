@@ -1338,6 +1338,67 @@ def test_get_resolution_suggestion_prompt_not_configured(mocker: MockerFixture) 
 
 
 @patch("preloop.api.endpoints.issue_duplicates.openai.OpenAI")
+@patch("preloop.api.endpoints.issue_duplicates.resolve_model_call_credentials")
+@patch("preloop.api.endpoints.issue_duplicates.load_duplicates_prompts_config")
+@patch("preloop.api.endpoints.issue_duplicates.crud_ai_model.get_default_active_model")
+@patch("preloop.api.endpoints.issue_duplicates.crud_issue.get")
+@patch("preloop.api.endpoints.issue_duplicates.crud_issue_duplicate.get_by_issue_ids")
+def test_check_issue_duplicate_calls_the_models_own_endpoint(
+    mock_get_by_issue_ids: MagicMock,
+    mock_crud_issue_get: MagicMock,
+    mock_get_default_model: MagicMock,
+    mock_load_prompts: MagicMock,
+    mock_resolve_creds: MagicMock,
+    mock_openai_class: MagicMock,
+) -> None:
+    """A default model served off OpenAI is called at its endpoint (#1588)."""
+    mock_get_by_issue_ids.return_value = None
+    mock_crud_issue_get.side_effect = [
+        MagicMock(id=uuid4(), title="Issue 1", description="Desc"),
+        MagicMock(id=uuid4(), title="Issue 2", description="Desc"),
+    ]
+    model = MagicMock(id=uuid4(), model_identifier="openrouter/model")
+    mock_get_default_model.return_value = model
+    mock_resolve_creds.return_value = {
+        "api_key": "router-key",
+        "api_base": "https://openrouter.ai/api/v1",
+    }
+    mock_load_prompts.return_value = {
+        "duplicate_classification_v1": {
+            "system": "Classify duplicates.",
+            "user": "{issue1_id} {issue1_title} {issue1_description} "
+            "{issue2_id} {issue2_title} {issue2_description}",
+        }
+    }
+    client = MagicMock()
+    mock_openai_class.return_value = client
+    client.chat.completions.create.return_value = MagicMock(
+        choices=[
+            MagicMock(message=MagicMock(content='{"classification": "UNRELATED"}'))
+        ]
+    )
+
+    with (
+        patch(
+            "preloop.api.endpoints.issue_duplicates.get_aux_openai_sdk_extra_kwargs",
+            return_value={},
+        ),
+        patch("preloop.api.endpoints.issue_duplicates.crud_issue_duplicate.create"),
+    ):
+        check_or_create_issue_duplicate(
+            db=MagicMock(),
+            issue1_id=str(uuid4()),
+            issue2_id=str(uuid4()),
+            current_user=MagicMock(account_id=uuid4()),
+            settings=MagicMock(),
+        )
+
+    kwargs = mock_openai_class.call_args.kwargs
+    assert kwargs["api_key"] == "router-key"
+    assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
+
+
+@patch("preloop.api.endpoints.issue_duplicates.openai.OpenAI")
 @patch("preloop.api.endpoints.issue_duplicates.load_duplicates_prompts_config")
 @patch("preloop.api.endpoints.issue_duplicates.crud_ai_model.get_default_active_model")
 @patch("preloop.api.endpoints.issue_duplicates.crud_issue.get")

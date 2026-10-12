@@ -214,6 +214,16 @@ export class PreloopSessionObserver extends LitElement {
   @property({ type: Boolean })
   hideListSearch = false;
 
+  /**
+   * Open the first session when the list arrives. The Sessions page is a
+   * list with its detail, so it does. A page where the sessions are one
+   * card among others (the model detail page) turns it off: opening one
+   * there read a whole session's replay nobody asked for and made the page
+   * many screens tall (#1586).
+   */
+  @property({ type: Boolean })
+  autoSelect = true;
+
   @property({ type: String })
   layout: 'full' | 'embedded' = 'embedded';
 
@@ -1127,7 +1137,9 @@ export class PreloopSessionObserver extends LitElement {
       requested &&
       this.observedSessions.some((session) => session.id === requested)
         ? requested
-        : this.observedSessions[0]?.id || null;
+        : this.autoSelect
+          ? this.observedSessions[0]?.id || null
+          : null;
     if (nextActive && nextActive !== this.activeSessionId) {
       // Stagger heavy event/activity loads so the session list can paint first.
       requestAnimationFrame(() => {

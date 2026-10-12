@@ -1785,6 +1785,22 @@ def get_flow_execution_workspace(
     )
 
 
+def _log_payload(
+    metadata: Dict[str, Any] | None, message: str | None
+) -> Dict[str, Any]:
+    """A persisted log row as the console reads it.
+
+    A container line is stored with its text both as the row message and as
+    ``line`` in the metadata. Sending both doubled every log line on the
+    wire, so ``line`` is dropped when it repeats the message: readers take
+    ``message`` when ``line`` is absent.
+    """
+    payload = {**(metadata or {}), "message": message}
+    if "line" in payload and payload["line"] == message:
+        del payload["line"]
+    return payload
+
+
 @router.get("/flows/executions/{execution_id}/logs")
 @require_permission("view_flows")
 async def get_flow_execution_logs(
@@ -1795,6 +1811,7 @@ async def get_flow_execution_logs(
     tail: int | None = None,
     skip: int = 0,
     limit: int | None = None,
+    exclude_model_calls: bool = False,
 ) -> Dict[str, Any]:
     """Get execution logs from the live container or from persisted database rows.
 
@@ -1810,6 +1827,9 @@ async def get_flow_execution_logs(
         tail: Number of recent log lines to retrieve, or None for all logs
         skip: Number of logs to skip (for pagination)
         limit: Number of logs to return (for pagination)
+        exclude_model_calls: Leave out ``model_gateway_call`` rows. The
+            console reads those from the gateway-events endpoint and shows
+            them as cards; here each one is a large payload it already has.
 
     Returns:
         Dictionary with:
@@ -1918,6 +1938,9 @@ async def get_flow_execution_logs(
         desc=tail is not None,  # If tail is used, query descending
         skip=skip,
         limit=query_limit if tail is None else None,
+        exclude_log_types=[MODEL_GATEWAY_CALL_LOG_TYPE]
+        if exclude_model_calls
+        else None,
     )
 
     has_more = False
@@ -1938,7 +1961,7 @@ async def get_flow_execution_logs(
                 "execution_id": str(row.execution_id),
                 "timestamp": row.timestamp.isoformat() if row.timestamp else None,
                 "type": row.log_type or "log",
-                "payload": {**(row.metadata_ or {}), "message": row.message},
+                "payload": _log_payload(row.metadata_, row.message),
             }
             for row in log_rows
         ]
@@ -2050,6 +2073,12 @@ def get_flow_execution_gateway_events(
             payload.pop("tools", None)
             payload.pop("result", None)
             payload.pop("stream_events", None)
+            # The sanitized request and response bodies and the tool
+            # activity are the bulk of a model call row. The timeline card
+            # reads none of them; opening a call fetches the full row.
+            payload.pop("request", None)
+            payload.pop("response", None)
+            payload.pop("tool_activity", None)
         else:
             payload = {**payload, "message": row.message}
 

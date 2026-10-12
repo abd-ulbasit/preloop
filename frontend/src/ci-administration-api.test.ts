@@ -24,6 +24,18 @@ describe('restricted CI human administration client', () => {
     api?.restore();
     localStorage.clear();
   });
+  it('shares one capabilities read between callers asking at once', async () => {
+    api = mockApi({ fallback: { status: 200, body: {} } });
+    await Promise.all([
+      ciAdministration.capabilities(),
+      ciAdministration.capabilities(),
+    ]);
+    await ciAdministration.capabilities();
+    // Two at once are one request; a later read asks again.
+    expect(
+      api.calls.filter((call) => call.path === BASE + '/capabilities')
+    ).to.have.length(2);
+  });
   it('calls actual closed lifecycle paths with JSON bodies and no secret cache or query strings', async () => {
     api = mockApi({ fallback: { status: 200, body: {} } });
     await ciAdministration.capabilities();

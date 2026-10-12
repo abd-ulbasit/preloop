@@ -181,3 +181,58 @@ def test_model_call_read_has_a_matching_index(db_session):
     ).scalar_one()
 
     assert '(execution_id, log_type, "timestamp")' in definition
+
+
+def test_metadata_read_leaves_out_request_and_response_bodies(
+    client, db_session, test_user
+):
+    """The timeline card reads none of them; opening a call fetches them (#1586)."""
+    execution = _execution(db_session, test_user)
+    _row(
+        db_session,
+        execution,
+        at=datetime(2026, 9, 1, tzinfo=UTC),
+        log_type="model_gateway_call",
+        metadata={
+            **_model_call(0),
+            "request": {"input": "x" * 2000},
+            "response": {"output": "y" * 2000},
+            "tool_activity": [{"name": "bash"}],
+        },
+    )
+    db_session.flush()
+
+    body = client.get(
+        f"/api/v1/flows/executions/{execution.id}/gateway-events"
+        "?model_calls_only=true&metadata_only=true"
+    ).json()
+    payload = body["logs"][0]["payload"]
+
+    assert {"request", "response", "tool_activity"}.isdisjoint(payload)
+    assert payload["total_tokens"] == 100
+
+
+def test_logs_can_leave_out_model_calls_and_send_each_line_once(
+    client, db_session, test_user
+):
+    """The logs read the execution page makes is lines, once each (#1586)."""
+    execution = _execution(db_session, test_user)
+    _seed(db_session, execution, calls=2, lines_after_each=2)
+
+    everything = client.get(
+        f"/api/v1/flows/executions/{execution.id}/logs?tail=10"
+    ).json()
+    lines = client.get(
+        f"/api/v1/flows/executions/{execution.id}/logs?tail=10&exclude_model_calls=true"
+    ).json()
+
+    assert {log["type"] for log in everything["logs"]} == {
+        "agent_log_line",
+        "model_gateway_call",
+    }
+    assert [log["type"] for log in lines["logs"]] == ["agent_log_line"] * 4
+    assert lines["has_more"] is False
+    first = lines["logs"][0]["payload"]
+    # The text arrives as `message`; the identical `line` copy is not sent.
+    assert first["message"] == "line 0.0"
+    assert "line" not in first

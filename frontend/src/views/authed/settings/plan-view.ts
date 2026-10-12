@@ -573,6 +573,7 @@ export class PlanView extends LitElement {
                     and a stale renewal date until a manual reload.
                   -->
                   <billing-plan-comparison
+                    .initialOptions=${this._options}
                     @billing-subscription-changed=${() =>
                       void this._reloadOptions()}
                   ></billing-plan-comparison>

@@ -3249,12 +3249,22 @@ async def get_account_session_activity_timeline(
     account: Annotated[Account, Depends(get_account_for_user)],
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=100,
+        description=(
+            "Most recent model interactions merged into the timeline. The "
+            "console asks for the latest 50 when a session opens."
+        ),
+    ),
 ):
     """Activity timeline overview for this session."""
     return await run_db_off_loop(
         lambda: RuntimeSessionExplorerService(db).get_account_session_activity_timeline(
             account=account,
             runtime_session_id=runtime_session_id,
+            interaction_limit=limit,
         )
     )
 

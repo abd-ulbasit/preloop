@@ -80,6 +80,9 @@ import consoleStyles from '../../../styles/console-styles.css?inline';
 import { consoleDialogStyles } from '../../../styles/console-dialog';
 import '../../../components/view-header';
 
+/** A realtime sign-in this soon after a load started repeats that load. */
+const RECONNECT_RELOAD_GRACE_MS = 3000;
+
 const VIEW_MODE_KEY = 'preloop.models.view_mode';
 
 /** Delete is the only thing that makes sense over a set of models. */
@@ -225,6 +228,8 @@ export class AIModelsView extends LitElement {
 
   private unsubscribeRealtime?: () => void;
   private refreshTimer: number | null = null;
+  /** When the last load started, for the realtime sign-in check. */
+  private lastLoadStartedAt = 0;
   private refreshInFlight = false;
   private narrowViewportSubscription: NarrowViewportSubscription | null = null;
 
@@ -486,9 +491,16 @@ export class AIModelsView extends LitElement {
       unifiedWebSocketManager.subscribe('budget_health', scheduleRefresh),
       unifiedWebSocketManager.subscribe('runtime_sessions', scheduleRefresh),
       unifiedWebSocketManager.subscribe('managed_agents', scheduleRefresh),
+      // A reconnect may have missed events, so it reloads. The socket's
+      // first sign-in arrives while the page's own first load is reading
+      // the same state, and reloading then asked for everything twice.
       unifiedWebSocketManager.subscribe(
         'system',
-        scheduleRefresh,
+        () => {
+          if (Date.now() - this.lastLoadStartedAt < RECONNECT_RELOAD_GRACE_MS)
+            return;
+          scheduleRefresh();
+        },
         (message) => message?.type === 'authenticated'
       ),
     ];
@@ -515,6 +527,7 @@ export class AIModelsView extends LitElement {
       return;
     }
     this.refreshInFlight = true;
+    this.lastLoadStartedAt = Date.now();
     if (!options.preserveLoadingState) {
       this.isLoading = true;
     }

@@ -90,9 +90,20 @@ export class PreloopInviteDialog extends LitElement {
   @state()
   private failedInvites: FailedInvite[] = [];
 
-  async connectedCallback() {
-    super.connectedCallback();
-    await this.loadData();
+  /** Whether the teams and roles have been asked for. */
+  private dataRequested = false;
+
+  /**
+   * The teams and roles are read when the dialog first opens, not when the
+   * page that hosts it mounts: the Overview and the invitations page each
+   * carry a closed dialog, and both used to spend two requests on lists
+   * nobody looked at (one of them a second copy of the page's own teams).
+   */
+  protected willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has('open') && this.open && !this.dataRequested) {
+      this.dataRequested = true;
+      void this.loadData();
+    }
   }
 
   async loadData() {

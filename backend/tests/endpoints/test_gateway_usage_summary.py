@@ -1604,3 +1604,39 @@ def test_gateway_usage_summary_query_shape_matches_raw_rows(
     assert empty.json()["total_requests"] == 0
     assert empty.json()["usage_by_session"] == []
     assert empty.json()["requests_by_day"] == []
+
+
+def test_session_activity_passes_the_turn_limit(client, monkeypatch):
+    """The console opens a session with its latest 50 turns (#1586)."""
+    from preloop.services.runtime_session_explorer import RuntimeSessionExplorerService
+
+    seen: dict = {}
+
+    def fake_timeline(self, *, account, runtime_session_id, interaction_limit=100):
+        seen["limit"] = interaction_limit
+        return {"items": []}
+
+    monkeypatch.setattr(
+        RuntimeSessionExplorerService,
+        "get_account_session_activity_timeline",
+        fake_timeline,
+    )
+    session_id = "00000000-0000-0000-0000-000000000001"
+
+    assert (
+        client.get(
+            f"/api/v1/runtime-sessions/{session_id}/activity?limit=50"
+        ).status_code
+        == 200
+    )
+    assert seen["limit"] == 50
+    assert (
+        client.get(f"/api/v1/runtime-sessions/{session_id}/activity").status_code == 200
+    )
+    assert seen["limit"] == 100
+    assert (
+        client.get(
+            f"/api/v1/runtime-sessions/{session_id}/activity?limit=500"
+        ).status_code
+        == 422
+    )

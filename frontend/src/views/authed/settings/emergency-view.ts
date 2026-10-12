@@ -1,16 +1,17 @@
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import {
-  getKillSwitchStatus,
-  activateKillSwitch,
-  deactivateKillSwitch,
-} from '../../../api';
+import { activateKillSwitch, deactivateKillSwitch } from '../../../api';
 import type {
   KillSwitchScope,
   KillSwitchScopeState,
   KillSwitchStatus,
 } from '../../../types';
+import {
+  refreshKillSwitch,
+  setKillSwitchStatus,
+  subscribeKillSwitch,
+} from '../../../services/kill-switch-store';
 import consoleStyles from '../../../styles/console-styles.css?inline';
 import '../../../components/view-header.ts';
 import { confirmDialog } from '../../../components/confirm-dialog';
@@ -57,24 +58,40 @@ export class EmergencyView extends LitElement {
     flows: 'Flow executions',
   };
 
-  async connectedCallback() {
+  private _unsubscribeHalt?: () => void;
+
+  connectedCallback() {
     super.connectedCallback();
-    await this._refreshHaltStatus();
+    if (!this._haltStatus) this._statusState = 'loading';
+    // The same shared read the console banner uses: one request for both.
+    this._unsubscribeHalt = subscribeKillSwitch((status, failed) =>
+      this._applyHaltStatus(status, failed)
+    );
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._unsubscribeHalt?.();
+    this._unsubscribeHalt = undefined;
+  }
+
+  /** Ask again now, for the Retry button. */
+  private async _refreshHaltStatus() {
+    await refreshKillSwitch({ force: true });
   }
 
   /**
-   * Reload kill-switch state. A failed refresh keeps a state already read;
-   * with nothing read yet the state is unknown, never "not halted".
+   * Take a kill-switch read. A failed read keeps a state already read; with
+   * nothing read yet the state is unknown, never "not halted".
    */
-  private async _refreshHaltStatus() {
-    if (!this._haltStatus) this._statusState = 'loading';
-    try {
-      this._haltStatus = await getKillSwitchStatus();
-      this._statusState = 'known';
-    } catch (error) {
-      console.warn('Failed to read the kill switch status:', error);
+  private _applyHaltStatus(status: KillSwitchStatus | null, failed: boolean) {
+    if (failed || !status) {
+      if (failed) console.warn('Failed to read the kill switch status');
       if (!this._haltStatus) this._statusState = 'unknown';
+      return;
     }
+    this._haltStatus = status;
+    this._statusState = 'known';
   }
 
   private async _confirmHalt() {
@@ -99,6 +116,7 @@ export class EmergencyView extends LitElement {
       this._haltStatus = await activateKillSwitch({
         reason: this._haltReason.trim() || null,
       });
+      setKillSwitchStatus(this._haltStatus);
       this._statusState = 'known';
       this._haltReason = '';
       this.dispatchEvent(
@@ -123,6 +141,7 @@ export class EmergencyView extends LitElement {
         scopes,
         reason: this._haltReason.trim() || null,
       });
+      setKillSwitchStatus(this._haltStatus);
       this._statusState = 'known';
       this.dispatchEvent(
         new CustomEvent('kill-switch-changed', {

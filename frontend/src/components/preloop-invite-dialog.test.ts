@@ -77,6 +77,33 @@ describe('PreloopInviteDialog', () => {
     invalidateApiCaches();
   });
 
+  it('reads teams and roles when it first opens, not while closed', async () => {
+    fetchStub = createFetchStub();
+    const element = await fixture<PreloopInviteDialog>(
+      html`<preloop-invite-dialog></preloop-invite-dialog>`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes('/teams') || url.includes('/roles')),
+      'closed dialog'
+    ).to.deep.equal([]);
+
+    element.open = true;
+    await waitUntil(() => (element as any).roles.length === 1, 'roles load');
+    element.open = false;
+    await element.updateComplete;
+    element.open = true;
+    await element.updateComplete;
+    const lists = fetchStub
+      .getCalls()
+      .map((call) => String(call.args[0]))
+      .filter((url) => url.includes('/teams') || url.includes('/roles'));
+    expect(lists).to.have.length(2);
+  });
+
   it('labels roles by their display names', async () => {
     fetchStub = createFetchStub();
     const element = await mount();

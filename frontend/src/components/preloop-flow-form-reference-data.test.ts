@@ -76,6 +76,37 @@ describe('PreloopFlowForm reference data warning', () => {
     expect((element as any).trackers).to.have.length(1);
   });
 
+  it('takes the agents the flow page already read instead of asking again', async () => {
+    trackersFail = false;
+    const agent = { id: 'agent-1', name: 'Long runner' };
+    const element = await fixture<PreloopFlowForm>(
+      html`<preloop-flow-form
+        .flow=${{ name: 'Triage' }}
+        .prefetchedAgents=${[agent]}
+      ></preloop-flow-form>`
+    );
+    while ((element as any)._loadingReferenceData) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const fetchStub = window.fetch as unknown as sinon.SinonStub;
+    const agentReads = fetchStub
+      .getCalls()
+      .filter((call) => String(call.args[0]).includes('/api/v1/agents'));
+    expect(agentReads).to.have.length(0);
+    expect((element as any).longRunningAgents).to.deep.equal([agent]);
+  });
+
+  it('asks for the agents itself when the page has none to hand over', async () => {
+    trackersFail = false;
+    await mount();
+    const fetchStub = window.fetch as unknown as sinon.SinonStub;
+    expect(
+      fetchStub
+        .getCalls()
+        .filter((call) => String(call.args[0]).includes('/api/v1/agents'))
+    ).to.have.length(1);
+  });
+
   it('shows no warning when the lists load', async () => {
     trackersFail = false;
     const element = await mount();

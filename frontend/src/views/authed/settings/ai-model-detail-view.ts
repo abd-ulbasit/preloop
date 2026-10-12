@@ -81,6 +81,9 @@ import {
 import { consoleDialogStyles } from '../../../styles/console-dialog';
 import '../../../components/capability-extension';
 
+/** A realtime sign-in this soon after a load started repeats that load. */
+const RECONNECT_RELOAD_GRACE_MS = 3000;
+
 // The one range control, with the same vocabulary as the Overview, Cost and
 // API usage, and the window resolved by the same shared math so "30d" means
 // the same 30 days on all four pages.
@@ -269,6 +272,8 @@ export class AIModelDetailView extends LitElement {
   private initialized = false;
   private unsubscribeRealtime?: () => void;
   private refreshTimer: number | null = null;
+  /** When the last load started, for the realtime sign-in check. */
+  private lastLoadStartedAt = 0;
   private refreshInFlight = false;
   private loadGeneration = 0;
   /**
@@ -716,9 +721,16 @@ export class AIModelDetailView extends LitElement {
         scheduleRefresh,
         (message) => this.shouldRefreshForRuntimeSession(message)
       ),
+      // A reconnect may have missed events, so it reloads. The socket's
+      // first sign-in arrives while the page's own first load is reading
+      // the same state, and reloading then asked for everything twice.
       unifiedWebSocketManager.subscribe(
         'system',
-        scheduleRefresh,
+        () => {
+          if (Date.now() - this.lastLoadStartedAt < RECONNECT_RELOAD_GRACE_MS)
+            return;
+          scheduleRefresh();
+        },
         (message) => message?.type === 'authenticated'
       ),
     ];
@@ -783,6 +795,7 @@ export class AIModelDetailView extends LitElement {
       return;
     }
     this.refreshInFlight = true;
+    this.lastLoadStartedAt = Date.now();
     const generation = ++this.loadGeneration;
     const modelId = this.modelId;
     const isCurrent = () =>
@@ -3027,6 +3040,7 @@ export class AIModelDetailView extends LitElement {
                                   .scopeId=${this.modelId}
                                   .sessions=${this.sessions?.items || []}
                                   layout="embedded"
+                                  .autoSelect=${false}
                                   defaultReplayMode="timeline"
                                   .features=${{
                                     summaries: true,

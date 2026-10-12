@@ -575,6 +575,33 @@ describe('api', () => {
       expect(await fresh.json()).to.eql({ users: [] });
     });
 
+    it('does not let a read after a write join a read from before it', async () => {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reads = 0;
+      fetchStub.callsFake(
+        async (_input: RequestInfo | URL, init?: RequestInit) => {
+          if ((init?.method || 'GET') !== 'GET') {
+            return new Response('{}', { status: 200 });
+          }
+          reads += 1;
+          const answer = reads === 1 ? 'before' : 'after';
+          if (reads === 1) await gate;
+          return new Response(JSON.stringify({ answer }), { status: 200 });
+        }
+      );
+
+      const before = fetchWithAuth('/api/v1/teams?skip=0&limit=100');
+      await fetchWithAuth('/api/v1/teams', { method: 'POST', body: '{}' });
+      const after = fetchWithAuth('/api/v1/teams?skip=0&limit=100');
+      release();
+
+      expect(await (await before).json()).to.eql({ answer: 'before' });
+      expect(await (await after).json()).to.eql({ answer: 'after' });
+    });
+
     it('never joins two writes to the same URL', async () => {
       fetchStub.resolves(
         new Response(JSON.stringify({}), {

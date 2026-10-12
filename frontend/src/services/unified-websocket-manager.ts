@@ -258,6 +258,17 @@ export class UnifiedWebSocketManager {
         return;
       }
 
+      // A refused subscription names its topic too. Routed, it reached that
+      // topic's subscribers as if it were news: the notification settings
+      // page took it for a device registration and read its preferences a
+      // second time on every visit.
+      if (message.type === 'subscription_error') {
+        debugLog(
+          `[UnifiedWebSocketManager] Subscription refused for topic ${message.topic}: ${message.error}`
+        );
+        return;
+      }
+
       // Handle ping
       if (message.type === 'ping') {
         this.send({ type: 'pong' });

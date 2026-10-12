@@ -3,6 +3,10 @@ import sinon from 'sinon';
 
 import './plan-choice-screen';
 import type { PlanChoiceScreen } from './plan-choice-screen';
+import { resetPricingContentForTests } from '../utils/pricing-content';
+
+// The pricing content is read once per page; each test is a fresh page.
+beforeEach(() => resetPricingContentForTests());
 
 /**
  * The published cloud ladder, exactly as the public pricing page and the

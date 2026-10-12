@@ -1,7 +1,11 @@
 import { expect } from '@open-wc/testing';
 import sinon from 'sinon';
 
-import { cloudPlans, loadPricingContent } from './pricing-content';
+import {
+  cloudPlans,
+  loadPricingContent,
+  resetPricingContentForTests,
+} from './pricing-content';
 
 describe('pricing content', () => {
   let fetchStub: sinon.SinonStub;
@@ -13,8 +17,31 @@ describe('pricing content', () => {
     });
   }
 
+  beforeEach(() => resetPricingContentForTests());
+
   afterEach(() => {
     fetchStub?.restore();
+  });
+
+  it('reads the file once for callers on the same page', async () => {
+    fetchStub = sinon
+      .stub(window, 'fetch')
+      .callsFake(async () => json({ pricing: { plans: [] } }));
+    await Promise.all([loadPricingContent(), loadPricingContent()]);
+    await loadPricingContent();
+    expect(fetchStub.callCount).to.equal(1);
+  });
+
+  it('asks again after a failed read', async () => {
+    fetchStub = sinon
+      .stub(window, 'fetch')
+      .onFirstCall()
+      .callsFake(async () => json({}, 500))
+      .onSecondCall()
+      .callsFake(async () => json({ pricing: { plans: [] } }));
+    await loadPricingContent().catch(() => undefined);
+    await loadPricingContent();
+    expect(fetchStub.callCount).to.equal(2);
   });
 
   it('reads the published ladder the public page reads', async () => {

@@ -47,12 +47,32 @@ function toPlan(p: any, fallback?: 'cloud' | 'dedicated'): PricingPlan {
 }
 
 /**
- * Read the published pricing content.
+ * Read the published pricing content, once.
  *
  * Throws when the file is missing or unreadable: a page that cannot say what
  * a plan costs must say so rather than draw an empty ladder.
  */
-export async function loadPricingContent(): Promise<PricingContent> {
+export function loadPricingContent(): Promise<PricingContent> {
+  // A static file shipped with this build: one read per page load is
+  // enough. The plan page and the plan chooser both ask for it on the same
+  // screen. A failed read is forgotten so the next caller tries again.
+  if (!pricingContent) {
+    pricingContent = readPricingContent().catch((error) => {
+      pricingContent = null;
+      throw error;
+    });
+  }
+  return pricingContent;
+}
+
+let pricingContent: Promise<PricingContent> | null = null;
+
+/** Test seam: forget the content read so far. */
+export function resetPricingContentForTests(): void {
+  pricingContent = null;
+}
+
+async function readPricingContent(): Promise<PricingContent> {
   const response = await fetch('/landing-content.json');
   if (!response.ok) {
     throw new Error(`Failed to load pricing content: ${response.statusText}`);

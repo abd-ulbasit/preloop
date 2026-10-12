@@ -7,6 +7,7 @@
 import { fixture, html, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
+import { invalidateApiCaches } from '../api';
 import './preloop-session-observer';
 import type { PreloopSessionObserver } from './preloop-session-observer';
 import type { DesktopViewElement } from './desktop-view';
@@ -58,6 +59,7 @@ describe('PreloopSessionObserver live desktop', () => {
   let endpointsResponse: () => Response;
   let profileResponse: () => Response;
   let viewId: string;
+  let featuresOff = false;
   const calls: Array<{ url: string; method: string; body: any }> = [];
 
   beforeEach(() => {
@@ -78,6 +80,10 @@ describe('PreloopSessionObserver live desktop', () => {
         const method = String(init?.method || 'GET').toUpperCase();
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         calls.push({ url, method, body });
+        if (url === '/api/v1/features')
+          return jsonResponse({
+            features: featuresOff ? { desktop_views: false } : {},
+          });
         if (url.startsWith('/api/v1/desktop/endpoints?'))
           return endpointsResponse();
         if (method === 'POST' && url.endsWith('/views')) {
@@ -157,6 +163,37 @@ describe('PreloopSessionObserver live desktop', () => {
 
   const liveDesktopButton = (el: PreloopSessionObserver) =>
     el.shadowRoot!.querySelector<HTMLElement>('sl-button.live-desktop');
+
+  it('opens no session by itself when autoSelect is off (#1586)', async () => {
+    const el = (await fixture(
+      html`<preloop-session-observer
+        .sessions=${[SESSION]}
+        .autoSelect=${false}
+      ></preloop-session-observer>`
+    )) as PreloopSessionObserver;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await el.updateComplete;
+    expect((el as any).activeSessionId).to.equal(null);
+    expect(
+      calls.filter(
+        (c) => c.url.includes('/activity') || c.url.includes('/gateway-events')
+      )
+    ).to.deep.equal([]);
+  });
+
+  it('does not ask for desktops when the server says desktop views are off', async () => {
+    invalidateApiCaches();
+    endpointsResponse = () => jsonResponse({ detail: 'disabled' }, 404);
+    featuresOff = true;
+    const el = await mount();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      calls.filter((c) => c.url.startsWith('/api/v1/desktop/endpoints'))
+    ).to.deep.equal([]);
+    expect(liveDesktopButton(el)).to.equal(null);
+    featuresOff = false;
+    invalidateApiCaches();
+  });
 
   it('opens the live desktop beside the timeline for a live session', async () => {
     const el = await mount();

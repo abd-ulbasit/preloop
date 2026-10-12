@@ -10,6 +10,10 @@ import {
 } from './register-view';
 import { invalidateApiCaches } from '../../api';
 import { Router } from '../../router';
+import { resetPricingContentForTests } from '../../utils/pricing-content';
+
+// The pricing content is read once per page; each test is a fresh page.
+beforeEach(() => resetPricingContentForTests());
 
 describe('RegisterView', () => {
   let element: RegisterView;

@@ -388,6 +388,19 @@ export class SessionLiveActivity extends LitElement {
       sessionId = this.sessionId;
     const run = async () => {
       try {
+        // The history and the first pending page are asked together: the
+        // answer arrives sooner, and the pending read joins the identical one
+        // the session panel makes when it opens instead of repeating it.
+        const pendingPage = (skip: number) =>
+          listApprovalRequests({
+            runtime_session_id: sessionId,
+            status: 'pending',
+            limit: 100,
+            skip,
+          });
+        const firstPending = pendingPage(0);
+        // Settled here so a failed history read cannot leave it unhandled.
+        firstPending.catch(() => undefined);
         const history = await listApprovalRequests({
           runtime_session_id: sessionId,
           limit: 100,
@@ -395,12 +408,8 @@ export class SessionLiveActivity extends LitElement {
         if (generation !== this.generation) return;
         const pending: ApprovalRequest[] = [];
         for (let skip = 0; ; skip += 100) {
-          const page = await listApprovalRequests({
-            runtime_session_id: sessionId,
-            status: 'pending',
-            limit: 100,
-            skip,
-          });
+          const page =
+            skip === 0 ? await firstPending : await pendingPage(skip);
           if (generation !== this.generation) return;
           pending.push(...page);
           if (page.length < 100) break;
