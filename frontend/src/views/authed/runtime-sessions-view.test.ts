@@ -887,6 +887,49 @@ describe('RuntimeSessionsView', () => {
     expect(content).to.contain('anthropic/claude-sonnet-4');
   });
 
+  it('coalesces a burst of live events into at most one list refresh (#1584)', async () => {
+    const element = (await fixture(
+      html`<runtime-sessions-view></runtime-sessions-view>`
+    )) as RuntimeSessionsView;
+    await waitUntil(
+      () => !(element as any).loading,
+      'Runtime sessions view did not finish loading'
+    );
+    const listCalls = () =>
+      fetchStub
+        .getCalls()
+        .filter((call) =>
+          String(call.args[0]).startsWith('/api/v1/runtime-sessions?')
+        ).length;
+    expect(listCalls()).to.equal(1);
+
+    // Events spaced past the debounce: each one used to fetch the list.
+    for (let i = 0; i < 4; i++) {
+      (element as any).scheduleRefresh();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    expect(listCalls()).to.equal(1);
+
+    const view = element.constructor as any;
+    const interval = view.LIVE_REFRESH_MIN_INTERVAL_MS;
+    try {
+      // Once the interval has passed, the pending refresh fires exactly once.
+      view.LIVE_REFRESH_MIN_INTERVAL_MS = 0;
+      const timer = (element as any).refreshTimer;
+      window.clearTimeout(timer);
+      (element as any).refreshTimer = null;
+      for (let i = 0; i < 20; i++) (element as any).scheduleRefresh();
+      await waitUntil(() => listCalls() === 2, 'No refresh after the interval');
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(listCalls()).to.equal(2);
+    } finally {
+      view.LIVE_REFRESH_MIN_INTERVAL_MS = interval;
+      const timer = (element as any).refreshTimer;
+      if (timer !== null) window.clearTimeout(timer);
+      (element as any).refreshTimer = null;
+    }
+  });
+
   it('shows who noted a session, and asks for nothing extra to do it', async () => {
     const element = (await fixture(
       html`<runtime-sessions-view></runtime-sessions-view>`

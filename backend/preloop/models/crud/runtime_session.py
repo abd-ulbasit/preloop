@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import (
     String,
@@ -190,6 +190,11 @@ def _latest_gateway_usage_for_sessions(
 
 class SpawnAliasConflictError(ValueError):
     """A resumed session cannot rename its write-once alias to avoid a clash."""
+
+
+# Recent-usage windows the session list ranking tries before reading the
+# whole usage history (#1584).
+_RANKING_WINDOWS = (timedelta(days=1), timedelta(days=7))
 
 
 class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
@@ -824,34 +829,29 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         # Pick the page on a narrow (session, last request) ranking first,
         # then aggregate usage for those sessions only. Aggregating every
         # session's full usage before the LIMIT took 30 s on a busy model
-        # detail page (#1584).
-        ranking_links = self._account_usage_links(db, narrow=True, **link_filters)
-        last_request = (
-            db.query(
-                ranking_links.c.session_id.label("session_id"),
-                func.max(ranking_links.c.timestamp).label("last_request_at"),
+        # detail page (#1584). The ranking itself is tried on recent usage
+        # first; it falls back to the whole history only when the recent
+        # window cannot decide the page.
+        page_ids = None
+        for window in _RANKING_WINDOWS:
+            page_ids = self._rank_page_from_recent_usage(
+                db,
+                session_query=session_query,
+                link_filters=link_filters,
+                window=window,
+                limit=limit,
+                offset=offset,
             )
-            .group_by(ranking_links.c.session_id)
-            .subquery("session_last_request")
-        )
-        page_ids = [
-            row.id
-            for row in session_query.outerjoin(
-                last_request, last_request.c.session_id == self.model.id
+            if page_ids is not None:
+                break
+        if page_ids is None:
+            page_ids = self._rank_page_from_all_usage(
+                db,
+                session_query=session_query,
+                link_filters=link_filters,
+                limit=limit,
+                offset=offset,
             )
-            .with_entities(self.model.id)
-            .order_by(
-                func.coalesce(
-                    last_request.c.last_request_at,
-                    self.model.last_activity_at,
-                    self.model.started_at,
-                ).desc(),
-                self.model.id.desc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        ]
         if page_ids:
             usage_links = self._account_usage_links(
                 db, session_ids=page_ids, **link_filters
@@ -899,6 +899,146 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             items.append(summary)
 
         return {"total": total, "items": items}
+
+    def _rank_page_from_all_usage(
+        self,
+        db: Session,
+        *,
+        session_query: Any,
+        link_filters: Dict[str, Any],
+        limit: int,
+        offset: int,
+    ) -> List[Any]:
+        """Rank every listed session by its last request over all usage."""
+        ranking_links = self._account_usage_links(db, narrow=True, **link_filters)
+        last_request = (
+            db.query(
+                ranking_links.c.session_id.label("session_id"),
+                func.max(ranking_links.c.timestamp).label("last_request_at"),
+            )
+            .group_by(ranking_links.c.session_id)
+            .subquery("session_last_request")
+        )
+        return [
+            row.id
+            for row in session_query.outerjoin(
+                last_request, last_request.c.session_id == self.model.id
+            )
+            .with_entities(self.model.id)
+            .order_by(
+                func.coalesce(
+                    last_request.c.last_request_at,
+                    self.model.last_activity_at,
+                    self.model.started_at,
+                ).desc(),
+                self.model.id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+            .all()
+        ]
+
+    def _rank_page_from_recent_usage(
+        self,
+        db: Session,
+        *,
+        session_query: Any,
+        link_filters: Dict[str, Any],
+        window: timedelta,
+        limit: int,
+        offset: int,
+    ) -> Optional[List[Any]]:
+        """The same page as ``_rank_page_from_all_usage``, from recent usage.
+
+        A session ranks by ``coalesce(last request, last activity, start)``.
+        Every session whose key is at or after a cutoff ``T`` either made a
+        request at or after ``T`` (its last request is in the recent usage)
+        or has an activity/start time at or after ``T``. Both sets are small
+        and cheap to find, and the second gets its exact last request from
+        its own usage. So the ranking of all sessions with key >= ``T`` is
+        exact, and if the page ends at or after ``T`` it is the full answer.
+        Otherwise ``None`` asks the caller for a wider window.
+        """
+        needed = offset + limit
+        if needed <= 0:
+            return []
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - window
+        start_date = link_filters.get("start_date")
+        if start_date is not None:
+            start_utc = (
+                start_date.astimezone(UTC).replace(tzinfo=None)
+                if start_date.tzinfo
+                else start_date
+            )
+            if start_utc >= cutoff:
+                # The filter already bounds usage at least this tightly.
+                return None
+        recent_links = self._account_usage_links(
+            db, narrow=True, **{**link_filters, "start_date": cutoff}
+        )
+        recent_request = (
+            db.query(
+                recent_links.c.session_id.label("session_id"),
+                func.max(recent_links.c.timestamp).label("last_request_at"),
+            )
+            .group_by(recent_links.c.session_id)
+            .subquery("session_recent_request")
+        )
+        fallback_key = func.coalesce(self.model.last_activity_at, self.model.started_at)
+        candidates = (
+            session_query.outerjoin(
+                recent_request, recent_request.c.session_id == self.model.id
+            )
+            .filter(
+                or_(
+                    recent_request.c.last_request_at.isnot(None),
+                    fallback_key >= cutoff,
+                )
+            )
+            .with_entities(
+                self.model.id,
+                recent_request.c.last_request_at,
+                fallback_key.label("fallback_key"),
+            )
+            .all()
+        )
+        keys: Dict[Any, datetime] = {}
+        unresolved = []
+        for row in candidates:
+            if row.last_request_at is not None:
+                keys[row.id] = row.last_request_at
+            else:
+                unresolved.append(row)
+        if unresolved:
+            # Recently active without a recent request: the key is the last
+            # request (older than the cutoff) if there is one at all.
+            older_links = self._account_usage_links(
+                db,
+                narrow=True,
+                session_ids=[row.id for row in unresolved],
+                **link_filters,
+            )
+            older = dict(
+                db.query(
+                    older_links.c.session_id,
+                    func.max(older_links.c.timestamp),
+                )
+                .group_by(older_links.c.session_id)
+                .all()
+            )
+            for row in unresolved:
+                keys[row.id] = older.get(row.id) or row.fallback_key
+        ranked = sorted(
+            (
+                (key, session_id)
+                for session_id, key in keys.items()
+                if key is not None and key >= cutoff
+            ),
+            reverse=True,
+        )
+        if len(ranked) < needed:
+            return None
+        return [session_id for _, session_id in ranked[offset:needed]]
 
     def _principal_id_condition(self, runtime_principal_id: str) -> Any:
         """Match a principal id exactly or any per-run variant of it.

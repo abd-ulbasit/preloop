@@ -293,3 +293,71 @@ def test_listing_pages_one_model(
     )
     assert page["total"] == 1
     assert page["items"][0]["session_source_id"] == "direct"
+
+
+def test_recent_window_ranking_matches_the_full_history(
+    db_session: Session,
+    session_listing_data: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ranking from recent usage first must return the full-history page (#1584).
+
+    The shapes that can fool a recent window: a session active just now whose
+    last request is days old (its key is that old request, not the activity),
+    a request-less session that started recently, and pages that reach past
+    the window so the ranking has to fall back.
+    """
+    from preloop.models.crud import runtime_session as runtime_session_crud
+
+    data = session_listing_data
+    now = data["now"]
+    account = data["account"]
+
+    def session(name: str, *, started: timedelta, active: timedelta | None):
+        row = models.RuntimeSession(
+            account_id=account.id,
+            session_source_type="custom",
+            session_source_id=name,
+            started_at=now - started,
+            last_activity_at=None if active is None else now - active,
+        )
+        db_session.add(row)
+        db_session.flush()
+        data["sessions"][name] = row
+        return row
+
+    session("active-old-request", started=timedelta(days=9), active=timedelta(0))
+    data["usage"]("active-old-request", timestamp=now - timedelta(days=3))
+    session("fresh-no-usage", started=timedelta(minutes=1), active=None)
+    session("old-no-usage", started=timedelta(days=20), active=None)
+    session("two-days", started=timedelta(days=4), active=timedelta(days=2))
+    data["usage"]("two-days", timestamp=now - timedelta(days=2))
+    session("ten-days", started=timedelta(days=12), active=timedelta(days=10))
+    data["usage"]("ten-days", timestamp=now - timedelta(days=10))
+    db_session.flush()
+
+    full_history = runtime_session_crud._RANKING_WINDOWS
+    for window in (full_history, ()):
+        monkeypatch.setattr(runtime_session_crud, "_RANKING_WINDOWS", window)
+        pages = {
+            (limit, offset): [
+                item["session_source_id"]
+                for item in crud_runtime_session.list_account_sessions(
+                    db_session,
+                    account_id=str(account.id),
+                    limit=limit,
+                    offset=offset,
+                )["items"]
+            ]
+            for limit in (1, 2, 3, 20)
+            for offset in (0, 1, 2, 4, 6)
+        }
+        if window:
+            windowed = pages
+        else:
+            assert windowed == pages
+    # The recently active session ranks by its 3-day-old request.
+    assert windowed[(20, 0)].index("two-days") < windowed[(20, 0)].index(
+        "active-old-request"
+    )
+    assert windowed[(1, 0)] == ["fresh-no-usage"]

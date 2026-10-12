@@ -275,6 +275,13 @@ export class RuntimeSessionsView extends LitElement {
   private initialized = false;
   private unsubscribeRealtime?: () => void;
   private refreshTimer: number | null = null;
+  /** When the list was last requested, for the live refresh interval. */
+  private lastListLoadAt = 0;
+  private listLoadInFlight = false;
+  /** Quiet time after a live event before the list is asked again. */
+  static LIVE_REFRESH_DEBOUNCE_MS = 250;
+  /** Live events refresh the list at most this often. */
+  static LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
   private searchDebounce: number | null = null;
   private loadSequence = 0;
   private searchSequence = 0;
@@ -943,13 +950,26 @@ export class RuntimeSessionsView extends LitElement {
     if (this.isSearching) {
       return;
     }
+    // One pending refresh absorbs every event until it fires. On a busy
+    // account gateway and audit events arrive many times a second; a debounce
+    // that restarts on each one re-fetched the list back to back (#1584).
     if (this.refreshTimer !== null) {
-      window.clearTimeout(this.refreshTimer);
+      return;
     }
+    const sinceLastLoad = Date.now() - this.lastListLoadAt;
+    const delay = Math.max(
+      RuntimeSessionsView.LIVE_REFRESH_DEBOUNCE_MS,
+      RuntimeSessionsView.LIVE_REFRESH_MIN_INTERVAL_MS - sinceLastLoad
+    );
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
+      if (this.listLoadInFlight) {
+        // The list is already on its way; ask again once it lands.
+        this.scheduleRefresh();
+        return;
+      }
       void this.loadSessions(true);
-    }, 250);
+    }, delay);
   }
 
   private getLocalDateString(date: Date): string {
@@ -1117,6 +1137,8 @@ export class RuntimeSessionsView extends LitElement {
 
   private async loadSessions(isSoftRefresh = false) {
     const seq = ++this.loadSequence;
+    this.lastListLoadAt = Date.now();
+    this.listLoadInFlight = true;
     if (!isSoftRefresh) {
       this.loading = true;
       this.error = null;
@@ -1153,6 +1175,7 @@ export class RuntimeSessionsView extends LitElement {
     } finally {
       if (seq === this.loadSequence) {
         this.loading = false;
+        this.listLoadInFlight = false;
       }
     }
   }
