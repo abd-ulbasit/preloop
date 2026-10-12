@@ -67,11 +67,13 @@ def test_policy_states_what_is_not_public() -> None:
 
 
 def test_api_versioning_is_accepted_and_links_the_issue() -> None:
-    """The policy and ADR agree that the versioning decision is accepted."""
+    """The policy, ADR and index agree that the versioning decision is accepted."""
     text = _read(POLICY)
     assert "status: accepted" in text.lower()
     adr = REPO_ROOT / "docs/architecture/decisions/0001-api-versioning.md"
     assert "| Status | Accepted |" in _read(adr)
+    index = _read(REPO_ROOT / "docs/architecture/decisions.md")
+    assert "(decisions/0001-api-versioning.md) (Accepted)" in index
     assert "https://github.com/preloop/preloop/issues/977" in text
     assert "0001-api-versioning" in text
 
