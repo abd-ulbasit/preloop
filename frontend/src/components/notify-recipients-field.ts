@@ -157,7 +157,8 @@ export class NotifyRecipientsField extends LitElement {
           ${this.users.map(
             (user) => html`
               <sl-option value=${`user:${user.id}`}>
-                ${user.username} (${user.email})
+                ${user.username || `Identity unavailable · Membership ${user.id}`}
+                ${user.email ? `(${user.email})` : ''}
               </sl-option>
             `
           )}

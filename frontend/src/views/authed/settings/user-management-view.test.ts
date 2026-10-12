@@ -279,7 +279,8 @@ describe('UserManagementView', () => {
       deactivate.click();
       const prompt = await answerConfirmDialog(false);
       expect(prompt).to.contain('alice@example.com');
-      expect(prompt).to.contain('can no longer sign in');
+      expect(prompt).to.contain('access to this account');
+      expect(prompt).to.contain('Other account memberships');
       await element.updateComplete;
       expect(deactivateCalls()).to.have.length(0);
 
@@ -301,7 +302,7 @@ describe('UserManagementView', () => {
     expect(labels).to.deep.equal([
       'Manage roles',
       'Edit account membership',
-      'Deactivate user',
+      'Deactivate account membership',
     ]);
   });
 
@@ -572,6 +573,14 @@ describe('membership editing scope', () => {
         'sl-dialog[label="Edit account membership"]'
       )!;
       expect(dialog.querySelector('sl-input')).to.equal(null);
+      expect(dialog.textContent).to.contain('Identity unavailable');
+      expect(dialog.textContent).to.contain('membership-child');
+      const pending = element.handleDeactivateUser((element as any).users[0]);
+      const prompt = await answerConfirmDialog(false);
+      await pending;
+      expect(prompt).to.contain('Identity unavailable');
+      expect(prompt).to.contain('membership-child');
+      expect(prompt).not.to.contain('null');
     } finally {
       fetchStub.restore();
       localStorage.clear();

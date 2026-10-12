@@ -106,6 +106,12 @@ export class ConsoleHeader extends LitElement {
   @state()
   private _user: UserDetails | null = null;
 
+  private userRequestVersion = 0;
+  private handleIdentityChange = (): void => {
+    this._user = null;
+    void this.fetchUserDetails();
+  };
+
   @state()
   private _runningExecutions: FlowExecution[] = [];
 
@@ -459,6 +465,7 @@ export class ConsoleHeader extends LitElement {
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.pruneAndScheduleApprovalExpiry();
     this.fetchUserDetails();
+    window.addEventListener('auth-change', this.handleIdentityChange);
     void api
       .getFeatures()
       .then((features) => {
@@ -478,6 +485,8 @@ export class ConsoleHeader extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.userRequestVersion += 1;
+    window.removeEventListener('auth-change', this.handleIdentityChange);
     window.removeEventListener(
       ATTENTION_SUMMARY_EVENT,
       this.handleAttentionSummary as EventListener
@@ -1104,11 +1113,26 @@ export class ConsoleHeader extends LitElement {
 
   @state() private serverVersion = '';
 
-  async fetchUserDetails() {
+  async fetchUserDetails(): Promise<void> {
+    const version = ++this.userRequestVersion;
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      this._user = null;
+      return;
+    }
     try {
-      this._user = await api.getUserProfile();
+      const user = await api.getUserProfile();
+      if (
+        version === this.userRequestVersion &&
+        this.isConnected &&
+        localStorage.getItem('accessToken') === token
+      ) {
+        this._user = user;
+      }
     } catch (error) {
-      console.error('Failed to fetch user details', error);
+      if (version === this.userRequestVersion && this.isConnected) {
+        console.error('Failed to fetch user details', error);
+      }
     }
   }
 

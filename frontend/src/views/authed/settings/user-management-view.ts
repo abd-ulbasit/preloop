@@ -335,10 +335,10 @@ export class UserManagementView extends LitElement {
   async handleDeactivateUser(user: User) {
     if (!this.editPermissions.allows('manage_users')) return;
     const confirmed = await confirmDialog({
-      title: 'Deactivate user?',
-      message: `Deactivate ${user.full_name || user.username} (${user.email})?`,
+      title: 'Deactivate account membership?',
+      message: `Deactivate ${user.full_name || user.username || 'Identity unavailable'}${user.email ? ` (${user.email})` : ''}? Membership: ${user.id}.`,
       detail:
-        'They can no longer sign in. You can reactivate them later from Edit user.',
+        'They lose access to this account. Other account memberships and their shared identity are retained. Reactivate access from Edit account membership.',
       confirmLabel: 'Deactivate',
       variant: 'danger',
     });
@@ -560,7 +560,7 @@ export class UserManagementView extends LitElement {
                     ><sl-button
                       ?disabled=${!this.editPermissions.allows('manage_users')}
                       size="small"
-                      title="Edit user"
+                      title="Edit account membership"
                       @click=${() => this.openEditModal(user)}
                     >
                       <sl-icon
@@ -603,12 +603,12 @@ export class UserManagementView extends LitElement {
                       size="small"
                       variant="danger"
                       outline
-                      title="Deactivate user"
+                      title="Deactivate account membership"
                       @click=${() => this.handleDeactivateUser(user)}
                     >
                       <sl-icon
                         name="person-dash"
-                        label="Deactivate user"
+                        label="Deactivate account membership"
                       ></sl-icon> </sl-button
                   ></sl-tooltip>
                 </div>
@@ -692,8 +692,9 @@ export class UserManagementView extends LitElement {
         ${this.renderDialogError()}
         <div class="form-grid">
           <p>
-            ${this.selectedUser?.full_name || this.selectedUser?.username} —
-            ${this.selectedUser?.email}
+            ${this.selectedUser?.full_name || this.selectedUser?.username || 'Identity unavailable'}
+            ${this.selectedUser?.email ? `(${this.selectedUser.email})` : ''} —
+            Membership: ${this.selectedUser?.id}
           </p>
           <p>
             Shared identity and credentials are managed by the person in

@@ -3730,8 +3730,8 @@ export async function uploadAvatar(file: File): Promise<AvatarResponse> {
     }
     throw new Error(`Failed to upload avatar (${response.status})`);
   }
-  // Profile changed -- drop cached /me so the next reader gets fresh data.
-  userProfileCache = null;
+  // Discard profile reads started before the canonical avatar changed.
+  invalidateUserProfileCache();
   return response.json();
 }
 
@@ -3742,7 +3742,7 @@ export async function deleteAvatar(): Promise<AvatarResponse> {
   if (!response.ok) {
     throw new Error('Failed to delete avatar');
   }
-  userProfileCache = null;
+  invalidateUserProfileCache();
   return response.json();
 }
 

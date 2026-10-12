@@ -146,6 +146,9 @@ export class ProfileView extends LitElement {
         };
       }
       this.avatarMessage = 'Avatar updated.';
+      window.dispatchEvent(
+        new CustomEvent('auth-change', { bubbles: true, composed: true })
+      );
     } catch (error) {
       this.avatarMessage =
         error instanceof Error ? error.message : 'Failed to upload avatar.';
@@ -164,6 +167,9 @@ export class ProfileView extends LitElement {
         };
       }
       this.avatarMessage = 'Avatar removed.';
+      window.dispatchEvent(
+        new CustomEvent('auth-change', { bubbles: true, composed: true })
+      );
     } catch (error) {
       this.avatarMessage = 'Failed to remove avatar.';
     }

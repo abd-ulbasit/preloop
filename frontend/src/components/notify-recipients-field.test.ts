@@ -1,5 +1,6 @@
 import { html, fixture, expect } from '@open-wc/testing';
 import './notify-recipients-field.ts';
+import type { User } from '../types';
 import type { NotifyRecipientsField } from './notify-recipients-field';
 
 describe('NotifyRecipientsField', () => {
@@ -52,4 +53,17 @@ describe('NotifyRecipientsField', () => {
     await element.updateComplete;
     expect(element.userIds).to.deep.equal(['abc']);
   });
+});
+
+it('labels unavailable identities with membership context and retains selection IDs', async () => {
+  const users = [
+    { id: 'membership-child', username: null, email: null },
+  ] as User[];
+  const element = await fixture<NotifyRecipientsField>(
+    html`<notify-recipients-field .users=${users}></notify-recipients-field>`
+  );
+  const option = element.shadowRoot!.querySelector('sl-option')!;
+  expect(option.textContent).to.contain('Identity unavailable');
+  expect(option.textContent).to.contain('membership-child');
+  expect(option.getAttribute('value')).to.equal('user:membership-child');
 });
