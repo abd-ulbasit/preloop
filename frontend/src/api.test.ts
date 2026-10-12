@@ -1952,6 +1952,34 @@ describe('api', () => {
       expect(payload.analytics_window).to.equal(null);
       expect(payload.threshold).to.equal(null);
     });
+
+    it('reuses one answer across console mounts for a minute (#1590)', async () => {
+      const clock = sinon.useFakeTimers({ now: 0, toFake: ['Date'] });
+      try {
+        fetchStub.callsFake(async () => body({ nudges: [] }));
+
+        await getUsageNudges();
+        clock.tick(59_000);
+        await getUsageNudges();
+        expect(fetchStub.callCount).to.equal(1);
+
+        clock.tick(1_000);
+        await getUsageNudges();
+        expect(fetchStub.callCount).to.equal(2);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it('asks again after a plan change', async () => {
+      fetchStub.callsFake(async () => body({ nudges: [] }));
+
+      await getUsageNudges();
+      window.dispatchEvent(new CustomEvent(BILLING_SUBSCRIPTION_CHANGED));
+      await getUsageNudges();
+
+      expect(fetchStub.callCount).to.equal(2);
+    });
   });
 
   describe('a period outside the plan analytics window', () => {

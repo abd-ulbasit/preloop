@@ -55,6 +55,9 @@ function decisionErrorMessage(
  */
 export const PENDING_APPROVALS_EVENT = 'preloop-pending-approvals';
 
+/** How long the first bell read waits for a socket that is still connecting. */
+export const INITIAL_LIVE_COUNTS_FALLBACK_MS = 3000;
+
 interface UserDetails {
   username: string;
   email: string;
@@ -138,6 +141,7 @@ export class ConsoleHeader extends LitElement {
   private pendingApprovalsRefreshTimer?: ReturnType<typeof setTimeout>;
   private loadingPendingApprovals = false;
   private pendingApprovalsReload = false;
+  private initialLiveCountsTimer?: ReturnType<typeof setTimeout>;
 
   private refreshPendingApprovals = (): void => {
     this.pruneAndScheduleApprovalExpiry();
@@ -170,6 +174,31 @@ export class ConsoleHeader extends LitElement {
       this.pendingApprovalsRefreshTimer = undefined;
       void this.loadPendingApprovals();
     }, 0);
+  }
+
+  /**
+   * First read of the two bell counts.
+   *
+   * While the socket is still coming up, its CONNECTED callback re-reads both
+   * counts anyway (a connect means the gap is unknown). Loading here as well
+   * sent `approval-requests?status=pending` and the in-flight executions
+   * list twice on every console load (#1590). So wait for that callback,
+   * with a short fallback for a socket that does not come up.
+   */
+  private loadInitialLiveCounts(): void {
+    const state = unifiedWebSocketManager.getState();
+    if (
+      state === ConnectionState.CONNECTING ||
+      state === ConnectionState.RECONNECTING
+    ) {
+      this.initialLiveCountsTimer = setTimeout(() => {
+        this.initialLiveCountsTimer = undefined;
+        this.refreshLiveCounts();
+      }, INITIAL_LIVE_COUNTS_FALLBACK_MS);
+      return;
+    }
+    void this.loadRunningExecutions();
+    void this.loadPendingApprovals();
   }
 
   private handleVisibilityChange = (): void => {
@@ -468,8 +497,7 @@ export class ConsoleHeader extends LitElement {
     this.connectToFlowUpdates();
     this.connectToApprovalUpdates();
     this.connectToNotificationUpdates();
-    this.loadRunningExecutions();
-    this.loadPendingApprovals();
+    this.loadInitialLiveCounts();
     // No desktop-notification prompt here. A permission dialog before the
     // person has done anything is denied out of hand (and browsers demote
     // sites that do it), after which approval alerts can never be shown.
@@ -495,6 +523,8 @@ export class ConsoleHeader extends LitElement {
     this.approvalExpiryTimer = undefined;
     clearTimeout(this.pendingApprovalsRefreshTimer);
     this.pendingApprovalsRefreshTimer = undefined;
+    clearTimeout(this.initialLiveCountsTimer);
+    this.initialLiveCountsTimer = undefined;
   }
 
   /**
@@ -790,7 +820,10 @@ export class ConsoleHeader extends LitElement {
       (state) => {
         if (state === ConnectionState.CONNECTED) {
           // A reconnect means the gap is unknown: both counts are re-read
-          // rather than waited on, since the updates missed are gone.
+          // rather than waited on, since the updates missed are gone. This
+          // is also the first read when the header mounted mid-connect.
+          clearTimeout(this.initialLiveCountsTimer);
+          this.initialLiveCountsTimer = undefined;
           this.refreshLiveCounts();
         }
       }
