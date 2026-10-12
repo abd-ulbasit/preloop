@@ -1517,20 +1517,25 @@ export async function getCostAnalyticsSummary(
 }
 
 export type CostGranularity = 'day' | 'week' | 'month';
+/** The Overview Usage card also asks for hours (Today); the Spend chart does not. */
+export type CostSeriesGranularity = CostGranularity | 'hour';
 
-/** Gateway spend per UTC bucket; `date` is the bucket start (YYYY-MM-DD). */
+/**
+ * Gateway spend per UTC bucket; `date` is the bucket start (YYYY-MM-DD, or a
+ * full UTC timestamp for hour buckets).
+ */
 export interface CostTimeseriesResponse {
   period_start: string;
   period_end: string;
-  granularity: CostGranularity;
+  granularity: CostSeriesGranularity;
   buckets: GatewayUsageByDay[];
 }
 
-/** Spend chart series. The server caps a window at 366 days. */
+/** Spend chart series. The server caps a window at 366 days (7 for hours). */
 export async function getCostTimeseries(params: {
   startDate: string;
   endDate: string;
-  granularity: CostGranularity;
+  granularity: CostSeriesGranularity;
 }): Promise<CostTimeseriesResponse> {
   const query = new URLSearchParams({
     start_date: params.startDate,

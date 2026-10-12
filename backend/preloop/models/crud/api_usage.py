@@ -2595,10 +2595,11 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         account_ids: Optional[Sequence[str]] = None,
         granularity: str = "day",
     ) -> List[Dict[str, Any]]:
-        """Group gateway usage by UTC day (or ISO week / month).
+        """Group gateway usage by UTC day (or hour / ISO week / month).
 
-        ``granularity`` is ``day``, ``week`` (Monday start) or ``month``; each
-        bucket's ``date`` is the bucket start.
+        ``granularity`` is ``hour``, ``day``, ``week`` (Monday start) or
+        ``month``; each bucket's ``date`` is the bucket start (a full ISO
+        timestamp for ``hour``, ``YYYY-MM-DD`` otherwise).
 
         ``account_ids``, when given, aggregates over those accounts instead of
         ``account_id`` alone (account hook H8).
@@ -2608,7 +2609,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         aggregate up under the outer sort, which otherwise sorts every usage
         row. The outer query sorts only the day buckets.
         """
-        if granularity not in ("day", "week", "month"):
+        if granularity not in ("hour", "day", "week", "month"):
             raise ValueError(f"Unsupported granularity: {granularity}")
         bucket = func.date_trunc(granularity, ApiUsage.timestamp)
         grouped = db.query(
@@ -2648,7 +2649,11 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         rows = db.query(aggregated).order_by(aggregated.c.bucket.asc()).all()
         return [
             {
-                "date": row.bucket.date().isoformat(),
+                "date": (
+                    row.bucket.strftime("%Y-%m-%dT%H:00:00Z")
+                    if granularity == "hour"
+                    else row.bucket.date().isoformat()
+                ),
                 "request_count": int(row.request_count or 0),
                 "total_tokens": int(row.total_tokens or 0),
                 "input_tokens": int(row.input_tokens or 0),

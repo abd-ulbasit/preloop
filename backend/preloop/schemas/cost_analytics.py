@@ -462,9 +462,9 @@ class CostHealthResponse(BaseModel):
 
 
 class CostTimeseriesResponse(BaseModel):
-    """Gateway spend bucketed by UTC day, week or month for one window."""
+    """Gateway spend bucketed by UTC hour, day, week or month for one window."""
 
     period_start: datetime
     period_end: datetime
-    granularity: Literal["day", "week", "month"]
+    granularity: Literal["hour", "day", "week", "month"]
     buckets: List[GatewayUsageByDay] = Field(default_factory=list)

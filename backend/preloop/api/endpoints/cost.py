@@ -72,6 +72,9 @@ UNPRICED_MODELS_LIMIT = 10
 #: 366 rows; the query runs on ix_api_usage_account_action_ts either way.
 TIMESERIES_MAX_WINDOW_DAYS = 366
 
+#: Hour buckets are capped tighter: 7 days is 168 rows.
+TIMESERIES_MAX_HOURLY_WINDOW_DAYS = 7
+
 
 def _price_catalog_info() -> Optional[PriceCatalogInfo]:
     """Return vendored price-catalog provenance for the staleness indicator."""
@@ -89,7 +92,7 @@ def _price_catalog_info() -> Optional[PriceCatalogInfo]:
 def get_cost_timeseries(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    granularity: Literal["day", "week", "month"] = Query(
+    granularity: Literal["hour", "day", "week", "month"] = Query(
         "day", description="Bucket size; buckets start on UTC boundaries."
     ),
     runtime_principal_id: Optional[str] = Query(None),
@@ -109,6 +112,13 @@ def get_cost_timeseries(
         raise HTTPException(
             status_code=422,
             detail=f"Window exceeds {TIMESERIES_MAX_WINDOW_DAYS} days",
+        )
+    if granularity == "hour" and end - start > timedelta(
+        days=TIMESERIES_MAX_HOURLY_WINDOW_DAYS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Hourly window exceeds {TIMESERIES_MAX_HOURLY_WINDOW_DAYS} days"),
         )
     rows = crud_api_usage.get_gateway_usage_timeseries(
         db,

@@ -29,10 +29,15 @@ export class TimeRangeSelect extends LitElement {
   static styles = css`
     :host {
       display: inline-block;
+      max-width: 100%;
+      min-width: 0;
     }
 
+    /* Never wider than the header it sits in: at 200% zoom a fixed width
+       pushed the control out of the Usage card. */
     sl-select {
-      width: var(--time-range-select-width, 96px);
+      max-width: 100%;
+      width: min(var(--time-range-select-width, 96px), 100%);
     }
 
     sl-select::part(combobox) {
