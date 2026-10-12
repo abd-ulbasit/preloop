@@ -167,6 +167,8 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "PersonAuthIdentity",
+    "PersonPasswordCredential",
     "AUDIT_OUTBOX_DELIVERED",
     "AUDIT_OUTBOX_FAILED",
     "AUDIT_OUTBOX_PENDING",
@@ -356,3 +358,5 @@ from .readiness import (
     ReadinessSeries,
     TicketCreationRecord,
 )
+
+from .person_auth_identity import PersonAuthIdentity, PersonPasswordCredential

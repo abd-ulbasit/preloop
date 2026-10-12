@@ -45,6 +45,39 @@ def _unwrap_exception_group(exc: BaseException) -> BaseException:
     return exc
 
 
+def describe_mcp_connection_error(exc: BaseException) -> str:
+    """Explain the failure without exposing request URLs, headers or credentials."""
+    cause = _unwrap_exception_group(exc)
+    if isinstance(cause, httpx.HTTPStatusError):
+        code = cause.response.status_code
+        if code in {401, 403}:
+            return (
+                f"MCP server rejected authentication or authorization (HTTP {code}). "
+                "Configure or reconnect authentication in Preloop, then rescan. "
+                "Credentials cached by your local agent may require a separate sign-in."
+            )
+        if code == 404:
+            return (
+                "MCP endpoint not found (HTTP 404). Verify the server URL and rescan."
+            )
+        return (
+            f"MCP server returned HTTP {code}. "
+            "Check the server endpoint and availability, then rescan."
+        )
+    if isinstance(cause, (httpx.TimeoutException, TimeoutError)):
+        return "MCP server timed out. Check server availability and rescan."
+    if isinstance(cause, (httpx.ConnectError, ConnectionError)):
+        return (
+            "Could not connect to the MCP server. Check its address and network "
+            "reachability from Preloop. A localhost endpoint must run where Preloop "
+            "is hosted or be exposed through a reachable address."
+        )
+    return (
+        f"MCP connection failed ({type(cause).__name__}). "
+        "Verify the endpoint, authentication and MCP protocol, then rescan."
+    )
+
+
 class UpstreamToolContent(list):
     """Content blocks of an upstream ``CallToolResult``.
 
@@ -247,43 +280,21 @@ class MCPClient:
                 f"(protocol: {init_result.protocolVersion}, "
                 f"server: {init_result.serverInfo.name})"
             )
-        except Exception as e:
-            logger.warning("Failed to connect to MCP server at %s: %s", self.url, e)
-            self._connected = False
-            raise
         except BaseException as e:
-            # Catch BaseExceptionGroup which can be triggered when a TaskGroup
-            # receives a GeneratorExit alongside a real Exception (like HTTPStatusError)
-            target_exc = e
-            if type(e).__name__ in ("ExceptionGroup", "BaseExceptionGroup"):
-                # Extract the first normal Exception (e.g. HTTPStatusError)
-                # ignoring BaseExceptions like GeneratorExit
-                exceptions = getattr(e, "exceptions", [])
-                for exc in exceptions:
-                    if isinstance(exc, Exception):
-                        target_exc = exc
-                        break
-
+            target_exc = _unwrap_exception_group(e)
             logger.warning(
-                "Failed to connect to MCP server at %s: %s",
-                self.url,
-                target_exc,
+                "Failed to connect to MCP server: %s", describe_mcp_connection_error(e)
             )
             self._connected = False
-
-            # Only re-raise as Exception if we unwrapped an Exception.
-            # If it's pure BaseException (like KeyboardInterrupt), re-raise it perfectly.
             if isinstance(target_exc, Exception):
-                raise target_exc
-
-            # Convert SDK cancel scope BaseExceptions into standard Exceptions to prevent router 500s
-            if "cancel scope" in str(target_exc).lower() or type(e).__name__ in (
-                "ExceptionGroup",
-                "BaseExceptionGroup",
+                raise target_exc from None
+            if "cancel scope" in str(target_exc).lower() or isinstance(
+                e, BaseExceptionGroup
             ):
-                raise ConnectionError(f"Connection aborted: {target_exc}")
-
-            raise e
+                raise ConnectionError(
+                    "MCP connection aborted during session setup"
+                ) from None
+            raise
 
     async def close(self):
         """Close the connection to the MCP server."""

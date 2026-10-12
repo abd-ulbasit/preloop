@@ -347,6 +347,10 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert result_schema.down_revision == "20261011_runner_presence"
     audit_outbox = script.get_revision("20261011_audit_outbox")
     assert audit_outbox.down_revision == "20261011_flow_result_schema"
+    identity_schema = script.get_revision("20261012_identity_schema")
+    assert identity_schema.down_revision == "20261011_audit_outbox"
+    identity_backfill = script.get_revision("20261012_identity_backfill")
+    assert identity_backfill.down_revision == "20261012_identity_schema"
     session_alias = script.get_revision("20261011_session_alias")
-    assert session_alias.down_revision == "20261011_audit_outbox"
+    assert session_alias.down_revision == "20261012_identity_backfill"
     assert script.get_heads() == ["20261011_session_alias"]
