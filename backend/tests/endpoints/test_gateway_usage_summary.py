@@ -633,11 +633,38 @@ def test_account_runtime_sessions_endpoints(client, db_session, test_user):
     assert "deployment risk" in interactions_body["items"][0]["excerpt"].lower()
     # The session interactions answer carries has_more too (#1620 review).
     assert interactions_body["has_more"] is False
+    second = crud_api_usage.log_gateway_request(
+        db_session,
+        endpoint="/anthropic/v1/messages",
+        method="POST",
+        status_code=200,
+        duration=0.1,
+        user_id=str(test_user.id),
+        account_id=str(test_user.account_id),
+        runtime_session_id=str(runtime_session.id),
+        model_alias="anthropic/claude-sonnet-4",
+        provider_name="anthropic",
+        prompt_tokens=5,
+        completion_tokens=3,
+        total_tokens=8,
+        estimated_cost=0.01,
+    )
+    GatewayUsageSearchService(db_session).index_interaction(
+        usage=second,
+        request_payload={"input": "Follow-up question"},
+        response_payload={"output_text": "Follow-up answer"},
+    )
     paged = client.get(
         f"/api/v1/runtime-sessions/{runtime_session.id}/interactions",
         params={"interaction_limit": 1},
     ).json()
-    assert paged["has_more"] is (paged["total"] > 1)
+    assert paged["total"] == 2
+    assert paged["has_more"] is True
+    last = client.get(
+        f"/api/v1/runtime-sessions/{runtime_session.id}/interactions",
+        params={"interaction_limit": 1, "interaction_offset": 1},
+    ).json()
+    assert last["has_more"] is False
 
 
 def test_account_runtime_sessions_use_most_recent_model_alias(
