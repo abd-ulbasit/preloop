@@ -741,6 +741,11 @@ export class RuntimeSessionsView extends LitElement {
       }
 
       @media (max-width: 720px) {
+        /* Phone: 44px tap target (DESIGN.md D24). */
+        sl-button.new-runner-session {
+          --sl-input-height-small: 44px;
+        }
+
         .filter-actions {
           margin-left: 0;
           width: 100%;

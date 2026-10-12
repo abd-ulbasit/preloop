@@ -84,6 +84,14 @@ export class OperatorNoteComposer extends LitElement {
       min-width: 0;
     }
 
+    /* Phone: 44px tap target for Send (DESIGN.md D24). */
+    @media (max-width: 720px) {
+      .row sl-button {
+        --sl-input-height-medium: 44px;
+        min-width: 44px;
+      }
+    }
+
     sl-textarea::part(form-control-label) {
       clip: rect(0 0 0 0);
       clip-path: inset(50%);

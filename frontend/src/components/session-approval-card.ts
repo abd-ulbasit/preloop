@@ -83,6 +83,17 @@ export class SessionApprovalCard extends LitElement {
     .error {
       color: var(--sl-color-danger-700);
     }
+    /* Phone: 44px tap targets for the decision (DESIGN.md D24). */
+    @media (max-width: 720px) {
+      .actions sl-button {
+        --sl-input-height-medium: 44px;
+        min-width: 44px;
+      }
+      button,
+      a {
+        min-height: 44px;
+      }
+    }
   `;
   protected willUpdate(changed: Map<string | number | symbol, unknown>): void {
     const previous = changed.get('request') as ApprovalRequest | undefined;
