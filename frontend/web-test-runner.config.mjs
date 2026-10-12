@@ -3,6 +3,7 @@ import { esbuildPlugin } from '@web/dev-server-esbuild';
 import fs from 'fs/promises';
 import path from 'path';
 import { testConcurrency } from './scripts/test-concurrency.mjs';
+import { desktopMockServerPlugin } from './scripts/desktop-mock-server.mjs';
 
 const headed = process.env.HEADED === 'true';
 const concurrency = testConcurrency();
@@ -27,10 +28,14 @@ export default {
   ...(concurrency === undefined ? {} : { concurrency }),
   plugins: [
     cssInlinePlugin,
+    // Viewer socket of the #870 live desktop view, for desktop-view tests.
+    desktopMockServerPlugin(),
     esbuildPlugin({
       ts: true,
       tsconfig: './tsconfig.json',
-      target: 'es2020',
+      // es2022: the vendored noVNC (vendor/novnc) uses top-level await, which
+      // every browser the console supports runs natively.
+      target: 'es2022',
       // Vite substitutes this in `npm run build`; the test runner serves the
       // same dependency sources untouched, so a library guarded by
       // `process.env.NODE_ENV` (table-core's debug logging) threw

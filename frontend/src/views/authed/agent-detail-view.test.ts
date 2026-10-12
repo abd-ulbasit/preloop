@@ -438,6 +438,111 @@ describe('AgentDetailView', () => {
     localStorage.clear();
   });
 
+  describe('live desktop (#870)', () => {
+    const endpoint = {
+      id: '00000000-0000-4000-8000-000000000001',
+      endpoint_id: 'host-endpoint-1',
+      hostname: 'agent-vm.example.com',
+      display: ':99',
+      managed_agent_id: 'agent-1',
+      runner_id: null,
+      state: 'online',
+      last_seen_at: '2026-10-11T18:00:00Z',
+      active_view: null,
+    };
+
+    function withEndpoints(respond: () => Response) {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          if (url.startsWith('/api/v1/desktop/endpoints?')) return respond();
+          return defaultFetch(input, init);
+        }
+      );
+    }
+
+    const desktopTab = (el: AgentDetailView) =>
+      el.shadowRoot!.querySelector('sl-tab[panel="desktop"]');
+
+    it('shows a Desktop tab with the viewer when an online endpoint is linked', async () => {
+      withEndpoints(
+        () =>
+          new Response(JSON.stringify({ endpoints: [endpoint] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => desktopTab(el), 'Desktop tab', { timeout: 5000 });
+      const lookup = fetchStub
+        .getCalls()
+        .map((call) => call.args[0].toString())
+        .find((url) => url.startsWith('/api/v1/desktop/endpoints?'))!;
+      expect(lookup).to.contain('managed_agent_id=agent-1');
+      expect(lookup).to.contain('state=online');
+      expect(desktopTab(el)!.textContent).to.contain('Desktop');
+
+      (el as any).activeTab = 'desktop';
+      await el.updateComplete;
+      const card = el.shadowRoot!.querySelector('.desktop-tab')!;
+      expect(card.textContent).to.contain('agent-vm.example.com');
+      const viewer = card.querySelector('desktop-view') as any;
+      expect(viewer).to.exist;
+      expect(viewer.endpointId).to.equal(endpoint.id);
+      await viewer.updateComplete;
+      // Nothing opens until the operator asks.
+      expect(viewer.viewerState).to.equal('idle');
+      expect(
+        viewer.shadowRoot.querySelector('sl-button.open').textContent
+      ).to.contain('Open live view');
+    });
+
+    it('has no Desktop tab when the server has desktop views off (404)', async () => {
+      withEndpoints(
+        () =>
+          new Response(
+            JSON.stringify({
+              detail: { code: 'desktop_views_disabled', message: 'off' },
+            }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => !(el as any).loading);
+      await waitUntil(() =>
+        fetchStub
+          .getCalls()
+          .some((call) =>
+            call.args[0].toString().startsWith('/api/v1/desktop/endpoints?')
+          )
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await el.updateComplete;
+      expect(desktopTab(el)).to.be.null;
+    });
+
+    it('has no Desktop tab when no linked endpoint is online', async () => {
+      withEndpoints(
+        () =>
+          new Response(
+            JSON.stringify({ endpoints: [{ ...endpoint, state: 'offline' }] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => !(el as any).loading);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await el.updateComplete;
+      expect(desktopTab(el)).to.be.null;
+    });
+  });
+
   it('defers all editor catalogs on the sessions tab and shares a single load across editors', async () => {
     const el = await fixture<AgentDetailView>(
       html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
@@ -1054,14 +1159,17 @@ describe('AgentDetailView', () => {
 
     (element as any).agent = { ...(element as any).agent, desktop: 'vnc' };
     await element.updateComplete;
-    expect(badge()?.textContent).to.contain(
-      'Desktop: VNC (loopback, brokered access coming)'
-    );
+    expect(badge()?.textContent).to.contain('Desktop: VNC (loopback)');
 
     (element as any).agent = { ...(element as any).agent, desktop: 'rdp' };
     await element.updateComplete;
+    expect(badge()?.textContent).to.contain('Desktop: RDP (loopback)');
+
+    // An online desktop endpoint (#870) makes the live view reachable.
+    (element as any).desktopEndpoints = [{ id: 'endpoint-1' }];
+    await element.updateComplete;
     expect(badge()?.textContent).to.contain(
-      'Desktop: RDP (loopback, brokered access coming)'
+      'Desktop: RDP (live view available)'
     );
   });
 

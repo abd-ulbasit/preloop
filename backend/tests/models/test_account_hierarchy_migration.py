@@ -53,6 +53,13 @@ def _load(name: str):
 
 
 def _downgrade_all(connection) -> None:
+    # Reconstruct only the historical snapshot inside this rollback-only test
+    # transaction. Production identity migrations intentionally refuse downgrade.
+    connection.execute(text("DROP TABLE IF EXISTS person_auth_identity"))
+    connection.execute(text("DROP TABLE IF EXISTS person_password_credential"))
+    connection.execute(
+        text("ALTER TABLE webauthn_credential DROP COLUMN IF EXISTS person_id")
+    )
     with Operations.context(MigrationContext.configure(connection)):
         for name in reversed(REVISIONS):
             _load(name).downgrade()
