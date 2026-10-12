@@ -43,6 +43,16 @@ class CRUDAIModel(CRUDBase[AIModel]):
     """CRUD class for AIModel operations."""
 
     @staticmethod
+    def _is_retired_system_model(ai_model: AIModel) -> bool:
+        """Retain historical global rows without selecting them for new work."""
+        metadata = ai_model.meta_data if isinstance(ai_model.meta_data, dict) else {}
+        gateway = metadata.get("gateway")
+        return ai_model.account_id is None and (
+            metadata.get("retired") is True
+            or (isinstance(gateway, dict) and gateway.get("enabled") is False)
+        )
+
+    @staticmethod
     def _model_kind(ai_model: AIModel) -> str:
         return getattr(ai_model, "model_kind", "llm")
 
@@ -293,6 +303,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
             ).all()
             if self._model_kind(ai_model) == normalized_model_kind
             and ai_model.supports_server_side_generation
+            and not self._is_retired_system_model(ai_model)
         ]
         if not candidates:
             return None
@@ -657,7 +668,12 @@ class CRUDAIModel(CRUDBase[AIModel]):
     def get_all_for_account(
         self, db: Session, *, account_id: uuid.UUID | str
     ) -> list[AIModel]:
-        """Get all configured AIModels available to the account, including system defaults.
+        """Get account models and non-retired system defaults.
+
+        Global rows explicitly retired via ``meta_data.retired=true`` or the
+        existing ``meta_data.gateway.enabled=false`` marker remain available through
+        ``get`` for historical references but cannot serve new model discovery.
+        Account-owned models ignore this operator-only retirement marker.
 
         Results are ordered deterministically: account-owned models before system
         defaults, then oldest-first by ``created_at``, with ``id`` as a final
@@ -668,7 +684,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
 
         shared_ids = extra_visible_ids(db, account_id, VISIBLE_AI_MODEL)
         if not shared_ids:
-            return (
+            rows = (
                 db.query(self.model)
                 .filter(
                     or_(
@@ -683,13 +699,14 @@ class CRUDAIModel(CRUDBase[AIModel]):
                 )
                 .all()
             )
+            return [row for row in rows if not self._is_retired_system_model(row)]
         # Models shared from another account (account hook H3) sit between
         # the account's own models and system defaults, so an own alias
         # shadows a shared one and a shared alias shadows a system one.
         own = self.model.account_id == account_id
         system = self.model.account_id.is_(None)
         rank = case((own, 0), (system, 2), else_=1)
-        return (
+        rows = (
             db.query(self.model)
             .filter(or_(own, system, self.model.id.in_(shared_ids)))
             .order_by(
@@ -699,6 +716,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
             )
             .all()
         )
+        return [row for row in rows if not self._is_retired_system_model(row)]
 
     def update(
         self,
