@@ -4,6 +4,10 @@
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  /* Containing block for absolutely positioned cell content (the
+     visually-hidden header labels): without it they escape the scroll box
+     and widen the whole page, e.g. Agents at 1537px in a 1440px window. */
+  position: relative;
 }
 
 /* Shoelace cards default to inline-block; let a wide table shrink within them. */
