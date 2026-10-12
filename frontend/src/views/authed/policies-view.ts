@@ -2219,7 +2219,7 @@ export class PoliciesView extends LitElement {
               </div>
               <table-pagination
                 class="rules-pager"
-                page-index=${this._rulePage}
+                page-index=${this.rulePageOf(rules.length)}
                 page-size=${this._rulePageSize}
                 .pageSizes=${[10, 25, 50]}
                 .total=${rules.length}
@@ -2239,11 +2239,16 @@ export class PoliciesView extends LitElement {
     `;
   }
 
-  /** The rule cards of the current page; a page past the end shows the last. */
+  /** The page shown: a page past the end (rules deleted) is the last one. */
+  private rulePageOf(count: number): number {
+    const last = Math.max(0, Math.ceil(count / this._rulePageSize) - 1);
+    return Math.min(this._rulePage, last);
+  }
+
+  /** The rule cards of the current page. */
   private rulesOnPage<T>(rules: T[]): T[] {
     const size = this._rulePageSize;
-    const last = Math.max(0, Math.ceil(rules.length / size) - 1);
-    const page = Math.min(this._rulePage, last);
+    const page = this.rulePageOf(rules.length);
     return rules.slice(page * size, page * size + size);
   }
 

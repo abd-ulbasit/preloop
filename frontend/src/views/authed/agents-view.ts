@@ -177,18 +177,6 @@ const RELATIVE_TIME_DAYS = 90;
  */
 export type AgentLifecycleAction = AgentLifecycleMove;
 
-export type AgentListSortKey =
-  | 'agent'
-  | 'status'
-  | 'owner'
-  | 'model'
-  | 'requests'
-  | 'tokens'
-  | 'spend'
-  | 'last_seen';
-
-export type SortDirection = 'asc' | 'desc';
-
 /** One normalized table row, covering both managed agents and flow nodes. */
 export interface AgentListRow {
   id: string;
@@ -218,73 +206,6 @@ export interface AgentListRow {
   lastSeen: string | null;
   /** The original API item, so row actions keep working on the real object. */
   source: any;
-}
-
-/** Total tokens for sorting; matches the figure the cell states. */
-function tokenTotal(usage: GatewayTokenUsage | null): number {
-  return totalTokensOf(usage);
-}
-
-function timestampValue(value: string | null): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
-}
-
-/** Sorts blank owners to the end of an ascending sort. */
-function ownerSortValue(row: AgentListRow): string {
-  return row.owner || '￿';
-}
-
-function compareRowsByKey(
-  a: AgentListRow,
-  b: AgentListRow,
-  key: AgentListSortKey
-): number {
-  switch (key) {
-    case 'agent':
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    case 'status':
-      return a.statusLabel.localeCompare(b.statusLabel, undefined, {
-        sensitivity: 'base',
-      });
-    case 'owner':
-      // Unassigned agents have no owner to alphabetise, so they sort after
-      // every named owner rather than landing at the top of an A-Z sort.
-      return ownerSortValue(a).localeCompare(ownerSortValue(b), undefined, {
-        sensitivity: 'base',
-      });
-    case 'model':
-      return a.modelLabel.localeCompare(b.modelLabel, undefined, {
-        sensitivity: 'base',
-      });
-    case 'requests':
-      return a.requests - b.requests;
-    case 'tokens':
-      return tokenTotal(a.tokenUsage) - tokenTotal(b.tokenUsage);
-    case 'spend':
-      return a.spend - b.spend;
-    case 'last_seen':
-      return timestampValue(a.lastSeen) - timestampValue(b.lastSeen);
-  }
-}
-
-/**
- * Sorts table rows without mutating the input. Ties fall back to the agent
- * name so a re-sort on a column full of equal values (every Idle agent, every
- * zero-spend agent) still produces a stable, readable order.
- */
-export function sortAgentListRows(
-  rows: AgentListRow[],
-  key: AgentListSortKey,
-  direction: SortDirection
-): AgentListRow[] {
-  const factor = direction === 'asc' ? 1 : -1;
-  return [...rows].sort((a, b) => {
-    const primary = compareRowsByKey(a, b, key);
-    if (primary !== 0) return primary * factor;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  });
 }
 
 const CANVAS_LAYOUT_VERSION = 'polygon-rings-v1';

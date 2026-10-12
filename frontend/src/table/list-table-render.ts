@@ -102,7 +102,7 @@ function renderListHeader<TRow extends RowData>(
               role="separator"
               tabindex="0"
               aria-orientation="vertical"
-              aria-valuemin=${MIN_COLUMN_WIDTH}
+              aria-valuemin=${column.minWidth ?? MIN_COLUMN_WIDTH}
               aria-valuemax=${MAX_COLUMN_WIDTH}
               aria-valuenow=${
                 header.width ??

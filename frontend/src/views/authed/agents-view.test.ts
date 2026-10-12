@@ -3,7 +3,7 @@ import sinon from 'sinon';
 
 import './agents-view.ts';
 import type { AgentListRow, AgentsView } from './agents-view';
-import { sortAgentListRows } from './agents-view';
+import { ListTable } from '../../table';
 import { loadShoelaceTokens } from '../../utils/test-shoelace-theme';
 import { resetConfirmDialogForTests } from '../../components/confirm-dialog';
 import { bulkActionButton, bulkCountText } from '../../utils/test-bulk-bar';
@@ -1698,7 +1698,7 @@ describe('AgentsView', () => {
   });
 });
 
-describe('sortAgentListRows', () => {
+describe('agents list sorting (shared table columns)', () => {
   const rows = [
     makeRow({
       id: 'b',
@@ -1726,25 +1726,43 @@ describe('sortAgentListRows', () => {
     }),
   ];
 
-  const ids = (
-    key: Parameters<typeof sortAgentListRows>[1],
+  /** The view's own column definitions on a bare table model. */
+  function sorted(
+    data: AgentListRow[],
+    id: string,
     dir: 'asc' | 'desc'
-  ) => sortAgentListRows(rows, key, dir).map((row) => row.id);
+  ): string[] {
+    const view = document.createElement('agents-view') as unknown as {
+      agentColumns(): ConstructorParameters<typeof ListTable>[1]['columns'];
+    };
+    const table = new ListTable<AgentListRow>(
+      { addController() {}, requestUpdate() {} } as never,
+      {
+        listId: `agents-sort-${Math.random()}`,
+        getRowId: (row) => row.id,
+        persist: [],
+        columns: view.agentColumns() as never,
+      }
+    );
+    table.data = data;
+    table.setSorting([{ id, desc: dir === 'desc' }]);
+    return table.rows.map((row) => row.id);
+  }
 
   it('does not mutate the rows it is given', () => {
     const before = rows.map((row) => row.id);
-    sortAgentListRows(rows, 'agent', 'asc');
+    sorted(rows, 'agent', 'asc');
     expect(rows.map((row) => row.id)).to.deep.equal(before);
   });
 
   it('sorts by name in both directions', () => {
-    expect(ids('agent', 'asc')).to.deep.equal(['a', 'b', 'c']);
-    expect(ids('agent', 'desc')).to.deep.equal(['c', 'b', 'a']);
+    expect(sorted(rows, 'agent', 'asc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'agent', 'desc')).to.deep.equal(['c', 'b', 'a']);
   });
 
   it('sorts numeric columns by value, not by their formatted text', () => {
-    expect(ids('requests', 'desc')).to.deep.equal(['c', 'b', 'a']);
-    expect(ids('spend', 'desc')).to.deep.equal(['a', 'c', 'b']);
+    expect(sorted(rows, 'requests', 'desc')).to.deep.equal(['c', 'b', 'a']);
+    expect(sorted(rows, 'spend', 'desc')).to.deep.equal(['a', 'c', 'b']);
   });
 
   it('sorts tokens by the total the cell states', () => {
@@ -1780,19 +1798,25 @@ describe('sortAgentListRows', () => {
       }),
       makeRow({ id: 'none', name: 'None', tokenUsage: null }),
     ];
-    expect(
-      sortAgentListRows(tokenRows, 'tokens', 'desc').map((row) => row.id)
-    ).to.deep.equal(['large', 'small', 'split', 'none']);
-    expect(
-      sortAgentListRows(tokenRows, 'tokens', 'asc').map((row) => row.id)
-    ).to.deep.equal(['none', 'split', 'small', 'large']);
+    expect(sorted(tokenRows, 'tokens', 'desc')).to.deep.equal([
+      'large',
+      'small',
+      'split',
+      'none',
+    ]);
+    expect(sorted(tokenRows, 'tokens', 'asc')).to.deep.equal([
+      'none',
+      'split',
+      'small',
+      'large',
+    ]);
   });
 
   it('sorts last seen newest first and keeps never-seen agents last', () => {
-    expect(ids('last_seen', 'desc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'last_seen', 'desc')).to.deep.equal(['a', 'b', 'c']);
   });
 
   it('sorts owners alphabetically with unassigned agents last', () => {
-    expect(ids('owner', 'asc')).to.deep.equal(['a', 'b', 'c']);
+    expect(sorted(rows, 'owner', 'asc')).to.deep.equal(['a', 'b', 'c']);
   });
 });

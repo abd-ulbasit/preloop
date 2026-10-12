@@ -299,6 +299,8 @@ describe('PoliciesView', () => {
     // A page past the end (rules deleted) shows the last page.
     view._rulePage = 9;
     expect(view.rulesOnPage(rules)).to.have.length(3);
+    // The pager is told the same clamped page the cards use.
+    expect(view.rulePageOf(rules.length)).to.equal(2);
   });
 
   it('does not loop fetching versions when the list is empty', async () => {

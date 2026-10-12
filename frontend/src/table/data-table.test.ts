@@ -6,6 +6,7 @@ import { ListSelectionController } from '../components/list-selection';
 import { ListTable } from './list-table';
 import type { ListColumn, ListQuery } from './list-table';
 import { dataTableStyles } from './data-table-styles';
+import { listTableStyles } from './list-table-styles';
 import { renderDataTableToolbar } from './data-table-toolbar';
 import { readTableUrlState, writeTableUrlState } from './table-url-state';
 import { tablePreferencesKey } from './table-preferences';
@@ -554,7 +555,7 @@ describe('data-table: rowDetail and available()', () => {
 });
 
 describe('data-table: truncate and minWidth', () => {
-  it('cuts a long cell on an inner block with the full text on hover', async () => {
+  function twoColumnTable() {
     const table = new ListTable<Key>(
       { addController() {}, requestUpdate() {} } as never,
       {
@@ -566,18 +567,36 @@ describe('data-table: truncate and minWidth', () => {
             header: 'Name',
             truncate: true,
             minWidth: 120,
+            width: 200,
             value: (row) => row.name,
             cell: (row) => row.name,
+          },
+          // A second column, so the first header is not :last-child (where
+          // the resize handle is hidden) and the handle is really measured.
+          {
+            id: 'uses',
+            header: 'Uses',
+            value: (row) => row.uses,
+            cell: (row) => String(row.uses),
           },
         ],
       }
     );
     table.data = [{ id: 'a', name: 'x'.repeat(400), scope: 'read', uses: 1 }];
+    return table;
+  }
+
+  it('cuts a long cell on an inner block with the full text on hover', async () => {
+    const table = twoColumnTable();
     const el = await fixture<HTMLElement>(
-      html`<div style="width: 400px">
+      html`<div style="width: 600px">
         <data-table .table=${table} .rows=${table.rows}></data-table>
       </div>`
     );
+    // The view's styles, as a view would adopt them.
+    const style = document.createElement('style');
+    style.textContent = listTableStyles.cssText;
+    el.prepend(style);
     const dataTable = el.querySelector('data-table') as LitElement;
     await dataTable.updateComplete;
     const td = el.querySelector('td')!;
@@ -585,7 +604,18 @@ describe('data-table: truncate and minWidth', () => {
     expect(td.querySelector('.cell-truncate')).to.exist;
     const th = el.querySelector('th')!;
     expect(th.getAttribute('style')).to.contain('min-width: 120px');
-    // The handle sits inside the header, so the header does not overflow.
+    const handle = th.querySelector('.col-resize') as HTMLElement;
+    expect(getComputedStyle(handle).display).to.not.equal('none');
+    expect(handle.getAttribute('aria-valuemin')).to.equal('120');
+    // The handle sits inside the header, so the header does not overflow,
+    // and the cut text does not widen its cell either.
     expect(th.scrollWidth).to.be.at.most(th.clientWidth + 2);
+    expect(td.scrollWidth).to.be.at.most(td.clientWidth + 2);
+  });
+
+  it('stops a resize at the column minWidth', () => {
+    const table = twoColumnTable();
+    table.resizeBy('name', -500);
+    expect(table.widthOfColumn('name')).to.equal(120);
   });
 });
