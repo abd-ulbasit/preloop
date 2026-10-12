@@ -594,3 +594,6 @@ Three arrive as webhook events, `agent.note_sent`, `agent.note_delivered` and
 written to the runtime session timeline where it landed, with its channel and
 turn index, so the execution view shows the note in the stream of what the
 agent was doing when it arrived.
+
+For spawn-time aliases, parent lineage, and session id handoffs, see
+[Spawning workers](spawning-workers.md).

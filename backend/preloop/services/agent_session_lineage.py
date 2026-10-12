@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -69,6 +70,7 @@ class SessionStartResult:
     parent_session_id: Optional[str]
     started_at: datetime
     created: bool
+    alias: Optional[str] = None
 
 
 def as_uuid(value: Any) -> Optional[uuid.UUID]:
@@ -276,6 +278,7 @@ def register_session_start(
     cwd: Optional[str] = None,
     parent_session_id: Any = None,
     first_prompt: Optional[str] = None,
+    alias: Optional[str] = None,
 ) -> Optional[SessionStartResult]:
     """Create or find the run's session and record what the hook knows.
 
@@ -292,6 +295,8 @@ def register_session_start(
     external = normalize_session_id(external_session_id)
     if external is None:
         return None
+    alias = re.sub(r"[^A-Za-z0-9._-]", "-", alias or "")[:64] or None
+    crud_runtime_session.lock_alias_account(db, account_id=account_id)
     source_id = session_source_id_for(principal_id, external)
     parent_id: Optional[uuid.UUID] = None
     parent_uuid = as_uuid(parent_session_id)
@@ -313,6 +318,16 @@ def register_session_start(
     )
     if existing is not None and parent_id == existing.id:
         parent_id = None
+    if existing is not None and existing.alias:
+        if parent_id is not None and existing.parent_session_id is None:
+            existing.parent_session_id = parent_id
+        crud_runtime_session.assign_spawn_alias(
+            db,
+            session=existing,
+            alias=alias,
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
     now = datetime.now(UTC)
     upsert_kwargs = dict(
         account_id=account_id,
@@ -333,13 +348,21 @@ def register_session_start(
         # The gateway created the same row between our read and our insert.
         # One retry finds it and goes through the update path instead.
         db.rollback()
+        crud_runtime_session.lock_alias_account(db, account_id=account_id)
         session = crud_runtime_session.upsert_by_source(db, **upsert_kwargs)
     if cwd and not session.cwd:
         session.cwd = cwd[:1024]
     label = principal_label(agent_kind or principal_type, cwd or session.cwd)
     if not session.runtime_principal_name:
         session.runtime_principal_name = label or principal_name
-    title = title_from_prompt(first_prompt)
+    crud_runtime_session.assign_spawn_alias(
+        db,
+        session=session,
+        alias=alias,
+        principal_type=principal_type,
+        principal_id=principal_id,
+    )
+    title = session.alias or title_from_prompt(first_prompt)
     if title and not session.title:
         session.title = title
     db.add(session)
@@ -352,4 +375,5 @@ def register_session_start(
         ),
         started_at=session.started_at,
         created=existing is None and not raced,
+        alias=session.alias,
     )

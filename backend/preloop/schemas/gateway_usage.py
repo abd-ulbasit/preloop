@@ -362,6 +362,7 @@ class RuntimeSessionSummary(BaseModel):
     #: The session that spawned this one, when the harness reported it.
     #: ``None`` means the lineage is unknown, which is the normal case: most
     #: harnesses do not distinguish a subagent's traffic from their own.
+    alias: Optional[str] = None
     parent_session_id: Optional[str] = None
     runtime_principal_type: Optional[str] = None
     runtime_principal_id: Optional[str] = None

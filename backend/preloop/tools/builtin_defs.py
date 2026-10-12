@@ -272,7 +272,8 @@ SEND_NOTE_TOOL: Dict[str, Any] = {
     "description": (
         "Steer a running agent you started (worker, subagent, flow run) "
         "without restarting it. Target its runtime_session_id (from "
-        "list_sessions, or the id printed at spawn), its external session id "
+        "list_sessions, or the id printed at spawn), its spawn-time alias "
+        "(PRELOOP_SESSION_ALIAS), its external session id "
         "(the harness's own session id, e.g. the Claude Code session_id), or "
         "children='latest' / 'all' for the live runs your session started. "
         "Delivered at its next turn boundary, recorded with you as author. "
@@ -318,6 +319,11 @@ SEND_NOTE_TOOL: Dict[str, Any] = {
                     "list_sessions returns it, and the SessionStart hook "
                     "prints it at spawn."
                 ),
+            },
+            "alias": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Spawn-time session alias, set with PRELOOP_SESSION_ALIAS.",
             },
             "external_session_id": {
                 "type": "string",
@@ -591,8 +597,8 @@ LIST_SESSIONS_TOOL: Dict[str, Any] = {
         "Find the runtime_session_id of a run you started, to steer it with "
         "send_note. With no arguments it returns your session's live "
         "children, newest first: id, started_at, agent_kind, cwd, "
-        "parent_session_id, title and is_active_now. Filter by "
-        "started_since, external_session_id, agent_kind, cwd or "
+        "parent_session_id, alias, title and is_active_now. Filter by "
+        "alias, started_since, external_session_id, agent_kind, cwd or "
         "active_only=false to include ended runs. Listing another session's "
         "children, or every session in the account (parent_session_id "
         "'any'), needs the operator's account grant, the same one "
@@ -621,6 +627,11 @@ LIST_SESSIONS_TOOL: Dict[str, Any] = {
                 "type": "string",
                 "format": "date-time",
                 "description": "Only runs started at or after this instant (ISO 8601).",
+            },
+            "alias": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Spawn-time session alias, set with PRELOOP_SESSION_ALIAS.",
             },
             "external_session_id": {
                 "type": "string",

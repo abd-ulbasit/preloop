@@ -958,6 +958,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
         agent_id: str | None = None,
         runtime_session_id: str | None = None,
         execution_id: str | None = None,
+        alias: str | None = None,
         external_session_id: str | None = None,
         children: str | None = None,
         ctx: Optional[Context] = None,
@@ -996,6 +997,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
             "agent_id": agent_id,
             "runtime_session_id": runtime_session_id,
             "execution_id": execution_id,
+            "alias": alias,
             "external_session_id": external_session_id,
             "children": children,
         }
@@ -1030,6 +1032,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
                 agent_id=agent_id,
                 runtime_session_id=runtime_session_id,
                 execution_id=execution_id,
+                alias=alias,
                 external_session_id=external_session_id,
                 children=children,
                 author_session_ids=author_sessions,
@@ -1346,6 +1349,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
     async def list_sessions(
         parent_session_id: str | None = None,
         started_since: str | None = None,
+        alias: str | None = None,
         external_session_id: str | None = None,
         agent_kind: str | None = None,
         cwd: str | None = None,
@@ -1388,6 +1392,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
             arguments={
                 "parent_session_id": parent_session_id,
                 "started_since": started_since,
+                "alias": alias,
                 "external_session_id": external_session_id,
                 "agent_kind": agent_kind,
                 "cwd": cwd,
@@ -1415,6 +1420,7 @@ def initialize_mcp_with_tools() -> DynamicFastMCP:
                 },
                 parent_session_id=parent_session_id,
                 started_since=started_since,
+                alias=alias,
                 external_session_id=external_session_id,
                 agent_kind=agent_kind,
                 cwd=cwd,

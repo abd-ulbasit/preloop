@@ -1660,6 +1660,7 @@ export class RuntimeSessionsView extends LitElement {
 
   private getSessionDisplayName(session: RuntimeSessionSummary): string {
     return (
+      session.alias ??
       session.runtime_principal_name ??
       session.flow_name ??
       session.session_reference ??

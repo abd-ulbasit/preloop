@@ -44,6 +44,24 @@ class TestOperatorNoteCreateTarget:
         with pytest.raises(ValidationError, match="Name exactly one of"):
             OperatorNoteCreate(text="Check the tests", **fields)
 
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"alias": "worker", "external_session_id": "native-id"},
+            {"alias": "worker", "children": "all", "parent_session_id": uuid.uuid4()},
+        ],
+    )
+    def test_new_target_conflicts_list_every_supported_target(
+        self, fields: Dict[str, Any]
+    ) -> None:
+        with pytest.raises(ValidationError) as error:
+            OperatorNoteCreate(text="Check the tests", **fields)
+
+        assert (
+            "Name exactly one of agent_id, runtime_session_id, execution_id, "
+            "alias, external_session_id, children"
+        ) in str(error.value)
+
 
 class TestOperatorNoteCreateBounds:
     """Text length and expiry are bounded."""

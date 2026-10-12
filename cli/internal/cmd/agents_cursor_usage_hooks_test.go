@@ -151,6 +151,13 @@ func TestRemoveCursorUsageHooksLeavesPermissionHooks(t *testing.T) {
 	doc := readJSONDoc(t, hooksPath)
 	hooks := doc["hooks"].(map[string]interface{})
 	for _, key := range cursorUsageHookEvents {
+		if key == "sessionStart" || key == "beforeSubmitPrompt" {
+			entries := flatHookEntries(t, doc, key)
+			if len(entries) != 1 || !strings.Contains(entries[0]["command"].(string), "permission-hook session") {
+				t.Errorf("session registration lost: %v", entries)
+			}
+			continue
+		}
 		if _, ok := hooks[key]; ok {
 			t.Errorf("%s should be gone: %v", key, hooks[key])
 		}

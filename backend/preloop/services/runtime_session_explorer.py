@@ -135,6 +135,7 @@ class RuntimeSessionExplorerService:
         background_tasks: Optional[BackgroundTasks] = None,
         agent: Optional[str] = None,
         agent_kind: Optional[str] = None,
+        alias: Optional[str] = None,
         parent_session_id: Optional[str] = None,
         flow_execution_id: Optional[str] = None,
         active_within_minutes: Optional[int] = None,
@@ -165,6 +166,7 @@ class RuntimeSessionExplorerService:
             offset=offset,
             principals=principals,
             source_types=source_types,
+            alias=alias,
             parent_session_id=parent_session_id,
             flow_execution_id=flow_execution_id,
             active_within=(
@@ -1171,6 +1173,7 @@ class RuntimeSessionExplorerService:
             session_reference=row["session_reference"],
             # Absent for callers that build a row without lineage, and None
             # for the many sessions whose harness never names a parent.
+            alias=row.get("alias"),
             parent_session_id=row.get("parent_session_id"),
             runtime_principal_type=row["runtime_principal_type"],
             runtime_principal_id=row["runtime_principal_id"],
