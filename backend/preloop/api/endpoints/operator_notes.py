@@ -35,11 +35,16 @@ from preloop.models.crud import (
 from preloop.models.db.session import get_db_session, get_session_factory
 from preloop.schemas.operator_notes import (
     OperatorNoteAuthor,
+    OperatorNoteState,
+    OperatorNoteAckRequest,
+    OperatorNoteAckResponse,
     OperatorNoteCreate,
     OperatorNoteList,
     OperatorNotePendingRequest,
     OperatorNotePendingResponse,
     OperatorNoteResponse,
+    OperatorSessionEndRequest,
+    OperatorSessionEndResponse,
 )
 from preloop.services import operator_notes
 from preloop.utils.permissions import ensure_permission_in_oss, require_permission
@@ -76,8 +81,13 @@ def _to_response(note: Any) -> OperatorNoteResponse:
         ),
         created_at=note.created_at,
         expires_at=note.expires_at,
+        claimed_at=note.claimed_at,
+        expired_at=note.expired_at,
+        undeliverable_at=note.undeliverable_at,
+        undeliverable_reason=note.undeliverable_reason,
         delivered_at=note.delivered_at,
         delivery_channel=note.delivery_channel,
+        delivery_event=note.delivery_event,
         delivered_turn_index=note.delivered_turn_index,
         acknowledged_turn_id=note.acknowledged_turn_id,
         cancelled_at=note.cancelled_at,
@@ -254,6 +264,7 @@ def list_operator_notes(
     runtime_session_id: Optional[UUID] = Query(None),
     execution_id: Optional[UUID] = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    state: Optional[OperatorNoteState] = Query(None),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ) -> OperatorNoteList:
@@ -262,6 +273,10 @@ def list_operator_notes(
     account_id = str(current_user.account_id)
 
     def _load() -> list[Any]:
+        crud_agent_control_command.expire_notes(
+            db, account_id=account_id, now=datetime.now(timezone.utc)
+        )
+        db.commit()
         session_id = runtime_session_id
         if execution_id is not None:
             session = operator_notes.session_for_execution(
@@ -281,9 +296,36 @@ def list_operator_notes(
             managed_agent_id=agent_id,
             runtime_session_id=session_id,
             limit=limit,
+            state=state,
         )
 
     return OperatorNoteList(notes=[_to_response(note) for note in _load()])
+
+
+@router.get(
+    "/operator-notes/{note_id}",
+    response_model=OperatorNoteResponse,
+    tags=["Operator Notes"],
+)
+@require_permission(CONTROL_PERMISSION)
+def get_operator_note(
+    note_id: str,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> OperatorNoteResponse:
+    """Read one delivery receipt within the same account and permission as list."""
+    ensure_permission_in_oss(db, current_user, CONTROL_PERMISSION)
+    account_id = str(current_user.account_id)
+    crud_agent_control_command.expire_notes(
+        db, account_id=account_id, now=datetime.now(timezone.utc)
+    )
+    db.commit()
+    note = crud_agent_control_command.get_note(
+        db, account_id=account_id, note_id=note_id
+    )
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return _to_response(note)
 
 
 @router.post(
@@ -321,6 +363,53 @@ def cancel_operator_note(
     return _to_response(_cancel())
 
 
+def _hook_origin_session_id(
+    db: Session, context: Any, external_session_id: Optional[str]
+) -> Optional[str]:
+    """Resolve a harness session id to a runtime session the token may use.
+
+    A durable hook credential can be bound to the agent's identity session
+    rather than the ``claude -p`` run that just started, so claiming only the
+    token's session would miss notes addressed to the run. The harness's own
+    session id is resolved against the caller's own principal (the key the
+    SessionStart hook registered), so this can only ever name a session the
+    same managed agent already owns. Returns ``None`` when the id is absent,
+    the agent has no durable principal, or nothing matches.
+    """
+    external = (external_session_id or "").strip()
+    agent = context.managed_agent
+    principal_type = getattr(agent, "session_source_type", None)
+    principal_id = getattr(agent, "session_source_id", None)
+    if not external or not principal_type or not principal_id:
+        return None
+    from preloop.services.agent_session_lineage import resolve_external_session
+
+    try:
+        matches = resolve_external_session(
+            db,
+            account_id=str(context.api_key.account_id),
+            external_session_id=external,
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
+    except Exception:
+        logger.warning("Resolving the hook origin session failed", exc_info=True)
+        return None
+    # Ownership must be positive: a session with no runtime principal (an
+    # importer row keyed on the bare id) or another principal's session in the
+    # same account is never the caller's, so it is never claimed into or ended.
+    qualified = f"{principal_id}:{external}"
+    for session in matches:
+        runtime_principal_id = getattr(session, "runtime_principal_id", None)
+        runtime_principal_type = getattr(session, "runtime_principal_type", None)
+        if runtime_principal_type != principal_type:
+            continue
+        if runtime_principal_id not in {principal_id, qualified}:
+            continue
+        return str(session.id)
+    return None
+
+
 def _claim_for_hook(
     token: str, payload: OperatorNotePendingRequest
 ) -> OperatorNotePendingResponse:
@@ -329,17 +418,34 @@ def _claim_for_hook(
         context = authenticate_runtime_bearer_token(
             db, token, enforce_current_binding=False
         )
-        notes = operator_notes.claim_pending_notes(
-            db,
-            account_id=str(context.api_key.account_id),
-            managed_agent_id=str(context.managed_agent.id),
-            runtime_session_id=(
-                str(context.runtime_session.id)
-                if context.runtime_session is not None
-                else None
-            ),
-            channel=payload.channel,
-        )
+        account_id = str(context.api_key.account_id)
+        managed_agent_id = str(context.managed_agent.id)
+        # The run session first: a note addressed to the agent (no session) is
+        # bound to the conversation that claimed it, and that must be the run
+        # the hook is serving, not the agent's identity session.
+        session_ids: list[Optional[str]] = []
+        origin = _hook_origin_session_id(db, context, payload.session_id)
+        if origin:
+            session_ids.append(origin)
+        if context.runtime_session is not None:
+            bound = str(context.runtime_session.id)
+            if bound not in session_ids:
+                session_ids.append(bound)
+        if not session_ids:
+            session_ids.append(None)
+
+        notes: list[Any] = []
+        for session_id in session_ids:
+            claimed = operator_notes.claim_pending_notes(
+                db,
+                account_id=account_id,
+                managed_agent_id=managed_agent_id,
+                runtime_session_id=session_id,
+                channel=payload.channel,
+                event=payload.event,
+                defer_delivery=payload.defer_delivery,
+            )
+            notes.extend(claimed)
         if not notes:
             return OperatorNotePendingResponse(notes=[], text=None, channel_event=None)
         return OperatorNotePendingResponse(
@@ -347,6 +453,94 @@ def _claim_for_hook(
             text=operator_notes.render_notes_block(notes),
             channel_event=operator_notes.render_channel_event(notes),
         )
+
+
+def _end_session(
+    token: str, payload: OperatorSessionEndRequest
+) -> OperatorSessionEndResponse:
+    """Fail the run's remaining session-only notes, then end it.
+
+    The runtime bearer is the authority: the body may name the harness's own
+    session id but never selects an arbitrary session. The harness id is
+    resolved against the caller's own principal, so a durable credential whose
+    token is bound to the agent's identity session still aims the sweep at the
+    ``claude -p`` run that just ended. Ending is idempotent: a session already
+    ended keeps its timestamp and the sweep only looks at uncarried rows.
+    """
+    from preloop.models.crud import crud_runtime_session
+    from preloop.services.event_webhooks.emitters import emit_session_ended
+
+    with get_session_factory()() as db:
+        context = authenticate_runtime_bearer_token(
+            db, token, enforce_current_binding=False
+        )
+        account_id = str(context.api_key.account_id)
+        session = None
+        origin_id = _hook_origin_session_id(db, context, payload.external_session_id)
+        if origin_id:
+            session = crud_runtime_session.get_account_session(
+                db, account_id=account_id, runtime_session_id=origin_id
+            )
+        if session is None and (payload.external_session_id or "").strip():
+            # The harness named a run the caller never registered. Ending the
+            # token's bound session instead would end a durable credential's
+            # identity session on every headless exit, so do nothing.
+            return OperatorSessionEndResponse(runtime_session_id=None, marked=0)
+        if session is None:
+            session = context.runtime_session
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Runtime bearer token is not bound to a session",
+            )
+        reason = (payload.reason or "session_end").strip() or "session_end"
+        marked = operator_notes.undeliver_session_notes(
+            db,
+            account_id=account_id,
+            runtime_session_id=session.id,
+            reason=f"session ended ({reason})",
+        )
+        if session.ended_at is None:
+            ended = crud_runtime_session.update_operator_state(
+                db,
+                account_id=account_id,
+                runtime_session_id=str(session.id),
+                ended_at=datetime.now(timezone.utc),
+                commit=True,
+            )
+            if ended is not None:
+                emit_session_ended(db, ended, reason=reason)
+                db.commit()
+        return OperatorSessionEndResponse(
+            runtime_session_id=session.id,
+            marked=marked,
+        )
+
+
+@router.post(
+    "/agents/session-end",
+    response_model=OperatorSessionEndResponse,
+    tags=["Operator Notes"],
+)
+async def agent_session_end(
+    payload: OperatorSessionEndRequest,
+    authorization: Optional[str] = Header(None),
+) -> OperatorSessionEndResponse:
+    """End a harness session and fail the notes that were addressed to it.
+
+    Called by the SessionEnd hook with the same runtime bearer the other hook
+    routes use. A note addressed to the session can never reach it now, so it
+    moves to ``undeliverable`` in this one request instead of sitting pending
+    until expiry. A note addressed to the agent (no session) is untouched.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Runtime bearer token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    return await run_db_off_loop(lambda: _end_session(token, payload))
 
 
 @router.post(
@@ -372,3 +566,41 @@ async def pending_operator_notes(
         )
     token = authorization.split(" ", 1)[1].strip()
     return await run_db_off_loop(lambda: _claim_for_hook(token, payload))
+
+
+@router.post(
+    "/agents/notes/ack", response_model=OperatorNoteAckResponse, tags=["Operator Notes"]
+)
+async def acknowledge_operator_notes(
+    payload: OperatorNoteAckRequest, authorization: Optional[str] = Header(None)
+) -> OperatorNoteAckResponse:
+    """Acknowledge only claims belonging to the authenticated runtime session."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Runtime bearer token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1].strip()
+
+    def acknowledge() -> OperatorNoteAckResponse:
+        with get_session_factory()() as db:
+            context = authenticate_runtime_bearer_token(
+                db, token, enforce_current_binding=False
+            )
+            origin = _hook_origin_session_id(db, context, payload.session_id)
+            session_id = origin or (
+                str(context.runtime_session.id) if context.runtime_session else None
+            )
+            if session_id:
+                operator_notes.acknowledge_notes(
+                    db,
+                    account_id=str(context.api_key.account_id),
+                    managed_agent_id=str(context.managed_agent.id),
+                    runtime_session_id=session_id,
+                    note_ids=payload.note_ids,
+                    undeliverable_reason=payload.undeliverable_reason,
+                )
+            return OperatorNoteAckResponse()
+
+    return await run_db_off_loop(acknowledge)

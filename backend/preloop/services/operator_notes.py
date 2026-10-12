@@ -77,6 +77,14 @@ DELIVERY_CHANNELS = (
     CHANNEL_CLAUDE_MESSAGE,
 )
 
+#: Harness lifecycle points a hook can pull a note at. Recorded on the
+#: delivery so audit can tell an ordinary next-tool-call delivery from the
+#: ``stop`` rescue that keeps a headless ``claude -p`` run alive one more step.
+EVENT_SESSION_START = "session_start"
+EVENT_STOP = "stop"
+EVENT_PRE_TOOL_USE = "pre_tool_use"
+DELIVERY_EVENTS = (EVENT_SESSION_START, EVENT_STOP, EVENT_PRE_TOOL_USE)
+
 #: Audit actions. ``sent`` is written before the API answers the author,
 #: ``delivered`` before the request carrying the note leaves Preloop, and
 #: ``scope_denied`` before an agent author is told its target is out of reach
@@ -84,6 +92,7 @@ DELIVERY_CHANNELS = (
 AUDIT_NOTE_SENT = "agent.note_sent"
 AUDIT_NOTE_DELIVERED = "agent.note_delivered"
 AUDIT_NOTE_SCOPE_DENIED = "agent.note_scope_denied"
+AUDIT_NOTE_UNDELIVERABLE = "agent.note_undeliverable"
 
 #: Wire protocols the gateway speaks. Gemini is absent on purpose: it
 #: translates to a Responses payload and delegates to the Responses path.
@@ -352,6 +361,7 @@ def _record_delivery(
     channel: str,
     turn_index: Optional[int],
     runtime_session_id: Optional[str],
+    delivery_event: Optional[str] = None,
 ) -> None:
     """Write the audit row and enqueue the webhook event for one delivery.
 
@@ -363,6 +373,7 @@ def _record_delivery(
         "managed_agent_id": str(note.managed_agent_id),
         "runtime_session_id": runtime_session_id,
         "delivery_channel": channel,
+        "delivery_event": delivery_event,
         "turn_index": turn_index,
         "author_display": note.author_display,
         "author_auth_method": note.author_auth_method,
@@ -396,6 +407,7 @@ def _log_timeline(
     channel: str,
     turn_index: Optional[int],
     runtime_session_id: Optional[str],
+    delivery_event: Optional[str] = None,
 ) -> None:
     """Put the note on the session timeline where it landed."""
     if not runtime_session_id:
@@ -412,6 +424,7 @@ def _log_timeline(
             "kind": "operator_note",
             "note_id": note.command_id,
             "delivery_channel": channel,
+            "delivery_event": delivery_event,
             "turn_index": turn_index,
             "author_display": note.author_display,
             "author_auth_method": note.author_auth_method,
@@ -428,14 +441,22 @@ def claim_pending_notes(
     runtime_session_id: Optional[str],
     channel: str,
     turn_index: Optional[int] = None,
+    event: Optional[str] = None,
+    defer_delivery: bool = False,
     now: Optional[datetime] = None,
     limit: int = MAX_NOTES_PER_DELIVERY,
 ) -> List[Any]:
     """Claim the notes this session should receive, at most once each.
 
-    Returns the claimed rows, oldest first, or an empty list. Every claim is
-    audited, timelined and enqueued as a webhook event in the caller's
-    transaction; the caller only has to render what comes back.
+    Returns the claimed rows, oldest first, or an empty list. Immediate
+    delivery is audited, timelined and evented in the caller's transaction.
+    A deferred claim only reserves the row and claim timestamp; its receipt
+    records delivery after the carrying output is written.
+
+    ``event`` names the harness lifecycle point that asked (``session_start``,
+    ``stop`` or ``pre_tool_use``), recorded on the row and in the audit so a
+    Stop rescue is distinguishable from the ordinary hook path. It is not a
+    delivery channel: the channel says *how*, the event says *when*.
 
     Account scoping is not optional and not a filter added by callers: the
     candidate query itself is bounded by ``account_id``, so a session id from
@@ -443,12 +464,16 @@ def claim_pending_notes(
     """
     if channel not in DELIVERY_CHANNELS:
         raise ValueError(f"Unknown delivery channel: {channel}")
+    if event is not None and event not in DELIVERY_EVENTS:
+        raise ValueError(f"Unknown delivery event: {event}")
     # Aware UTC on purpose: ``expires_at`` and ``delivered_at`` are
     # ``timestamptz``, so a naive value would be read in the database session's
     # own zone and an expired note could still look live by that offset.
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
+    # Receipt reads expire stale rows. A model call only selects live candidates,
+    # avoiding an account-wide sweep and unrelated commits on the gateway path.
     candidates = crud_agent_control_command.list_deliverable_notes(
         db,
         account_id=account_id,
@@ -466,9 +491,14 @@ def claim_pending_notes(
             delivery_channel=channel,
             runtime_session_id=runtime_session_id,
             turn_index=turn_index,
+            delivery_event=event,
+            defer_delivery=defer_delivery,
         ):
             # Another request took it first. Deliver nothing for this row:
             # two copies of one instruction is the failure worth avoiding.
+            continue
+        if defer_delivery:
+            claimed.append(note)
             continue
         _record_delivery(
             db,
@@ -476,6 +506,7 @@ def claim_pending_notes(
             channel=channel,
             turn_index=turn_index,
             runtime_session_id=runtime_session_id,
+            delivery_event=event,
         )
         _log_timeline(
             db,
@@ -483,10 +514,12 @@ def claim_pending_notes(
             channel=channel,
             turn_index=turn_index,
             runtime_session_id=runtime_session_id,
+            delivery_event=event,
         )
         claimed.append(note)
     if claimed:
         db.commit()
+    if claimed and not defer_delivery:
         _emit_delivered_notes(
             account_id=account_id,
             runtime_session_id=runtime_session_id,
@@ -651,9 +684,64 @@ def note_state(note: Any) -> str:
     status = getattr(note, "status", None)
     if status == "acked" or getattr(note, "acknowledged_turn_id", None):
         return "acknowledged"
-    if status in {"delivered", "cancelled", "expired", "failed"}:
+    if status in {
+        "claimed",
+        "delivered",
+        "cancelled",
+        "expired",
+        "failed",
+        "undeliverable",
+    }:
         return status
     return "pending"
+
+
+def undeliver_session_notes(
+    db: Session,
+    *,
+    account_id: str,
+    runtime_session_id: Any,
+    reason: Optional[str] = None,
+) -> int:
+    """Mark every session-only pending or claimed note undeliverable, and audit it.
+
+    Called when a session ends (the SessionEnd hook, or an operator ending it
+    from the console). A note addressed only to this exact session can never
+    reach it, so it must not sit ``pending`` until its 24h expiry and look
+    like the agent ignored it. A note addressed to the agent with no session
+    is untouched: it waits for the agent's next run.
+
+    Returns how many rows changed; zero is the common, quiet case.
+    """
+    transitioned_notes: List[Any] = []
+    changed = crud_agent_control_command.mark_session_notes_undeliverable(
+        db,
+        account_id=account_id,
+        runtime_session_id=runtime_session_id,
+        reason=reason,
+        commit=False,
+        transitioned_notes=transitioned_notes,
+    )
+    if changed:
+        crud_audit_log.log_action(
+            db,
+            account_id=account_id,
+            user_id=None,
+            action=AUDIT_NOTE_UNDELIVERABLE,
+            resource_type="runtime_session",
+            resource_id=str(runtime_session_id),
+            status="success",
+            details={"marked": changed, "reason": reason},
+            commit=False,
+        )
+        from preloop.services.event_webhooks.emitters import (
+            emit_agent_note_undeliverable,
+        )
+
+        for note in transitioned_notes:
+            emit_agent_note_undeliverable(db, note)
+        db.commit()
+    return changed
 
 
 def notes_payload(notes: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -816,3 +904,80 @@ def resolve_note_target(
         if session is not None and session.ended_at is None:
             session_id = session.id
     return (agent.id, session_id)
+
+
+def acknowledge_notes(
+    db: Session,
+    *,
+    account_id: str,
+    managed_agent_id: str,
+    runtime_session_id: str,
+    note_ids: Sequence[str],
+    undeliverable_reason: Optional[str] = None,
+) -> None:
+    """Finish authenticated deferred claims once, auditing and eventing atomically."""
+    from preloop.services.event_webhooks.emitters import emit_agent_note_undeliverable
+
+    now = datetime.now(timezone.utc)
+    crud_agent_control_command.expire_notes(db, account_id=account_id, now=now)
+    delivered = []
+    for note_id in dict.fromkeys(note_ids):
+        note = crud_agent_control_command.finish_claimed_note(
+            db,
+            account_id=account_id,
+            managed_agent_id=managed_agent_id,
+            runtime_session_id=runtime_session_id,
+            note_id=note_id,
+            now=now,
+            undeliverable_reason=undeliverable_reason,
+        )
+        if note is None:
+            continue
+        if undeliverable_reason:
+            crud_audit_log.log_action(
+                db,
+                account_id=account_id,
+                user_id=None,
+                action=AUDIT_NOTE_UNDELIVERABLE,
+                resource_type="operator_note",
+                resource_id=note.command_id,
+                status="success",
+                details={"reason": undeliverable_reason},
+                commit=False,
+            )
+            emit_agent_note_undeliverable(db, note)
+        else:
+            _record_delivery(
+                db,
+                note=note,
+                channel=note.delivery_channel,
+                turn_index=note.delivered_turn_index,
+                runtime_session_id=runtime_session_id,
+                delivery_event=note.delivery_event,
+            )
+            _log_timeline(
+                db,
+                note=note,
+                channel=note.delivery_channel,
+                turn_index=note.delivered_turn_index,
+                runtime_session_id=runtime_session_id,
+                delivery_event=note.delivery_event,
+            )
+            delivered.append(note)
+    db.commit()
+    if delivered:
+        _emit_delivered_notes(
+            account_id=account_id,
+            runtime_session_id=runtime_session_id,
+            notes=delivered,
+            delivered_at=now,
+            channel=CHANNEL_HOOK,
+        )
+        _index_claimed_notes(
+            db,
+            account_id=account_id,
+            runtime_session_id=runtime_session_id,
+            notes=delivered,
+            delivered_at=now,
+            channel=CHANNEL_HOOK,
+        )

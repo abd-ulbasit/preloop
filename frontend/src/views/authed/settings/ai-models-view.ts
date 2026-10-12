@@ -39,6 +39,7 @@ import {
   sharedFromBadge,
   sharedResourceHref,
 } from '../hierarchy/shared-badge';
+import { unpricedBadge } from '../../../components/unpriced-badge';
 import '../../../components/list-toolbar';
 import '../../../components/resource-actions';
 import '../../../components/token-figures';
@@ -1389,7 +1390,7 @@ export class AIModelsView extends LitElement {
     return html`
       <div class="cell-stack">
         <a class="model-link" href=${this.modelHref(model)}> ${model.name} </a>
-        ${sharedFromBadge(model)}
+        ${sharedFromBadge(model)} ${unpricedBadge(model)}
         <div class="model-identifier" title=${alias || model.model_identifier}>
           ${alias || model.model_identifier}
         </div>
@@ -1751,7 +1752,8 @@ export class AIModelsView extends LitElement {
             <a class="model-link" href=${this.modelHref(model)}>
               ${model.name}
             </a>
-            ${sharedFromBadge(model)} ${this.renderDefaultControl(model)}
+            ${sharedFromBadge(model)} ${unpricedBadge(model)}
+            ${this.renderDefaultControl(model)}
           </div>
           <div class="model-identifier">
             ${this.getGatewayAlias(model) || model.model_identifier}

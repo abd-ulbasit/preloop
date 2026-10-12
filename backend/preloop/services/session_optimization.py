@@ -56,6 +56,7 @@ from preloop.services.analytics_history import history_cutoff, require_session_h
 from preloop.services.account_governance_cache import (
     invalidate_account_governance_cache,
 )
+from preloop.services.analytics_detail_policy import should_degrade_gateway_analytics
 from preloop.services.builtin_tool_optimizer import (
     BUILTIN_USAGE_WINDOW_DAYS,
     UnusedBuiltinPartition,
@@ -187,6 +188,13 @@ class SessionOptimizationService:
         fast_model = self._resolve_optimization_model(
             account=account, model_id=request.model_id
         )
+        # Optional analysis degrades to the deterministic analyzers; the
+        # agent's upstream model traffic and governance are unaffected.
+        quota_degraded = fast_model is not None and should_degrade_gateway_analytics(
+            str(account.id)
+        )
+        if quota_degraded:
+            fast_model = None
         scope_hash = self._scope_hash(request, fast_model)
         if not request.regenerate:
             cached = self._load_cached_response(
@@ -219,7 +227,9 @@ class SessionOptimizationService:
         suggestions = self._local_optimization_suggestions(
             summary, profile, account=account
         )
-        llm_skipped_reason: Optional[str] = None
+        llm_skipped_reason: Optional[str] = (
+            "monthly_analysis_quota_reached" if quota_degraded else None
+        )
         if fast_model is not None and self._daily_optimization_cap_reached(account):
             logger.info(
                 "Skipping optimization model call: daily cap reached",
