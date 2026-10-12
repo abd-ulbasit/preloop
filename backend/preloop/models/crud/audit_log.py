@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
 from uuid import UUID
 
 from sqlalchemy import and_, case, func, or_
@@ -20,6 +20,16 @@ _GROUP_ANCHOR_ACTIONS = ("tool_call", *STANDALONE_POLICY_ACTIONS)
 _GROUPING_DETAIL_KEYS = ("correlation_id", "decision", "approval_id", "estimated_cost")
 
 
+class _GroupingRow(Protocol):
+    """Fields the grouped timeline reads before it hydrates full rows."""
+
+    id: Any
+    action: str
+    status: Optional[str]
+    timestamp: datetime
+    details: Optional[Dict[str, Any]]
+
+
 def _audit_event_estimated_cost(details: Optional[Dict[str, Any]]) -> float:
     """Return the estimated spend stored on one audit event, if any."""
     if not details:
@@ -33,7 +43,7 @@ def _audit_event_estimated_cost(details: Optional[Dict[str, Any]]) -> float:
         return 0.0
 
 
-def _narrow_audit_rows(query: Any) -> List[SimpleNamespace]:
+def _narrow_audit_rows(query: Any) -> List[_GroupingRow]:
     """Run ``query`` for the grouping fields only, not the full row.
 
     Grouping and outcome evaluation read four keys of ``details``. Tool call
@@ -50,20 +60,22 @@ def _narrow_audit_rows(query: Any) -> List[SimpleNamespace]:
         AuditLog.timestamp,
         *(AuditLog.details[key].label(key) for key in _GROUPING_DETAIL_KEYS),
     ).all()
-    return [
-        SimpleNamespace(
-            id=row.id,
-            action=row.action,
-            status=row.status,
-            timestamp=row.timestamp,
-            details={
-                key: getattr(row, key)
-                for key in _GROUPING_DETAIL_KEYS
-                if getattr(row, key) is not None
-            },
+    projected: List[_GroupingRow] = []
+    for row in rows:
+        projected.append(
+            SimpleNamespace(
+                id=row.id,
+                action=row.action,
+                status=row.status,
+                timestamp=row.timestamp,
+                details={
+                    key: getattr(row, key)
+                    for key in _GROUPING_DETAIL_KEYS
+                    if getattr(row, key) is not None
+                },
+            )
         )
-        for row in rows
-    ]
+    return projected
 
 
 def _hydrate_groups(db: Session, groups: List[Dict[str, Any]]) -> None:
@@ -75,8 +87,9 @@ def _hydrate_groups(db: Session, groups: List[Dict[str, Any]]) -> None:
         return
     full = {row.id: row for row in db.query(AuditLog).filter(AuditLog.id.in_(ids))}
     for group in groups:
-        group["primary_event"] = full[group["primary_event"].id]
-        group["sub_events"] = [full[sub.id] for sub in group["sub_events"]]
+        primary = full.get(group["primary_event"].id, group["primary_event"])
+        group["primary_event"] = primary
+        group["sub_events"] = [full.get(sub.id, sub) for sub in group["sub_events"]]
 
 
 class CRUDAuditLog(CRUDBase[AuditLog]):
@@ -523,7 +536,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                     correlation_ids.add(cid)
 
         # Step 3: Fetch sub-events correlated by correlation_id
-        sub_events_map: Dict[str, List[AuditLog]] = {}
+        sub_events_map: Dict[str, List[_GroupingRow]] = {}
         if correlation_ids:
             # 3a: Fetch events that directly carry a correlation_id
             direct_subs = _narrow_audit_rows(
