@@ -4,19 +4,22 @@ Editions: OSS. Contributor documentation for this repository.
 
 | | |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-10 |
+| Accepted | 2026-10-13 |
 | Issue | [#977](https://github.com/preloop/preloop/issues/977) |
 | Decider | project founder |
 | Policy text | [Compatibility policy, API versioning](../../compatibility.md#api-versioning) |
 
 This record settles what `/api/v1` promises at 1.0 and how the public
-surfaces that do not carry that prefix are versioned. It is written so that
-the decision can be taken by reading this page; the inventory in the
-appendix was produced from the tree at `67a082ee0`, and every number cites
-the command that produced it.
+surfaces that do not carry that prefix are versioned. The founder accepted
+the decisions on 2026-10-13. The inventory in the appendix is historical
+evidence from the tree at `67a082ee0`; every number
+cites the command that produced it.
 
 ## Context
+
+The following inventory describes the proposal baseline on 2026-10-10.
 
 - All 315 path keys in `openapi.yaml` sit under `/api/v1/`. Nothing states
   what `v1` promises and there is no `v2` mechanism.
@@ -37,9 +40,8 @@ the command that produced it.
 
 ## Decision points
 
-Each point gives the options, one recommendation with its reasoning in at
-most five lines, and the option that loses and why. Numbers in brackets
-refer to the appendix.
+Each point records the selected option and the alternatives considered.
+Numbers in brackets refer to the historical inventory in the appendix.
 
 ### 1. What `/api/v1` commits to
 
@@ -53,7 +55,7 @@ Options:
   `Preloop-API-Version: 2026-10-01`), with the default pinned per API key or
   account.
 
-Recommendation: **A**.
+Decision: **A**.
 
 1. Every client already addresses the API by path [A1, A3]; the Helm nginx
    config routes `location /api/` by prefix [A4], so `/api/v2` needs no
@@ -67,7 +69,7 @@ Recommendation: **A**.
    many versions; a path is visible in every log line, curl and proxy rule,
    a header is not.
 
-Loser: **B**. It moves the versioning burden from the one party that can
+Rejected: **B**. It moves the versioning burden from the one party that can
 see the whole surface at cut time (the server) to every client on every
 request, and the inventory shows no client is set up to send it [A3].
 
@@ -80,89 +82,105 @@ Removing `/api/v1` is a major release under semantic versioning.
 
 Options:
 
-- **(i)** Fixed by the RFCs they implement and excluded from the Preloop
-  version promise.
+- **(i)** Keep OAuth outside `/api/v1`: standard well-known discovery
+  locations and stable, server-chosen `/oauth/*` operation URLs.
 - **(ii)** Follow the REST decision (move under `/api/v1/oauth`, or version
   with `/api/v2`).
 
-Recommendation: **(i)**.
+Decision: **(i)**.
 
-1. `/.well-known/oauth-authorization-server` is fixed by RFC 8414 and
-   `/.well-known/oauth-protected-resource` by RFC 9728; a client cannot be
-   told to look elsewhere.
-2. `/oauth/authorize`, `/oauth/token`, `/oauth/register` and
-   `/oauth/revoke` are advertised by that metadata document, which is the
-   contract; MCP clients discover them there, the CLI hardcodes them [A3].
-3. Moving them would break every onboarded agent's OAuth for no gain.
+1. [RFC 8414 section 3](https://www.rfc-editor.org/rfc/rfc8414#section-3)
+   and [RFC 9728 section 3](https://www.rfc-editor.org/rfc/rfc9728#section-3)
+   define how well-known discovery URLs are constructed from the issuer or
+   resource identifier. Keep `/.well-known/` in its standard position.
+   Path-specific metadata can apply, for example
+   `/.well-known/oauth-protected-resource/mcp` for a resource at `/mcp`.
+   RFC 9728 also permits advertising a metadata URL in `WWW-Authenticate`.
+2. The RFCs do not mandate literal operation paths such as `/oauth/token`.
+   Preloop chooses `/oauth/authorize`, `/oauth/token`, `/oauth/register`
+   and `/oauth/revoke` and advertises them in authorization-server metadata.
+   Clients should use that metadata; existing CLI URLs also remain valid [A3].
+3. OAuth's wire contract follows its specifications. Its public URLs remain
+   covered by Preloop's compatibility policy, independently of REST versioning.
 
-Loser: **(ii)**. The RFCs already fix the discovery locations and clients
-already follow them; a Preloop prefix would add nothing but a migration.
+Rejected: **(ii)**. Moving operation URLs under `/api/v1` is technically
+possible but couples authentication infrastructure to the REST API lifecycle
+and requires an unnecessary client migration.
 
 ### 3. MCP and model gateway paths
 
 Options:
 
-- **(i)** The path is the contract and is versioned by the protocol or
-  upstream API it mirrors, not by Preloop.
+- **(i)** Keep stable MCP URLs with protocol-level version selection, and
+  gateway prefixes that mirror the upstream provider's API versions.
 - **(ii)** Follow the REST decision (`/mcp/v2` and `/openai/v2` when
   `/api/v2` is cut).
 
-Recommendation: **(i)**.
+Decision: **(i)**.
 
-1. `/mcp` (canonical `/mcp/v1`) is written into every onboarded agent's
-   config by the CLI and the sidecars [A3]; the protocol version is
-   negotiated inside MCP (`protocolVersion` at `initialize`, and the
-   `MCP-Protocol-Version` header in newer spec revisions), not in the path.
-2. `/openai/v1`, `/anthropic/v1` and `/gemini/v1beta` mirror the upstream
-   providers' public API versions; the nanobot and codex sidecars check that
-   the gateway URL ends in `/openai/v1` [A3]; the Helm ingress splits
-   `/openai`, `/anthropic` and `/gemini` to the gateway Service [A4].
-3. A new gateway prefix appears only when the upstream adds one (for
-   example `/openai/v2` beside `/openai/v1`), never because Preloop's REST
-   API moved.
+1. `/mcp` is the documented entry point. Preserve `/mcp/v1` for existing
+   configurations and the current internal rewrite, without HTTP redirects.
+   That mount suffix is a Preloop implementation detail, not an MCP protocol
+   or SDK version. Neither an SDK v2 upgrade nor a new protocol revision
+   requires `/mcp/v2`.
+2. MCP uses dated protocol revisions. In `2025-11-25` and earlier, clients
+   select the revision through `initialize`; applicable HTTP revisions also
+   use `MCP-Protocol-Version`. Revision `2026-07-28` uses per-request
+   `_meta` version metadata and the matching HTTP header, with
+   `server/discover` for supported versions and capabilities. The specification
+   permits modern and legacy clients on the same endpoint. See
+   [MCP versioning and compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
+   Support for the modern revision and the Python SDK v2 migration is pending
+   in [#1629](https://github.com/preloop/preloop/issues/1629); accepting this
+   ADR does not claim that it is already implemented.
+3. `/openai/v1`, `/anthropic/v1` and `/gemini/v1beta` mirror the providers'
+   API contracts, including applicable provider version headers. A new
+   gateway prefix appears when its provider adds one, alongside the old
+   prefix, never because Preloop's REST API moved [A3, A4].
 
-Loser: **(ii)**. The versions in those paths belong to other specifications;
-a Preloop `v2` there would mean "the same OpenAI v1 wire format at a
-different path", which helps nobody and breaks the ingress split.
+Rejected: **(ii)**. REST, MCP and provider API versions evolve independently.
+Changing an SDK does not require clients to change their MCP URL, and a
+Preloop REST version must not relabel an unchanged provider wire format.
 
 ### 4. Version discovery header
 
 Options:
 
 - **(i)** None; clients call `GET /api/v1/version`.
-- **(ii)** A response header `Preloop-API-Version` on every `/api/v1/`
+- **(ii)** A response header `Preloop-Server-Version` on every `/api/v1/`
   response, diagnostics only, no request-side meaning.
 - **(iii)** A request header that pins behaviour (option B by another
   name).
 
-Recommendation: **(ii)**, with `Deprecation` and `Sunset` added once a
-`v2` exists.
+Decision: **(ii)**, with `Deprecation` added when `/api/v1` is deprecated
+in favor of `/api/v2`, and `Sunset` once its removal date is known.
 
-1. The value is the `info.version` of the `openapi.yaml` the server serves
-   (today identical to the release version), so a reader of a proxy log or
-   a support bundle can fetch the exact spec a response was produced under.
+1. The value is the server software release, consistent with `server_version`
+   from `GET /api/v1/version`. It identifies which software answered, not
+   the REST contract version; it does not select request behavior.
 2. It discloses nothing new: `GET /api/v1/version` is unauthenticated and
    already returns `server_version` [A5].
-3. Once `/api/v2` ships, `/api/v1` responses also carry `Deprecation`
-   (RFC 9745) and `Sunset` (RFC 8594), which is the "response header" the
-   compatibility rule already promises for runtime deprecation notice.
+3. When `/api/v1` is deprecated, its responses carry `Deprecation`
+   (RFC 9745), and `Sunset` (RFC 8594) once the removal date is known,
+   implementing the compatibility rule's runtime deprecation notice.
 4. The name has no `X-` prefix (RFC 6648); the existing `X-Preloop-*`
    headers stay as they are because renaming them would be a breaking change.
 
-Loser: **(iii)**, because it is option B and loses for the same reasons;
+Rejected: **(iii)**, because it is option B and loses for the same reasons;
 and **(i)**, because a second request is not available after the fact in
 logs and support bundles.
 
 ## Decision
 
 Adopt A for `/api/v1`, (i) for OAuth, (i) for MCP and the gateway, and
-(ii) for discovery. In one sentence: the path is the version for
-everything Preloop owns, the specification is the version for everything
-Preloop mirrors, and one response header says which server answered.
+(ii) for server-version diagnostics. REST contracts use path versions;
+OAuth follows its discovery and protocol specifications; MCP selects protocol
+revisions at the same URL; gateway versions mirror their providers.
 
 The policy text that follows from this is in
 [Compatibility policy, API versioning](../../compatibility.md#api-versioning).
-It is marked proposed until this record is Accepted.
+The decision is accepted now and becomes binding at 1.0.0. Implementation
+work remains explicitly tracked below.
 
 ## Additions beyond the issue
 
@@ -182,31 +200,22 @@ Two points the issue did not raise, surfaced by the inventory:
 
 ## Consequences
 
-If Accepted:
-
-- `docs/compatibility.md` "API versioning" drops its proposed marker and
-  becomes binding at 1.0.0.
-- Follow-up issues to file and link from the 1.0.0 readiness checklist
-  (#978):
-    1. Emit `Preloop-API-Version` on every `/api/v1/` response (one
-       middleware, one test). Small.
-    2. Introduce one API prefix constant in the Go CLI (`cli/internal/api`)
-       and one in the console (`frontend/src/api.ts`) so a future `v2` cut
-       is a one-line change in each instead of 48 and 58 files [A3]. Small,
-       mechanical, no behaviour change.
-    3. Document the `/mcp` to `/mcp/v1` rewrite as stable in the MCP
-       guide, and send `MCP-Protocol-Version` on the MCP transport when the
-       vendored MCP library supports it. Small.
-- No second router, no redirect and no pinning column are needed now.
-  `/api/v2` is created only when an incompatible REST change is actually
-  required.
-
-If Rejected in favour of B:
-
-- A pinning column on API keys and accounts, a settings surface for it, a
-  header-aware cache key in every caching layer, and a client change in the
-  CLI (one chokepoint), the console (two chokepoints plus raw `fetch`
-  calls), each sidecar and the mobile apps before any benefit is seen.
+- `docs/compatibility.md` records the accepted policy, binding at 1.0.0.
+- Follow-up issues are linked from the
+  [1.0.0 readiness checklist (#978)](https://github.com/preloop/preloop/issues/978):
+    1. [#1630](https://github.com/preloop/preloop/issues/1630): emit the
+       diagnostics-only `Preloop-Server-Version` header and centralize REST
+       prefix construction in the Go CLI and console. Centralization prepares
+       clients for deliberate future version selection; changing a constant
+       alone does not migrate schemas or behavior.
+    2. [#1629](https://github.com/preloop/preloop/issues/1629): support MCP
+       revision `2026-07-28`, migrate to Python SDK v2 and compatible FastMCP,
+       preserve legacy interoperability, and document `/mcp` and its stable
+       `/mcp/v1` compatibility path.
+- No second REST router, redirect or pinning column is needed now.
+  `/api/v2` is created only when an incompatible REST change is required.
+- README already links the policy; ARCHITECTURE links this decision so
+  contributors can find the public routing boundaries.
 
 ## Appendix: inventory
 

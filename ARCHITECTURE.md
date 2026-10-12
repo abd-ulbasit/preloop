@@ -100,6 +100,12 @@ flows into policy and tool-call audits, whose account-scoped consent index is
 built concurrently. Synthetic simulation does no introspection HTTP. See
 [Delegated grants](docs/guide/grant-introspection.md).
 
+Public route and versioning boundaries are defined in
+[ADR 0001](docs/architecture/decisions/0001-api-versioning.md) and the
+[compatibility policy](docs/compatibility.md#api-versioning): REST uses
+`/api/v1`, while OAuth discovery/operations, MCP, and provider gateway
+prefixes follow their respective protocol contracts.
+
 ## High-Level Architecture
 
 ```mermaid
