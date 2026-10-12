@@ -22,6 +22,10 @@ from preloop.models.crud import (
 )
 from preloop.models.db.session import get_db_session, _safe_close_db_session
 from preloop.models.crud.project import find_repository_projects, repository_host
+from preloop.services.managed_credentials import (
+    get_managed_webhook_verifier,
+    is_managed_tracker,
+)
 from preloop.services.issue_intake import IssuePayloadError, issue_values_from_payload
 from preloop.sync.scanner.core import TrackerClient
 
@@ -407,6 +411,85 @@ def _resolve_webhook_project(
     return matches[0] if matches else None
 
 
+def _managed_jira_webhook_ids(db: Session, tracker: models.Tracker) -> set[str]:
+    """Dynamic webhook ids this managed Jira tracker registered (one query)."""
+    rows = (
+        db.query(models.Webhook.external_id)
+        .join(models.Project, models.Webhook.project_id == models.Project.id)
+        .join(
+            models.Organization,
+            models.Project.organization_id == models.Organization.id,
+        )
+        .filter(models.Organization.tracker_id == tracker.id)
+        .distinct()
+        .all()
+    )
+    return {str(row[0]) for row in rows if row[0]}
+
+
+def _verify_managed_jira_delivery(
+    *,
+    headers: Mapping[str, str],
+    raw_body: bytes,
+    db: Session,
+    tracker: models.Tracker,
+    plan: "_WebhookPlan",
+) -> None:
+    """Authenticate a Jira dynamic-webhook delivery for a managed tracker.
+
+    Atlassian signs OAuth 2.0 app deliveries with a JWT in ``Authorization:
+    Bearer`` using the app's client secret, which only the provider plugin
+    holds, so the plugin verifies it. The delivery must also name one of
+    this tracker's dynamic webhooks in ``matchedWebhookIds``: the app-wide
+    signature alone does not bind a delivery to a tenant.
+
+    Raises:
+        HTTPException: 403 on any failure; the reason is logged, not echoed.
+    """
+    denied = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Jira delivery"
+    )
+    verifier = get_managed_webhook_verifier("jira")
+    authorization = headers.get("Authorization") or headers.get("authorization")
+    if verifier is None or not hasattr(verifier, "verify"):
+        logger.warning(
+            "Jira dynamic webhook for managed tracker %s rejected: no verifier",
+            tracker.id,
+        )
+        raise denied
+    try:
+        verified = bool(verifier.verify(authorization=authorization))
+    except Exception as exc:  # noqa: BLE001 - every verifier failure denies
+        logger.warning(
+            "Jira dynamic webhook verifier raised %s for tracker %s",
+            type(exc).__name__,
+            tracker.id,
+        )
+        verified = False
+    if not verified:
+        logger.warning(
+            "Jira dynamic webhook signature invalid for managed tracker %s", tracker.id
+        )
+        plan.queue_task(
+            "notify_admins",
+            subject="Jira dynamic webhook signature invalid",
+            message=f"Invalid Jira dynamic webhook JWT for tracker ID {tracker.id}",
+        )
+        raise denied
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise denied from None
+    matched = payload.get("matchedWebhookIds") if isinstance(payload, dict) else None
+    matched_ids = {str(i) for i in matched} if isinstance(matched, list) else set()
+    if not matched_ids & _managed_jira_webhook_ids(db, tracker):
+        logger.warning(
+            "Jira dynamic webhook for tracker %s matched none of its webhooks",
+            tracker.id,
+        )
+        raise denied
+
+
 def _prepare_webhook(
     tracker_type: str,
     organization_id: str,
@@ -474,7 +557,12 @@ def _prepare_webhook(
             detail="Tracker configuration error",
         )
 
-    if not organization_data.webhook_secret:  # For GH/GL, secret is on Org model
+    # A managed Jira grant receives dynamic webhooks authenticated by the
+    # Atlassian app's JWT, not by a per-organization HMAC secret.
+    managed_jira = tracker_type.lower() == "jira" and is_managed_tracker(
+        organization_data.tracker
+    )
+    if not organization_data.webhook_secret and not managed_jira:
         logger.error(
             f"Webhook secret not configured for organization ID {organization_data.id}"
         )
@@ -487,6 +575,8 @@ def _prepare_webhook(
     plan.tracker_id = resolved_tracker.id
     plan.organization_id = organization_data.id
     webhook_secret_to_use = organization_data.webhook_secret
+    if managed_jira:
+        webhook_secret_to_use = webhook_secret_to_use or ""
 
     if not resolved_tracker:
         logger.error(
@@ -610,6 +700,15 @@ def _prepare_webhook(
             )
         logger.info(
             f"GitLab webhook token verified successfully for tracker ID {resolved_tracker.id}"
+        )
+
+    elif managed_jira:
+        _verify_managed_jira_delivery(
+            headers=headers,
+            raw_body=raw_body,
+            db=db,
+            tracker=resolved_tracker,
+            plan=plan,
         )
 
     elif tracker_type.lower() == "jira":

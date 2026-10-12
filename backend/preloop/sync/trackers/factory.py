@@ -17,6 +17,9 @@ from .jira import JiraTracker
 
 logger = logging.getLogger(__name__)
 
+# Tracker types whose client accepts a managed ``credential_source``.
+MANAGED_TRACKER_TYPES = frozenset({"bitbucket", "jira"})
+
 # Tracker type to client class. create_tracker_client builds instances; this
 # map answers class-level questions (hosts_repositories, hosts_issues) without
 # credentials or network access. A new provider registers here once.
@@ -108,7 +111,7 @@ async def create_tracker_client(
                 "A managed tracker requires a provider credential resolver; "
                 "refusing to build an unauthenticated client."
             )
-        if managed and tracker_type != "bitbucket":
+        if managed and tracker_type not in MANAGED_TRACKER_TYPES:
             raise ValueError(
                 f"Managed grants are not supported for tracker type {tracker_type}"
             )
@@ -157,6 +160,13 @@ async def create_tracker_client(
         elif tracker_type == "gitlab":
             return GitLabTracker(tracker_id, api_key, connection_details)
         elif tracker_type == "jira":
+            if credential_source is not None:
+                return JiraTracker(
+                    tracker_id,
+                    "",
+                    connection_details,
+                    credential_source=credential_source,
+                )
             return JiraTracker(tracker_id, api_key, connection_details)
         elif tracker_type == "bitbucket_dc":
             return BitbucketDCTracker(tracker_id, api_key, connection_details)

@@ -54,6 +54,12 @@ Add the Jira tracker for the site that hosts the project. Let it sync so the
 Jira project exists as a Preloop project. Jira issue events (created,
 updated, labeled, commented) become flow triggers.
 
+When the deployment offers **Connect Jira** (feature `jira_cloud_oauth`), use
+it: consent in the browser, pick the site if the account sees several, and
+Preloop renews the token and keeps the dynamic webhook alive (30-day expiry,
+refreshed on every sync). Otherwise expand **Use an API token instead**. See
+[Jira Cloud tracker](jira-tracker.md).
+
 ## 3. Bind the Jira project to the Bitbucket repository
 
 A Jira project has no repository of its own. Bind it to the Bitbucket

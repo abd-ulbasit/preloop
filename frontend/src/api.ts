@@ -7535,6 +7535,191 @@ export async function disconnectBitbucket(trackerId: string): Promise<void> {
   }
 }
 
+// Managed Jira Cloud OAuth (Atlassian OAuth 2.0 3LO, issue #1579). Served by
+// the jira_oauth managed-provider plugin and advertised through
+// `features.jira_cloud_oauth`. As with Bitbucket, the console only handles an
+// opaque completion handle: no code, token or secret reaches the browser.
+export const JIRA_CLOUD_OAUTH_FEATURE = 'jira_cloud_oauth';
+export const JIRA_CONNECT_HANDLE_PARAM = 'jira_connect';
+export const JIRA_CONNECT_TRACKER_PARAM = 'jira_tracker';
+export const JIRA_CONNECT_ERROR_PARAM = 'jira_error';
+
+export type JiraConnectionState =
+  | 'connected'
+  | 'site_required'
+  | 'reconnect_required'
+  | 'disconnected'
+  | 'unavailable'
+  | 'not_managed';
+
+export interface JiraConnectionActor {
+  account_id?: string | null;
+  name?: string | null;
+}
+
+export interface JiraSite {
+  /** Atlassian cloudId. */
+  id: string;
+  name?: string | null;
+  url: string;
+  scopes?: string[] | null;
+}
+
+export interface JiraConnectionStatus {
+  tracker_id: string;
+  name: string;
+  provider: string;
+  managed: boolean;
+  state: JiraConnectionState;
+  consumer_configured: boolean;
+  cloud_id?: string | null;
+  site_url?: string | null;
+  site_name?: string | null;
+  actor?: JiraConnectionActor | null;
+  /** Actual access-token expiry reported by the provider service (ISO). */
+  expires_at?: string | null;
+  rotation_version?: number | null;
+  granted_scopes?: string[] | null;
+  reconnect_reason?: string | null;
+}
+
+/** Human-readable text for the sanitized error codes the callback may carry. */
+export function describeJiraConnectError(code: string): string {
+  switch (code) {
+    case 'access_denied':
+      return 'Jira access was declined. No connection was created.';
+    case 'invalid_state':
+      return 'The Jira consent link expired or was already used. Start again.';
+    case 'session_mismatch':
+      return 'The Jira callback arrived in a different browser session. Start again from this browser.';
+    case 'exchange_failed':
+      return 'Atlassian did not complete the authorization. Try again in a moment.';
+    case 'no_sites':
+      return 'The Atlassian account did not grant access to any Jira site.';
+    case 'not_configured':
+      return 'Managed Jira connections are not configured on this deployment.';
+    default:
+      return `Jira connection failed (${code}).`;
+  }
+}
+
+async function jiraConnectRequest<T>(
+  path: string,
+  fallback: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetchWithAuth(`/api/v1/auth/jira${path}`, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = body?.detail ?? body?.message;
+    if (response.status === 501 || detail === 'not_configured') {
+      throw new Error(describeJiraConnectError('not_configured'));
+    }
+    throw new Error(typeof detail === 'string' ? detail : fallback);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json().catch(() => undefined as T);
+}
+
+function jsonInit(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+function returnQuery(returnPath?: string): string {
+  return returnPath ? `?return_path=${encodeURIComponent(returnPath)}` : '';
+}
+
+const jiraTrackerPath = (trackerId: string) =>
+  `/trackers/${encodeURIComponent(trackerId)}`;
+
+export function startJiraConnect(
+  returnPath?: string
+): Promise<BitbucketAuthorizationStart> {
+  return jiraConnectRequest(
+    `/authorize${returnQuery(returnPath)}`,
+    'Failed to start the Jira connection',
+    { credentials: 'include' }
+  );
+}
+
+export function completeJiraConnect(body: {
+  handle: string;
+  name?: string;
+  cloud_id?: string;
+}): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    '/complete',
+    'Failed to complete the Jira connection',
+    jsonInit('POST', body)
+  );
+}
+
+export function getJiraConnectionStatus(
+  trackerId: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/status`,
+    'Failed to read the Jira connection status'
+  );
+}
+
+export function getJiraSites(
+  trackerId: string
+): Promise<{ sites: JiraSite[] }> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/sites`,
+    'Failed to list the Jira sites for this connection'
+  );
+}
+
+export function bindJiraSite(
+  trackerId: string,
+  cloudId: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/binding`,
+    'Failed to select the Jira site',
+    jsonInit('PUT', { cloud_id: cloudId })
+  );
+}
+
+export function startJiraReconnect(
+  trackerId: string,
+  returnPath?: string
+): Promise<BitbucketAuthorizationStart> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/reconnect${returnQuery(returnPath)}`,
+    'Failed to start the Jira reconnect',
+    { method: 'POST', credentials: 'include' }
+  );
+}
+
+export function completeJiraReconnect(
+  trackerId: string,
+  handle: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/reconnect/complete`,
+    'Failed to complete the Jira reconnect',
+    jsonInit('POST', { handle })
+  );
+}
+
+export async function disconnectJira(trackerId: string): Promise<void> {
+  await jiraConnectRequest<void>(
+    `${jiraTrackerPath(trackerId)}/disconnect`,
+    'Failed to disconnect the Jira connection',
+    { method: 'POST' }
+  );
+}
+
 // GitHub App OAuth API
 export interface TrackerAuthMethodsResponse {
   methods: string[];
