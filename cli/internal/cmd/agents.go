@@ -6410,6 +6410,16 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		"transport_ok":            false,
 		"authorization_header_ok": false,
 	}
+	// Simple mode prevents MCP discovery regardless of whether the server is
+	// registered. Report recovery before the missing-server early return.
+	if isClaudeCodeAgent(a.agent) {
+		env, _ := asObjectMap(doc["env"])
+		simple := strings.ToLower(strings.TrimSpace(fmt.Sprint(env["CLAUDE_CODE_SIMPLE"])))
+		if simple == "1" || simple == "true" || simple == "yes" {
+			result["error"] = "CLAUDE_CODE_SIMPLE disables automatic MCP loading and hooks; re-onboard Claude Code and restart it."
+			return mergeNpmSidecarControlValidation(a.agent, doc, baseURL, result)
+		}
+	}
 	if !ok {
 		return mergeNpmSidecarControlValidation(a.agent, doc, baseURL, result)
 	}
@@ -6603,14 +6613,6 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(a.agent.Name), "claude code") {
-		// A registered server cannot load automatically in simple mode.
-		// Configuration validation must catch this even when the gateway works.
-		env, _ := asObjectMap(doc["env"])
-		simple := strings.ToLower(strings.TrimSpace(fmt.Sprint(env["CLAUDE_CODE_SIMPLE"])))
-		if simple == "1" || simple == "true" || simple == "yes" {
-			result["validation_passed"] = false
-			result["error"] = "CLAUDE_CODE_SIMPLE disables automatic MCP loading and hooks; re-onboard Claude Code and restart it."
-		}
 		expectedGatewayURL := strings.TrimRight(baseURL, "/") + "/anthropic"
 		result["expected_gateway_url"] = expectedGatewayURL
 		result["gateway_provider_ok"] = false

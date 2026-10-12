@@ -3464,6 +3464,14 @@ func TestClaudeValidationRejectsSimpleMode(t *testing.T) {
 			if !want && !strings.Contains(fmt.Sprint(result["error"]), "CLAUDE_CODE_SIMPLE") {
 				t.Fatalf("expected actionable simple-mode diagnostic, got %+v", result)
 			}
+			delete(doc, "mcpServers")
+			result = adapter.ValidateManagedConfig(doc, "https://preloop.example")
+			if result["validation_passed"] != false {
+				t.Fatal("missing server must fail validation")
+			}
+			if !want && !strings.Contains(fmt.Sprint(result["error"]), "CLAUDE_CODE_SIMPLE") {
+				t.Fatalf("missing server must not hide simple-mode recovery: %+v", result)
+			}
 		})
 	}
 }
