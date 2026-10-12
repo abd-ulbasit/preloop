@@ -118,7 +118,10 @@ describe('spend-chart', () => {
         }}
       ></spend-chart>`
     );
-    await waitUntil(() => urls.length > 0);
+    await waitUntil(() => el.shadowRoot!.querySelector('svg'));
+    // One request on mount, not one from connectedCallback and another from
+    // the first update.
+    expect(urls).to.have.length(1);
     expect(last().searchParams.get('start_date')).to.equal(
       '2026-03-01T15:00:00.000Z'
     );

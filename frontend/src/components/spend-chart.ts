@@ -9,7 +9,6 @@ import type { GatewayUsageByDay } from '../types';
 import { formatUsd } from '../utils/money';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/button-group/button-group.js';
-import '@shoelace-style/shoelace/dist/components/icon-button/icon-button.js';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
@@ -116,6 +115,8 @@ export class SpendChart extends LitElement {
   }
 
   protected willUpdate(changed: Map<PropertyKey, unknown>): void {
+    // connectedCallback already handled the initial period.
+    if (!this.hasUpdated) return;
     if (!changed.has('period') || !this.period || !this.start) return;
     const before = changed.get('period') as SpendChart['period'];
     const same =

@@ -564,6 +564,33 @@ describe('console route transitions', () => {
     }
   });
 
+  it('keeps the query and hash when the old Cost URLs redirect', async () => {
+    for (const [from, to, tag] of [
+      [
+        '/console/cost?panel=pricing#x',
+        '/console/cost/spend?panel=pricing#x',
+        'cost-view',
+      ],
+      ['/console/api-usage?a=1', '/console/cost/gateway?a=1', 'api-usage-view'],
+    ]) {
+      clickLink(from);
+      await waitUntil(
+        () =>
+          window.location.pathname +
+            window.location.search +
+            window.location.hash ===
+          to,
+        `${from}: expected ${to}, got ${window.location.href}`,
+        { timeout: 10000 }
+      );
+      await waitUntil(
+        () => Boolean(shell()?.querySelector(`:scope > ${tag}`)),
+        `${from}: expected ${tag}`,
+        { timeout: 10000 }
+      );
+    }
+  });
+
   it('connects a view against the URL it navigated to', async () => {
     clickLink('/console/approvals');
     await assertLanded(BY_PATH.get('/console/approvals')!, 'visit approvals');
