@@ -277,6 +277,9 @@ export class IssueCostView extends AuthedElement {
         .nowrap {
           white-space: nowrap;
         }
+        .num-wrap {
+          text-align: right;
+        }
         /* One line per issue; the full title is on hover. */
         .issue-title {
           max-width: 20rem;
@@ -582,7 +585,9 @@ export class IssueCostView extends AuthedElement {
           header: 'Cost',
           numeric: true,
           sort: 'number',
-          // Wraps: a partial bucket says how many runs lack a cost.
+          // Right-aligned like its siblings, but wraps: a partial bucket
+          // says how many runs lack a cost.
+          cellClass: 'num-wrap',
           value: (item) => item.estimated_cost,
           cellTitle: (item) => issueCostTitle(item) || undefined,
           cell: (item) => formatIssueAmount(item),
