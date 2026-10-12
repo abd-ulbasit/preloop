@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
-from sqlalchemy import DateTime, Float, String, ForeignKey
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -62,6 +62,16 @@ class Event(Base):
     """
 
     __tablename__ = "event"
+    __table_args__ = (
+        # Latest activity per account (admin accounts list, last-activity
+        # sort): one backward probe per account instead of aggregating the
+        # whole table.
+        Index(
+            "ix_event_account_timestamp",
+            "account_id",
+            text("timestamp DESC"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -72,7 +82,8 @@ class Event(Base):
         UUID(as_uuid=True),
         ForeignKey("account.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
+        # Indexed by ix_event_account_timestamp (account_id leads), which
+        # replaced the single-column ix_event_account_id.
         comment="Account this event belongs to (required for most events)",
     )
 

@@ -361,4 +361,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert runner_scheduling.down_revision == "20261013_note_receipts"
     desktop_views = script.get_revision("20261011_desktop_views")
     assert desktop_views.down_revision == "20261011_runner_scheduling"
-    assert script.get_heads() == ["20261011_desktop_views"]
+    admin_activity = script.get_revision("20261013_admin_activity_idx")
+    assert admin_activity.down_revision == "20261011_desktop_views"
+    assert script.get_heads() == ["20261013_admin_activity_idx"]
