@@ -248,8 +248,6 @@ def _identity(db: Session, user: models.User) -> Any:
 async def test_permission_hook_lands_on_runner_session(
     endpoint_db, runner, test_user, monkeypatch
 ):
-    from unittest.mock import AsyncMock
-
     from preloop.api.endpoints import agent_permission
 
     db_session = endpoint_db
@@ -260,13 +258,56 @@ async def test_permission_hook_lands_on_runner_session(
     monkeypatch.setattr(
         agent_permission, "_resolve_permission_identity", lambda token: identity
     )
-    monkeypatch.setattr(
-        agent_permission,
-        "request_agent_permission",
-        AsyncMock(return_value=("allow", "approved", str(uuid.uuid4()), False)),
-    )
+    from fastapi import Response
 
-    await agent_permission.agent_permission_check(
+    from preloop.api.endpoints.approval_requests import list_approval_requests
+    from preloop.models.crud import crud_agent_control_command
+
+    crud_agent_control_command.create_note(
+        db_session,
+        account_id=test_user.account_id,
+        managed_agent_id=None,
+        runtime_session_id=row.runtime_session_id,
+        note_id=uuid.uuid4().hex[:16],
+        body="check the tests first",
+        envelope={},
+        author_display="Admin User",
+        author_auth_method="jwt",
+        created_by_user_id=test_user.id,
+        expires_at=datetime.now(timezone.utc).replace(year=2100),
+        commit=False,
+    )
+    db_session.flush()
+    seen: dict = {}
+
+    async def decide(**kwargs: Any) -> tuple:
+        # Stands in for the policy engine: record the approval the way it
+        # does, on the session it was given.
+        seen.update(kwargs)
+        workflow = models.ApprovalWorkflow(
+            account_id=test_user.account_id, name=f"wf-{uuid.uuid4().hex[:6]}"
+        )
+        tool = models.ToolConfiguration(
+            account_id=test_user.account_id, tool_name="bash", tool_source="builtin"
+        )
+        db_session.add_all([workflow, tool])
+        db_session.flush()
+        approval = models.ApprovalRequest(
+            account_id=test_user.account_id,
+            tool_configuration_id=tool.id,
+            approval_workflow_id=workflow.id,
+            tool_name="bash",
+            tool_args={},
+            status="approved",
+            runtime_session_id=kwargs["runtime_session_id"],
+        )
+        db_session.add(approval)
+        db_session.flush()
+        return ("allow", "approved", str(approval.id), False)
+
+    monkeypatch.setattr(agent_permission, "request_agent_permission", decide)
+
+    result = await agent_permission.agent_permission_check(
         agent_permission.AgentPermissionCheckRequest(
             source="copilot_cli",
             tool_name="bash",
@@ -277,6 +318,21 @@ async def test_permission_hook_lands_on_runner_session(
         authorization="Bearer token",
     )
 
+    assert seen["runtime_session_id"] == row.runtime_session_id
+    listed = list_approval_requests(
+        Response(),
+        status=None,
+        execution_id=None,
+        runtime_session_id=row.runtime_session_id,
+        tool_name=None,
+        q=None,
+        limit=50,
+        skip=0,
+        current_user=test_user,
+        db=db_session,
+    )
+    assert [str(a.id) for a in listed] == [result.request_id]
+    assert result.operator_note and "check the tests first" in result.operator_note
     activity = (
         db_session.query(models.RuntimeSessionActivity)
         .filter(models.RuntimeSessionActivity.activity_type == "tool_call")
@@ -304,3 +360,48 @@ async def test_permission_hook_lands_on_runner_session(
         )
         is None
     )
+
+
+def _user(db: Session, account_id: Any, name: str) -> models.User:
+    user = models.User(
+        account_id=account_id,
+        email=f"{name}-{uuid.uuid4().hex[:6]}@example.com",
+        username=f"{name}-{uuid.uuid4().hex[:6]}",
+        hashed_password="x",
+        user_source="local",
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+def test_admin_started_session_links_runner_owner_hook_only(
+    db_session, runner, test_user
+):
+    from preloop.services.agent_session_lineage import runner_session_for_external
+
+    owner = _user(db_session, test_user.account_id, "owner")
+    runner.registered_by_user_id = owner.id
+    db_session.flush()
+    row = _start(db_session, runner, test_user)  # the admin starts it
+    hs = str(uuid.uuid4())
+    _go_idle(db_session, runner, row, hs)
+    stranger = _user(db_session, test_user.account_id, "member")
+
+    linked = runner_session_for_external(
+        db_session,
+        account_id=test_user.account_id,
+        external_session_id=hs,
+        actor_user_id=owner.id,
+    )
+    refused = runner_session_for_external(
+        db_session,
+        account_id=test_user.account_id,
+        external_session_id=hs,
+        actor_user_id=stranger.id,
+    )
+
+    assert linked is not None and linked.id == row.runtime_session_id
+    assert refused is None
+    start = _hook_start(db_session, test_user.account_id, hs, actor_user_id=owner.id)
+    assert start.runtime_session_id == str(row.runtime_session_id)

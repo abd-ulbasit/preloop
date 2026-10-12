@@ -41,7 +41,11 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from preloop.models.crud import crud_runner_remote_session, crud_runtime_session
+from preloop.models.crud import (
+    crud_flow_runner,
+    crud_runner_remote_session,
+    crud_runtime_session,
+)
 from preloop.models.models.runtime_session import RuntimeSession
 from preloop.services.agent_session_headers import normalize_session_id
 
@@ -188,7 +192,9 @@ def runner_session_for_external(
     know only that id, so their registrations, approvals and notes are
     redirected here instead of opening a second session. Account scoped,
     and ended runner sessions never match. When the caller's user is known
-    (``actor_user_id``) it must be the user who started the runner session.
+    (``actor_user_id``) it must be the user who started the runner session or
+    the user who registered the hosting runner: an admin may start a session
+    on a member's runner (#1483), and the hooks there run as the member.
     """
     external = normalize_session_id(external_session_id)
     if external is None:
@@ -198,10 +204,26 @@ def runner_session_for_external(
     )
     if runner is None:
         return None
-    if actor_user_id is not None and str(runner.actor_user_id) != str(actor_user_id):
+    if actor_user_id is not None and not _may_join_runner_session(
+        db, account_id=account_id, runner=runner, user_id=actor_user_id
+    ):
         return None
     return crud_runtime_session.get_account_session(
         db, account_id=account_id, runtime_session_id=str(runner.runtime_session_id)
+    )
+
+
+def _may_join_runner_session(
+    db: Session, *, account_id: Any, runner: Any, user_id: Any
+) -> bool:
+    """Whether this user's hook may attach to the runner session."""
+    if str(runner.actor_user_id) == str(user_id):
+        return True
+    host = crud_flow_runner.get(db, id=runner.runner_id)
+    return (
+        host is not None
+        and str(host.account_id) == str(account_id)
+        and str(host.registered_by_user_id) == str(user_id)
     )
 
 

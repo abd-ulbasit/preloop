@@ -135,9 +135,21 @@ def _origin_matches_principal(
     )
 
 
+@dataclass(frozen=True)
+class OriginSession:
+    """The recorded session a hook call belongs to.
+
+    ``hosted_runner`` is True when it is a runner-hosted session (#1482): the
+    hook's approvals and notes then belong to that session itself.
+    """
+
+    runtime_session_id: str
+    hosted_runner: bool = False
+
+
 def _origin_runtime_session_id(
     identity: PermissionIdentity, source: Optional[str], session_id: str
-) -> Optional[str]:
+) -> Optional[OriginSession]:
     """Link a hook session only to a recorded session in the caller's account."""
     from preloop.services.agent_session_lineage import runner_session_for_external
 
@@ -152,7 +164,7 @@ def _origin_runtime_session_id(
             actor_user_id=identity.user_id,
         )
         if hosted is not None:
-            return str(hosted.id)
+            return OriginSession(str(hosted.id), hosted_runner=True)
         principal_type = identity.runtime_principal_type
         principal_id = identity.runtime_principal_id
         if (not principal_type or not principal_id) and identity.runtime_session_id:
@@ -176,7 +188,7 @@ def _origin_runtime_session_id(
             if session is not None and _origin_matches_principal(
                 session, principal_type, principal_id, f"{principal_id}:{session_id}"
             ):
-                return str(session.id)
+                return OriginSession(str(session.id))
         # Usage importers and host observers record a bare native session id.
         if source_type:
             session = crud_runtime_session.get_by_source(
@@ -188,7 +200,7 @@ def _origin_runtime_session_id(
             if session is not None and _origin_matches_principal(
                 session, principal_type, principal_id
             ):
-                return str(session.id)
+                return OriginSession(str(session.id))
         return None
 
 
@@ -372,6 +384,7 @@ def _claim_operator_note(
     origin_session_id: Optional[str] = None,
     *,
     defer_delivery: bool = False,
+    hosted_origin: bool = False,
 ) -> Optional[str]:
     """Claim this session's pending operator notes for the hook channel.
 
@@ -383,7 +396,9 @@ def _claim_operator_note(
     Never raises: a note is a bonus on this route, and a store problem must
     not turn a permission check into a denied tool call.
     """
-    if identity.managed_agent_id is None:
+    if identity.managed_agent_id is None and not (hosted_origin and origin_session_id):
+        # A runner-hosted session has no managed agent; its notes are
+        # addressed to the session and still reach the hook (#1482).
         return None
     session_ids: list[Optional[str]] = [
         str(identity.runtime_session_id) if identity.runtime_session_id else None
@@ -403,7 +418,11 @@ def _claim_operator_note(
                 claimed = operator_notes.claim_pending_notes(
                     db,
                     account_id=identity.account_id,
-                    managed_agent_id=str(identity.managed_agent_id),
+                    managed_agent_id=(
+                        str(identity.managed_agent_id)
+                        if identity.managed_agent_id
+                        else None
+                    ),
                     runtime_session_id=session_id,
                     channel=operator_notes.CHANNEL_HOOK,
                     defer_delivery=defer_delivery,
@@ -610,12 +629,16 @@ async def agent_permission_check(
             "model": (payload.model or "").strip() or None,
         }
     origin_id: Optional[str] = None
+    hosted_origin = False
     if payload.session_id and payload.session_id.strip():
-        origin_id = await run_db_off_loop(
+        origin = await run_db_off_loop(
             lambda: _origin_runtime_session_id(
                 identity, payload.source, payload.session_id.strip()
             )
         )
+        if origin is not None:
+            origin_id = origin.runtime_session_id
+            hosted_origin = origin.hosted_runner
         if origin_id:
             tool_input["_preloop_origin"]["runtime_session_id"] = origin_id
     if payload.cwd:
@@ -643,7 +666,13 @@ async def agent_permission_check(
         account_id=identity.account_id,
         user_id=identity.user_id,
         managed_agent_id=identity.managed_agent_id,
-        runtime_session_id=identity.runtime_session_id,
+        # A runner-hosted session's approvals belong on that session, where
+        # the console and `preloop sessions attach` show them (#1482).
+        runtime_session_id=(
+            UUID(origin_id)
+            if hosted_origin and origin_id
+            else identity.runtime_session_id
+        ),
         managed_agent_name=identity.managed_agent_name,
         api_key_id=identity.api_key_id,
         source=payload.source,
@@ -672,7 +701,10 @@ async def agent_permission_check(
     )
     operator_note = await run_db_off_loop(
         lambda: _claim_operator_note(
-            identity, origin_session_id=origin_id, defer_delivery=defer_note_delivery
+            identity,
+            origin_session_id=origin_id,
+            defer_delivery=defer_note_delivery,
+            hosted_origin=hosted_origin,
         )
     )
     activity_session_id = origin_id or identity.runtime_session_id
