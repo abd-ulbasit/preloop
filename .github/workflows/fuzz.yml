@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fuzz-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: fuzz-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.execution_host_tests && 'isolated' || 'hosted' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
