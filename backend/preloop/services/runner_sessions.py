@@ -763,6 +763,8 @@ def _apply_state(
                 }
             ]
         return []
+    # Before the transition check: a reconnect re-reports the same state.
+    _adopt_host_idle_timeout(row, message.idle_timeout_seconds)
     if state not in _TRANSITIONS.get(row.state, frozenset()):
         logger.info("Ignoring session %s transition %s -> %s", row.id, row.state, state)
         return []
@@ -819,6 +821,24 @@ def _apply_state(
         )
     db.add(row)
     return []
+
+
+def _adopt_host_idle_timeout(
+    row: models.RunnerRemoteSession, reported: Optional[int]
+) -> None:
+    """Lower the session's idle timeout to the host's effective one.
+
+    The host may lower the requested limit in runner.json; the offline sweep
+    must then end the session at the same point. Never raises the limit.
+
+    Args:
+        row: The session.
+        reported: ``idle_timeout_seconds`` from the state frame, if any.
+    """
+    if reported is None or reported < MIN_IDLE_TIMEOUT_SECONDS:
+        return
+    current = row.idle_timeout_seconds or DEFAULT_IDLE_TIMEOUT_SECONDS
+    row.idle_timeout_seconds = min(current, reported)
 
 
 def _link_hook_sessions(db: Session, row: models.RunnerRemoteSession) -> None:

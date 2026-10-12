@@ -333,6 +333,11 @@ func TestRunnerSessionStartTwoTurnsStop(t *testing.T) {
 	if idle := findMsg(msgs, isState("idle")); idle["harness_session_id"] == "" {
 		t.Fatalf("idle state must carry harness_session_id")
 	}
+	for _, state := range []string{"starting", "idle"} {
+		if got := findMsg(msgs, isState(state))["idle_timeout_seconds"]; got != int(runnerSessionDefaultIdle/time.Second) {
+			t.Fatalf("%s state must carry the effective idle timeout, got %v", state, got)
+		}
+	}
 	event := findMsg(msgs, func(m map[string]any) bool { return m["type"] == "session_event" })
 	payload := event["payload"].(map[string]any)
 	if _, leaked := payload["api_key"]; leaked || event["turn_id"] != runnerSessionFirstTurnID || event["seq"] != 0 {

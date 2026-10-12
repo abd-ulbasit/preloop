@@ -378,7 +378,9 @@ Set in `~/.preloop/runner.json`:
 | Maximum duration | 8 hours | The session ends with `max_duration` |
 
 The server may ask for a shorter idle timeout for one session, never a longer
-one.
+one. The runner reports each session's effective idle timeout, and the server
+adopts the host's lower value for its offline sweep, so a session whose runner
+disappears ends with `runner_offline` after the same limit the host applies.
 
 ## What the host user sees
 
