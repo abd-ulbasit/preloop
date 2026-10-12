@@ -3115,6 +3115,7 @@ async def list_account_runtime_sessions(
             "managed agents of that kind or recorded from that source"
         ),
     ),
+    alias: Optional[str] = Query(None, min_length=1, max_length=64),
     parent_session_id: Optional[UUID] = Query(
         None, description="Only sessions this session spawned"
     ),
@@ -3160,6 +3161,7 @@ async def list_account_runtime_sessions(
             background_tasks=background_tasks,
             agent=agent,
             agent_kind=agent_kind,
+            alias=alias,
             parent_session_id=str(parent_session_id) if parent_session_id else None,
             flow_execution_id=str(flow_execution_id) if flow_execution_id else None,
             active_within_minutes=active_within_minutes,

@@ -636,6 +636,7 @@ def test_the_tool_takes_no_lineage_argument(db_session):
         # Aliases for a target, not lineage claims: ``children`` is resolved
         # against the caller's session as the platform recorded it (#1045).
         "external_session_id",
+        "alias",
         "children",
     }
     assert SEND_NOTE_TOOL["schema"]["additionalProperties"] is False

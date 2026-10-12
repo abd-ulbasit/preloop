@@ -238,6 +238,7 @@ function buildSessionTitleFallback(row: Record<string, unknown>): string {
 
 function buildTitle(row: Record<string, unknown>): string {
   return (
+    asString(row.alias) ||
     asString(row.title) ||
     asString(row.summary) ||
     asString(row.session_summary) ||

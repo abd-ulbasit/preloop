@@ -27,7 +27,7 @@ export function employeeClientOptionsFor(
     throw new Error("Employee API URL must match the enrolled control origin");
   }
   const env: Record<string, string> = {};
-  for (const name of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "SHELL"]) {
+  for (const name of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "SHELL", "PRELOOP_SESSION_ALIAS", "PRELOOP_PARENT_SESSION_ID", "PRELOOP_DISABLE_TELEMETRY"]) {
     if (process.env[name]) env[name] = process.env[name]!;
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "preloop-codex-employee-"));

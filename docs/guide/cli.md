@@ -329,6 +329,16 @@ The CLI checks for updates at most once per day. With `PRELOOP_DISABLE_TELEMETRY
 - [Importing usage from Cursor](cost/importing-cursor-usage.md)
 - [Troubleshooting](troubleshooting.md)
 
+### Named workers
+
+`preloop sessions list --alias <name>` filters spawn-time aliases. The table
+shows ALIAS and PARENT (short ids; `--wide` shows full ids).
+`preloop notes send --alias <name>` targets one active worker;
+`--external-session-id <id>` targets its harness id.
+`--children latest|all` targets live children of the session in
+`PRELOOP_PARENT_SESSION_ID`, with the same 20-session cap as MCP `send_note`.
+See [Spawning workers](spawning-workers.md) for the complete recipe.
+
 ## Notes
 
 Send and inspect operator-note receipts:

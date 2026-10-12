@@ -69,6 +69,7 @@ type runtimeSessionRow struct {
 	ID                   string   `json:"id"`
 	SessionSourceType    string   `json:"session_source_type"`
 	SessionSourceID      string   `json:"session_source_id"`
+	Alias                string   `json:"alias"`
 	ParentSessionID      string   `json:"parent_session_id"`
 	RuntimePrincipalName string   `json:"runtime_principal_name"`
 	Title                string   `json:"title"`
@@ -98,6 +99,7 @@ var (
 	sessionsListAgent     string
 	sessionsListKind      string
 	sessionsListSince     string
+	sessionsListAlias     string
 	sessionsListParent    string
 	sessionsListExecution string
 	sessionsListLimit     int
@@ -138,6 +140,7 @@ Examples:
 
 func init() {
 	flags := sessionsListCmd.Flags()
+	flags.StringVar(&sessionsListAlias, "alias", "", "only sessions with this spawn-time alias")
 	flags.BoolVar(&sessionsListActive, "active", false,
 		"only open sessions with activity in the last 10 minutes")
 	flags.StringVar(&sessionsListAgent, "agent", "", "managed agent id or display name")
@@ -238,6 +241,9 @@ func sessionsListOptionsFrom() (sessionsListOptions, error) {
 		} else {
 			opts.query.Set("flow_execution_id", value)
 		}
+	}
+	if value := strings.TrimSpace(sessionsListAlias); value != "" {
+		opts.query.Set("alias", value)
 	}
 	return opts, nil
 }
@@ -370,9 +376,9 @@ func writeSessionsJSON(
 
 func writeSessionsTable(out io.Writer, rows []runtimeSessionRow, titles []string, now time.Time, wide bool) error {
 	writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	header := "ID\tAGENT\tSTARTED\tLAST ACTIVITY\tSTATE\tTOOLS\tMODEL\tPENDING\tTITLE"
+	header := "ID\tALIAS\tPARENT\tAGENT\tSTARTED\tLAST ACTIVITY\tSTATE\tTOOLS\tMODEL\tPENDING\tTITLE"
 	if wide {
-		header = "ID\tAGENT\tKIND\tSTARTED\tLAST ACTIVITY\tSTATE\tTOOLS\tMODEL\tPENDING\tTITLE"
+		header = "ID\tALIAS\tPARENT\tAGENT\tKIND\tSTARTED\tLAST ACTIVITY\tSTATE\tTOOLS\tMODEL\tPENDING\tTITLE"
 	}
 	fmt.Fprintln(writer, header) //nolint:errcheck
 	for index, row := range rows {
@@ -380,7 +386,11 @@ func writeSessionsTable(out io.Writer, rows []runtimeSessionRow, titles []string
 		if wide {
 			id = row.ID
 		}
-		columns := []string{id, sessionAgentLabel(row)}
+		parent := shortSessionID(row.ParentSessionID)
+		if wide {
+			parent = row.ParentSessionID
+		}
+		columns := []string{id, dashIfEmpty(row.Alias), dashIfEmpty(parent), sessionAgentLabel(row)}
 		if wide {
 			columns = append(columns, dashIfEmpty(sessionKind(row)))
 		}
@@ -473,6 +483,9 @@ func sessionDisplayTitles(rows []runtimeSessionRow) []string {
 }
 
 func fallbackSessionTitle(row runtimeSessionRow) string {
+	if alias := strings.TrimSpace(row.Alias); alias != "" {
+		return alias
+	}
 	if title := strings.TrimSpace(row.Title); title != "" {
 		return title
 	}

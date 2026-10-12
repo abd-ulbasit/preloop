@@ -51,6 +51,35 @@ func TestReceiptCommandsStatusAndList(t *testing.T) {
 	}
 }
 
+func TestChildrenAllWaitPollsEachNote(t *testing.T) {
+	gets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"notes": []map[string]string{
+					{"note_id": "child-a", "state": "pending"},
+					{"note_id": "child-b", "state": "pending"},
+				},
+			})
+			return
+		}
+		gets++
+		id := strings.TrimPrefix(r.URL.Path, operatorNotesPath+"/")
+		_ = json.NewEncoder(w).Encode(map[string]string{"note_id": id, "state": "delivered"})
+	}))
+	defer server.Close()
+	pointCLIAt(t, server.URL)
+	t.Setenv(parentSessionEnvVar, testNoteSessionID)
+	_, err := runNotesSendCmd(t, "", "--children", "all", "--wait", "30ms", "Fan out.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gets != 2 {
+		t.Fatalf("batch wait polls = %d, want 2", gets)
+	}
+}
+
 func TestReceiptWaitExitCodes(t *testing.T) {
 	for _, tc := range []struct {
 		state string

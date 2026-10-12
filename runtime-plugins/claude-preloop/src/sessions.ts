@@ -1,3 +1,4 @@
+import { SessionRegistrar } from "./session-registration.js";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -110,7 +111,7 @@ class OwnedSession {
   private turnText: string[] = [];
   private ended = false;
 
-  constructor(readonly key: string) {}
+  constructor(readonly key: string, private registrar: SessionRegistrar, private cwd?: string) {}
 
   /** Consume SDK messages, resolving one waiter per completed turn. */
   async run(handle: SdkQueryHandle): Promise<void> {
@@ -120,6 +121,7 @@ class OwnedSession {
         this.lastActivity = Date.now();
         if (message.type === "system" && message.subtype === "init") {
           this.sessionId = message.session_id ?? this.sessionId;
+          await this.registrar.register(this.sessionId, this.cwd);
           continue;
         }
         if (message.type === "assistant") {
@@ -238,11 +240,12 @@ export type SendMessageParams = {
  */
 export class SessionManager {
   private sessions = new Map<string, OwnedSession>();
+  private registrar: SessionRegistrar;
 
   constructor(
     private readonly config: ControlConfig,
     private readonly queryFactory: QueryFactory = sdkQueryFactory,
-  ) {}
+  ) { this.registrar = new SessionRegistrar(config, "claude_code"); }
 
   private findBySessionId(sessionId: string): OwnedSession | undefined {
     for (const session of this.sessions.values()) {
@@ -281,7 +284,7 @@ export class SessionManager {
     resumeSessionId?: string,
     cwd?: string,
   ): Promise<OwnedSession> {
-    const session = new OwnedSession(resumeSessionId ?? randomUUID());
+    const session = new OwnedSession(resumeSessionId ?? randomUUID(), this.registrar, cwd ?? this.config.workspace_root);
     const handle = await this.queryFactory({
       prompt: session.input,
       options: this.sdkOptions(resumeSessionId, cwd),

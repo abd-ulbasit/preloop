@@ -44,6 +44,7 @@ const agentSessionStartPath = "/api/v1/agents/session-start"
 
 // parentSessionEnvVar carries the runtime session id of the spawning run.
 const parentSessionEnvVar = "PRELOOP_PARENT_SESSION_ID"
+const sessionAliasEnvVar = "PRELOOP_SESSION_ALIAS"
 
 // sessionHookHTTPTimeout bounds the one request the hook makes.
 const sessionHookHTTPTimeout = 5 * time.Second
@@ -70,10 +71,11 @@ func init() {
 }
 
 type sessionHookEvent struct {
-	HookEventName string `json:"hook_event_name"`
-	SessionID     string `json:"session_id"`
-	Cwd           string `json:"cwd"`
-	Prompt        string `json:"prompt"`
+	HookEventName  string `json:"hook_event_name"`
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversation_id"`
+	Cwd            string `json:"cwd"`
+	Prompt         string `json:"prompt"`
 }
 
 type sessionStartRequest struct {
@@ -82,12 +84,14 @@ type sessionStartRequest struct {
 	Cwd             string `json:"cwd,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	FirstPrompt     string `json:"first_prompt,omitempty"`
+	Alias           string `json:"alias,omitempty"`
 }
 
 type sessionStartResponse struct {
 	RuntimeSessionID string `json:"runtime_session_id"`
 	ParentSessionID  string `json:"parent_session_id"`
 	StartedAt        string `json:"started_at"`
+	Alias            string `json:"alias"`
 }
 
 // sessionHandoffFile is ~/.preloop/sessions/<external_session_id>.json.
@@ -98,6 +102,7 @@ type sessionHandoffFile struct {
 	StartedAt         string `json:"started_at,omitempty"`
 	AgentKind         string `json:"agent_kind"`
 	Cwd               string `json:"cwd,omitempty"`
+	Alias             string `json:"alias,omitempty"`
 	TitleSent         bool   `json:"title_sent,omitempty"`
 }
 
@@ -226,20 +231,29 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 	if source == "" {
 		source = permissionSourceClaudeCode
 	}
+	if source == permissionSourceClaudeCode && isCursorHostInvokingClaudeHook() {
+		return nil
+	}
 	raw, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 1<<20))
 	if err != nil {
 		fmt.Fprintf(errOut, "preloop session hook: %v\n", err)
 		return nil
 	}
 	var event sessionHookEvent
-	if json.Unmarshal(raw, &event) != nil || strings.TrimSpace(event.SessionID) == "" {
+	if json.Unmarshal(raw, &event) != nil {
 		return nil
 	}
-	externalID := strings.TrimSpace(event.SessionID)
+	if event.SessionID == "" {
+		event.SessionID = hookEventSessionID(raw)
+	}
+	if strings.TrimSpace(event.SessionID) == "" {
+		return nil
+	}
+	externalID := strings.TrimSpace(hookEventSessionID(raw))
 	if !sessionFileIDPattern.MatchString(externalID) {
 		return nil
 	}
-	isPrompt := strings.EqualFold(event.HookEventName, "UserPromptSubmit")
+	isPrompt := strings.EqualFold(event.HookEventName, "UserPromptSubmit") || strings.EqualFold(event.HookEventName, "beforeSubmitPrompt")
 	existing, haveFile := readSessionHandoff(externalID)
 	// Only the first UserPromptSubmit carries the title; later prompts cost
 	// one stat. A prompt with no text is ignored too.
@@ -261,6 +275,7 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 			Source:          source,
 			Cwd:             strings.TrimSpace(event.Cwd),
 			ParentSessionID: strings.TrimSpace(os.Getenv(parentSessionEnvVar)),
+			Alias:           strings.TrimSpace(os.Getenv(sessionAliasEnvVar)),
 		}
 		if isPrompt {
 			req.FirstPrompt = event.Prompt
@@ -277,6 +292,7 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 				StartedAt:         resp.StartedAt,
 				AgentKind:         source,
 				Cwd:               req.Cwd,
+				Alias:             resp.Alias,
 				TitleSent:         isPrompt || (haveFile && existing.TitleSent),
 			}
 			if err := writeSessionHandoff(file); err != nil {
@@ -284,6 +300,9 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 			}
 			if !isPrompt {
 				resetStopBlocks(externalID)
+				if resp.Alias != "" && (!haveFile || existing.Alias != resp.Alias) {
+					fmt.Fprintf(errOut, "preloop session_alias=%s\n", resp.Alias)
+				}
 				if err := appendClaudeEnvExport(resp.RuntimeSessionID); err != nil {
 					fmt.Fprintf(errOut, "preloop session hook: could not export %s: %v\n", parentSessionEnvVar, err)
 				}
@@ -293,19 +312,56 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 			}
 		}
 	}
-	// Reaching here means needsRegistration was true: a prompt that needs no
-	// registration returned above. So `registered` is set only by the post.
-
 	// Notes ride the same event: a note sent before the run started reaches
 	// the model before its first tool call. First turn only, so an interactive
 	// session does not pay a request per prompt; later notes land on the tool
 	// call or the Stop hook.
-	if registered && (!isPrompt || !haveFile) {
+	// The permission-hook fallback registers lineage only. Claiming notes
+	// here would mark them delivered before SessionStart and write a second
+	// JSON document onto the permission decision's stdout.
+	if !sessionHookRegisterOnly(cmd) && registered && (!isPrompt || !haveFile) {
 		if text := claimNotesForHook(cred, externalID, noteEventSessionStart); text != "" {
 			writeSessionAdditionalContext(cmd.OutOrStdout(), event.HookEventName, text)
 		}
 	}
 	return nil
+}
+
+func sessionHookRegisterOnly(cmd *cobra.Command) bool {
+	flag := cmd.Flags().Lookup("register-only")
+	if flag == nil {
+		return false
+	}
+	value, err := cmd.Flags().GetBool("register-only")
+	return err == nil && value
+}
+
+// Register on the first permission event as well for hosts which do not emit
+// a SessionStart event. The handoff makes subsequent tool calls local reads.
+func registerSpawnFromPermissionHook(source string, raw []byte) {
+	if os.Getenv(sessionAliasEnvVar) == "" && os.Getenv(parentSessionEnvVar) == "" {
+		return
+	}
+	externalID := hookEventSessionID(raw)
+	if externalID == "" {
+		return
+	}
+	file, exists := readSessionHandoff(externalID)
+	if exists && (os.Getenv(sessionAliasEnvVar) == "" || file.Alias != "") {
+		return
+	}
+	event := sessionHookEvent{HookEventName: "SessionStart", SessionID: externalID, Cwd: hookEventFieldFromRaw(raw, "cwd")}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	command := &cobra.Command{}
+	command.Flags().String("source", source, "")
+	command.Flags().Bool("register-only", true, "")
+	command.SetIn(bytes.NewReader(payload))
+	command.SetOut(io.Discard)
+	command.SetErr(os.Stderr)
+	_ = runAgentsSessionHook(command, nil)
 }
 
 // writeSessionAdditionalContext emits the harness JSON that puts a pending

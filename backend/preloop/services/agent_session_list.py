@@ -96,6 +96,7 @@ def _row(session: RuntimeSession, now: datetime) -> Dict[str, Any]:
         "parent_session_id": (
             str(session.parent_session_id) if session.parent_session_id else None
         ),
+        "alias": session.alias,
         "title": title[:MAX_TITLE_CHARS] if title else None,
         "is_active_now": active,
         "ended": session.ended_at is not None,
@@ -111,6 +112,7 @@ def list_for_agent(
     subject_context: Dict[str, Optional[str]],
     parent_session_id: Optional[str] = None,
     started_since: Optional[str] = None,
+    alias: Optional[str] = None,
     external_session_id: Optional[str] = None,
     agent_kind: Optional[str] = None,
     cwd: Optional[str] = None,
@@ -213,6 +215,8 @@ def list_for_agent(
     if cwd:
         escaped = cwd.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.filter(RuntimeSession.cwd.like(f"{escaped}%", escape="\\"))
+    if alias:
+        query = query.filter(RuntimeSession.alias == alias)
     if external_session_id:
         matches = agent_session_lineage.resolve_external_session(
             db, account_id=account_id, external_session_id=external_session_id
