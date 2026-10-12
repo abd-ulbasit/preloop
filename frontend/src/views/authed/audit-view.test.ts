@@ -285,6 +285,48 @@ describe('AuditView', () => {
     localStorage.clear();
   });
 
+  it('opens a linked page at its size and keeps paging in the URL', async () => {
+    window.history.replaceState(null, '', '?page=2&size=25');
+    const requested: string[] = [];
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/v1/audit-logs/grouped?')) {
+        requested.push(url);
+        return new Response(JSON.stringify({ groups: [], total: 120 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('[]', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const element = document.createElement('audit-view') as AuditView;
+    document.body.appendChild(element);
+    await waitUntil(() => requested.length > 0, 'no timeline request');
+    const first = new URL(requested[0], window.location.origin).searchParams;
+    expect(first.get('skip')).to.equal('25');
+    expect(first.get('limit')).to.equal('25');
+    await waitUntil(() => (element as any)._total === 120, 'no total');
+
+    (element as any)._goToPage(3);
+    await waitUntil(() => requested.length > 1, 'no second request');
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('page')).to.equal('4');
+    expect(params.get('size')).to.equal('25');
+    (element as any)._setPageSize(100);
+    await waitUntil(() => requested.length > 2, 'no third request');
+    expect(new URLSearchParams(window.location.search).get('page')).to.equal(
+      null
+    );
+    expect(new URLSearchParams(window.location.search).get('size')).to.equal(
+      '100'
+    );
+    element.remove();
+    window.history.replaceState(null, '', window.location.pathname);
+  });
+
   it('shows a first-run empty state when no audit events exist', async () => {
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -313,8 +355,10 @@ describe('AuditView', () => {
       /\s+/g,
       ' '
     );
-    expect(content).to.contain('No audit events yet.');
-    expect(content).to.contain(
+    const state = element.shadowRoot?.querySelector('table-state');
+    expect(state?.getAttribute('kind')).to.equal('empty');
+    expect(state?.getAttribute('heading')).to.equal('No audit events yet');
+    expect(state?.getAttribute('message')).to.contain(
       'Governed tool calls, approvals, and policy decisions are recorded here'
     );
     expect(content).to.not.contain('matching your filters');
@@ -355,13 +399,14 @@ describe('AuditView', () => {
 
       const element = await mount();
       const alert = element.shadowRoot?.querySelector(
-        'sl-alert[variant="danger"]'
+        'table-state[kind="error"]'
       );
-      expect(alert, 'expected a danger alert').to.exist;
-      expect(alert?.textContent).to.contain("Couldn't load audit events");
-      expect(element.shadowRoot?.textContent).to.not.contain(
-        'No audit events yet'
+      expect(alert, 'expected the error state').to.exist;
+      expect(alert?.getAttribute('message')).to.contain(
+        "Couldn't load audit events"
       );
+      expect(element.shadowRoot?.querySelector('table-state[kind="empty"]')).to
+        .not.exist;
 
       fail = false;
       const retry = alert?.querySelector('sl-button') as HTMLElement;
@@ -370,11 +415,12 @@ describe('AuditView', () => {
       await waitUntil(
         () =>
           !(element as any)._loading &&
-          !element.shadowRoot?.querySelector('sl-alert[variant="danger"]'),
+          !element.shadowRoot?.querySelector('table-state[kind="error"]'),
         'Retry did not reload'
       );
       await element.updateComplete;
-      expect(element.shadowRoot?.textContent).to.contain('No audit events yet');
+      expect(element.shadowRoot?.querySelector('table-state[kind="empty"]')).to
+        .exist;
       element.remove();
     });
 
@@ -393,15 +439,19 @@ describe('AuditView', () => {
       await element.updateComplete;
 
       const empty = element.shadowRoot?.querySelector('.empty-state');
-      expect(empty?.textContent).to.contain('No events match these filters.');
-      expect(empty?.textContent).to.not.contain('No audit events yet');
+      expect(empty?.getAttribute('kind')).to.equal('no-results');
+      expect(empty?.getAttribute('heading')).to.equal(
+        'No events match these filters.'
+      );
       const clear = empty?.querySelector('sl-button') as HTMLElement;
       expect(clear.textContent?.trim()).to.equal('Clear filters');
       clear.click();
       await waitUntil(() => !(element as any)._loading);
       await element.updateComplete;
       expect((element as any)._outcomeFilters).to.deep.equal([]);
-      expect(element.shadowRoot?.textContent).to.contain('No audit events yet');
+      expect(
+        element.shadowRoot?.querySelector('table-state')?.getAttribute('kind')
+      ).to.equal('empty');
       element.remove();
     });
   });

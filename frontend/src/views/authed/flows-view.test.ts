@@ -61,6 +61,9 @@ describe('FlowsView', () => {
     fetchStub?.restore();
     localStorage.clear();
     invalidateApiCaches();
+    // The list mirrors its sort into the query string; one test's sort must
+    // not become the next test's starting order.
+    window.history.replaceState(null, '', window.location.pathname);
   });
 
   it('renders flow rows before execution requests finish', async () => {
@@ -879,9 +882,11 @@ describe('FlowsView', () => {
       );
       await element.updateComplete;
 
-      expect(
-        element.shadowRoot?.querySelector('.empty-state')?.textContent
-      ).to.contain('No flows match these filters.');
+      const state = element.shadowRoot?.querySelector('.empty-state');
+      expect(state?.getAttribute('kind')).to.equal('no-results');
+      expect(state?.getAttribute('heading')).to.contain(
+        'No flows match these filters.'
+      );
     });
 
     it('switches to cards and remembers the choice for the next visit', async () => {
