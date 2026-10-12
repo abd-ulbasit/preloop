@@ -3,23 +3,33 @@
 Revision ID: 20261014_gateway_agg_idx
 Revises: 20261011_session_alias
 
-- ``ix_api_usage_gateway_totals`` (account_id, timestamp) INCLUDE the columns
-  the gateway window aggregates read (#1583). The Spend and Gateway traffic
-  totals and their per-model, per-flow and per-day breakdowns become
-  index-only scans and never read the wide ``meta_data`` heap rows. It is
-  partial on the same gateway + non-replay filter as
-  ``ix_api_usage_gateway_spend``. That narrower index stays: the admin
-  trailing-spend sum keeps its smaller index-only path, and dropping an index
-  on api_usage is a separate, lock-sensitive change.
-- ``ix_api_usage_gateway_subscription`` (account_id, timestamp), partial on
-  subscription-billed gateway rows. The Spend subscription block filters on
-  ``cost_source = 'subscription'``, which no index served: every Spend load
-  ran a sequential scan of the whole api_usage table (#1583).
-- ``ix_api_usage_rate_limit_snapshot`` (account_id, provider, model,
-  timestamp DESC), partial on gateway rows that carry a rate-limit header
-  snapshot (#1582). The latest snapshot per provider/model was a DISTINCT ON
-  over every gateway row of the account's history; with this index it is a
-  skip scan, one probe per pair.
+- ``ix_api_usage_gateway_totals``: ``ON api_usage (account_id, timestamp)
+  INCLUDE (id, status_code, prompt_tokens, completion_tokens, total_tokens,
+  estimated_cost, cache_read_tokens, cache_creation_tokens, model_alias,
+  provider_name, ai_model_id, flow_id) WHERE action_type = 'model_gateway' AND
+  (purpose IS NULL OR purpose <> 'replay_validation')`` (#1583). The Spend and
+  Gateway traffic window totals and their per-model, per-flow and per-day
+  breakdowns become index-only scans and never read the wide ``meta_data``
+  heap rows. That holds for the account-wide window; a call that also filters
+  on a column outside the index (``runtime_principal_id``, ``api_key_id``,
+  ``runtime_session_id``, ``flow_execution_id``, ``is_retry`` for
+  ``exclude_retries``) still uses it, as a plain index scan with heap reads.
+  The predicate is the one ``ix_api_usage_gateway_spend`` has. That narrower
+  index stays: the admin trailing-spend sum keeps its smaller index-only
+  path, and dropping an index on api_usage is a separate, lock-sensitive
+  change.
+- ``ix_api_usage_gateway_subscription``: ``ON api_usage (account_id,
+  timestamp) WHERE action_type = 'model_gateway' AND cost_source =
+  'subscription'``. The Spend subscription block filters on ``cost_source =
+  'subscription'``, which no index served: every Spend load ran a sequential
+  scan of the whole api_usage table (#1583).
+- ``ix_api_usage_rate_limit_snapshot``: ``ON api_usage (account_id,
+  (COALESCE(provider_name, '')), (COALESCE(model_alias, '')), timestamp DESC)
+  WHERE action_type = 'model_gateway' AND (meta_data ->> 'rate_limit') IS NOT
+  NULL AND (purpose IS NULL OR purpose <> 'replay_validation')`` (#1582). The
+  latest snapshot per provider/model was a DISTINCT ON over every gateway row
+  of the account's history; with this index it is a recursive skip scan, one
+  probe per pair. NULL and '' names fall in one group.
 
 Created CONCURRENTLY and IF NOT EXISTS, with a leftover invalid index
 dropped first, as in ``20261013_admin_activity_indexes``.

@@ -123,3 +123,15 @@ def test_subscription_block_can_use_its_partial_index(db_session, test_user):
     assert "api_usage.action_type = " in statement
     assert "api_usage.cost_source = " in statement
     assert {"model_gateway", "subscription"} <= values
+
+    # And the index exists with exactly that predicate, so the planner can
+    # prove the query implies it.
+    indexdef = db_session.execute(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'ix_api_usage_gateway_subscription'"
+        )
+    ).scalar()
+    assert "(action_type)::text = 'model_gateway'::text" in indexdef
+    assert "(cost_source)::text = 'subscription'::text" in indexdef
+    assert '(account_id, "timestamp")' in indexdef

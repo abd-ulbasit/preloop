@@ -305,3 +305,32 @@ def test_latest_rate_limit_snapshots_use_the_skip_scan_index(db_session, test_us
         )
     )
     assert "ix_api_usage_rate_limit_snapshot" in plan, plan
+
+
+def test_latest_rate_limit_snapshots_group_null_and_empty_names(db_session, test_user):
+    """NULL and '' provider names are one pair; the newest row speaks for it."""
+    _log_row(
+        db_session,
+        test_user,
+        status_code=200,
+        model_alias="same-model",
+        provider_name=None,
+        rate_limit_meta={"requests_remaining": 1},
+    )
+    _log_row(
+        db_session,
+        test_user,
+        status_code=429,
+        model_alias="same-model",
+        provider_name="",
+        rate_limit_meta={"requests_remaining": 0},
+    )
+
+    snapshots = crud_api_usage.get_latest_rate_limit_snapshots(
+        db_session, account_id=str(test_user.account_id)
+    )
+    assert len(snapshots) == 1
+    assert snapshots[0]["model_alias"] == "same-model"
+    assert snapshots[0]["provider_name"] == ""
+    assert snapshots[0]["status_code"] == 429
+    assert snapshots[0]["rate_limit"] == {"requests_remaining": 0}

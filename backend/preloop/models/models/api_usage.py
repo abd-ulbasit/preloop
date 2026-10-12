@@ -255,6 +255,9 @@ class ApiUsage(Base):
         # Covering + partial on the exact filter of
         # exclude_replay_usage_condition, so those aggregates are index-only
         # scans and never touch the wide meta_data column in the heap (#1583).
+        # Index-only for the account-wide window: an extra filter on a column
+        # not carried here (principal, API key, session, execution, is_retry)
+        # makes it a plain index scan with heap reads.
         Index(
             "ix_api_usage_gateway_totals",
             "account_id",
