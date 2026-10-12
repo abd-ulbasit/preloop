@@ -336,10 +336,51 @@ def test_recent_window_ranking_matches_the_full_history(
     data["usage"]("ten-days", timestamp=now - timedelta(days=10))
     db_session.flush()
 
-    full_history = runtime_session_crud._RANKING_WINDOWS
-    for window in (full_history, ()):
-        monkeypatch.setattr(runtime_session_crud, "_RANKING_WINDOWS", window)
-        pages = {
+    # The legacy (flow execution) and direct sessions of the fixture are in
+    # the account too; a model filter and a date range are separate cases.
+    model = models.AIModel(
+        account_id=account.id,
+        name="Ranked",
+        provider_name="openai",
+        model_identifier="ranked-model",
+    )
+    db_session.add(model)
+    db_session.flush()
+    data["usage"]("two-days", ai_model_id=model.id, timestamp=now - timedelta(days=2))
+    data["usage"]("legacy", ai_model_id=model.id, timestamp=now - timedelta(hours=3))
+    data["usage"]("ten-days", ai_model_id=model.id, timestamp=now - timedelta(days=10))
+    db_session.flush()
+    filters = {
+        "account": {},
+        "model": {"ai_model_id": str(model.id)},
+        "range": {
+            "start_date": now - timedelta(days=20),
+            "end_date": now + timedelta(minutes=1),
+        },
+    }
+
+    full_ranking = runtime_session_crud.CRUDRuntimeSession._rank_page_from_all_usage
+    full_calls: list[tuple[int, int]] = []
+
+    def counted_full(self, db, *, session_query, link_filters, limit, offset):
+        full_calls.append((limit, offset))
+        return full_ranking(
+            self,
+            db,
+            session_query=session_query,
+            link_filters=link_filters,
+            limit=limit,
+            offset=offset,
+        )
+
+    monkeypatch.setattr(
+        runtime_session_crud.CRUDRuntimeSession,
+        "_rank_page_from_all_usage",
+        counted_full,
+    )
+
+    def pages_for(**kwargs: Any) -> dict[tuple[int, int], list[str]]:
+        return {
             (limit, offset): [
                 item["session_source_id"]
                 for item in crud_runtime_session.list_account_sessions(
@@ -347,15 +388,27 @@ def test_recent_window_ranking_matches_the_full_history(
                     account_id=str(account.id),
                     limit=limit,
                     offset=offset,
+                    **kwargs,
                 )["items"]
             ]
             for limit in (1, 2, 3, 20)
             for offset in (0, 1, 2, 4, 6)
         }
-        if window:
-            windowed = pages
-        else:
-            assert windowed == pages
+
+    windows = runtime_session_crud._RANKING_WINDOWS
+    for name, kwargs in filters.items():
+        monkeypatch.setattr(runtime_session_crud, "_RANKING_WINDOWS", windows)
+        full_calls.clear()
+        windowed = pages_for(**kwargs)
+        fell_back = list(full_calls)
+        monkeypatch.setattr(runtime_session_crud, "_RANKING_WINDOWS", ())
+        assert pages_for(**kwargs) == windowed, name
+        if name == "account":
+            # The recent windows must actually answer the shallow pages.
+            assert len(fell_back) < 20
+            assert (1, 0) not in fell_back
+    monkeypatch.setattr(runtime_session_crud, "_RANKING_WINDOWS", windows)
+    windowed = pages_for()
     # The recently active session ranks by its 3-day-old request.
     assert windowed[(20, 0)].index("two-days") < windowed[(20, 0)].index(
         "active-old-request"

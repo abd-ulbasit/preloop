@@ -195,6 +195,13 @@ class SpawnAliasConflictError(ValueError):
 # Recent-usage windows the session list ranking tries before reading the
 # whole usage history (#1584).
 _RANKING_WINDOWS = (timedelta(days=1), timedelta(days=7))
+# Pages ending past this row skip the windows: they rarely fit one.
+_RANKING_WINDOW_MAX_ROWS = 200
+# A window with more candidate sessions than this (or more recently active
+# sessions without a recent request, which need their own usage lookup) is
+# handed to the next window or the full ranking rather than materialized.
+_RANKING_WINDOW_MAX_CANDIDATES = 5000
+_RANKING_WINDOW_MAX_UNRESOLVED = 500
 
 
 class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
@@ -833,7 +840,10 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         # first; it falls back to the whole history only when the recent
         # window cannot decide the page.
         page_ids = None
-        for window in _RANKING_WINDOWS:
+        # Deep pages almost never fit a recent window; go straight to the
+        # full ranking instead of paying for two windows first.
+        windows = _RANKING_WINDOWS if offset + limit <= _RANKING_WINDOW_MAX_ROWS else ()
+        for window in windows:
             page_ids = self._rank_page_from_recent_usage(
                 db,
                 session_query=session_query,
@@ -1000,6 +1010,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 recent_request.c.last_request_at,
                 fallback_key.label("fallback_key"),
             )
+            .limit(_RANKING_WINDOW_MAX_CANDIDATES + 1)
             .all()
         )
         keys: Dict[Any, datetime] = {}
@@ -1009,6 +1020,11 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 keys[row.id] = row.last_request_at
             else:
                 unresolved.append(row)
+        if len(candidates) > _RANKING_WINDOW_MAX_CANDIDATES or (
+            len(unresolved) > _RANKING_WINDOW_MAX_UNRESOLVED
+        ):
+            # Too many sessions in the window to rank them cheaply here.
+            return None
         if unresolved:
             # Recently active without a recent request: the key is the last
             # request (older than the cutoff) if there is one at all.
