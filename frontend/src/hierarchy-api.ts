@@ -111,6 +111,9 @@ export async function currentAccountId(): Promise<string> {
 
 export interface Membership {
   account_id: string;
+  membership_id?: string | null;
+  person_id?: string | null;
+  username?: string | null;
   account_name: string;
   slug?: string | null;
   parent_account_id?: string | null;

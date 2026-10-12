@@ -391,8 +391,6 @@ export class UserManagementView extends LitElement {
     if (!this.editPermissions.allows('manage_users')) return;
     this.selectedUser = user;
     this.editUser = {
-      email: user.email,
-      full_name: user.full_name || undefined,
       is_active: user.is_active,
     };
     this.dialogError = null;
@@ -476,7 +474,10 @@ export class UserManagementView extends LitElement {
                   <sl-icon name="person-circle"></sl-icon>
                 </div>
                 <div class="user-details">
-                  <h3 class="user-name">${user.full_name || user.username}</h3>
+                  <h3 class="user-name">
+                    ${user.full_name || user.username || 'Identity unavailable'}
+                  </h3>
+                  ${user.identity_status === 'quarantined' ? html`<p>Identity requires migration conflict resolution by a platform administrator.</p>` : ''}
                   <p class="user-email">${user.email}</p>
                   <div class="user-meta">
                     <sl-badge
@@ -564,7 +565,7 @@ export class UserManagementView extends LitElement {
                     >
                       <sl-icon
                         name="pencil"
-                        label="Edit user"
+                        label="Edit account membership"
                       ></sl-icon> </sl-button
                   ></sl-tooltip>
                   ${
@@ -578,7 +579,10 @@ export class UserManagementView extends LitElement {
                               type: 'user',
                               id: user.id,
                               label:
-                                user.full_name || user.username || user.email,
+                                user.full_name ||
+                                user.username ||
+                                user.email ||
+                                'Identity unavailable',
                             })}
                         >
                           <sl-icon
@@ -681,30 +685,27 @@ export class UserManagementView extends LitElement {
 
       <!-- Edit user modal -->
       <sl-dialog
-        label="Edit user"
+        label="Edit account membership"
         ?open=${this.isEditModalOpen}
         @sl-request-close=${() => (this.isEditModalOpen = false)}
       >
         ${this.renderDialogError()}
         <div class="form-grid">
-          <sl-input
-            label="Email"
-            type="email"
-            value=${this.editUser.email || ''}
-            @sl-input=${(e: any) => (this.editUser.email = e.target.value)}
-          ></sl-input>
-          <sl-input
-            label="Full name"
-            value=${this.editUser.full_name || ''}
-            @sl-input=${(e: any) => (this.editUser.full_name = e.target.value)}
-          ></sl-input>
+          <p>
+            ${this.selectedUser?.full_name || this.selectedUser?.username} —
+            ${this.selectedUser?.email}
+          </p>
+          <p>
+            Shared identity and credentials are managed by the person in
+            Profile. These changes affect access to this account.
+          </p>
           <sl-checkbox
             ?disabled=${!this.editPermissions.allows('manage_users')}
             ?checked=${this.editUser.is_active}
             @sl-change=${(e: any) =>
               (this.editUser.is_active = e.target.checked)}
           >
-            Active
+            Active account membership
           </sl-checkbox>
         </div>
         <sl-tooltip

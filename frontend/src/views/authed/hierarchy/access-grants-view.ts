@@ -126,7 +126,11 @@ export class AccessGrantsView extends LitElement {
         (user) => ({
           type: 'user' as const,
           id: user.id,
-          label: user.full_name || user.username || user.email,
+          label:
+            user.full_name ||
+            user.username ||
+            user.email ||
+            'Identity unavailable',
         })
       ),
       ...(teams.status === 'fulfilled' ? teams.value.teams : []).map(
