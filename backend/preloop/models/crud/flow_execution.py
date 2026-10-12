@@ -1474,6 +1474,8 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         statuses: Optional[List[str]] = None,
         search: Optional[str] = None,
         started_after: Optional[datetime] = None,
+        ended_after: Optional[datetime] = None,
+        sort_by: str = "start_time",
         eager_load: bool = False,
         lightweight: bool = False,
         **filters,
@@ -1487,7 +1489,11 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
             lightweight: If True, defer heavy text/JSON columns used only by detail views.
             search: Case-insensitive match on the flow name or the trigger subject.
             started_after: Only runs that started at or after this instant.
+            ended_after: Only runs that ended at or after this instant.
+            sort_by: start_time (default) or end_time for newest completed runs.
         """
+        if sort_by not in {"start_time", "end_time"}:
+            raise ValueError("sort_by must be start_time or end_time")
         query = db.query(FlowExecution)
 
         if lightweight:
@@ -1560,7 +1566,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         if eager_load:
             flow_loader = joinedload(FlowExecution.flow)
             if lightweight:
-                flow_loader = flow_loader.load_only(Flow.id, Flow.name)
+                flow_loader = flow_loader.load_only(Flow.id, Flow.name, Flow.account_id)
             query = query.options(flow_loader)
 
         query = self._apply_list_filters(
@@ -1570,11 +1576,16 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
             statuses=statuses,
             search=search,
             started_after=started_after,
+            ended_after=ended_after,
             filters=filters,
         )
 
-        # Order by start_time descending (most recent first)
-        query = query.order_by(FlowExecution.start_time.desc())
+        # Stable pagination, including runs with identical timestamps.
+        timestamp = getattr(FlowExecution, sort_by)
+        ordering = (
+            timestamp.desc().nullslast() if sort_by == "end_time" else timestamp.desc()
+        )
+        query = query.order_by(ordering, FlowExecution.id.desc())
 
         return query.offset(skip).limit(limit).all()
 
@@ -1587,6 +1598,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         statuses: Optional[List[str]] = None,
         search: Optional[str] = None,
         started_after: Optional[datetime] = None,
+        ended_after: Optional[datetime] = None,
         **filters,
     ) -> int:
         """How many executions match the filters, ignoring the page window.
@@ -1601,6 +1613,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
             statuses=statuses,
             search=search,
             started_after=started_after,
+            ended_after=ended_after,
             filters=filters,
         )
         return query.count()
@@ -1614,6 +1627,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         statuses: Optional[List[str]],
         search: Optional[str] = None,
         started_after: Optional[datetime] = None,
+        ended_after: Optional[datetime] = None,
         filters: Optional[Dict[str, Any]] = None,
     ):
         """The list filters, shared by the page query and its count."""
@@ -1632,6 +1646,9 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
 
         if started_after is not None:
             query = query.filter(FlowExecution.start_time >= started_after)
+
+        if ended_after is not None:
+            query = query.filter(FlowExecution.end_time >= ended_after)
 
         if search:
             # Both halves of what the row shows: the flow it belongs to and
