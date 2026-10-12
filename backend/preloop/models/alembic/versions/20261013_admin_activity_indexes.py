@@ -1,7 +1,7 @@
 """Index event and gateway usage for the admin accounts list.
 
 Revision ID: 20261013_admin_activity_idx
-Revises: 20261013_note_receipts
+Revises: 20261011_runner_scheduling
 
 The admin accounts list sorts by last activity and shows 30-day gateway
 spend per account. Both aggregated whole tables on every page load:
@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20261013_admin_activity_idx"
-down_revision: Union[str, None] = "20261013_note_receipts"
+down_revision: Union[str, None] = "20261011_runner_scheduling"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
