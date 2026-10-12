@@ -18,6 +18,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
+    text,
     true,
     union_all,
 )
@@ -88,6 +89,17 @@ GATEWAY_USAGE_PURPOSES = frozenset(
 # checked per request at the gateway, so an account already at its limit
 # cannot replay).
 REPLAY_VALIDATION_PURPOSE = "replay_validation"
+
+
+# The rows ix_api_usage_rate_limit_snapshot holds, spelled exactly as its
+# WHERE clause so the planner can use it. JSON null (the common "no
+# snapshot" case) yields NULL from ->>, so it never matches.
+_RATE_LIMIT_SNAPSHOT_ROWS = (
+    "action_type = 'model_gateway' "
+    "AND (meta_data ->> 'rate_limit') IS NOT NULL "
+    "AND ((meta_data ->> 'purpose') IS NULL "
+    "OR (meta_data ->> 'purpose') <> 'replay_validation')"
+)
 
 
 def exclude_replay_usage_condition():
@@ -1554,39 +1566,72 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             One dict per group with the snapshot, observation timestamp,
             status code, and upstream credential type.
         """
+        # A skip scan over ix_api_usage_rate_limit_snapshot: walk the
+        # distinct (provider, model) pairs one index probe at a time, then
+        # take each pair's newest row. A DISTINCT ON over the rows read every
+        # gateway row in the account's history (#1582). Names are compared
+        # coalesced, as the index stores them; NULL and '' fall in one group.
         rows = (
-            db.query(ApiUsage)
-            .filter(
-                ApiUsage.action_type == "model_gateway",
-                ApiUsage.account_id == account_id,
-                # JSON null (the common "no snapshot" case) must not match,
-                # so test the value rather than key presence.
-                ApiUsage.meta_data["rate_limit"].astext.isnot(None),
-                exclude_replay_usage_condition(),
+            db.execute(
+                text(
+                    f"""
+                    WITH RECURSIVE pairs(provider_key, model_key) AS (
+                        (SELECT COALESCE(provider_name, ''), COALESCE(model_alias, '')
+                         FROM api_usage
+                         WHERE account_id = :account_id AND {_RATE_LIMIT_SNAPSHOT_ROWS}
+                         ORDER BY 1, 2
+                         LIMIT 1)
+                        UNION ALL
+                        SELECT next_pair.provider_key, next_pair.model_key
+                        FROM pairs
+                        CROSS JOIN LATERAL (
+                            SELECT COALESCE(provider_name, '') AS provider_key,
+                                   COALESCE(model_alias, '') AS model_key
+                            FROM api_usage
+                            WHERE account_id = :account_id
+                              AND {_RATE_LIMIT_SNAPSHOT_ROWS}
+                              AND (COALESCE(provider_name, ''), COALESCE(model_alias, ''))
+                                  > (pairs.provider_key, pairs.model_key)
+                            ORDER BY 1, 2
+                            LIMIT 1
+                        ) AS next_pair
+                    )
+                    SELECT latest.provider_name, latest.model_alias,
+                           latest.timestamp, latest.status_code,
+                           latest.upstream_credential_type, latest.rate_limit
+                    FROM (SELECT * FROM pairs ORDER BY 1, 2 LIMIT :limit) AS pair
+                    CROSS JOIN LATERAL (
+                        SELECT provider_name, model_alias, timestamp, status_code,
+                               meta_data ->> 'upstream_credential_type'
+                                   AS upstream_credential_type,
+                               meta_data -> 'rate_limit' AS rate_limit
+                        FROM api_usage
+                        WHERE account_id = :account_id
+                          AND {_RATE_LIMIT_SNAPSHOT_ROWS}
+                          AND COALESCE(provider_name, '') = pair.provider_key
+                          AND COALESCE(model_alias, '') = pair.model_key
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    ) AS latest
+                    ORDER BY pair.provider_key, pair.model_key
+                    """
+                ),
+                {"account_id": str(account_id), "limit": limit},
             )
-            .distinct(ApiUsage.provider_name, ApiUsage.model_alias)
-            .order_by(
-                ApiUsage.provider_name,
-                ApiUsage.model_alias,
-                ApiUsage.timestamp.desc(),
-            )
-            .limit(limit)
+            .mappings()
             .all()
         )
-        snapshots: List[Dict[str, Any]] = []
-        for row in rows:
-            meta = row.meta_data or {}
-            snapshots.append(
-                {
-                    "provider_name": row.provider_name,
-                    "model_alias": row.model_alias,
-                    "observed_at": row.timestamp,
-                    "status_code": row.status_code,
-                    "upstream_credential_type": meta.get("upstream_credential_type"),
-                    "rate_limit": meta.get("rate_limit") or {},
-                }
-            )
-        return snapshots
+        return [
+            {
+                "provider_name": row["provider_name"],
+                "model_alias": row["model_alias"],
+                "observed_at": row["timestamp"],
+                "status_code": row["status_code"],
+                "upstream_credential_type": row["upstream_credential_type"],
+                "rate_limit": row["rate_limit"] or {},
+            }
+            for row in rows
+        ]
 
     def get_gateway_usage_by_model(
         self,

@@ -225,3 +225,83 @@ def test_rate_limit_report_endpoint(client, db_session, test_user):
     assert body["by_model"][0]["model_alias"] == "anthropic/claude-sonnet-4-5"
     assert body["latest_snapshots"][0]["rate_limit"]["headers"] == {"retry-after": "30"}
     assert body["latest_snapshots"][0]["observed_at"] is not None
+
+
+def test_latest_rate_limit_snapshots_skip_replay_and_honour_limit(
+    db_session, test_user
+):
+    """The skip scan (#1582) keeps the replay filter, the pair order and limit."""
+    for provider, model in (("openai", "b-model"), ("anthropic", "z-model")):
+        _log_row(
+            db_session,
+            test_user,
+            status_code=200,
+            model_alias=model,
+            provider_name=provider,
+            rate_limit_meta={"requests_remaining": 1},
+        )
+    # Newer replay row for the anthropic pair must not win.
+    _log_row(
+        db_session,
+        test_user,
+        status_code=200,
+        model_alias="z-model",
+        provider_name="anthropic",
+        rate_limit_meta={"requests_remaining": 999},
+        purpose="replay_validation",
+    )
+    # A pair seen only in replay traffic does not appear at all.
+    _log_row(
+        db_session,
+        test_user,
+        status_code=200,
+        model_alias="replay-only",
+        provider_name="openai",
+        rate_limit_meta={"requests_remaining": 5},
+        purpose="replay_validation",
+    )
+
+    snapshots = crud_api_usage.get_latest_rate_limit_snapshots(
+        db_session, account_id=str(test_user.account_id)
+    )
+    assert [(s["provider_name"], s["model_alias"]) for s in snapshots] == [
+        ("anthropic", "z-model"),
+        ("openai", "b-model"),
+    ]
+    assert snapshots[0]["rate_limit"] == {"requests_remaining": 1}
+
+    first = crud_api_usage.get_latest_rate_limit_snapshots(
+        db_session, account_id=str(test_user.account_id), limit=1
+    )
+    assert [(s["provider_name"], s["model_alias"]) for s in first] == [
+        ("anthropic", "z-model")
+    ]
+
+
+def test_latest_rate_limit_snapshots_use_the_skip_scan_index(db_session, test_user):
+    """The per-pair probes must hit ix_api_usage_rate_limit_snapshot."""
+    from sqlalchemy import event, text
+
+    _log_row(db_session, test_user, status_code=200, rate_limit_meta={"tokens": 1})
+    statements = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append((statement, parameters))
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", _capture)
+    try:
+        crud_api_usage.get_latest_rate_limit_snapshots(
+            db_session, account_id=str(test_user.account_id)
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", _capture)
+    statement, parameters = next(s for s in statements if "RECURSIVE" in s[0])
+    db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    plan = "\n".join(
+        row[0]
+        for row in db_session.connection().exec_driver_sql(
+            "EXPLAIN " + statement, parameters
+        )
+    )
+    assert "ix_api_usage_rate_limit_snapshot" in plan, plan
