@@ -12689,6 +12689,32 @@ paths:
           title: Breakdown
         description: Optional breakdown selection. Repeat for multiple sections; omitted
           returns all. Ignored when include_breakdown=false.
+      - name: compare_start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Start of a comparison window. With compare_end_date, the response
+            carries that window's totals in `previous`, so a page comparing two ranges
+            needs one request instead of two.
+          title: Compare Start Date
+        description: Start of a comparison window. With compare_end_date, the response
+          carries that window's totals in `previous`, so a page comparing two ranges
+          needs one request instead of two.
+      - name: compare_end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: End of the comparison window; see compare_start_date.
+          title: Compare End Date
+        description: End of the comparison window; see compare_start_date.
       responses:
         '200':
           description: Successful Response
@@ -27533,6 +27559,12 @@ components:
           anyOf:
           - $ref: '#/components/schemas/SubscriptionUsageSummary'
           - type: 'null'
+        previous:
+          anyOf:
+          - $ref: '#/components/schemas/CostAnalyticsSummaryResponse'
+          - type: 'null'
+          description: Totals for the comparison window (compare_start_date and compare_end_date),
+            without breakdowns. Null unless asked for.
       type: object
       required:
       - period_start

@@ -709,6 +709,35 @@ describe('CostView', () => {
     ).to.equal(true);
   });
 
+  it('asks the comparison range in the same summary request (#1583)', async () => {
+    summaryPayload = {
+      ...summary,
+      previous: { ...summary, estimated_cost: 4.25 },
+    };
+    const element = (await fixture(html`<cost-view></cost-view>`)) as CostView;
+    await waitUntil(
+      () => (element as unknown as { loading: boolean }).loading === false
+    );
+    await element.updateComplete;
+    const totalsCalls = fetchStub
+      .getCalls()
+      .map((call) => String(call.args[0]))
+      .filter((url) => url.includes('/api/v1/cost/summary'))
+      .map((url) => new URL(url, window.location.origin).searchParams)
+      .filter((params) => params.get('include_breakdown') === 'false');
+    // One totals request, carrying the comparison window; no second one.
+    expect(totalsCalls.length).to.equal(1);
+    expect(totalsCalls[0].get('compare_start_date')).to.be.a('string');
+    expect(totalsCalls[0].get('compare_end_date')).to.be.a('string');
+    expect(
+      (
+        element as unknown as {
+          previousRangeSummary: { estimated_cost: number } | null;
+        }
+      ).previousRangeSummary?.estimated_cost
+    ).to.equal(4.25);
+  });
+
   it('exposes loading status while analytics are fetched', async () => {
     const element = (await fixture(html`<cost-view></cost-view>`)) as CostView;
     await element.updateComplete;
