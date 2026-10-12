@@ -1216,6 +1216,11 @@ export interface GatewayUsageSearchParams extends GatewayUsageSummaryParams {
   sessionSourceType?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Count every match (`total`). Off by default for the console: no view
+   * reads it, and the count is the slow part on a busy account (#1582).
+   */
+  includeTotal?: boolean;
 }
 
 export interface RuntimeSessionListParams extends GatewayUsageSummaryParams {
@@ -2289,8 +2294,10 @@ export async function getFlowGatewayUsageSummary(
 export async function getAccountGatewayUsageSearch(
   params: GatewayUsageSearchParams = {}
 ): Promise<AccountGatewayUsageSearchResponse> {
+  const query = new URLSearchParams(buildGatewayUsageQuery(params));
+  if (params.includeTotal !== true) query.set('include_total', 'false');
   const response = await fetchWithAuth(
-    `/api/v1/account/gateway-usage/search${buildGatewayUsageQuery(params)}`
+    `/api/v1/account/gateway-usage/search?${query}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch account gateway usage search results');

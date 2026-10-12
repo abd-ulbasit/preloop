@@ -538,6 +538,27 @@ def test_account_gateway_usage_search_lists_recent_documents_without_query(
     assert body["items"][0]["provider_name"] == "openai"
     assert body["items"][0]["outcome"] == "error"
 
+    # Without the count (#1582): the same page, no total, and has_more from
+    # one extra row.
+    listed = client.get(
+        "/api/v1/account/gateway-usage/search",
+        params={"limit": 1, "include_total": "false"},
+    ).json()
+    assert listed["total"] is None
+    assert listed["has_more"] is True
+    assert [item["api_usage_id"] for item in listed["items"]] == [str(second_usage.id)]
+    last = client.get(
+        "/api/v1/account/gateway-usage/search",
+        params={"limit": 1, "offset": 1, "include_total": "false"},
+    ).json()
+    assert last["has_more"] is False
+    assert [item["api_usage_id"] for item in last["items"]] == [str(first_usage.id)]
+    counted = client.get(
+        "/api/v1/account/gateway-usage/search", params={"limit": 1}
+    ).json()
+    assert counted["total"] == 2
+    assert counted["has_more"] is True
+
 
 def test_account_runtime_sessions_endpoints(client, db_session, test_user):
     """Runtime session explorer endpoints should list and drill into sessions."""
@@ -610,6 +631,40 @@ def test_account_runtime_sessions_endpoints(client, db_session, test_user):
     )
     assert interactions_body["total"] == 1
     assert "deployment risk" in interactions_body["items"][0]["excerpt"].lower()
+    # The session interactions answer carries has_more too (#1620 review).
+    assert interactions_body["has_more"] is False
+    second = crud_api_usage.log_gateway_request(
+        db_session,
+        endpoint="/anthropic/v1/messages",
+        method="POST",
+        status_code=200,
+        duration=0.1,
+        user_id=str(test_user.id),
+        account_id=str(test_user.account_id),
+        runtime_session_id=str(runtime_session.id),
+        model_alias="anthropic/claude-sonnet-4",
+        provider_name="anthropic",
+        prompt_tokens=5,
+        completion_tokens=3,
+        total_tokens=8,
+        estimated_cost=0.01,
+    )
+    GatewayUsageSearchService(db_session).index_interaction(
+        usage=second,
+        request_payload={"input": "Follow-up question"},
+        response_payload={"output_text": "Follow-up answer"},
+    )
+    paged = client.get(
+        f"/api/v1/runtime-sessions/{runtime_session.id}/interactions",
+        params={"interaction_limit": 1},
+    ).json()
+    assert paged["total"] == 2
+    assert paged["has_more"] is True
+    last = client.get(
+        f"/api/v1/runtime-sessions/{runtime_session.id}/interactions",
+        params={"interaction_limit": 1, "interaction_offset": 1},
+    ).json()
+    assert last["has_more"] is False
 
 
 def test_account_runtime_sessions_use_most_recent_model_alias(

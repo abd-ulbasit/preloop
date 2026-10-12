@@ -535,7 +535,10 @@ export interface AccountGatewayUsageSearchResponse {
   period_start: string;
   period_end: string;
   query: string | null;
-  total: number;
+  /** Null when the request skipped the count (`include_total=false`). */
+  total: number | null;
+  /** Whether a later page has more rows; present on current servers. */
+  has_more?: boolean;
   limit: number;
   offset: number;
   items: GatewayUsageSearchResultItem[];

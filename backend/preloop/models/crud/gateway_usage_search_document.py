@@ -143,8 +143,14 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
         session_source_type: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
+        include_total: bool = True,
     ) -> Dict[str, Any]:
-        """Return account-scoped gateway interaction search hits."""
+        """Return account-scoped gateway interaction search hits.
+
+        ``include_total=False`` skips the count, which joins every document
+        in the window (a whole-table hash join on a busy account, #1582), and
+        reports ``has_more`` from one extra row instead.
+        """
         legacy_session_source_type = case(
             (ApiUsage.flow_execution_id.isnot(None), "flow_execution"),
             else_=None,
@@ -235,17 +241,23 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
                 resolved_session_source_type == session_source_type
             )
 
-        total = base_query.with_entities(
-            func.count(GatewayUsageSearchDocument.id)
-        ).scalar()
+        total = (
+            base_query.with_entities(func.count(GatewayUsageSearchDocument.id)).scalar()
+            if include_total
+            else None
+        )
         rows = (
             base_query.order_by(
                 ApiUsage.timestamp.desc(), GatewayUsageSearchDocument.id.desc()
             )
-            .limit(limit)
+            .limit(limit if include_total else limit + 1)
             .offset(offset)
             .all()
         )
+        has_more = (
+            offset + len(rows) < total if total is not None else len(rows) > limit
+        )
+        rows = rows[:limit]
         items = []
         for row in rows:
             text_preview = row.text_preview
@@ -299,7 +311,11 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
                 }
             )
 
-        return {"total": int(total or 0), "items": items}
+        return {
+            "total": int(total or 0) if include_total else None,
+            "has_more": has_more,
+            "items": items,
+        }
 
     @staticmethod
     def _build_excerpt(searchable_text: str, *, query: Optional[str]) -> str:

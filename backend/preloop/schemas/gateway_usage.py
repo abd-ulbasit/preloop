@@ -346,7 +346,13 @@ class AccountGatewayUsageSearchResponse(BaseModel):
     period_start: Optional[datetime] = None
     period_end: Optional[datetime] = None
     query: Optional[str] = None
-    total: int = 0
+    total: Optional[int] = Field(
+        default=0,
+        description="Matching interactions; null when include_total=false.",
+    )
+    has_more: bool = Field(
+        default=False, description="Whether a later page has more rows."
+    )
     limit: int = 20
     offset: int = 0
     items: List[GatewayUsageSearchResultItem] = Field(default_factory=list)

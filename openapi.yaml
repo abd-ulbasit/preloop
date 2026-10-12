@@ -2002,6 +2002,19 @@ paths:
           minimum: 0
           default: 0
           title: Offset
+      - name: include_total
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: False skips counting every match in the window (the slow part
+            on a busy account); `total` is then null and `has_more` says whether another
+            page exists.
+          default: true
+          title: Include Total
+        description: False skips counting every match in the window (the slow part
+          on a busy account); `total` is then null and `has_more` says whether another
+          page exists.
       responses:
         '200':
           description: Successful Response
@@ -21562,9 +21575,17 @@ components:
           - type: 'null'
           title: Query
         total:
-          type: integer
+          anyOf:
+          - type: integer
+          - type: 'null'
           title: Total
+          description: Matching interactions; null when include_total=false.
           default: 0
+        has_more:
+          type: boolean
+          title: Has More
+          description: Whether a later page has more rows.
+          default: false
         limit:
           type: integer
           title: Limit
