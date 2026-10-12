@@ -270,3 +270,15 @@ def test_monitor_refreshes_cached_execution(db_session: Session) -> None:
     current = crud_flow_execution.get(db_session, id=execution.id, refresh=True)
     assert current is execution
     assert current.status == "SUCCEEDED"
+
+
+def test_paused_runner_cannot_be_selected_or_claimed(db_session: Session) -> None:
+    account = _account(db_session, "paused-runner-test")
+    runner = _runner(db_session, account.id, paused=True, reported=2)
+    assert (
+        crud_flow_runner.find_matching(db_session, account_id=account.id, pool="auto")
+        == []
+    )
+    assert crud_flow_runner.claim_free_slot(db_session, runner_id=runner.id) is None
+    crud_flow_runner.update(db_session, db_obj=runner, obj_in={"paused": False})
+    assert crud_flow_runner.claim_free_slot(db_session, runner_id=runner.id) is not None

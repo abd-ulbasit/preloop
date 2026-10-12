@@ -793,6 +793,36 @@ githubApp:
   # GitHub App slug (e.g., "preloop" or "preloop-staging")
   slug: ""
 
+# Bitbucket Cloud managed OAuth consumer (Enterprise Edition only, bitbucket_oauth plugin)
+# Enables "Connect Bitbucket" in tracker creation (feature flag bitbucket_cloud_oauth).
+# Register a private OAuth consumer in a Bitbucket workspace with callback
+# <PRELOOP_URL>/api/v1/auth/bitbucket/callback.
+bitbucketOauth:
+  enabled: false
+  # OAuth consumer Key
+  clientId: ""
+  # OAuth consumer Secret (stored in the chart Secret as bitbucket-oauth-client-secret)
+  clientSecret: ""
+  # Optional; defaults to PRELOOP_URL + /api/v1/auth/bitbucket/callback
+  callbackUrl: ""
+  # Optional space-separated scope override; empty uses the plugin default
+  scopes: ""
+
+# Atlassian OAuth 2.0 (3LO) app for managed Jira Cloud trackers (Enterprise Edition only, jira_oauth plugin)
+# Enables "Connect Jira" in tracker creation (feature flag jira_cloud_oauth).
+# Register the app at developer.atlassian.com with callback
+# <PRELOOP_URL>/api/v1/auth/jira/callback.
+atlassianOauth:
+  enabled: false
+  # OAuth 2.0 app Client ID
+  clientId: ""
+  # OAuth 2.0 app Secret (stored in the chart Secret as atlassian-oauth-client-secret)
+  clientSecret: ""
+  # Optional; defaults to PRELOOP_URL + /api/v1/auth/jira/callback
+  callbackUrl: ""
+  # Optional space-separated scope override; empty uses the plugin default
+  scopes: ""
+
 # Google OAuth configuration (Enterprise Edition only)
 # Enables "Sign in with Google" on login/register pages
 googleOauth:

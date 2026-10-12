@@ -23,6 +23,9 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from fastmcp.server.auth.auth import AccessToken, OAuthProvider
 
+from preloop.api.auth.identity import require_session_membership
+from fastapi import HTTPException
+
 from preloop.models.crud.oauth_mcp_client import crud_oauth_mcp_client
 from preloop.models.crud.oauth_mcp_token import (
     crud_oauth_mcp_access_token,
@@ -275,7 +278,24 @@ class PreloopOAuthProvider(OAuthProvider):
                     error_description="Authorization code already used",
                 )
 
-            crud_oauth_mcp_auth_code.mark_used(db, obj=db_code)
+            try:
+                require_session_membership(db, db_code.user_id, lock=True)
+            except HTTPException as exc:
+                raise TokenError(
+                    error="invalid_grant", error_description=str(exc.detail)
+                ) from exc
+            db_code = crud_oauth_mcp_auth_code.get_by_code(
+                db,
+                code=authorization_code.code,
+                client_id=client.client_id,
+                lock=True,
+            )
+            if db_code is None or db_code.is_used:
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="Authorization code no longer valid",
+                )
+            crud_oauth_mcp_auth_code.mark_used(db, obj=db_code, commit=False)
 
             # Generate tokens
             access_token_str = generate_token(32)
@@ -292,6 +312,7 @@ class PreloopOAuthProvider(OAuthProvider):
                 scopes=db_code.scopes or [],
                 expires_at=now + self._access_token_expiry,
                 resource=db_code.resource,
+                commit=False,
             )
 
             # Store refresh token
@@ -372,11 +393,35 @@ class PreloopOAuthProvider(OAuthProvider):
                     error="invalid_grant", error_description="Refresh token not found"
                 )
 
+            try:
+                require_session_membership(db, db_old_refresh.user_id, lock=True)
+            except HTTPException as exc:
+                raise TokenError(
+                    error="invalid_grant", error_description=str(exc.detail)
+                ) from exc
+            db_old_refresh = crud_oauth_mcp_refresh_token.get_by_token(
+                db,
+                token=refresh_token.token,
+                lock=True,
+            )
+            if (
+                db_old_refresh is None
+                or db_old_refresh.is_revoked
+                or db_old_refresh.client_id != client.client_id
+                or (
+                    db_old_refresh.expires_at
+                    and db_old_refresh.expires_at < int(time.time())
+                )
+            ):
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="Refresh token no longer valid",
+                )
             user_id = db_old_refresh.user_id
             account_id = db_old_refresh.account_id
 
             # Revoke old refresh token (rotation)
-            crud_oauth_mcp_refresh_token.revoke(db, obj=db_old_refresh)
+            crud_oauth_mcp_refresh_token.revoke(db, obj=db_old_refresh, commit=False)
 
             # Generate new tokens
             new_access_token_str = generate_token(32)
@@ -394,6 +439,7 @@ class PreloopOAuthProvider(OAuthProvider):
                 account_id=account_id,
                 scopes=effective_scopes,
                 expires_at=now + self._access_token_expiry,
+                commit=False,
             )
 
             # Store new refresh token
@@ -435,11 +481,9 @@ class PreloopOAuthProvider(OAuthProvider):
                 if db_token.expires_at and db_token.expires_at < int(time.time()):
                     return None
 
-                # Load user for attaching to AccessToken
-                from preloop.models.crud import crud_user
-
-                user = crud_user.get(db, id=str(db_token.user_id))
-                if not user:
+                try:
+                    user = require_session_membership(db, str(db_token.user_id))
+                except HTTPException:
                     return None
 
                 access_token = AccessToken(

@@ -680,7 +680,7 @@ describe('deriveAttentionItems', () => {
       expect(items[0].detail).to.contain('Price catalog stale since');
       expect(items[0].action).to.deep.equal({
         label: 'Update prices',
-        href: '/console/cost?panel=pricing',
+        href: '/console/cost/spend?panel=pricing',
       });
     });
 

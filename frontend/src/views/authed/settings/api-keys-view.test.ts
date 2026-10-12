@@ -464,10 +464,11 @@ describe('ApiKeysView', () => {
     );
     await element.updateComplete;
 
-    // Nothing selected: the bar is over the table's header row from the
-    // first paint, hidden, so ticking a box costs the table no height.
-    const idleBar = element.shadowRoot!.querySelector('list-bulk-bar')!;
-    expect(getComputedStyle(idleBar).visibility).to.equal('hidden');
+    // Nothing selected: the bar is docked in the toolbar from the first
+    // paint, so ticking a box costs the table no height.
+    expect(element.shadowRoot!.querySelector('list-bulk-bar')).to.not.equal(
+      null
+    );
 
     // Pick the first row, then shift-extend to the third.
     element.selection.toggle('key-a');
@@ -526,7 +527,7 @@ describe('ApiKeysView', () => {
     resetConfirmDialogForTests();
   });
 
-  it('takes over the table header instead of pushing the rows down', async () => {
+  it('docks the bulk bar in the shared toolbar without moving the rows', async () => {
     const element = await fixture<ApiKeysView>(
       html`<api-keys-view></api-keys-view>`
     );
@@ -536,9 +537,11 @@ describe('ApiKeysView', () => {
     );
     await element.updateComplete;
 
-    // This page has no list-toolbar, so the bar takes the header row: the
-    // fallback path. The body must not move an inch either way.
-    expect(element.shadowRoot!.querySelector('list-toolbar')).to.equal(null);
+    const toolbar = element.shadowRoot!.querySelector('list-toolbar');
+    expect(toolbar, 'the shared list toolbar').to.not.equal(null);
+    const bar = toolbar!.querySelector('list-bulk-bar[slot="bulk"]');
+    expect(bar, 'bulk bar in the toolbar slot').to.not.equal(null);
+
     const bodyTop = () =>
       element.shadowRoot!.querySelector('tbody')!.getBoundingClientRect().top;
     const before = bodyTop();
@@ -546,32 +549,21 @@ describe('ApiKeysView', () => {
     element.selection.toggle('key-1');
     await element.updateComplete;
     await nextFrame();
-
-    const bar = element.shadowRoot!.querySelector('list-bulk-bar')!;
-    expect(bulkCountText(bar)).to.contain('1 selected');
-    expect(getComputedStyle(bar).visibility).to.equal('visible');
-    const headerCell = element.shadowRoot!.querySelector(
-      'thead th:last-child'
-    )!;
-    expect(
-      getComputedStyle(headerCell).visibility,
-      'the column names stay behind the bar'
-    ).to.equal('hidden');
+    expect(bulkCountText(bar!)).to.contain('1 selected');
+    expect(toolbar!.hasAttribute('selecting')).to.equal(true);
     expect(bodyTop(), 'selecting pushed the key rows down').to.equal(before);
 
-    // Escape gives the header back, at the same place.
     element.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
     );
     await element.updateComplete;
     await nextFrame();
     expect(element.selection.count).to.equal(0);
-    expect(getComputedStyle(bar).visibility).to.equal('hidden');
-    expect(getComputedStyle(headerCell).visibility).to.equal('visible');
+    expect(toolbar!.hasAttribute('selecting')).to.equal(false);
     expect(bodyTop(), 'clearing moved the key rows').to.equal(before);
   });
 
-  it('anchors the bar to a block every engine positions against', async () => {
+  it('searches and sorts through the shared table', async () => {
     const element = await fixture<ApiKeysView>(
       html`<api-keys-view></api-keys-view>`
     );
@@ -579,32 +571,27 @@ describe('ApiKeysView', () => {
       () => !(element as any).isLoading,
       'API keys view did not finish loading'
     );
-    element.selection.toggle('key-1');
     await element.updateComplete;
-    await nextFrame();
-
-    // WebKit does not treat a positioned table section as a containing block,
-    // so a bar anchored to the thead escapes to the viewport there. It hangs
-    // off a plain wrapper around the table instead.
-    const overlay =
-      element.shadowRoot!.querySelector<HTMLElement>('.head-bulk-bar')!;
-    expect(overlay.closest('table'), 'the bar sits outside the table').to.equal(
-      null
+    const table = element.shadowRoot!.querySelector('data-table')!;
+    expect(table.querySelector('table')!.getAttribute('aria-label')).to.equal(
+      'API keys'
     );
     expect(
-      (overlay.offsetParent as HTMLElement | null)?.classList.contains(
-        'table-shell'
-      ),
-      'the wrapper is what positions the bar'
-    ).to.equal(true);
+      table.querySelector('th[aria-sort] .sort-button[data-sort-key="name"]'),
+      'Name sorts'
+    ).to.not.equal(null);
 
-    // And it still covers the header row it stands in for.
-    const head = element
-      .shadowRoot!.querySelector('thead')!
-      .getBoundingClientRect();
-    const bar = overlay.getBoundingClientRect();
-    expect(Math.round(bar.top)).to.equal(Math.round(head.top));
-    expect(Math.round(bar.width)).to.equal(Math.round(head.width));
+    element.table.setSearch('no such key');
+    await element.updateComplete;
+    await (table as unknown as { updateComplete: Promise<unknown> })
+      .updateComplete;
+    const state = table.querySelector('table-state');
+    expect(state?.getAttribute('kind')).to.equal('no-results');
+    expect(new URLSearchParams(window.location.search).get('q')).to.equal(
+      'no such key'
+    );
+    element.table.clearFilters();
+    window.history.replaceState(null, '', window.location.pathname);
   });
 
   it('renders Agent badge when managed_agent_id is present', async () => {

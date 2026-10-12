@@ -26,6 +26,8 @@ from preloop.schemas.issue_compliance import (
     ComplianceWorkflow,
 )
 from preloop.schemas.issue_compliance import (
+    IssueComplianceBatchRequest,
+    IssueComplianceBatchResponse,
     IssueComplianceResultCreate,
     IssueComplianceResultResponse,
 )
@@ -107,13 +109,19 @@ def _calculate_issue_compliance(
     project = crud_project.get(
         db, id=issue.project_id, account_id=current_user.account_id
     )
+    if not project:
+        raise HTTPException(status_code=404, detail="Issue not found")
 
     default_model = crud_ai_model.get_default_active_model(
         db, account_id=current_user.account_id
     )
     if not default_model:
         raise HTTPException(
-            status_code=500, detail="No default active AI model configured."
+            status_code=422,
+            detail={
+                "code": "no_default_ai_model",
+                "message": "No default AI model configured. Set one under Models.",
+            },
         )
 
     evaluate_prompt = prompt_template.evaluate
@@ -140,7 +148,11 @@ def _calculate_issue_compliance(
             )
         except AuxApiKeyMissingError:
             raise HTTPException(
-                status_code=500, detail="OpenAI API key not configured."
+                status_code=422,
+                detail={
+                    "code": "ai_model_key_missing",
+                    "message": "The default AI model has no API key configured.",
+                },
             ) from None
         aux_extras = get_aux_openai_sdk_extra_kwargs(
             default_model,
@@ -171,7 +183,12 @@ def _calculate_issue_compliance(
         annotated_description = response_obj.get("annotated_description")
 
     except openai.APIError as e:
-        raise HTTPException(status_code=500, detail=f"AI model API error: {e}")
+        # Upstream model failure: a bad gateway, not a server bug.
+        logger.warning("AI compliance check failed upstream: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "ai_model_error", "message": "AI model API error"},
+        )
     except ModelGatewayAPIError as exc:
         logger.warning("AI compliance check did not recover: %s", exc)
         raise HTTPException(
@@ -200,6 +217,43 @@ def _calculate_issue_compliance(
 
     new_result.short_name = prompt_template.short_name
     return new_result
+
+
+@router.post(
+    "/issue_compliance/batch",
+    response_model=IssueComplianceBatchResponse,
+    tags=["Issues"],
+)
+def get_issue_compliance_batch(
+    body: IssueComplianceBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    settings: Settings = Depends(get_settings),
+) -> IssueComplianceBatchResponse:
+    """Return stored compliance results for many issues in one query.
+
+    Read-only and cheap: it never calls a model. Lists use this instead of
+    one ``GET /issue_compliance/{id}`` per row; scoring an issue stays an
+    explicit per-issue action.
+    """
+    prompts_config = load_compliance_prompts_config(settings.PROMPTS_FILE)
+    prompt_data = prompts_config.get(body.prompt_name)
+    if not prompt_data:
+        raise HTTPException(
+            status_code=404, detail=f"Prompt '{body.prompt_name}' not found."
+        )
+    short_name = prompt_data.get("short_name", "N/A")
+    rows = crud_issue_compliance_result.get_for_issues_and_prompt(
+        db,
+        issue_ids=list(dict.fromkeys(body.issue_ids)),
+        prompt_id=body.prompt_name,
+        account_id=current_user.account_id,
+    )
+    results = {}
+    for row in rows:
+        row.short_name = short_name
+        results[str(row.issue_id)] = IssueComplianceResultResponse.model_validate(row)
+    return IssueComplianceBatchResponse(results=results)
 
 
 @router.get(
@@ -370,6 +424,12 @@ async def update_issue_content(
     current_user: User = Depends(get_current_active_user),
 ):
     """Update the title and description of an issue and sync to tracker."""
+    # Verify the issue belongs to the caller's account BEFORE any destructive
+    # writes: the deletes below are not account-scoped (cross-account IDOR).
+    owned_issue = crud_issue.get(db, id=issue_id, account_id=current_user.account_id)
+    if not owned_issue:
+        raise HTTPException(status_code=404, detail="Issue not found.")
+
     # Delete any existing compliance results for this issue
     crud_issue_compliance_result.delete_by_issue_id(db, issue_id=issue_id)
 

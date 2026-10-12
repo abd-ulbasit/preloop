@@ -790,6 +790,10 @@ def _prepare_start(
     _authorize(audit)
     if not _runner_online(runner):
         raise audit.reject(409, "runner_offline", "The runner is offline.")
+    if getattr(runner, "paused", False) is True:
+        raise audit.reject(
+            409, "runner_paused", "Resume the runner before starting a session."
+        )
 
     entry = next(
         (e for e in _session_harnesses(runner) if e.harness == body.harness), None

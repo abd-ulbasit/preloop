@@ -119,6 +119,14 @@ tracker; **Disconnect** erases the grant locally and disables the tracker.
 With the feature flag off, managed trackers are marked `provider unavailable`
 and cannot refresh; pasted-token trackers are unaffected.
 
+Operators enable the flow by giving the API the Bitbucket OAuth consumer. With
+the Helm chart set `bitbucketOauth.enabled=true`, `bitbucketOauth.clientId` and
+`bitbucketOauth.clientSecret` (optional `bitbucketOauth.callbackUrl` and
+`bitbucketOauth.scopes`); the chart stores the secret as
+`bitbucket-oauth-client-secret` and exports `BITBUCKET_OAUTH_CLIENT_ID` and
+`BITBUCKET_OAUTH_CLIENT_SECRET` to the api, gateway and worker pods. Register
+the consumer with the callback `https://<your-preloop-host>/api/v1/auth/bitbucket/callback`.
+
 ### Git credentials
 
 Clones and pushes use HTTPS with the token as the password, installed through

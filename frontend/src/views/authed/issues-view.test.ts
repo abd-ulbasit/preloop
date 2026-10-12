@@ -210,6 +210,66 @@ describe('IssuesView', () => {
     expect(el.shadowRoot?.textContent).to.contain('No AI model');
   });
 
+  it('stops calling check after the verdict service fails (no 503 storm)', async () => {
+    fetchStub = stubFetch({
+      projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
+      duplicates: [1, 2, 3, 4, 5, 6].map(makePair),
+      checkHandler: () =>
+        new Response(JSON.stringify({ detail: 'unavailable' }), {
+          status: 503,
+        }),
+    });
+    const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
+    await waitUntil(
+      () => {
+        const v = (
+          el as unknown as { _verdicts: Record<string, { state: string }> }
+        )._verdicts;
+        return [1, 2, 3, 4, 5, 6].every(
+          (n) => v[`i${n}a-i${n}b`]?.state === 'failed'
+        );
+      },
+      'every row settles as failed',
+      { timeout: 4000 }
+    );
+    const checkCalls = fetchStub
+      .getCalls()
+      .filter((call) =>
+        String(call.args[0]).includes('/issue-duplicates/check')
+      );
+    // At most one call per concurrent worker before the breaker trips.
+    expect(checkCalls.length).to.be.at.most(2);
+  });
+
+  it('keeps checking other rows after a per-pair 404', async () => {
+    fetchStub = stubFetch({
+      projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
+      duplicates: [1, 2, 3, 4].map(makePair),
+      checkHandler: (url) =>
+        url.includes('i1a')
+          ? new Response(
+              JSON.stringify({ detail: 'Issue(s) not found: i1a.' }),
+              {
+                status: 404,
+              }
+            )
+          : new Response(JSON.stringify({ decision: 'duplicate' }), {
+              status: 200,
+            }),
+    });
+    const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
+    await waitUntil(
+      () => {
+        const v = (
+          el as unknown as { _verdicts: Record<string, { state: string }> }
+        )._verdicts;
+        return [2, 3, 4].every((n) => v[`i${n}a-i${n}b`]?.state === 'done');
+      },
+      'rows after the 404 still get verdicts',
+      { timeout: 4000 }
+    );
+  });
+
   it('shows failed state with a Review action after timeout', async () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],

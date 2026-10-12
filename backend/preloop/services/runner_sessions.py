@@ -49,7 +49,7 @@ AUDIT_RESOURCE_TYPE = "runner_session"
 
 #: Harnesses the runner hosts sessions for in this version (contract C,
 #: wave 1). Claude Code and Codex keep their Agent Control sidecars.
-RUNNER_SESSION_HARNESSES = frozenset({"copilot_cli"})
+RUNNER_SESSION_HARNESSES = frozenset({"copilot_cli", "cursor_cli", "devin_cli"})
 
 DEFAULT_IDLE_TIMEOUT_SECONDS = 1800
 MIN_IDLE_TIMEOUT_SECONDS = 60

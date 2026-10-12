@@ -1,5 +1,6 @@
 import { html, fixture, expect, nextFrame, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
+import { Router } from '../../router';
 
 import '../../components/view-header.ts';
 import './flows-view';
@@ -61,6 +62,9 @@ describe('FlowsView', () => {
     fetchStub?.restore();
     localStorage.clear();
     invalidateApiCaches();
+    // The list mirrors its sort into the query string; one test's sort must
+    // not become the next test's starting order.
+    window.history.replaceState(null, '', window.location.pathname);
   });
 
   it('renders flow rows before execution requests finish', async () => {
@@ -879,9 +883,11 @@ describe('FlowsView', () => {
       );
       await element.updateComplete;
 
-      expect(
-        element.shadowRoot?.querySelector('.empty-state')?.textContent
-      ).to.contain('No flows match these filters.');
+      const state = element.shadowRoot?.querySelector('.empty-state');
+      expect(state?.getAttribute('kind')).to.equal('no-results');
+      expect(state?.getAttribute('heading')).to.contain(
+        'No flows match these filters.'
+      );
     });
 
     it('switches to cards and remembers the choice for the next visit', async () => {
@@ -977,6 +983,23 @@ describe('FlowsView', () => {
       expect(flowSort.closest('th')?.getAttribute('aria-sort')).to.equal(
         'descending'
       );
+    });
+
+    it('opens a flow when Enter is pressed on its focused row', async () => {
+      const element = await renderFlows();
+      const go = sinon.stub(Router, 'go');
+      try {
+        const row =
+          element.shadowRoot!.querySelector<HTMLElement>('tbody tr.flow-row')!;
+        row.focus();
+        row.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+        );
+        expect(go.calledOnce, 'Enter navigated').to.equal(true);
+        expect(String(go.firstCall.args[0])).to.match(/^\/console\/flows\//);
+      } finally {
+        go.restore();
+      }
     });
 
     it('gives every row a real link to its flow', async () => {

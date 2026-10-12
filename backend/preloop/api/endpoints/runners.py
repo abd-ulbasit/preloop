@@ -241,7 +241,10 @@ def _to_response(
     viewer: Optional[User] = None,
     viewer_is_admin: Optional[bool] = None,
 ) -> schemas.RunnerResponse:
+    from preloop.models.crud.flow_runner import runner_labels
+
     data = schemas.RunnerResponse.model_validate(row)
+    data.labels = runner_labels(row)
     presence = derive_presence(row)
     data.presence = presence.state
     data.presence_since = presence.since
@@ -274,6 +277,7 @@ def register_runner(
     capabilities = normalize_host_exec_advertisements(
         [profile.model_dump() for profile in advertised]
     )
+    capabilities["docker_available"] = body.docker_available
     # Registration is the connecting process's full advertisement and
     # replaces the stored capabilities wholesale (no merge with the resumed
     # row): a CLI that omits the field (it predates remote sessions, or the
@@ -395,6 +399,26 @@ def runner_fleet_summary(
     return schemas.RunnerFleetSummary(
         **crud_flow_runner.counts_for_account(db, account_id=current_user.account_id)
     )
+
+
+@router.patch("/runners/{runner_id}/scheduling", response_model=schemas.RunnerResponse)
+@require_permission("execute_flows")
+def update_runner_scheduling(
+    runner_id: UUID,
+    body: schemas.RunnerSchedulingUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> schemas.RunnerResponse:
+    """Pause new leases or opt into jobs without tags."""
+    row = crud_flow_runner.get(
+        db, id=runner_id, account_id=str(current_user.account_id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Runner not found")
+    updates = body.model_dump(exclude_none=True)
+    row = crud_flow_runner.update(db, db_obj=row, obj_in=updates)
+    emit_runner_updated(row, db)
+    return _to_response(row, db, current_user)
 
 
 @router.patch("/runners/{runner_id}/concurrency", response_model=schemas.RunnerResponse)
@@ -942,7 +966,14 @@ async def runner_ws(
                 for assignment in list(runner.assignments or []):
                     if assignment.halt_requested:
                         await close_publication(assignment.execution_id)
-                if "host_exec_profiles" in raw or "authorized_directories" in raw:
+                if any(
+                    key in raw
+                    for key in (
+                        "host_exec_profiles",
+                        "authorized_directories",
+                        "docker_available",
+                    )
+                ):
                     # Each advertisement replaces only its own key: a
                     # heartbeat that carries one must not drop the other.
                     merged = dict(runner.capabilities or {})
@@ -952,7 +983,11 @@ async def runner_ws(
                         merged["authorized_directories"] = (
                             normalize_authorized_directories(raw)
                         )
-                    runner.capabilities = merged
+                    if "docker_available" in raw:
+                        merged["docker_available"] = raw["docker_available"] is True
+                    crud_flow_runner.update(
+                        db, db_obj=runner, obj_in={"capabilities": merged}
+                    )
                 # Harness inventory (#1480): every heartbeat names its hash,
                 # the body comes only when it changed or we asked for it.
                 inventory_wanted = False

@@ -21,6 +21,7 @@ from .flow import (
 from .flow_runner import (
     HostExecProfileAdvertisement,
     RunnerConcurrencyUpdate,
+    RunnerSchedulingUpdate,
     RunnerDeleteResponse,
     RunnerFleetSummary,
     HarnessInventory,
@@ -131,6 +132,7 @@ __all__ = [
     "RegistrationTokenResponse",
     "WebhookConfig",
     "RunnerConcurrencyUpdate",
+    "RunnerSchedulingUpdate",
     "RunnerDeleteResponse",
     "RunnerFleetSummary",
     "HostExecProfileAdvertisement",

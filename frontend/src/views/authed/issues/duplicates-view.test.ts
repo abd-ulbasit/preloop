@@ -18,13 +18,21 @@ describe('DuplicatesView', () => {
     localStorage.clear();
   });
 
-  function stub(issues: unknown[]) {
+  function stub(duplicates: unknown[]) {
     return sinon
       .stub(window, 'fetch')
       .callsFake(
-        async () => new Response(JSON.stringify(issues), { status: 200 })
+        async () =>
+          new Response(JSON.stringify({ duplicates }), { status: 200 })
       );
   }
+
+  const pair = (a: string, b: string) => ({
+    issue1: { id: a, title: a },
+    issue2: { id: b, title: b },
+    similarity: 0.9,
+    verified_as_duplicate: null,
+  });
 
   it('shows an info alert when there are no duplicate issues', async () => {
     fetchStub = stub([]);
@@ -38,7 +46,7 @@ describe('DuplicatesView', () => {
   });
 
   it('renders a menu of duplicate issues when present', async () => {
-    fetchStub = stub([{ title: 'Login bug' }, { title: 'Auth bug' }]);
+    fetchStub = stub([pair('Login bug', 'Auth bug'), pair('A', 'B')]);
     const el = (await fixture(
       html`<duplicates-view></duplicates-view>`
     )) as DuplicatesView;
@@ -61,5 +69,32 @@ describe('DuplicatesView', () => {
         .getCalls()
         .some((c) => String(c.args[0]).includes('/api/v1/issue-duplicates'))
     ).to.be.true;
+  });
+
+  it('requests the exact path with no trailing slash (no http:// redirect)', async () => {
+    fetchStub = stub([]);
+    const el = (await fixture(
+      html`<duplicates-view></duplicates-view>`
+    )) as DuplicatesView;
+    await tick();
+    await el.updateComplete;
+    const urls = fetchStub.getCalls().map((c) => String(c.args[0]));
+    expect(urls.some((u) => u.includes('/api/v1/issue-duplicates?'))).to.be
+      .true;
+    expect(urls.some((u) => u.includes('/issue-duplicates/?'))).to.be.false;
+  });
+
+  it('shows an error alert instead of throwing when the request fails', async () => {
+    fetchStub = sinon
+      .stub(window, 'fetch')
+      .rejects(new TypeError('Failed to fetch'));
+    const el = (await fixture(
+      html`<duplicates-view></duplicates-view>`
+    )) as DuplicatesView;
+    await tick();
+    await el.updateComplete;
+    const alert = el.shadowRoot?.querySelector('sl-alert[variant="danger"]');
+    expect(alert).to.exist;
+    expect(alert?.textContent).to.contain('Could not load duplicate issues');
   });
 });

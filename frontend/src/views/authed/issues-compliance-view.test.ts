@@ -19,10 +19,11 @@ const issue = {
 interface StubOpts {
   complianceStatus?: number;
   compliance?: unknown;
+  batchResults?: 'scored' | 'empty';
 }
 
 function stubFetch(opts: StubOpts = {}) {
-  const { complianceStatus = 200, compliance } = opts;
+  const { complianceStatus = 200, compliance, batchResults = 'scored' } = opts;
   return sinon
     .stub(window, 'fetch')
     .callsFake(async (input: RequestInfo | URL) => {
@@ -32,16 +33,19 @@ function stubFetch(opts: StubOpts = {}) {
       if (url.includes('/api/v1/issue_compliance_prompts')) {
         return json([{ id: 'default', name: 'Definition of ready' }]);
       }
+      const scored = compliance || {
+        name: 'Definition of ready',
+        compliance_factor: 0.6,
+        reason: 'Missing acceptance criteria',
+        suggestion: 'Add acceptance criteria',
+      };
+      if (url.includes('/api/v1/issue_compliance/batch')) {
+        if (batchResults === 'empty') return json({ results: {} });
+        return json({ results: { [issue.id]: scored } });
+      }
       if (url.includes('/api/v1/issue_compliance/')) {
         if (complianceStatus !== 200) return json({}, complianceStatus);
-        return json(
-          compliance || {
-            name: 'Definition of ready',
-            compliance_factor: 0.6,
-            reason: 'Missing acceptance criteria',
-            suggestion: 'Add acceptance criteria',
-          }
-        );
+        return json(scored);
       }
       if (url.includes('/api/v1/projects')) {
         return json([{ id: 'p1', name: 'Alpha', organization_id: 'org-1' }]);
@@ -82,6 +86,16 @@ describe('IssuesComplianceView', () => {
   it('offers Improve on a scored issue', async () => {
     fetchStub = stubFetch();
     const el = await mount();
+    const urls = fetchStub.getCalls().map((c) => String(c.args[0]));
+    // One batch call for the page, no per-row model-backed GETs.
+    expect(
+      urls.filter((u) => u.includes('/issue_compliance/batch'))
+    ).to.have.length(1);
+    expect(
+      urls.filter(
+        (u) => u.includes('/issue_compliance/') && !u.includes('/batch')
+      )
+    ).to.have.length(0);
     const action = el.shadowRoot?.querySelector(
       'tbody sl-button'
     ) as HTMLElement;
@@ -92,7 +106,7 @@ describe('IssuesComplianceView', () => {
   });
 
   it('says Not scored and offers Score when the score is missing', async () => {
-    fetchStub = stubFetch({ complianceStatus: 500 });
+    fetchStub = stubFetch({ batchResults: 'empty' });
     const el = await mount();
     expect(el.shadowRoot?.textContent).to.contain('Not scored');
     const action = el.shadowRoot?.querySelector(

@@ -438,9 +438,27 @@ export class LitApp extends LitElement {
               return commands.redirect('/console/agents');
             },
           },
+          // Cost is a nav group like Audit and Settings: Spend answers "what
+          // did we pay", Gateway traffic answers "how much did we send and how
+          // close are we to the rate limits". The old flat URLs keep working
+          // (digest emails, bookmarks) and carry their query and hash along.
           { path: 'cost/by-issue', component: 'issue-cost-view' },
-          { path: 'cost', component: 'cost-view' },
-          { path: '/api-usage', component: 'api-usage-view' },
+          { path: 'cost/spend', component: 'cost-view' },
+          { path: 'cost/gateway', component: 'api-usage-view' },
+          {
+            path: 'cost',
+            action: (context, commands) =>
+              commands.redirect(
+                `/console/cost/spend${context.search}${context.hash}`
+              ),
+          },
+          {
+            path: '/api-usage',
+            action: (context, commands) =>
+              commands.redirect(
+                `/console/cost/gateway${context.search}${context.hash}`
+              ),
+          },
           { path: 'settings', redirect: '/console/settings/profile' },
           { path: 'settings/profile', component: 'profile-view' },
           { path: 'settings/security', component: 'security-view' },

@@ -299,6 +299,11 @@ func handleRunnerSetupSkip(req runnerSetupRequest, reason string) error {
 }
 
 func installRunnerFromSetup(req runnerSetupRequest) error {
+	if runnerHasDocker() {
+		fmt.Fprintln(req.Out, "Docker daemon reachable (docker ps succeeded). The runner can advertise the docker tag.")
+	} else {
+		fmt.Fprintln(req.Out, "Docker daemon unavailable. Container jobs will not be assigned; native agents remain available. Start Docker Desktop and check docker ps as the runner user.")
+	}
 	if err := config.SetRunnerLabels(personalRunnerLabels()); err != nil {
 		fmt.Fprintf(req.Out, "Could not save runner labels: %v\n", err)
 	}

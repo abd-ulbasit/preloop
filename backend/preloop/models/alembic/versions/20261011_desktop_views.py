@@ -1,7 +1,7 @@
 """Desktop endpoints and brokered desktop views.
 
 Revision ID: 20261011_desktop_views
-Revises: 20261013_note_receipts
+Revises: 20261011_runner_scheduling
 Create Date: 2026-10-11
 
 Issue #870. ``desktop_endpoint`` records hosts running ``preloop desktop
@@ -17,7 +17,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20261011_desktop_views"
-down_revision: Union[str, None] = "20261013_note_receipts"
+down_revision: Union[str, None] = "20261011_runner_scheduling"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 # Alembic reads these module globals by name; keep a local reference so static

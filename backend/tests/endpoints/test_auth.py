@@ -156,7 +156,12 @@ def test_register_disabled(db_session_mock):
 
 
 def test_login_success():
-    with patch("preloop.api.auth.router.authenticate_user") as mock_authenticate_user:
+    with (
+        patch("preloop.api.auth.router.authenticate_user") as mock_authenticate_user,
+        patch(
+            "preloop.api.auth.router._landing_row", side_effect=lambda user, db: user
+        ),
+    ):
         mock_user = MagicMock(spec=User)
         mock_user.id = uuid.uuid4()
         mock_user.username = "testuser"

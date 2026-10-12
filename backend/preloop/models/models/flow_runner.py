@@ -60,6 +60,12 @@ class FlowRunner(Base):
     ephemeral: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
+    paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    accept_untagged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="offline", index=True
     )

@@ -431,6 +431,8 @@ var (
 // COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN rather than a file.
 func hostExecHarnessEnvAllowed(harness, key string) bool {
 	switch harness {
+	case hostExecHarnessDevin:
+		return key == "DEVIN_API_KEY"
 	case hostExecHarnessCursor:
 		return strings.HasPrefix(key, "CURSOR_")
 	case hostExecHarnessCopilot:
@@ -488,6 +490,9 @@ func hostExecChildEnv(
 		match := key
 		if goos == "windows" {
 			match = strings.ToUpper(match)
+		}
+		if harness == hostExecHarnessDevin && strings.HasPrefix(strings.ToUpper(key), "DEVIN_") && strings.ToUpper(key) != "DEVIN_API_KEY" {
+			continue
 		}
 		if _, ok := pass[match]; ok {
 			out = append(out, entry)

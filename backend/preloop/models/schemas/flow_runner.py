@@ -31,6 +31,7 @@ class HostExecProfileAdvertisement(BaseModel):
 
 #: Harness ids a runner may report (contract A, closed in wave 1; extend by PR).
 HarnessId = Literal[
+    "devin_cli",
     "copilot_cli",
     "cursor_cli",
     "claude_code",
@@ -176,6 +177,9 @@ class RunnerRegisterRequest(BaseModel):
         default=None, max_length=64
     )
 
+    #: True only after the runner can list containers on its Docker daemon.
+    docker_available: bool = False
+
     @field_validator("labels", mode="before")
     @classmethod
     def accept_null_labels(cls, value: Any) -> Any:
@@ -234,6 +238,8 @@ class RunnerResponse(BaseModel):
     labels: List[str] = Field(default_factory=list)
     ephemeral: bool = False
     status: str
+    paused: bool = False
+    accept_untagged: bool = False
     last_heartbeat: Optional[datetime] = None
     current_execution_id: Optional[UUID] = None
     #: The owner's ceiling on concurrent jobs for this runner.
@@ -269,6 +275,13 @@ class RunnerDeleteResponse(BaseModel):
     deleted: bool = True
     #: Executions the runner held that a forced delete stopped.
     halted_execution_ids: List[UUID] = Field(default_factory=list)
+
+
+class RunnerSchedulingUpdate(BaseModel):
+    """Control new work without interrupting running jobs."""
+
+    paused: Optional[bool] = None
+    accept_untagged: Optional[bool] = None
 
 
 class RunnerConcurrencyUpdate(BaseModel):

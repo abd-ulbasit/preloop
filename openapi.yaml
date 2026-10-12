@@ -141,17 +141,13 @@ paths:
       tags:
       - Auth
       summary: Forgot Password
-      description: "Send a password reset email for every user row holding the address.\n\
-        \n``user.email`` is not unique: an address invited into a second account\n\
-        holds a second row there, with its own password. This never chooses one\n\
-        of them. Every row holding the address gets its own message, whose link\n\
-        is bound to that row and names its username, so the person resets the\naccount\
-        \ they mean by following that account's link. Each link goes to\nthe address\
-        \ its own row holds, the inbox that row already trusts for a\nreset, so no\
-        \ row is reachable from an inbox it does not name.\n\nArgs:\n    reset_data:\
-        \ Password reset request with email.\n    background_tasks: Background tasks\
-        \ for sending emails.\n\nReturns:\n    The same neutral message whether or\
-        \ not the address is registered."
+      description: "Send one bound recovery proof per canonical identity at the address.\n\
+        \nExplicitly linked memberships share one message. Independent provisional\n\
+        people sharing an address receive separate messages naming their chosen\n\
+        usernames; account selectors cannot reroute an identity proof.\n\nArgs:\n\
+        \    reset_data: Password reset request with email.\n    background_tasks:\
+        \ Background tasks for sending emails.\n\nReturns:\n    The same neutral message\
+        \ whether or not the address is registered."
       operationId: forgot_password_api_v1_auth_forgot_password_post
       requestBody:
         content:
@@ -12526,6 +12522,82 @@ paths:
       security:
       - bearerAuth: []
       x-restricted-ci: deny
+  /api/v1/cost/timeseries:
+    get:
+      tags:
+      - Cost Analytics
+      - Cost Analytics
+      summary: Get Cost Timeseries
+      description: 'Return gateway spend and requests per time bucket for the spend
+        chart.
+
+
+        Bounded to ``TIMESERIES_MAX_WINDOW_DAYS`` so one request never scans
+
+        unbounded history.'
+      operationId: get_cost_timeseries_api_v1_cost_timeseries_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Start Date
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: End Date
+      - name: granularity
+        in: query
+        required: false
+        schema:
+          enum:
+          - day
+          - week
+          - month
+          type: string
+          description: Bucket size; buckets start on UTC boundaries.
+          default: day
+          title: Granularity
+        description: Bucket size; buckets start on UTC boundaries.
+      - name: runtime_principal_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Runtime Principal Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostTimeseriesResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/cost/summary:
     get:
       tags:
@@ -16148,6 +16220,49 @@ paths:
           description: Credential verification unavailable
       security:
       - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/runners/{runner_id}/scheduling:
+    patch:
+      tags:
+      - Runners
+      summary: Update Runner Scheduling
+      description: Pause new leases or opt into jobs without tags.
+      operationId: update_runner_scheduling_api_v1_runners__runner_id__scheduling_patch
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: runner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Runner Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunnerSchedulingUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunnerResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
       x-restricted-ci: deny
   /api/v1/runners/{runner_id}/concurrency:
     patch:
@@ -20823,6 +20938,10 @@ components:
             model. False for principal-bound OAuth (Claude Code / Codex subscription)
             credentials, which only authorize their owner's interactive traffic and
             must never be auto-selected as a default.
+          default: false
+        is_built_in:
+          type: boolean
+          title: Is Built In
           default: false
       type: object
       required:
@@ -27412,6 +27531,35 @@ components:
       - status
       title: CostHealthResponse
       description: Account-scoped gateway accounting self-check result.
+    CostTimeseriesResponse:
+      properties:
+        period_start:
+          type: string
+          format: date-time
+          title: Period Start
+        period_end:
+          type: string
+          format: date-time
+          title: Period End
+        granularity:
+          type: string
+          enum:
+          - day
+          - week
+          - month
+          title: Granularity
+        buckets:
+          items:
+            $ref: '#/components/schemas/GatewayUsageByDay'
+          type: array
+          title: Buckets
+      type: object
+      required:
+      - period_start
+      - period_end
+      - granularity
+      title: CostTimeseriesResponse
+      description: Gateway spend bucketed by UTC day, week or month for one window.
     CreateVersionRequest:
       properties:
         description:
@@ -31983,6 +32131,7 @@ components:
         harness:
           type: string
           enum:
+          - devin_cli
           - copilot_cli
           - cursor_cli
           - claude_code
@@ -38461,6 +38610,10 @@ components:
             maxItems: 64
           - type: 'null'
           title: Authorized Directories
+        docker_available:
+          type: boolean
+          title: Docker Available
+          default: false
         harness_inventory:
           anyOf:
           - $ref: '#/components/schemas/HarnessInventory'
@@ -38527,6 +38680,14 @@ components:
         status:
           type: string
           title: Status
+        paused:
+          type: boolean
+          title: Paused
+          default: false
+        accept_untagged:
+          type: boolean
+          title: Accept Untagged
+          default: false
         last_heartbeat:
           anyOf:
           - type: string
@@ -38671,6 +38832,14 @@ components:
         status:
           type: string
           title: Status
+        paused:
+          type: boolean
+          title: Paused
+          default: false
+        accept_untagged:
+          type: boolean
+          title: Accept Untagged
+          default: false
         last_heartbeat:
           anyOf:
           - type: string
@@ -38759,6 +38928,21 @@ components:
       - created_at
       - updated_at
       title: RunnerResponse
+    RunnerSchedulingUpdate:
+      properties:
+        paused:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Paused
+        accept_untagged:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Accept Untagged
+      type: object
+      title: RunnerSchedulingUpdate
+      description: Control new work without interrupting running jobs.
     RunnerSessionListItem:
       properties:
         session_id:
@@ -38848,6 +39032,7 @@ components:
         harness:
           type: string
           enum:
+          - devin_cli
           - copilot_cli
           - cursor_cli
           - claude_code
