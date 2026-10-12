@@ -644,7 +644,7 @@ export class IssueCostView extends AuthedElement {
             ${this.renderLink(row.issue_url, row.issue_key)}
             ${
               row.title
-                ? html`<span class="muted issue-title">${row.title}</span>`
+                ? html`<span class="muted">${row.title}</span>`
                 : nothing
             }
           </div>`,
