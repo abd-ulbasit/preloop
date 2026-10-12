@@ -3444,7 +3444,7 @@ func TestGenericAdapterValidateManagedConfigSupportsClaudeGateway(t *testing.T) 
 
 func TestClaudeValidationRejectsSimpleMode(t *testing.T) {
 	adapter := managedMCPAdapterForAgent(AgentConfig{Name: "Claude Code"})
-	for _, value := range []string{"1", "true", "yes", "0", "false", ""} {
+	for _, value := range []string{"1", "true", "yes", "on", " TRUE ", "0", "false", ""} {
 		t.Run(value, func(t *testing.T) {
 			doc := map[string]interface{}{
 				"mcpServers": map[string]interface{}{

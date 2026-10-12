@@ -6415,7 +6415,7 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 	if isClaudeCodeAgent(a.agent) {
 		env, _ := asObjectMap(doc["env"])
 		simple := strings.ToLower(strings.TrimSpace(fmt.Sprint(env["CLAUDE_CODE_SIMPLE"])))
-		if simple == "1" || simple == "true" || simple == "yes" {
+		if simple == "1" || simple == "true" || simple == "yes" || simple == "on" {
 			result["error"] = "CLAUDE_CODE_SIMPLE disables automatic MCP loading and hooks; re-onboard Claude Code and restart it."
 			return mergeNpmSidecarControlValidation(a.agent, doc, baseURL, result)
 		}
