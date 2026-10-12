@@ -53,7 +53,10 @@ def test_register_profiles_can_be_selected_for_lease(
         response = client.post("/api/v1/runners/register", json=body)
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["capabilities"] == {"host_exec_profiles": body["host_exec_profiles"]}
+    assert data["capabilities"] == {
+        "host_exec_profiles": body["host_exec_profiles"],
+        "docker_available": False,
+    }
     runner_id = UUID(data["id"])
     db_session.expire_all()
     saved = crud_flow_runner.get(
@@ -127,12 +130,12 @@ def test_register_null_missing_or_empty_host_exec_profiles_stores_none(
         response = client.post("/api/v1/runners/register", json=payload)
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["capabilities"] == {"host_exec_profiles": []}
+    assert data["capabilities"] == {"host_exec_profiles": [], "docker_available": False}
     saved = crud_flow_runner.get(
         db_session, id=UUID(data["id"]), account_id=str(test_user.account_id)
     )
     assert saved is not None
-    assert saved.capabilities == {"host_exec_profiles": []}
+    assert saved.capabilities == {"host_exec_profiles": [], "docker_available": False}
 
 
 def test_register_one_valid_host_exec_profile_is_stored(
@@ -151,12 +154,18 @@ def test_register_one_valid_host_exec_profile_is_stored(
         )
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["capabilities"] == {"host_exec_profiles": [profile]}
+    assert data["capabilities"] == {
+        "host_exec_profiles": [profile],
+        "docker_available": False,
+    }
     saved = crud_flow_runner.get(
         db_session, id=UUID(data["id"]), account_id=str(test_user.account_id)
     )
     assert saved is not None
-    assert saved.capabilities == {"host_exec_profiles": [profile]}
+    assert saved.capabilities == {
+        "host_exec_profiles": [profile],
+        "docker_available": False,
+    }
 
 
 def test_register_copilot_profile_leases_only_copilot_jobs(
@@ -179,7 +188,10 @@ def test_register_copilot_profile_leases_only_copilot_jobs(
             json={"name": "copilot-desk", "host_exec_profiles": profiles},
         )
     assert response.status_code == 200, response.text
-    assert response.json()["capabilities"] == {"host_exec_profiles": profiles}
+    assert response.json()["capabilities"] == {
+        "host_exec_profiles": profiles,
+        "docker_available": False,
+    }
     runner_id = UUID(response.json()["id"])
     flow = crud_flow.create(
         db_session,
@@ -219,3 +231,40 @@ def test_register_copilot_profile_leases_only_copilot_jobs(
         payload=payload,
     )
     assert leased is not None and leased.id == runner_id
+
+
+def test_scheduling_preferences_survive_runner_registration(
+    db_session: Session, test_user: models.User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runners, "emit_runner_updated", lambda *args: None)
+    with _register_client(db_session, test_user) as client:
+        registered = client.post(
+            "/api/v1/runners/register",
+            json={"name": "workstation", "docker_available": True},
+        )
+        assert registered.status_code == 200
+        runner_id = registered.json()["id"]
+        assert registered.json()["accept_untagged"] is False
+        assert "docker" in registered.json()["labels"]
+        changed = client.patch(
+            f"/api/v1/runners/{runner_id}/scheduling",
+            json={"paused": True, "accept_untagged": True},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["paused"] is True
+        resumed = client.post(
+            "/api/v1/runners/register",
+            json={
+                "name": "workstation",
+                "runner_id": runner_id,
+                "docker_available": False,
+            },
+        )
+        assert resumed.status_code == 200
+        assert resumed.json()["paused"] is True
+        assert resumed.json()["accept_untagged"] is True
+        assert "docker" not in resumed.json()["labels"]
+        assert (
+            crud_flow_runner.claim_free_slot(db_session, runner_id=UUID(runner_id))
+            is None
+        )

@@ -43,7 +43,7 @@ var publicationHelperProbe publicationHelperProbeCache
 // client environment inside their container. Their stdout is bounded and stderr
 // discarded; credential-bearing stdin is never included in errors or logs.
 var publicationDocker = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, runnerDockerBinary(), args...)
 	cmd.Stdin = bytes.NewReader(input)
 	output := &publicationBoundedOutput{}
 	cmd.Stdout, cmd.Stderr = output, io.Discard
@@ -114,17 +114,17 @@ type publicationTargetSpec struct {
 }
 
 type publicationLeaseSpec struct {
-	Version                   int                      `json:"version"`
-	Nonce                     string                   `json:"nonce"`
-	Phase                     string                   `json:"phase"`
-	RepositoryURL             string                   `json:"repository_url"`
-	Branch                    string                   `json:"branch"`
-	Base                      string                   `json:"base"`
-	BaseSHA                   string                   `json:"base_sha"`
-	ExpectedRemoteSHA         *string                  `json:"expected_remote_sha"`
-	VerificationImage         string                   `json:"verification_image"`
-	VerificationBudgetSeconds int                      `json:"verification_budget_seconds"`
-	Targets                   []publicationTargetSpec  `json:"targets"`
+	Version                   int                     `json:"version"`
+	Nonce                     string                  `json:"nonce"`
+	Phase                     string                  `json:"phase"`
+	RepositoryURL             string                  `json:"repository_url"`
+	Branch                    string                  `json:"branch"`
+	Base                      string                  `json:"base"`
+	BaseSHA                   string                  `json:"base_sha"`
+	ExpectedRemoteSHA         *string                 `json:"expected_remote_sha"`
+	VerificationImage         string                  `json:"verification_image"`
+	VerificationBudgetSeconds int                     `json:"verification_budget_seconds"`
+	Targets                   []publicationTargetSpec `json:"targets"`
 }
 type publicationManifest struct {
 	Version      int      `json:"version"`

@@ -20,6 +20,7 @@ import {
   RunnerHasLeasesError,
   updateAccountOrganization,
   updateRunnerConcurrency,
+  updateRunnerScheduling,
   type HarnessInventoryEntry,
   type RunnerRecord,
 } from '../../api';
@@ -553,10 +554,43 @@ export class RunnersView extends LitElement {
     </div>`;
   }
 
+  private async setScheduling(
+    row: RunnerRecord,
+    settings: { paused?: boolean; accept_untagged?: boolean }
+  ): Promise<void> {
+    if (!this.claimRow(row.id)) return;
+    try {
+      const updated = await updateRunnerScheduling(row.id, settings);
+      this.runners = this.runners.map((runner) =>
+        runner.id === row.id ? updated : runner
+      );
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.releaseRow(row.id);
+    }
+  }
+
   private renderActions(row: RunnerRecord) {
     const busy = this.isBusy(row.id);
     return html`
       <div class="actions">
+        <sl-button
+          class="pause-runner"
+          size="small"
+          ?disabled=${busy}
+          @click=${() => void this.setScheduling(row, { paused: !row.paused })}
+          >${row.paused ? 'Resume runner' : 'Pause runner'}</sl-button
+        >
+        <sl-button
+          class="accept-untagged"
+          size="small"
+          ?disabled=${busy}
+          aria-pressed=${String(row.accept_untagged === true)}
+          @click=${() => void this.setScheduling(row, { accept_untagged: !row.accept_untagged })}
+          >Untagged jobs: ${row.accept_untagged ? 'on' : 'off'}</sl-button
+        >
+
         ${
           row.ephemeral
             ? nothing
@@ -565,7 +599,7 @@ export class RunnersView extends LitElement {
                 size="small"
                 variant="primary"
                 outline
-                ?disabled=${busy || !this.isPresent(row.status)}
+                ?disabled=${busy || row.paused || !this.isPresent(row.status)}
                 title="Start a session with an agent installed on this runner"
                 @click=${() => (this.sessionRunnerId = row.id)}
                 >New session</sl-button

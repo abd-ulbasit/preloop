@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -24,6 +24,7 @@ from preloop.models.models.user import User
 from preloop.schemas.cost_analytics import (
     CostAnalyticsSummaryResponse,
     CostHealthResponse,
+    CostTimeseriesResponse,
     ImportedUsageByConversation,
     ImportedUsageByModel,
     ImportedUsageSummary,
@@ -45,7 +46,10 @@ from preloop.services.ledger_backfill import (
     parse_explorer_csv,
     plan_ledger_allocation,
 )
-from preloop.services.model_gateway_usage import ModelGatewayUsageService
+from preloop.services.model_gateway_usage import (
+    ModelGatewayUsageService,
+    normalize_usage_period,
+)
 from preloop.services.usage_repricing import reprice_gateway_usage
 from preloop.utils.permissions import require_permission
 
@@ -64,6 +68,10 @@ MAX_LEDGER_CSV_BYTES = 2 * 1024 * 1024
 #: the biggest token offenders sort first.
 UNPRICED_MODELS_LIMIT = 10
 
+#: Longest window one spend-chart request may cover. A year of day buckets is
+#: 366 rows; the query runs on ix_api_usage_account_action_ts either way.
+TIMESERIES_MAX_WINDOW_DAYS = 366
+
 
 def _price_catalog_info() -> Optional[PriceCatalogInfo]:
     """Return vendored price-catalog provenance for the staleness indicator."""
@@ -74,6 +82,48 @@ def _price_catalog_info() -> Optional[PriceCatalogInfo]:
         return PriceCatalogInfo(**meta) if meta else None
     except Exception:  # noqa: BLE001 - purely informational
         return None
+
+
+@router.get("/timeseries", response_model=CostTimeseriesResponse)
+@require_permission("view_cost")
+def get_cost_timeseries(
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    granularity: Literal["day", "week", "month"] = Query(
+        "day", description="Bucket size; buckets start on UTC boundaries."
+    ),
+    runtime_principal_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_active_user),
+) -> CostTimeseriesResponse:
+    """Return gateway spend and requests per time bucket for the spend chart.
+
+    Bounded to ``TIMESERIES_MAX_WINDOW_DAYS`` so one request never scans
+    unbounded history.
+    """
+    account = get_account_or_404(db, current_user)
+    start, end = normalize_usage_period(start_date, end_date)
+    if end <= start:
+        raise HTTPException(status_code=422, detail="end_date must be after start_date")
+    if end - start > timedelta(days=TIMESERIES_MAX_WINDOW_DAYS):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Window exceeds {TIMESERIES_MAX_WINDOW_DAYS} days",
+        )
+    rows = crud_api_usage.get_gateway_usage_timeseries(
+        db,
+        account_id=str(account.id),
+        start_date=start,
+        end_date=end,
+        runtime_principal_id=runtime_principal_id,
+        granularity=granularity,
+    )
+    return CostTimeseriesResponse(
+        period_start=start,
+        period_end=end,
+        granularity=granularity,
+        buckets=rows,
+    )
 
 
 @router.get("/summary", response_model=CostAnalyticsSummaryResponse)

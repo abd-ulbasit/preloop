@@ -556,7 +556,13 @@ def test_factory_uses_remote_runner_when_online_private_runner(
     monkeypatch.setattr(
         "preloop.services.runner_service.crud_flow_runner.find_matching",
         lambda db, **kwargs: [
-            SimpleNamespace(id=uuid4(), status="online", free_slots=2)
+            SimpleNamespace(
+                id=uuid4(),
+                status="online",
+                free_slots=2,
+                capabilities={"docker_available": True},
+                accept_untagged=True,
+            )
         ],
     )
     executor = create_executor_for_execution(

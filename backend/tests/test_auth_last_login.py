@@ -9,8 +9,15 @@ from preloop.api.auth.router import authenticate_user
 from preloop.models.models.user import User
 
 
+@pytest.fixture(autouse=True)
+def identity_crud(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from tests.auth_identity_support import mock_identity_crud
+
+    return mock_identity_crud(monkeypatch)
+
+
 @pytest.fixture
-def mock_user():
+def mock_user(identity_crud):
     """Create a mock user."""
     user = MagicMock(spec=User)
     user.id = uuid.uuid4()
@@ -19,6 +26,7 @@ def mock_user():
     user.hashed_password = "$2b$12$test_hashed_password"
     user.is_active = True
     user.last_login = None  # Never logged in before
+    identity_crud.register_membership(user)
     return user
 
 

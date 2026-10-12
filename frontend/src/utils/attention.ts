@@ -332,19 +332,19 @@ export const ATTENTION_KIND_META: Record<
     label: 'Budget',
     plural: 'Budgets',
     icon: 'wallet2',
-    sectionHref: '/console/cost',
+    sectionHref: '/console/cost/spend',
   },
   spend: {
     label: 'Spend outlier',
     plural: 'Spend outliers',
     icon: 'graph-up-arrow',
-    sectionHref: '/console/cost',
+    sectionHref: '/console/cost/spend',
   },
   pricing: {
     label: 'Pricing',
     plural: 'Pricing',
     icon: 'tags',
-    sectionHref: '/console/cost',
+    sectionHref: '/console/cost/spend',
   },
   policy: {
     label: 'Policy notice',
@@ -367,7 +367,7 @@ export const ATTENTION_KIND_ORDER: AttentionKind[] = [
 ];
 
 /** The Cost page reads `panel` and scrolls its pricing card into view. */
-const PRICING_HREF = '/console/cost?panel=pricing';
+const PRICING_HREF = '/console/cost/spend?panel=pricing';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;

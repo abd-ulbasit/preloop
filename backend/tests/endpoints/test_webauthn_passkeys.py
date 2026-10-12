@@ -9,6 +9,7 @@ import base64
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -39,6 +40,9 @@ def mock_user():
     user = MagicMock(spec=User)
     user.id = uuid.uuid4()
     user.account_id = uuid.uuid4()
+    user.person_id = user.id
+    user.email_verified = True
+    user.auth_generation = 0
     user.username = "testuser"
     user.email = "testuser@example.com"
     user.full_name = "Test User"
@@ -48,10 +52,42 @@ def mock_user():
 
 
 @pytest.fixture
-def db_session_mock():
+def db_session_mock(mock_user, monkeypatch):
     from preloop.models.db.session import get_db_session
 
     db_session = MagicMock(spec=Session)
+    from preloop.models.crud import crud_person, crud_account
+
+    def person():
+        return SimpleNamespace(
+            id=mock_user.person_id,
+            username=mock_user.username,
+            email=mock_user.email,
+            full_name=mock_user.full_name,
+            identity_status="active",
+            auth_generation=0,
+            email_verified_at=datetime.now(timezone.utc)
+            if mock_user.email_verified
+            else None,
+            last_active_user_id=mock_user.id,
+        )
+
+    monkeypatch.setattr(crud_person, "get", lambda *args, **kwargs: person())
+    monkeypatch.setattr(
+        crud_person, "has_external_identity", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        crud_person, "lock_for_session", lambda *args, **kwargs: person()
+    )
+    monkeypatch.setattr(
+        crud_person, "resolve_for_membership", lambda *args, **kwargs: person()
+    )
+    monkeypatch.setattr(
+        crud_person, "list_memberships", lambda *args, **kwargs: [mock_user]
+    )
+    monkeypatch.setattr(
+        crud_account, "get", lambda *args, **kwargs: SimpleNamespace(is_active=True)
+    )
     app.dependency_overrides[get_db_session] = lambda: db_session
     try:
         yield db_session
@@ -114,7 +150,7 @@ class TestRegistrationCeremony:
         with patch(
             "preloop.api.auth.webauthn_router.crud_webauthn_credential"
         ) as mock_crud:
-            mock_crud.list_for_user.return_value = [existing]
+            mock_crud.list_for_person.return_value = [existing]
             response = client.post("/auth/webauthn/register/options")
 
         assert response.status_code == 200
@@ -153,7 +189,12 @@ class TestRegistrationCeremony:
                 obj.id = uuid.uuid4()
                 obj.created_at = datetime.now(timezone.utc)
 
-            db_session_mock.refresh.side_effect = fake_refresh
+            def fake_create(db, *, obj_in):
+                obj = SimpleNamespace(**obj_in)
+                fake_refresh(obj)
+                return obj
+
+            mock_crud.create.side_effect = fake_create
 
             response = client.post(
                 "/auth/webauthn/register/verify",
@@ -172,10 +213,11 @@ class TestRegistrationCeremony:
         mock_verify.assert_called_once()
         # Challenge bytes from the token were passed to verification
         assert mock_verify.call_args.kwargs["expected_challenge"] == b"chal"
-        db_session_mock.add.assert_called_once()
-        stored = db_session_mock.add.call_args.args[0]
-        assert stored.credential_id == _b64url(b"new-cred-id")
-        assert stored.user_id == authed_user.id
+        mock_crud.create.assert_called_once()
+        stored = mock_crud.create.call_args.kwargs["obj_in"]
+        assert stored["credential_id"] == _b64url(b"new-cred-id")
+        assert stored["person_id"] == authed_user.person_id
+        assert stored["user_id"] == authed_user.id
 
     def test_verify_rejects_challenge_for_other_user(
         self, db_session_mock, authed_user
@@ -225,6 +267,7 @@ class TestAuthenticationCeremony:
 
         cred = MagicMock()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -239,10 +282,12 @@ class TestAuthenticationCeremony:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ) as mock_verify,
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -289,6 +334,7 @@ class TestAuthenticationCeremony:
         challenge_token = _issue_challenge_token(b"auth-chal", "authenticate")
         cred = MagicMock()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -316,6 +362,7 @@ class TestAuthenticationCeremony:
         mock_user.is_active = False
         cred = MagicMock()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -330,10 +377,12 @@ class TestAuthenticationCeremony:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ),
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -360,6 +409,7 @@ class TestAuthenticationCeremony:
         mock_user.user_source = "local"
         cred = MagicMock()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -375,10 +425,12 @@ class TestAuthenticationCeremony:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ),
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -400,6 +452,7 @@ class TestAuthenticationCeremony:
         mock_user.user_source = "local"
         cred = MagicMock()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -414,10 +467,12 @@ class TestAuthenticationCeremony:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ),
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -464,6 +519,7 @@ class TestLoginParityAndRateLimit:
         cred = MagicMock()
         cred.id = uuid.uuid4()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -478,11 +534,13 @@ class TestLoginParityAndRateLimit:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ),
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
             patch("preloop.api.auth.webauthn_router.crud_audit_log") as mock_audit,
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -510,6 +568,7 @@ class TestLoginParityAndRateLimit:
         cred = MagicMock()
         cred.id = uuid.uuid4()
         cred.user_id = mock_user.id
+        cred.person_id = mock_user.person_id
         cred.public_key = _b64url(b"public-key-bytes")
         cred.sign_count = 5
 
@@ -524,7 +583,9 @@ class TestLoginParityAndRateLimit:
                 "preloop.api.auth.webauthn_router.verify_authentication_response",
                 return_value=verification,
             ),
-            patch("preloop.api.auth.webauthn_router.crud_user") as mock_crud_user,
+            patch(
+                "preloop.api.auth.webauthn_router.login_membership"
+            ) as mock_crud_user,
             patch(
                 "preloop.services.account_setup_service.notify_admins_user_login_after_inactivity"
             ) as mock_notify,
@@ -536,7 +597,7 @@ class TestLoginParityAndRateLimit:
             ),
         ):
             mock_crud.get_by_credential_id.return_value = cred
-            mock_crud_user.get.return_value = mock_user
+            mock_crud_user.return_value = mock_user
 
             response = client.post(
                 "/auth/webauthn/authenticate/verify",
@@ -587,7 +648,7 @@ class TestCredentialManagement:
         with patch(
             "preloop.api.auth.webauthn_router.crud_webauthn_credential"
         ) as mock_crud:
-            mock_crud.list_for_user.return_value = [cred]
+            mock_crud.list_for_person.return_value = [cred]
             response = client.get("/auth/webauthn/credentials")
 
         assert response.status_code == 200
@@ -599,6 +660,7 @@ class TestCredentialManagement:
         cred = MagicMock()
         cred.id = uuid.uuid4()
         cred.user_id = authed_user.id
+        cred.person_id = authed_user.person_id
         cred.is_active = True
 
         with patch(
@@ -613,7 +675,8 @@ class TestCredentialManagement:
     def test_delete_other_users_credential_404(self, db_session_mock, authed_user):
         cred = MagicMock()
         cred.id = uuid.uuid4()
-        cred.user_id = uuid.uuid4()  # someone else
+        cred.user_id = uuid.uuid4()
+        cred.person_id = uuid.uuid4()  # someone else
         cred.is_active = True
 
         with patch(

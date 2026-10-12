@@ -278,8 +278,29 @@ async def _handle_authorization_code(
                     "redirect_uri does not match the authorization request",
                 )
 
-        # Mark code as used
-        crud_oauth_mcp_auth_code.mark_used(db, obj=db_code)
+        from preloop.models.crud import crud_user
+        from preloop.api.auth.identity import require_active_identity
+        from preloop.api.auth.email_verification import enforce_verified_email
+
+        user = crud_user.get(db, id=db_code.user_id)
+        if user is None:
+            return _oauth_error("invalid_grant", "User not found")
+        try:
+            require_active_identity(db, user, lock=True)
+            enforce_verified_email(user, db)
+        except HTTPException as exc:
+            return _oauth_error("invalid_grant", str(exc.detail))
+        db_code = crud_oauth_mcp_auth_code.get_by_code(
+            db,
+            code=code,
+            client_id=db_code.client_id,
+            lock=True,
+        )
+        if db_code is None or db_code.is_used:
+            return _oauth_error(
+                "invalid_grant", "Authorization code is no longer valid"
+            )
+        crud_oauth_mcp_auth_code.mark_used(db, obj=db_code, commit=False)
 
         # Decide token type based on whether PKCE was used
         has_pkce = bool(db_code.code_challenge)
@@ -391,6 +412,15 @@ async def _issue_jwt_tokens(
     if not user:
         return _oauth_error("invalid_grant", "User not found")
 
+    from preloop.api.auth.identity import require_active_identity
+    from preloop.api.auth.email_verification import enforce_verified_email
+
+    try:
+        require_active_identity(db, user)
+        enforce_verified_email(user, db)
+    except HTTPException as exc:
+        return _oauth_error("invalid_grant", str(exc.detail))
+
     refresh_jti = _new_refresh_jti()
     cli_session = crud_cli_session.create(
         db,
@@ -429,6 +459,7 @@ async def _issue_opaque_tokens(db, db_code):
         scopes=db_code.scopes or [],
         expires_at=now + 3600,
         resource=db_code.resource,
+        commit=False,
     )
 
     crud_oauth_mcp_refresh_token.create(
@@ -479,11 +510,34 @@ async def _handle_refresh_token(
                 db, token=refresh_token_str
             )
             if db_refresh and not db_refresh.is_revoked:
+                if client_id and db_refresh.client_id != client_id:
+                    return _oauth_error(
+                        "invalid_grant", "Refresh token client mismatch"
+                    )
+                from preloop.models.crud import crud_user
+                from preloop.api.auth.identity import require_active_identity
+                from preloop.api.auth.email_verification import enforce_verified_email
+
+                user = crud_user.get(db, id=db_refresh.user_id)
+                if user is None:
+                    return _oauth_error("invalid_grant", "User not found")
+                try:
+                    require_active_identity(db, user, lock=True)
+                    enforce_verified_email(user, db)
+                except HTTPException as exc:
+                    return _oauth_error("invalid_grant", str(exc.detail))
+                db_refresh = crud_oauth_mcp_refresh_token.get_by_token(
+                    db,
+                    token=refresh_token_str,
+                    lock=True,
+                )
+                if db_refresh is None or db_refresh.is_revoked:
+                    return _oauth_error("invalid_grant", "Refresh token revoked")
                 if db_refresh.expires_at and db_refresh.expires_at < int(time.time()):
                     return _oauth_error("invalid_grant", "Refresh token expired")
 
                 # Revoke the old refresh token (rotation)
-                crud_oauth_mcp_refresh_token.revoke(db, obj=db_refresh)
+                crud_oauth_mcp_refresh_token.revoke(db, obj=db_refresh, commit=False)
 
                 # Issue new opaque tokens
                 now = int(time.time())
@@ -498,6 +552,7 @@ async def _handle_refresh_token(
                     account_id=db_refresh.account_id,
                     scopes=db_refresh.scopes or [],
                     expires_at=now + 3600,
+                    commit=False,
                     resource=None,
                 )
 
@@ -544,6 +599,13 @@ async def _handle_refresh_token(
                 if user is None or not user.is_active:
                     return _oauth_error("invalid_grant", "User not found or inactive")
                 try:
+                    from preloop.api.auth.identity import require_active_identity
+                    from preloop.api.auth.email_verification import (
+                        enforce_verified_email,
+                    )
+
+                    require_active_identity(db, user)
+                    enforce_verified_email(user, db)
                     reject_stale_token_generation(user, token_data)
                 except HTTPException as exc:
                     return _oauth_error("invalid_grant", str(exc.detail))

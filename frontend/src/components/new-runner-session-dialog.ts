@@ -30,6 +30,7 @@ type WorkspaceKind = 'authorized_directory' | 'tracker_checkout';
 export const RUNNER_SESSION_ERROR_MESSAGES: Record<string, string> = {
   not_runner_owner:
     'Only the runner owner or an account admin can start sessions on this runner.',
+  runner_paused: 'Resume the runner before starting a session.',
   runner_offline:
     'The runner is offline. Start it on the host (preloop runner start) and try again.',
   harness_not_enabled_for_sessions:

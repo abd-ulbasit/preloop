@@ -519,6 +519,44 @@ class CRUDAIModel(CRUDBase[AIModel]):
             .all()
         )
 
+    def get_selectable_for_account(
+        self,
+        db: Session,
+        *,
+        account_id: uuid.UUID | str,
+        include_built_in: bool = False,
+    ) -> list[AIModel]:
+        """List account models plus the active Cloud built-in, when enabled.
+
+        Retired system rows remain stored for historical references, but cannot
+        be selected for new work. OSS callers opt out by default.
+        """
+        from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
+
+        own = self.model.account_id == account_id
+        visible = own
+        if include_built_in:
+            built_in = (
+                self.model.account_id.is_(None)
+                & (self.model.meta_data["gateway"]["enabled"].astext == "true")
+                & (
+                    self.model.meta_data["gateway"]["model_alias"].astext
+                    == BUILT_IN_MODEL_ALIAS
+                )
+            )
+            visible = or_(own, built_in)
+        return (
+            db.query(self.model)
+            .options(joinedload(self.model.credentials_secret))
+            .filter(visible)
+            .order_by(
+                self.model.account_id.is_(None).desc(),
+                self.model.created_at.asc(),
+                self.model.id.asc(),
+            )
+            .all()
+        )
+
     def get_for_account(
         self,
         db: Session,
@@ -855,6 +893,26 @@ class CRUDAIModel(CRUDBase[AIModel]):
 
         db.commit()
         return obj
+
+    @staticmethod
+    def configured_account_default_kinds(ai_models: Sequence[AIModel]) -> set[str]:
+        """Find configured defaults by kind without considering credentials."""
+        return {
+            model.model_kind
+            for model in ai_models
+            if model.account_id is not None and model.is_default
+        }
+
+    def account_default_model_exists(
+        self, db: Session, *, account_id: uuid.UUID | str, model_kind: str
+    ) -> bool:
+        """Check for a configured account default of the requested service kind."""
+        defaults = (
+            db.query(self.model)
+            .filter(self.model.is_default, self.model.account_id == account_id)
+            .all()
+        )
+        return model_kind in self.configured_account_default_kinds(defaults)
 
     def default_model_exists(self, db: Session) -> bool:
         """Check if a system-wide default model exists."""

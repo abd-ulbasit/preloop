@@ -8,11 +8,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from ..models.oauth_mcp_token import (
-    OAuthMCPAccessToken,
-    OAuthMCPAuthorizationCode,
-    OAuthMCPRefreshToken,
-)
+from preloop.models import models
+
+OAuthMCPAccessToken = models.OAuthMCPAccessToken
+OAuthMCPAuthorizationCode = models.OAuthMCPAuthorizationCode
+OAuthMCPRefreshToken = models.OAuthMCPRefreshToken
 
 
 def _hash_token(token: str) -> str:
@@ -76,17 +76,16 @@ class CRUDOAuthMCPAuthorizationCode:
         return obj
 
     def get_by_code(
-        self, db: Session, *, code: str, client_id: str
+        self, db: Session, *, code: str, client_id: str, lock: bool = False
     ) -> Optional[OAuthMCPAuthorizationCode]:
         """Look up an authorization code by its hash and client_id."""
-        return (
-            db.query(OAuthMCPAuthorizationCode)
-            .filter(
-                OAuthMCPAuthorizationCode.code_hash == _hash_token(code),
-                OAuthMCPAuthorizationCode.client_id == client_id,
-            )
-            .first()
+        query = db.query(OAuthMCPAuthorizationCode).filter(
+            OAuthMCPAuthorizationCode.code_hash == _hash_token(code),
+            OAuthMCPAuthorizationCode.client_id == client_id,
         )
+        if lock:
+            query = query.with_for_update().populate_existing()
+        return query.first()
 
     def get_by_code_hash(
         self, db: Session, *, code: str
@@ -103,11 +102,15 @@ class CRUDOAuthMCPAuthorizationCode:
             .first()
         )
 
-    def mark_used(self, db: Session, *, obj: OAuthMCPAuthorizationCode) -> None:
+    def mark_used(
+        self, db: Session, *, obj: OAuthMCPAuthorizationCode, commit: bool = True
+    ) -> None:
         """Mark an authorization code as consumed."""
         obj.is_used = True
         db.add(obj)
-        db.commit()
+        db.flush()
+        if commit:
+            db.commit()
 
     def delete_expired(self, db: Session) -> int:
         """Delete expired or used authorization codes. Returns count deleted."""
@@ -145,6 +148,7 @@ class CRUDOAuthMCPAccessToken:
         scopes: list[str],
         expires_at: Optional[int] = None,
         resource: Optional[str] = None,
+        commit: bool = True,
     ) -> OAuthMCPAccessToken:
         """Store an access token (hashed)."""
         obj = OAuthMCPAccessToken(
@@ -158,8 +162,10 @@ class CRUDOAuthMCPAccessToken:
             is_revoked=False,
         )
         db.add(obj)
-        db.commit()
-        db.refresh(obj)
+        db.flush()
+        if commit:
+            db.commit()
+            db.refresh(obj)
         return obj
 
     def get_by_token(self, db: Session, *, token: str) -> Optional[OAuthMCPAccessToken]:
@@ -234,6 +240,7 @@ class CRUDOAuthMCPRefreshToken:
         account_id: UUID,
         scopes: list[str],
         expires_at: Optional[int] = None,
+        commit: bool = True,
     ) -> OAuthMCPRefreshToken:
         """Store a refresh token (hashed)."""
         obj = OAuthMCPRefreshToken(
@@ -246,25 +253,32 @@ class CRUDOAuthMCPRefreshToken:
             is_revoked=False,
         )
         db.add(obj)
-        db.commit()
-        db.refresh(obj)
+        db.flush()
+        if commit:
+            db.commit()
+            db.refresh(obj)
         return obj
 
     def get_by_token(
-        self, db: Session, *, token: str
+        self, db: Session, *, token: str, lock: bool = False
     ) -> Optional[OAuthMCPRefreshToken]:
         """Look up a refresh token by its hash."""
-        return (
-            db.query(OAuthMCPRefreshToken)
-            .filter(OAuthMCPRefreshToken.token_hash == _hash_token(token))
-            .first()
+        query = db.query(OAuthMCPRefreshToken).filter(
+            OAuthMCPRefreshToken.token_hash == _hash_token(token)
         )
+        if lock:
+            query = query.with_for_update().populate_existing()
+        return query.first()
 
-    def revoke(self, db: Session, *, obj: OAuthMCPRefreshToken) -> None:
+    def revoke(
+        self, db: Session, *, obj: OAuthMCPRefreshToken, commit: bool = True
+    ) -> None:
         """Revoke a refresh token."""
         obj.is_revoked = True
         db.add(obj)
-        db.commit()
+        db.flush()
+        if commit:
+            db.commit()
 
     def revoke_by_user_and_client(
         self, db: Session, *, user_id: UUID, client_id: str

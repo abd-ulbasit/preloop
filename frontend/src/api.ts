@@ -1,4 +1,5 @@
 import { LitElement } from 'lit';
+import { withSafeIcon } from './utils/icon-name';
 import { Router } from './router';
 import { DEFAULT_SIMILARITY_THRESHOLD } from './config';
 import { PermissionError, permissionErrorFromResponse } from './permissions';
@@ -105,6 +106,7 @@ import type {
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEndpointCreated,
+  GatewayUsageByDay,
 } from './types';
 
 // Global refresh promise to prevent concurrent refresh requests
@@ -1474,6 +1476,32 @@ export async function getCostAnalyticsSummary(
     if (refused) throw refused;
     throw new Error('Failed to fetch cost analytics summary');
   }
+  return response.json();
+}
+
+export type CostGranularity = 'day' | 'week' | 'month';
+
+/** Gateway spend per UTC bucket; `date` is the bucket start (YYYY-MM-DD). */
+export interface CostTimeseriesResponse {
+  period_start: string;
+  period_end: string;
+  granularity: CostGranularity;
+  buckets: GatewayUsageByDay[];
+}
+
+/** Spend chart series. The server caps a window at 366 days. */
+export async function getCostTimeseries(params: {
+  startDate: string;
+  endDate: string;
+  granularity: CostGranularity;
+}): Promise<CostTimeseriesResponse> {
+  const query = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+    granularity: params.granularity,
+  });
+  const response = await fetchWithAuth(`/api/v1/cost/timeseries?${query}`);
+  if (!response.ok) throw new Error('Failed to fetch spend over time');
   return response.json();
 }
 
@@ -3414,14 +3442,17 @@ export async function listProjectsForOrg(
 
 export async function getDuplicateIssues(
   status: 'opened' | 'closed' | 'all' = 'opened'
-) {
+): Promise<DuplicatePair[]> {
+  // Exact path, no trailing slash: "/issue-duplicates/" answers with a
+  // redirect that a TLS-terminating proxy turns into a blocked http:// URL.
   const response = await fetchWithAuth(
-    `/api/v1/issue-duplicates/?status=${status}`
+    `/api/v1/issue-duplicates?status=${status}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch duplicate issues');
   }
-  return response.json();
+  const data = await response.json();
+  return Array.isArray(data?.duplicates) ? data.duplicates : [];
 }
 
 export async function getIssueCount(): Promise<{ total_issues: number }> {
@@ -4301,7 +4332,8 @@ export async function getFlowSummaries(
   const query = params.toString() ? `?${params.toString()}` : '';
   const response = await fetchWithAuth(`/api/v1/flows/summary${query}`);
   if (!response.ok) throw new Error('Failed to fetch flow summaries');
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4334,7 +4366,8 @@ export async function getFlows(
   if (!response.ok) {
     throw new Error('Failed to fetch flows');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4374,7 +4407,7 @@ export async function getFlow(flowId: string): Promise<any> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow');
   }
-  return response.json();
+  return withSafeIcon(await response.json());
 }
 
 /**
@@ -4519,7 +4552,8 @@ export async function getFlowPresets(): Promise<any[]> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow presets');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /** One page of executions plus how many rows the filters matched. */
@@ -4995,6 +5029,8 @@ export async function getRunner(runnerId: string): Promise<RunnerRecord> {
 }
 
 export interface RunnerRecord {
+  paused?: boolean;
+  accept_untagged?: boolean;
   id: string;
   name: string;
   hostname?: string | null;
@@ -5095,6 +5131,28 @@ export async function getFlowHarnessOptions(): Promise<HarnessOption[]> {
   }
   const body = await response.json();
   return Array.isArray(body?.harnesses) ? body.harnesses : [];
+}
+
+/** Pause new work or opt a runner into untagged jobs. */
+export async function updateRunnerScheduling(
+  runnerId: string,
+  settings: { paused?: boolean; accept_untagged?: boolean }
+): Promise<RunnerRecord> {
+  const response = await fetchWithAuth(
+    `/api/v1/runners/${runnerId}/scheduling`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    }
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(errorData, 'Failed to update runner scheduling')
+    );
+  }
+  return response.json();
 }
 
 /** Raise or lower how many executions a runner may hold at once. */
@@ -5647,6 +5705,27 @@ export async function getIssueCompliance(
     throw new Error('Failed to fetch issue compliance');
   }
   return response.json();
+}
+
+/**
+ * Stored compliance results for a page of issues in one request. Never
+ * triggers model calls; unscored issues are simply absent from the map.
+ */
+export async function getIssueComplianceBatch(
+  issueIds: string[],
+  promptName: string
+): Promise<Record<string, IssueComplianceResult>> {
+  if (issueIds.length === 0) return {};
+  const response = await fetchWithAuth('/api/v1/issue_compliance/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issue_ids: issueIds, prompt_name: promptName }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch issue compliance');
+  }
+  const data = await response.json();
+  return data?.results ?? {};
 }
 
 export async function getComplianceImprovementSuggestion(

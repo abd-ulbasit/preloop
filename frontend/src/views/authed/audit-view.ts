@@ -32,6 +32,12 @@ import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/tag/tag.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import '@shoelace-style/shoelace/dist/components/divider/divider.js';
+import '../../table/table-pagination';
+import '../../table/table-state';
+import {
+  readTablePreferences,
+  writeTablePreferences,
+} from '../../table/table-preferences';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import { reducedMotionStyles } from '../../styles/reduced-motion';
 import '../../components/view-header.ts';
@@ -161,6 +167,10 @@ const OUTCOME_OPTIONS = [
   { value: 'expired', label: approvalStatusLabel('expired') },
 ];
 
+/** The id the shared table preferences store this list's page size under. */
+const AUDIT_LIST_ID = 'audit-events';
+const AUDIT_PAGE_SIZES = [25, 50, 100];
+
 @customElement('audit-view')
 export class AuditView extends AuthedElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
@@ -172,7 +182,11 @@ export class AuditView extends AuthedElement {
   @state() private _loadError: string | null = null;
   @state() private _total = 0;
   @state() private _page = 0;
-  @state() private _pageSize = 50;
+  @state() private _pageSize = AUDIT_PAGE_SIZES.includes(
+    readTablePreferences(AUDIT_LIST_ID)?.pageSize ?? 0
+  )
+    ? readTablePreferences(AUDIT_LIST_ID)!.pageSize!
+    : 50;
 
   // Filters
   @state() private _eventTypeFilters: string[] = [];
@@ -572,11 +586,44 @@ export class AuditView extends AuthedElement {
     this._endDate = validFilterDate(params.get('end_date'));
     this._minCost = params.get('min_cost') ?? '';
     this._maxCost = params.get('max_cost') ?? '';
+    // A linked page of the timeline opens on that page, at that size.
+    const page = Number(params.get('page'));
+    this._page = Number.isInteger(page) && page > 1 ? page - 1 : 0;
+    const size = Number(params.get('size'));
+    if (AUDIT_PAGE_SIZES.includes(size)) this._pageSize = size;
+  }
+
+  private _syncPageLocation(): void {
+    replaceListFilters({
+      page: this._page > 0 ? String(this._page + 1) : null,
+      size: this._pageSize !== 50 ? String(this._pageSize) : null,
+    });
+  }
+
+  private _goToPage(pageIndex: number): void {
+    const next = Math.max(0, Math.min(pageIndex, this._totalPages - 1));
+    if (next === this._page) return;
+    this._page = next;
+    this._syncPageLocation();
+    void this._loadTimeline();
+  }
+
+  private _setPageSize(pageSize: number): void {
+    if (!AUDIT_PAGE_SIZES.includes(pageSize) || pageSize === this._pageSize) {
+      return;
+    }
+    this._pageSize = pageSize;
+    this._page = 0;
+    writeTablePreferences(AUDIT_LIST_ID, {
+      ...(readTablePreferences(AUDIT_LIST_ID) ?? {}),
+      pageSize,
+    });
+    this._syncPageLocation();
+    void this._loadTimeline();
   }
 
   private _onFilterPopState = (): void => {
     this._readFilterLocation();
-    this._page = 0;
     void this._loadTimeline({ background: this._groups.length > 0 });
   };
 
@@ -590,12 +637,16 @@ export class AuditView extends AuthedElement {
       min_cost: this._minCost,
       max_cost: this._maxCost,
     });
+    // Every filter change starts again at page 1, so the page in the address
+    // bar is written with the filters: a reload must not restore page 3 of a
+    // different query.
+    this._syncPageLocation();
   }
 
   private _applyFilters() {
+    this._page = 0;
     this._syncFilterLocation();
     this._cancelToolSearch();
-    this._page = 0;
     this._loadTimeline();
   }
 
@@ -637,8 +688,8 @@ export class AuditView extends AuthedElement {
     this._endDate = '';
     this._minCost = '';
     this._maxCost = '';
-    this._syncFilterLocation();
     this._page = 0;
+    this._syncFilterLocation();
     this._loadTimeline();
   }
 
@@ -1275,20 +1326,6 @@ export class AuditView extends AuthedElement {
     return Math.max(1, Math.ceil(this._total / this._pageSize));
   }
 
-  private _prevPage() {
-    if (this._page > 0) {
-      this._page--;
-      this._loadTimeline();
-    }
-  }
-
-  private _nextPage() {
-    if (this._page < this._totalPages - 1) {
-      this._page++;
-      this._loadTimeline();
-    }
-  }
-
   // ── Render ─────────────────────────────────────────────────────────
 
   /**
@@ -1375,40 +1412,44 @@ export class AuditView extends AuthedElement {
                           <sl-spinner style="font-size: 2rem;"></sl-spinner>
                         </div>`
                       : this._loadError
-                        ? html`<sl-alert
-                            variant="danger"
-                            open
+                        ? html`<table-state
+                            kind="error"
                             class="load-error"
                             data-testid="audit-load-error"
+                            heading="Could not load audit events"
+                            message=${this._loadError}
                           >
-                            <sl-icon
-                              slot="icon"
-                              name="exclamation-octagon"
-                            ></sl-icon>
-                            <div class="load-error-body">
-                              <span>${this._loadError}</span>
-                              <sl-button
-                                size="small"
-                                @click=${() => void this._loadTimeline()}
-                                >Retry</sl-button
-                              >
-                            </div>
-                          </sl-alert>`
+                            <sl-button
+                              size="small"
+                              @click=${() => void this._loadTimeline()}
+                            >
+                              <sl-icon
+                                slot="prefix"
+                                name="arrow-clockwise"
+                              ></sl-icon>
+                              Retry
+                            </sl-button>
+                          </table-state>`
                         : this._groups.length === 0
                           ? this._hasActiveFilters
-                            ? html`<div class="empty-state">
-                                <p>No events match these filters.</p>
+                            ? html`<table-state
+                                class="empty-state"
+                                kind="no-results"
+                                heading="No events match these filters."
+                              >
                                 <sl-button
                                   size="small"
                                   @click=${this._clearFilters}
                                   >Clear filters</sl-button
                                 >
-                              </div>`
-                            : html`<div class="empty-state">
-                                No audit events yet. Governed tool calls,
-                                approvals, and policy decisions are recorded
-                                here as your agents work.
-                              </div>`
+                              </table-state>`
+                            : html`<table-state
+                                class="empty-state"
+                                kind="empty"
+                                icon="shield-check"
+                                heading="No audit events yet"
+                                message="Governed tool calls, approvals, and policy decisions are recorded here as your agents work."
+                              ></table-state>`
                           : html`
                               <div class="timeline">
                                 ${this._groups.map((g) => this._renderGroup(g))}
@@ -1987,35 +2028,20 @@ export class AuditView extends AuthedElement {
   }
 
   private _renderPagination() {
-    const start = this._page * this._pageSize + 1;
-    const end = Math.min(start + this._pageSize - 1, this._total);
-
-    return html`
-      <div class="pagination">
-        <span class="page-info">Showing ${start}–${end} of ${this._total}</span>
-        <div class="page-controls">
-          <sl-button
-            size="small"
-            variant="text"
-            ?disabled=${this._page === 0}
-            @click=${this._prevPage}
-          >
-            <sl-icon name="chevron-left"></sl-icon>
-          </sl-button>
-          <span class="page-num"
-            >Page ${this._page + 1} of ${this._totalPages}</span
-          >
-          <sl-button
-            size="small"
-            variant="text"
-            ?disabled=${this._page >= this._totalPages - 1}
-            @click=${this._nextPage}
-          >
-            <sl-icon name="chevron-right"></sl-icon>
-          </sl-button>
-        </div>
-      </div>
-    `;
+    return html`<table-pagination
+      class="pagination"
+      page-index=${this._page}
+      page-size=${this._pageSize}
+      .pageSizes=${AUDIT_PAGE_SIZES}
+      .total=${this._total}
+      page-rows=${this._groups.length}
+      ?loading=${this._loading}
+      noun="events"
+      @page-change=${(event: CustomEvent) =>
+        this._goToPage(event.detail.pageIndex)}
+      @page-size-change=${(event: CustomEvent) =>
+        this._setPageSize(event.detail.pageSize)}
+    ></table-pagination>`;
   }
 
   // ── Styles ─────────────────────────────────────────────────────────
@@ -2149,24 +2175,9 @@ export class AuditView extends AuthedElement {
         justify-content: center;
         padding: 3rem 0;
       }
-      .empty-state {
-        text-align: center;
-        color: var(--console-meta-color);
-        padding: 3rem 0;
-        font-size: 0.9rem;
-      }
-      .empty-state p {
-        margin: 0 0 0.75rem;
-      }
-      .load-error {
+      /* The error panel keeps the breathing room the old alert had. */
+      table-state.load-error {
         margin: 1rem 0;
-      }
-      .load-error-body {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem 1rem;
       }
 
       /* ── Timeline ──────────────────────────── */
@@ -2447,30 +2458,6 @@ export class AuditView extends AuthedElement {
         font-size: 0.65rem;
         color: var(--console-meta-color);
         white-space: nowrap;
-      }
-
-      /* ── Pagination ────────────────────────── */
-      .pagination {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0.75rem 0;
-        margin-top: 0.5rem;
-        border-top: 1px solid var(--sl-color-neutral-200);
-      }
-      .page-info {
-        font-size: 0.75rem;
-        color: var(--console-meta-color);
-      }
-      .page-controls {
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-      }
-      .page-num {
-        font-size: 0.75rem;
-        color: var(--sl-color-neutral-600);
-        padding: 0 0.5rem;
       }
 
       /* ── Responsive ────────────────────────── */

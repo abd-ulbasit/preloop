@@ -2,11 +2,15 @@
 
 from datetime import datetime, timezone
 from typing import List, Optional
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from ..models.webauthn_credential import WebAuthnCredential
+from preloop.models import models
+
 from .base import CRUDBase
+
+WebAuthnCredential = models.WebAuthnCredential
 
 
 class CRUDWebAuthnCredential(CRUDBase[WebAuthnCredential]):
@@ -25,17 +29,23 @@ class CRUDWebAuthnCredential(CRUDBase[WebAuthnCredential]):
             .first()
         )
 
-    def list_for_user(self, db: Session, *, user_id) -> List[WebAuthnCredential]:
-        """List active credentials for a user."""
+    def list_for_person(
+        self, db: Session, *, person_id: UUID
+    ) -> List[WebAuthnCredential]:
+        """List identity-owned passkeys independent of registration membership."""
         return (
             db.query(self.model)
-            .filter(
-                self.model.user_id == user_id,
-                self.model.is_active.is_(True),
-            )
+            .filter(self.model.person_id == person_id, self.model.is_active.is_(True))
             .order_by(self.model.created_at)
             .all()
         )
+
+    def list_for_user(self, db: Session, *, user_id: UUID) -> List[WebAuthnCredential]:
+        """Compatibility wrapper resolving membership to the credential owner."""
+        from .person import crud_person
+
+        person = crud_person.resolve_for_membership(db, membership_id=user_id)
+        return self.list_for_person(db, person_id=person.id)
 
     def touch(
         self, db: Session, *, obj: WebAuthnCredential, sign_count: int

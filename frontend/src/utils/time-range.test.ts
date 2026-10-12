@@ -5,6 +5,8 @@ import {
   normalizeTimeRangeKey,
   resolvePreviousTimeRange,
   resolveTimeRange,
+  timeRangeComparisonLabel,
+  timeRangePhrase,
   timeRangeShortLabel,
 } from './time-range';
 
@@ -130,6 +132,34 @@ describe('time-range', () => {
     expect(previousMonth.endDate).to.equal(
       resolveTimeRange('this-month', now).startDate
     );
+  });
+
+  it('runs this year from 1 Jan and compares it with the whole prior year', () => {
+    const thisYear = resolveTimeRange('this-year', now);
+    expect(new Date(thisYear.startDate as string).getTime()).to.equal(
+      new Date(2026, 0, 1, 0, 0, 0, 0).getTime()
+    );
+    expect(thisYear.endDate).to.equal(now.toISOString());
+
+    const previousYear = resolvePreviousTimeRange('this-year', now);
+    expect(new Date(previousYear.startDate as string).getTime()).to.equal(
+      new Date(2025, 0, 1, 0, 0, 0, 0).getTime()
+    );
+    expect(previousYear.endDate).to.equal(thisYear.startDate);
+    expect(normalizeTimeRangeKey('this-year')).to.equal('this-year');
+    expect(timeRangeShortLabel('this-year')).to.equal('this year');
+  });
+
+  it('phrases a window and its comparison so calendar keys read naturally', () => {
+    expect(timeRangePhrase('last-30')).to.equal('In the last 30d');
+    expect(timeRangePhrase('this-month')).to.equal('This month');
+    expect(timeRangePhrase('today')).to.equal('Today');
+    expect(timeRangeComparisonLabel('last-30')).to.equal('prior 30d');
+    expect(timeRangeComparisonLabel('today')).to.equal('same hours yesterday');
+    expect(timeRangeComparisonLabel('this-week')).to.equal('prior week');
+    expect(timeRangeComparisonLabel('this-month')).to.equal('prior month');
+    expect(timeRangeComparisonLabel('this-year')).to.equal('prior year');
+    expect(timeRangeComparisonLabel('all')).to.equal('prior period');
   });
 
   it('labels a window in the register the stats use', () => {

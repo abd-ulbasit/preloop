@@ -105,7 +105,13 @@ def test_resolve_runner_pool_auto_when_online_private_runner(
         crud_flow_runner,
         "find_matching",
         lambda db, **kwargs: [
-            SimpleNamespace(id=uuid4(), status="online", free_slots=2)
+            SimpleNamespace(
+                id=uuid4(),
+                status="online",
+                free_slots=2,
+                capabilities={"docker_available": True},
+                accept_untagged=True,
+            )
         ],
     )
     assert resolve_runner_pool(flow, {}, db=MagicMock()) == AUTO_RUNNER_POOL
@@ -123,7 +129,15 @@ def test_resolve_runner_pool_auto_when_private_runner_has_a_second_slot(
     monkeypatch.setattr(
         crud_flow_runner,
         "find_matching",
-        lambda db, **kwargs: [SimpleNamespace(id=uuid4(), status="busy", free_slots=1)],
+        lambda db, **kwargs: [
+            SimpleNamespace(
+                id=uuid4(),
+                status="busy",
+                free_slots=1,
+                capabilities={"docker_available": True},
+                accept_untagged=True,
+            )
+        ],
     )
     assert resolve_runner_pool(flow, {}, db=MagicMock()) == AUTO_RUNNER_POOL
 
@@ -227,7 +241,13 @@ def test_persistable_job_payload_strips_account_api_token() -> None:
 def test_lease_job_claims_row_and_does_not_persist_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner = SimpleNamespace(id=uuid4(), status="online", free_slots=2)
+    runner = SimpleNamespace(
+        id=uuid4(),
+        status="online",
+        free_slots=2,
+        capabilities={"docker_available": True},
+        accept_untagged=True,
+    )
     claimed: list = []
     created: list = []
 
@@ -273,8 +293,20 @@ def test_lease_job_claims_row_and_does_not_persist_token(
 def test_lease_job_skips_locked_runner_and_claims_next(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    locked = SimpleNamespace(id=uuid4(), status="online", free_slots=1)
-    next_runner = SimpleNamespace(id=uuid4(), status="online", free_slots=1)
+    locked = SimpleNamespace(
+        id=uuid4(),
+        status="online",
+        free_slots=1,
+        capabilities={"docker_available": True},
+        accept_untagged=True,
+    )
+    next_runner = SimpleNamespace(
+        id=uuid4(),
+        status="online",
+        free_slots=1,
+        capabilities={"docker_available": True},
+        accept_untagged=True,
+    )
 
     monkeypatch.setattr(
         crud_flow_runner,
@@ -536,3 +568,186 @@ def test_lease_job_matches_copilot_lease_to_copilot_profile_only(
         },
     )
     assert result is copilot
+
+
+@pytest.mark.parametrize(
+    "docker,native,paused,untagged,pool,expected",
+    [
+        (False, False, False, False, "docker", False),
+        (False, False, False, True, "local", False),
+        (True, False, False, False, "docker", True),
+        (True, False, False, False, "auto", False),
+        (True, False, False, True, "auto", True),
+        (False, True, False, False, "auto", True),
+        (True, True, True, True, "cursor_cli", False),
+    ],
+)
+def test_runner_accepts_only_usable_and_authorized_work(
+    docker: bool,
+    native: bool,
+    paused: bool,
+    untagged: bool,
+    pool: str,
+    expected: bool,
+) -> None:
+    from preloop.services.runner_service import runner_accepts_job
+
+    runner = SimpleNamespace(
+        capabilities={"docker_available": docker},
+        paused=paused,
+        accept_untagged=untagged,
+    )
+    payload = (
+        {"host_exec_profile": "cursor"} if native else {"docker_image": "example/agent"}
+    )
+    assert runner_accepts_job(runner, pool, payload) is expected
+
+
+def test_runner_capability_tags_follow_current_inventory() -> None:
+    from preloop.models.crud.flow_runner import runner_labels
+
+    runner = SimpleNamespace(
+        id=uuid4(),
+        name="workstation",
+        labels=["office", "Docker", "devin_cli"],
+        capabilities={"docker_available": True},
+        accept_untagged=True,
+        harness_inventory={
+            "entries": [
+                {
+                    "harness": "cursor_cli",
+                    "enabled": True,
+                    "login_state": "signed_in",
+                    "support_level": "flows_and_sessions",
+                },
+                {
+                    "harness": "copilot_cli",
+                    "enabled": False,
+                    "login_state": "signed_in",
+                    "support_level": "flows_and_sessions",
+                },
+                {
+                    "harness": "codex_cli",
+                    "enabled": True,
+                    "login_state": "signed_out",
+                    "support_level": "flows_only",
+                },
+            ]
+        },
+    )
+    assert runner_labels(runner) == ["cursor_cli", "docker", "office"]
+    assert runner_matches_pool(runner, "cursor_cli")
+    assert not runner_matches_pool(runner, "copilot_cli")
+    runner.capabilities["docker_available"] = False
+    assert not runner_matches_pool(runner, "docker")
+
+
+@pytest.mark.parametrize("docker", [True, False])
+def test_explicit_container_trigger_requires_docker(
+    monkeypatch: pytest.MonkeyPatch, docker: bool
+) -> None:
+    from preloop.services.runner_service import (
+        RunnerCapabilityError,
+        validate_runner_capabilities,
+    )
+
+    flow = SimpleNamespace(
+        account_id=uuid4(),
+        runner_pool="workstation",
+        agent_type="codex",
+        agent_config={},
+    )
+    monkeypatch.setattr(
+        crud_flow_runner,
+        "find_matching",
+        lambda *args, **kwargs: [
+            SimpleNamespace(capabilities={"docker_available": docker})
+        ],
+    )
+    if docker:
+        validate_runner_capabilities(MagicMock(), flow, {})
+    else:
+        with pytest.raises(RunnerCapabilityError, match="working Docker daemon"):
+            validate_runner_capabilities(MagicMock(), flow, {})
+
+
+def test_native_trigger_does_not_require_docker() -> None:
+    from preloop.services.runner_service import validate_runner_capabilities
+
+    flow = SimpleNamespace(
+        account_id=uuid4(),
+        runner_pool="workstation",
+        agent_type="cursor",
+        agent_config={"host_exec_profile": "cursor"},
+    )
+    validate_runner_capabilities(MagicMock(), flow, {})
+
+
+def test_default_runner_does_not_capture_untagged_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = SimpleNamespace(
+        account_id=uuid4(), runner_pool=None, agent_type="codex", agent_config={}
+    )
+    monkeypatch.setattr(
+        crud_flow_runner,
+        "find_matching",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                status="online",
+                free_slots=2,
+                accept_untagged=False,
+                capabilities={"docker_available": True},
+            )
+        ],
+    )
+    assert resolve_runner_pool(flow, {}, db=MagicMock()) is None
+
+
+@pytest.mark.parametrize("pool", ["workstation", "auto"])
+def test_native_publication_does_not_require_docker(
+    monkeypatch: pytest.MonkeyPatch, pool: str
+) -> None:
+    from preloop.services.runner_service import (
+        runner_accepts_job,
+        validate_runner_capabilities,
+    )
+
+    flow = SimpleNamespace(
+        account_id=uuid4(),
+        runner_pool=pool,
+        agent_type="copilot",
+        agent_config={"host_exec_profile": "copilot"},
+        git_clone_config={"create_pull_request": True},
+    )
+    runner = SimpleNamespace(
+        capabilities={"docker_available": False}, paused=False, accept_untagged=False
+    )
+    monkeypatch.setattr(
+        crud_flow_runner, "find_matching", lambda *args, **kwargs: [runner]
+    )
+    validate_runner_capabilities(MagicMock(), flow, {})
+    assert runner_accepts_job(
+        runner,
+        pool,
+        {
+            "host_exec_profile": "copilot",
+            "host_exec_publication": {"publication_mode": "legacy"},
+        },
+    )
+    assert not runner_accepts_job(runner, pool, {"_publication": True})
+
+
+def test_runner_labels_coerce_legacy_json_values() -> None:
+    from preloop.models.crud.flow_runner import runner_labels
+
+    runner = SimpleNamespace(
+        id=uuid4(),
+        name="legacy",
+        labels=[1, None, "office", "Docker"],
+        capabilities={},
+        harness_inventory={},
+    )
+    assert runner_labels(runner) == ["1", "None", "office"]
+    assert runner_matches_pool(runner, "1")
+    assert not runner_matches_pool(runner, "docker")

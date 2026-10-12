@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/preloop/preloop/cli/internal/config"
@@ -46,14 +48,14 @@ type runnerDockerOpts struct {
 }
 
 var dockerCLI = func(args ...string) error {
-	cmd := exec.Command("docker", args...)
+	cmd := exec.Command(runnerDockerBinary(), args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run()
 }
 
 func defaultNewRunnerJobCmd(image string, env map[string]string, opts runnerDockerOpts) *exec.Cmd {
-	cmd := exec.Command("docker", dockerRunArgs(image, env, opts)...)
+	cmd := exec.Command(runnerDockerBinary(), dockerRunArgs(image, env, opts)...)
 	cmd.Env = append(os.Environ(), formatJobEnv(env)...)
 	return cmd
 }
@@ -494,4 +496,38 @@ func ensureDockerNetwork(name string) error {
 		return fmt.Errorf("create docker network %q: %w", name, err)
 	}
 	return nil
+}
+
+// runnerDockerBinary also locates Docker Desktop from a service's minimal PATH.
+func runnerDockerBinary() string {
+	if bin, err := exec.LookPath("docker"); err == nil {
+		return bin
+	}
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		for _, bin := range []string{filepath.Join(home, ".docker", "bin", "docker"), "/Applications/Docker.app/Contents/Resources/bin/docker", "/opt/homebrew/bin/docker", "/usr/local/bin/docker"} {
+			if info, err := os.Stat(bin); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+				return bin
+			}
+		}
+	}
+	return "docker"
+}
+
+var runnerDockerProbeCache struct {
+	sync.Mutex
+	checkedAt time.Time
+	available bool
+}
+
+// advertisedDockerAvailable avoids a second daemon probe during the startup
+// handshake. The normal 15-second heartbeat always refreshes this snapshot.
+func advertisedDockerAvailable() bool {
+	runnerDockerProbeCache.Lock()
+	defer runnerDockerProbeCache.Unlock()
+	if time.Since(runnerDockerProbeCache.checkedAt) >= 10*time.Second {
+		runnerDockerProbeCache.available = runnerHasDocker()
+		runnerDockerProbeCache.checkedAt = time.Now()
+	}
+	return runnerDockerProbeCache.available
 }

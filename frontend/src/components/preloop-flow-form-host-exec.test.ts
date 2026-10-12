@@ -133,6 +133,35 @@ describe('PreloopFlowForm host execution submit', () => {
     });
   });
 
+  it('submits a Devin native profile and its model without gateway credentials', async () => {
+    const element = await mount({
+      name: 'Devin task',
+      prompt_template: 'summarize',
+      agent_type: 'devin',
+      runner_pool: 'devin_cli',
+      agent_config: { host_exec_profile: 'devin', cursor_model: 'old' },
+    });
+    const input = element.shadowRoot?.querySelector(
+      '[data-devin-model]'
+    ) as HTMLInputElement;
+    expect(input).to.exist;
+    input.value = 'swe-2-high';
+    input.dispatchEvent(new CustomEvent('sl-input'));
+    await element.updateComplete;
+    const submitted = oneEvent(element, 'flow-submit');
+    void (element as any).handleFormSubmit(new Event('submit'));
+    const event = await submitted;
+    expect(event.detail.flow.agent_type).to.equal('devin');
+    expect(event.detail.flow.agent_config).to.deep.include({
+      host_exec_profile: 'devin',
+      devin_model: 'swe-2-high',
+    });
+    expect(event.detail.flow.agent_config).not.to.have.property('cursor_model');
+    expect(
+      element.shadowRoot?.querySelector('sl-select[label="AI model"]')
+    ).to.equal(null);
+  });
+
   it('preserves the profile default without selecting API credentials', async () => {
     const element = await mount({
       name: 'Local default',

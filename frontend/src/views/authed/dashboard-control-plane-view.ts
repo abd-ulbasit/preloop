@@ -18,6 +18,10 @@ import '../../components/budget-limits-dialog.ts';
 import '../../components/activity-feed.ts';
 import '../../components/inventory-card.ts';
 import '../../components/usage-card.ts';
+import {
+  USAGE_RANGE_STORAGE_KEY,
+  readStoredUsageRange,
+} from '../../components/usage-card';
 import '../../components/view-header.ts';
 import '../../components/relative-time-label.ts';
 import {
@@ -96,7 +100,14 @@ import type {
   InventoryUserRow,
 } from '../../components/inventory-card';
 import consoleStyles from '../../styles/console-styles.css?inline';
-import { resolveTimeRange } from '../../utils/time-range';
+import {
+  normalizeTimeRangeKey,
+  resolvePreviousTimeRange,
+  resolveTimeRange,
+  timeRangePhrase,
+  timeRangeShortLabel,
+  type TimeRangeKey,
+} from '../../utils/time-range';
 import { reducedMotionStyles } from '../../styles/reduced-motion';
 
 /**
@@ -367,8 +378,7 @@ export class DashboardView extends AuthedElement {
   @state() private totalFlowsCount = 0;
   @state() private totalAgentsCount = 0;
   @state() private totalRuntimeSessionsCount = 0;
-  @state() private gatewayTimeRange: 'day' | 'week' | 'month' | 'year' =
-    'month';
+  @state() private gatewayTimeRange: TimeRangeKey = readStoredUsageRange();
   @state() private fetchingBudget = false;
   /**
    * Starts true so Next steps and the welcome wizard stay hidden before the
@@ -1958,7 +1968,7 @@ export class DashboardView extends AuthedElement {
   private async refreshGatewayFold(): Promise<void> {
     const range = this.gatewayTimeRange;
     const startDateStr = this.getGatewayStartDate();
-    const priorWindow = this.getPriorGatewayWindow(startDateStr);
+    const priorWindow = this.getPriorGatewayWindow();
     const [summary, priorSummary, rateLimitReport, interactions] =
       await Promise.all([
         this.catchWith403Handling(
@@ -2099,19 +2109,19 @@ export class DashboardView extends AuthedElement {
   }
 
   /**
-   * The window immediately before the one on screen, same length. Computed
-   * from the current start date so the two summaries always cover equal spans
-   * (a month is not always 30 days).
+   * The window immediately before the one on screen, from the shared range
+   * math: a calendar key ("This month") compares against the whole previous
+   * period, a rolling key ("30d") and Today against the same duration.
    */
-  private getPriorGatewayWindow(startDateStr: string): {
+  private getPriorGatewayWindow(): {
     startDate: string;
     endDate: string;
   } {
-    const start = parseUTCDate(startDateStr).getTime();
-    const span = Date.now() - start;
+    const prior = resolvePreviousTimeRange(this.gatewayTimeRange);
+    const now = new Date().toISOString();
     return {
-      startDate: new Date(start - span).toISOString(),
-      endDate: new Date(start).toISOString(),
+      startDate: prior.startDate ?? now,
+      endDate: prior.endDate ?? now,
     };
   }
 
@@ -2253,7 +2263,7 @@ export class DashboardView extends AuthedElement {
 
     const range = this.gatewayTimeRange;
     const startDateStr = this.getGatewayStartDate();
-    const priorWindow = this.getPriorGatewayWindow(startDateStr);
+    const priorWindow = this.getPriorGatewayWindow();
 
     // Identity lists start with the fold, not after it. They do not block
     // `loading = false`, and each tab paints the moment its list lands.
@@ -3153,10 +3163,12 @@ export class DashboardView extends AuthedElement {
   }
 
   private get gatewayRangeLabel(): string {
-    if (this.gatewayTimeRange === 'day') return '24h';
-    if (this.gatewayTimeRange === 'week') return '7d';
-    if (this.gatewayTimeRange === 'year') return '1y';
-    return '30d';
+    return timeRangeShortLabel(this.gatewayTimeRange);
+  }
+
+  /** "In the last 30d" for a rolling key, "This month" for a calendar key. */
+  private get gatewayRangePhrase(): string {
+    return timeRangePhrase(this.gatewayTimeRange);
   }
 
   /** True once an agent talks to both the model gateway and the tool firewall. */
@@ -3419,8 +3431,16 @@ export class DashboardView extends AuthedElement {
         .toolCallsCount=${this.toolCallsCount}
         @range-change=${(event: CustomEvent<{ value: string }>) => {
           event.stopPropagation();
-          this.gatewayTimeRange = event.detail.value as
-            'day' | 'week' | 'month' | 'year';
+          this.gatewayTimeRange =
+            normalizeTimeRangeKey(event.detail.value) ?? 'last-30';
+          try {
+            localStorage.setItem(
+              USAGE_RANGE_STORAGE_KEY,
+              this.gatewayTimeRange
+            );
+          } catch {
+            // Non-fatal: the range still applies for this session.
+          }
           // The numbers on screen belong to the old range, so say they are
           // being replaced instead of clearing them.
           this.updatingUsage = true;
@@ -3446,7 +3466,7 @@ export class DashboardView extends AuthedElement {
       <sl-card class="content-card">
         <div class="card-header">
           <div class="card-title">Gateway failures needing attention</div>
-          <a class="row-link" href="/console/api-usage"
+          <a class="row-link" href="/console/cost/gateway"
             >Open gateway activity</a
           >
         </div>
@@ -3462,7 +3482,7 @@ export class DashboardView extends AuthedElement {
                     href=${
                       item.runtime_session_id
                         ? `/console/runtime-sessions?sessionId=${item.runtime_session_id}`
-                        : '/console/api-usage'
+                        : '/console/cost/gateway'
                     }
                   >
                     ${item.model_alias || item.provider_name || item.endpoint}
@@ -4305,8 +4325,8 @@ export class DashboardView extends AuthedElement {
             href="/console/approvals"
             title=${
               this.approvalsSampled
-                ? `In the last ${this.gatewayRangeLabel} (from the most recent ${APPROVALS_PAGE_SIZE} approval requests)`
-                : `In the last ${this.gatewayRangeLabel}`
+                ? `${this.gatewayRangePhrase} (from the most recent ${APPROVALS_PAGE_SIZE} approval requests)`
+                : this.gatewayRangePhrase
             }
             >${this.formatNumber(decided)} approval${decided === 1 ? '' : 's'}
             decided</a

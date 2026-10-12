@@ -26,6 +26,7 @@ type runnerLogBatch struct {
 }
 
 type runnerLogBuffer struct {
+	resultPath          string
 	logAcknowledgements bool
 	inflight            []*runnerLogBatch
 
@@ -269,6 +270,13 @@ func nativeRunnerResult(b *runnerLogBuffer, waitErr error) (map[string]any, erro
 	}
 	if b.overflow {
 		return nil, fmt.Errorf("native log buffer exceeded its limit")
+	}
+	if b.harness == hostExecHarnessDevin {
+		export, err := readDevinExport(b.resultPath)
+		if err != nil {
+			return nil, err
+		}
+		return export.result(), nil
 	}
 	if b.harness == hostExecHarnessCopilot {
 		return copilotRunnerResult(b.copilotCapture)

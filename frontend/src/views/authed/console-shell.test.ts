@@ -713,7 +713,6 @@ describe('ConsoleShell', () => {
       'Policies',
       'Trackers',
       'Cost',
-      'API usage',
       'Audit',
       'Settings',
       'Emergency',
@@ -778,7 +777,8 @@ describe('ConsoleShell', () => {
       html`<console-shell></console-shell>`
     )) as ConsoleShell;
     await waitUntil(
-      () => el.shadowRoot?.querySelector('a[href="/console/cost"]') !== null,
+      () =>
+        el.shadowRoot?.querySelector('a[href="/console/cost/spend"]') !== null,
       'nav did not render'
     );
 
@@ -1367,24 +1367,54 @@ describe('ConsoleShell', () => {
       expect(auditSection(el)?.hasAttribute('open')).to.be.true;
     });
 
-    it('gives API usage its own entry under Cost', async () => {
-      window.history.replaceState({}, '', '/console/api-usage');
+    it('groups Spend and Gateway traffic under a Cost section like Audit', async () => {
+      window.history.replaceState({}, '', '/console/cost/gateway');
       const el = await loaded();
       const link = el.shadowRoot!.querySelector(
-        'a.sidebar-link[href="/console/api-usage"]'
+        'a.sidebar-link[href="/console/cost/gateway"]'
       );
       expect(link).to.exist;
       expect(link!.classList.contains('active')).to.be.true;
       expect(link!.getAttribute('aria-current')).to.equal('page');
-      expect(link!.textContent).to.contain('Gateway traffic and rate limits');
-      // It sits right after Cost, and Cost no longer claims the page.
-      const cost = el.shadowRoot!.querySelector(
-        'a.sidebar-link[href="/console/cost"]'
+      expect(link!.textContent!.trim()).to.equal('Gateway traffic');
+      // The section is a pure group: its header is a summary with a chevron,
+      // not a link, and it opens on its own pages.
+      const section = link!.closest('details.nav-section')!;
+      expect(section.hasAttribute('open')).to.be.true;
+      expect(
+        section.querySelector('summary .sidebar-label')!.textContent!.trim()
+      ).to.equal('Cost');
+      expect(section.querySelector('summary a')).to.equal(null);
+      const spend = section.querySelector(
+        'a.sidebar-link[href="/console/cost/spend"]'
       )!;
-      expect(cost.classList.contains('active')).to.be.false;
-      expect(cost.closest('li')!.nextElementSibling).to.equal(
-        link!.closest('li')
-      );
+      expect(spend.classList.contains('active')).to.be.false;
+      // No subtitle clutter: the description lives in the tooltip.
+      expect(el.shadowRoot!.querySelector('.nav-subtitle')).to.equal(null);
+      expect(spend.querySelector('[title]')).to.exist;
+    });
+
+    it('keeps the Cost group closed elsewhere and marks Spend for cost per issue', async () => {
+      window.history.replaceState({}, '', '/console/agents');
+      let el = await loaded();
+      const costSection = () =>
+        el
+          .shadowRoot!.querySelector(
+            'a.sidebar-link[href="/console/cost/spend"]'
+          )!
+          .closest('details.nav-section')!;
+      expect(costSection().hasAttribute('open')).to.be.false;
+      el.remove();
+      window.history.replaceState({}, '', '/console/cost/by-issue');
+      el = await loaded();
+      expect(costSection().hasAttribute('open')).to.be.true;
+      expect(
+        el
+          .shadowRoot!.querySelector(
+            'a.sidebar-link[href="/console/cost/spend"]'
+          )!
+          .classList.contains('active')
+      ).to.be.true;
     });
 
     it('does not mistake Approvals for the single-approval alias the other way', async () => {

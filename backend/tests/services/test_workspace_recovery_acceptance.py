@@ -267,7 +267,12 @@ def test_lease_refuses_an_idle_peer_when_the_workspace_lives_elsewhere(
 def test_lease_uses_the_owning_runner_once_it_has_a_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    owner = SimpleNamespace(id=uuid4(), status="online", free_slots=1)
+    owner = SimpleNamespace(
+        id=uuid4(),
+        status="online",
+        free_slots=1,
+        capabilities={"docker_available": True},
+    )
     idle_peer = SimpleNamespace(id=uuid4(), status="online", free_slots=4)
 
     monkeypatch.setattr(
@@ -277,7 +282,9 @@ def test_lease_uses_the_owning_runner_once_it_has_a_slot(
         crud_flow_runner,
         "claim_free_slot",
         lambda db, *, runner_id: SimpleNamespace(
-            id=runner_id, publication_capabilities=None
+            id=runner_id,
+            publication_capabilities=None,
+            capabilities={"docker_available": True},
         ),
     )
     monkeypatch.setattr(

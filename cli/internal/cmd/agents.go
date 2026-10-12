@@ -196,20 +196,22 @@ var agentSpecs = []agentSpec{
 	},
 	{
 		// Devin (Cognition). Local CLI/Desktop config under ~/.config/devin.
-		// Inference always runs in Cognition's cloud, so Devin is MCP-only;
-		// model traffic cannot be redirected through the gateway.
+		// Model inference uses Cognition; local tools support native hooks.
+		// Model traffic cannot be redirected through the gateway.
 		Name: devinAgentName,
 		ConfigPaths: []string{
-			".config/devin/config.json",
-			".devin/config.json",
+			".config/devin/mcp_config.json",
+			".devin/mcp_config.json",
+			".devin/mcp_config.local.json",
 		},
 		DetectionPaths: []string{
 			".config/devin",
 			".devin",
 			".local/bin/devin",
 		},
-		BootstrapConfigPath: ".config/devin/config.json",
-		Parser:              parseGenericMCP,
+		DetectionCommands:   []string{"devin"},
+		BootstrapConfigPath: ".config/devin/mcp_config.json",
+		Parser:              parseDevinMCP,
 	},
 	{
 		// GitHub Copilot CLI (`copilot`). User MCP config lives at
@@ -868,7 +870,7 @@ func init() {
 	agentsEnrollCmd.Flags().Bool("live-validate", true, "after onboarding, run a supported direct gateway route/accounting probe (application behavior unverified) (default: true; pass --skip-live-validate or --live-validate=false to opt out)")
 	agentsEnrollCmd.Flags().Bool("skip-live-validate", false, "do not run a direct gateway route/accounting probe after onboarding (overrides --live-validate)")
 	agentsEnrollCmd.Flags().StringSlice("tags", []string{}, "add key-value tags to the enrolled agent (e.g., --tags ext=true,env=prod)")
-	agentsEnrollCmd.Flags().Bool("approvals", false, "install native action gates for central policy and mobile/watch approvals (Claude Code, Cursor, Codex CLI, Copilot CLI, OpenCode, Pi, DeepSeek Harness)")
+	agentsEnrollCmd.Flags().Bool("approvals", false, "install native action gates for central policy and mobile/watch approvals (Claude Code, Cursor, Codex CLI, Copilot CLI, Devin, OpenCode, Pi, DeepSeek Harness)")
 	agentsEnrollCmd.Flags().Bool("no-usage-hooks", false, "Cursor only: do not install the usage hooks that store conversations as runtime sessions with a token estimate (installed by default)")
 	agentsEnrollCmd.Flags().Bool("store-transcript", false, "Cursor only: have the usage hooks also ship transcript text as session activities (default: counts, title and a short summary only)")
 	agentsEnrollCmd.Flags().String("model", "", "managed model alias to use for gateway routing (skips the interactive model picker)")
@@ -3105,7 +3107,7 @@ func defaultAgentDisplayName(agent AgentConfig) string {
 	typeSlug := slugifyAgentName(agent.Name)
 	baseSlug := slugifyAgentName(configBase)
 	switch {
-	case configBase == "", configBase == ".", strings.EqualFold(configBase, "config"), strings.EqualFold(configBase, "settings"), strings.EqualFold(configBase, "openclaw"), strings.EqualFold(configBase, "mcp_config"), strings.EqualFold(configBase, "mcp"):
+	case configBase == "", configBase == ".", strings.EqualFold(configBase, "config"), strings.EqualFold(configBase, "settings"), strings.EqualFold(configBase, "openclaw"), strings.EqualFold(configBase, "mcp_config"), strings.EqualFold(configBase, "mcp-config"), strings.EqualFold(configBase, "mcp"):
 		return strings.TrimSpace(agent.Name)
 	case strings.Contains(typeSlug, baseSlug), strings.Contains(baseSlug, typeSlug):
 		return strings.TrimSpace(agent.Name)
@@ -3700,6 +3702,11 @@ func detectInstalledAgent(home string, spec agentSpec) (string, bool) {
 		return "", false
 	}
 	bootstrapPath := expandAgentConfigPath(home, filepath.Join(home, spec.BootstrapConfigPath))
+	if spec.Name == devinAgentName {
+		if path, err := devinConfigPath("mcp_config.json"); err == nil {
+			bootstrapPath = path
+		}
+	}
 	for _, relativePath := range spec.DetectionPaths {
 		fullPath := expandAgentConfigPath(home, filepath.Join(home, relativePath))
 		if _, err := os.Stat(fullPath); err == nil {
