@@ -452,6 +452,29 @@ describe('AIModelDetailView', () => {
     localStorage.clear();
   });
 
+  it('keeps built-in details read-only even for account admins', async () => {
+    modelPayload.is_built_in = true;
+    featureFlags.model_price_overrides = true;
+    const element = (await fixture(
+      html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
+    )) as AIModelDetailView;
+    await waitUntil(() => !(element as any).loading);
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).to.contain('Built-in');
+    const actions = element.shadowRoot?.querySelector(
+      'resource-actions'
+    ) as HTMLElement & { actions: unknown[] };
+    expect(actions.actions).to.deep.equal([]);
+    expect((element as any).canEditPrice).to.equal(false);
+    expect(
+      element.shadowRoot?.querySelector('[data-testid="edit-price"]')
+    ).to.equal(null);
+    (element as any).openEditModal();
+    (element as any).openDeleteConfirm();
+    expect((element as any).isEditModalOpen).to.equal(false);
+    expect((element as any).isDeleteConfirmOpen).to.equal(false);
+  });
+
   it('renders usage while sessions are pending without mounting a duplicate observer fetch', async () => {
     let release!: () => void;
     sessionsGate = new Promise<void>((resolve) => {

@@ -112,7 +112,7 @@ def test_list_endpoint_applies_tariff_visibility(superuser: bool, mocker) -> Non
     for m in (priced, unpriced):
         m.created_at = m.updated_at
     crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
-    crud.get_by_account.return_value = [priced, unpriced]
+    crud.get_selectable_for_account.return_value = [priced, unpriced]
     mocker.patch(
         "preloop.models.crud.resource_share.crud_resource_share.public_list",
         return_value=[],

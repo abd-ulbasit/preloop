@@ -179,6 +179,7 @@ export interface Flow {
 }
 
 export interface AIModel {
+  is_built_in?: boolean;
   id: string;
   name: string;
   description?: string | null;

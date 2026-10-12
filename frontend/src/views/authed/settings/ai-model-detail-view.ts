@@ -1183,6 +1183,7 @@ export class AIModelDetailView extends LitElement {
 
   private get canEditPrice(): boolean {
     return (
+      !this.model?.is_built_in &&
       this.priceOverridesEnabled &&
       this.editPermissions.allows('edit_ai_models')
     );
@@ -1691,7 +1692,11 @@ export class AIModelDetailView extends LitElement {
   }
 
   private openEditModal = () => {
-    if (!this.editPermissions.allows('edit_ai_models')) return;
+    if (
+      this.model?.is_built_in ||
+      !this.editPermissions.allows('edit_ai_models')
+    )
+      return;
     if (!this.model) {
       return;
     }
@@ -1708,6 +1713,7 @@ export class AIModelDetailView extends LitElement {
   }
 
   private openDeleteConfirm = () => {
+    if (this.model?.is_built_in) return;
     if (!this.model) {
       return;
     }
@@ -1715,7 +1721,11 @@ export class AIModelDetailView extends LitElement {
   };
 
   private async confirmDelete() {
-    if (!this.editPermissions.allows('delete_ai_models')) return;
+    if (
+      this.model?.is_built_in ||
+      !this.editPermissions.allows('delete_ai_models')
+    )
+      return;
     if (!this.model) {
       return;
     }
@@ -1731,7 +1741,11 @@ export class AIModelDetailView extends LitElement {
   }
 
   private async enableGatewayRouting() {
-    if (!this.editPermissions.allows('edit_ai_models')) return;
+    if (
+      this.model?.is_built_in ||
+      !this.editPermissions.allows('edit_ai_models')
+    )
+      return;
     if (!this.model?.id || !this.model.has_api_key) {
       this.validationError =
         'Add upstream API credentials on this model before enabling gateway routing.';
@@ -2672,7 +2686,7 @@ export class AIModelDetailView extends LitElement {
               : html`
                   <div class="meta-line">
                     ${
-                      this.model?.has_api_key
+                      this.model?.has_api_key && !this.model.is_built_in
                         ? html`
                             <sl-tooltip
                               content=${!this.editPermissions.allows('edit_ai_models') ? 'Requires edit_ai_models' : ''}
@@ -2767,10 +2781,12 @@ export class AIModelDetailView extends LitElement {
                 separated: true,
                 onClick: this.openDeleteConfirm,
               },
-            ].filter((action) =>
-              this.editPermissions.allows(
-                action.id === 'delete' ? 'delete_ai_models' : 'edit_ai_models'
-              )
+            ].filter(
+              (action) =>
+                !this.model?.is_built_in &&
+                this.editPermissions.allows(
+                  action.id === 'delete' ? 'delete_ai_models' : 'edit_ai_models'
+                )
             )}
           ></resource-actions>
         </div>
@@ -2785,6 +2801,7 @@ export class AIModelDetailView extends LitElement {
                      "Observability" promised telemetry it never carried. -->
                 <div class="model-title">Details</div>
                 <div class="badge-row">
+                  ${this.model?.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : null}
                   ${
                     this.model?.provider_name
                       ? html`

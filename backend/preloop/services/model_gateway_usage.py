@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from preloop.models.crud import (
     crud_account,
@@ -375,6 +376,7 @@ class ModelGatewayUsageService:
         self,
         *,
         ai_model: AIModel,
+        account_id: Optional[UUID | str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         failed_since: Optional[datetime] = None,
@@ -383,6 +385,7 @@ class ModelGatewayUsageService:
 
         Args:
             ai_model: The model to report on.
+            account_id: Requesting account for usage of a shared built-in.
             start_date: Inclusive lower bound, naive values read as UTC.
             end_date: Exclusive upper bound, naive values read as UTC.
             failed_since: When set, ``failed_requests_since`` counts the
@@ -394,7 +397,8 @@ class ModelGatewayUsageService:
             under which alias, which is what the console fingerprints a
             dismissed "needs attention" item with.
         """
-        account = crud_account.get(self.db, id=ai_model.account_id)
+        account_id = account_id if account_id is not None else ai_model.account_id
+        account = crud_account.get(self.db, id=account_id)
         if account is None:
             raise ValueError("Account not found")
         start_date, end_date = self._normalize_period(start_date, end_date)
@@ -403,21 +407,21 @@ class ModelGatewayUsageService:
         )
         totals = crud_api_usage.get_gateway_usage_summary(
             self.db,
-            account_id=str(ai_model.account_id),
+            account_id=str(account_id),
             ai_model_id=str(ai_model.id),
             start_date=start_date,
             end_date=end_date,
         )
         usage_by_session = crud_api_usage.get_gateway_usage_by_session(
             self.db,
-            account_id=str(ai_model.account_id),
+            account_id=str(account_id),
             ai_model_id=str(ai_model.id),
             start_date=start_date,
             end_date=end_date,
         )
         requests_by_day = crud_api_usage.get_gateway_usage_timeseries(
             self.db,
-            account_id=str(ai_model.account_id),
+            account_id=str(account_id),
             ai_model_id=str(ai_model.id),
             start_date=start_date,
             end_date=end_date,
@@ -427,7 +431,7 @@ class ModelGatewayUsageService:
         # exactly as the list does instead of inventing a second rule.
         failure_groups = crud_api_usage.get_gateway_usage_by_model(
             self.db,
-            account_id=str(ai_model.account_id),
+            account_id=str(account_id),
             ai_model_ids=[str(ai_model.id)],
             start_date=start_date,
             end_date=end_date,

@@ -76,6 +76,12 @@ from preloop.services.ai_model_provider import (
 )
 from preloop.services.ai_model_catalog_sync import sync_account_model_catalog
 
+from preloop.services.built_in_models import (
+    built_in_models_enabled,
+    is_available_built_in_model,
+    public_built_in_model,
+)
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -93,6 +99,26 @@ def _get_account_ai_model(
             status_code=status.HTTP_404_NOT_FOUND, detail="AI Model not found"
         )
     return db_model
+
+
+def _get_readable_ai_model(
+    *, db: Session, model_id: uuid.UUID, current_user: User
+) -> AIModel:
+    """Permit built-in reads while keeping all mutations account-owned."""
+    model = crud_ai_model.get(db=db, id=model_id)
+    if model and (
+        model.account_id == current_user.account_id
+        or (
+            built_in_models_enabled()
+            and is_available_built_in_model(model)
+            and (
+                hosted_model_selectable(model)
+                or getattr(current_user, "is_superuser", False) is True
+            )
+        )
+    ):
+        return model
+    raise HTTPException(404, "AI Model not found")
 
 
 def _gateway_alias(ai_model: AIModel) -> Optional[str]:
@@ -281,16 +307,31 @@ def list_ai_models(
     """List all AI Models associated with the authenticated user's account."""
     from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
 
-    models = crud_ai_model.get_by_account(db=db, account_id=current_user.account_id)
+    models = crud_ai_model.get_selectable_for_account(
+        db=db,
+        account_id=current_user.account_id,
+        include_built_in=built_in_models_enabled(),
+    )
     from preloop.models.crud.resource_share import crud_resource_share
 
     shared = crud_resource_share.public_list(
         db, account_id=current_user.account_id, resource_type="ai_model"
     )
-    visible = filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*models, *shared])
-    return _apply_tariff_visibility(
+    own_models = [model for model in models if model.account_id is not None]
+    built_in = [model for model in models if model.account_id is None]
+    visible = [
+        *filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*own_models, *shared]),
+        *built_in,
+    ]
+    priced = _apply_tariff_visibility(
         visible, is_admin=getattr(current_user, "is_superuser", False) is True
     )
+    return [
+        public_built_in_model(row)
+        if not isinstance(row, SharedResourceRead) and row.account_id is None
+        else row
+        for row in priced
+    ]
 
 
 def _apply_tariff_visibility(
@@ -348,7 +389,17 @@ def get_ai_models_overview(
     # are asked for one model at a time.
     period_start, period_end = normalize_usage_period(start_date, end_date)
     account_id = str(current_user.account_id)
-    models = crud_ai_model.get_by_account(db=db, account_id=current_user.account_id)
+    models = crud_ai_model.get_selectable_for_account(
+        db=db,
+        account_id=current_user.account_id,
+        include_built_in=built_in_models_enabled(),
+    )
+    models = [
+        model
+        for model in models
+        if hosted_model_selectable(model)
+        or getattr(current_user, "is_superuser", False) is True
+    ]
     if not models:
         return AIModelsOverviewResponse(
             period_start=period_start, period_end=period_end, models=[]
@@ -459,7 +510,8 @@ def get_ai_model(
         if not filter_viewable(db, current_user, VISIBLE_AI_MODEL, [shared]):
             raise HTTPException(404, "Resource not found")
         return shared
-    return _get_account_ai_model(db=db, model_id=model_id, current_user=current_user)
+    model = _get_readable_ai_model(db=db, model_id=model_id, current_user=current_user)
+    return public_built_in_model(model) if model.account_id is None else model
 
 
 @router.get(
@@ -485,11 +537,12 @@ def get_ai_model_usage_summary(
     current_user: User = Depends(get_current_active_user),
 ) -> AIModelGatewayUsageSummaryResponse:
     """Return model-scoped gateway usage totals for one AI model."""
-    db_model = _get_account_ai_model(
+    db_model = _get_readable_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
     return ModelGatewayUsageService(db).get_ai_model_summary(
         ai_model=db_model,
+        account_id=current_user.account_id,
         start_date=start_date,
         end_date=end_date,
         failed_since=failed_since,
@@ -516,7 +569,7 @@ def list_ai_model_runtime_sessions(
     current_user: User = Depends(get_current_active_user),
 ) -> AccountRuntimeSessionListResponse:
     """List runtime sessions that used one durable AI model."""
-    db_model = _get_account_ai_model(
+    db_model = _get_readable_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
     account = _get_current_account(db=db, current_user=current_user)
@@ -553,7 +606,7 @@ def list_ai_model_interactions(
     current_user: User = Depends(get_current_active_user),
 ) -> AccountGatewayUsageSearchResponse:
     """List indexed gateway interactions scoped to one AI model."""
-    db_model = _get_account_ai_model(
+    db_model = _get_readable_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
     account = _get_current_account(db=db, current_user=current_user)
@@ -672,7 +725,7 @@ def get_ai_model_pricing(
     current_user: User = Depends(get_current_active_user),
 ) -> AIModelPricingResponse:
     """Return the effective price for one model and where it came from."""
-    db_model = _get_account_ai_model(
+    db_model = _get_readable_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
     return get_effective_pricing(
