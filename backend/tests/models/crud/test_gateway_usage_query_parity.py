@@ -11,6 +11,8 @@ per-user filters, ordering, limits, cache splits, and the 1:many agent join.
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -775,3 +777,61 @@ def test_session_breakdown_pairs_session_with_execution(
     ]
     assert all(row["request_count"] == 1 for row in rows)
     assert rows[0]["flow_name"] == flow.name
+
+
+def _paging_world(db, account):
+    """Five sessions, one minute apart; the newest uses two models."""
+    sessions = []
+    for index in range(5):
+        session = _create_session(db, account.id, session_source_id=f"s{index}")
+        sessions.append(session)
+        _log(
+            db,
+            account.id,
+            when=BASE + timedelta(minutes=index),
+            runtime_session_id=session.id,
+        )
+    _log(
+        db,
+        account.id,
+        when=BASE + timedelta(minutes=4, seconds=30),
+        runtime_session_id=sessions[4].id,
+        model_alias="claude",
+        provider_name="anthropic",
+    )
+    db.flush()
+    return sessions
+
+
+@pytest.mark.parametrize("walk_max", [2000, 0])
+def test_session_pages_hold_whole_sessions_and_count_them(
+    db_session, create_account, monkeypatch, walk_max
+) -> None:
+    """Paged by session, newest first, every model slice kept (#1585).
+
+    ``walk_max=0`` forces the grouped SQL path used for deep pages; both
+    paths must return the same pages.
+    """
+    monkeypatch.setattr(type(crud_api_usage), "_SESSION_PAGE_WALK_MAX", walk_max)
+    account = create_account()
+    _paging_world(db_session, account)
+
+    def page(offset):
+        rows = _by_session(db_session, account.id, limit=2, session_offset=offset)
+        return [(row["session_source_id"], row["model_alias"]) for row in rows]
+
+    first = page(0)
+    # Both slices of the newest session, then the next session.
+    assert sorted(first) == [("s3", "gpt-4o"), ("s4", "claude"), ("s4", "gpt-4o")]
+    assert page(2) == [("s2", "gpt-4o"), ("s1", "gpt-4o")]
+    assert page(4) == [("s0", "gpt-4o")]
+    assert page(6) == []
+    assert (
+        crud_api_usage.count_gateway_sessions(
+            db_session,
+            account_id=str(account.id),
+            start_date=_WINDOW_START,
+            end_date=_WINDOW_END,
+        )
+        == 5
+    )

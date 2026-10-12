@@ -40,6 +40,8 @@ import type {
   GatewayUsageByModel,
   GatewayUsageBySession,
 } from '../../types';
+import { SessionPages } from '../../controllers/session-pages';
+import '../../table/table-state';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { totalTokensOf } from '../../components/token-figures';
@@ -143,16 +145,29 @@ export class ApiUsageView extends LitElement {
   @state() private expandedLists = new Set<'days'>();
 
   /**
-   * Runtime sessions in the period: up to 250 from the summary, so they are
-   * paged, sortable and searchable rather than one 45,000 px column.
+   * Runtime sessions in the period, paged on the server by session (every
+   * model row of a session stays on one page) with the total from the
+   * server: there is no 250-row window any more. The table sorts and
+   * searches the rows of the page it shows.
    */
+  readonly sessionPages = new SessionPages(
+    this,
+    (sessionPage) =>
+      getAccountGatewayUsageSummary({
+        ...this.rangeParams(),
+        includeBreakdown: true,
+        breakdowns: ['sessions'],
+        sessionPage,
+      }),
+    // The page shows ten sessions under the cards, as it showed ten rows.
+    10
+  );
+
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
     listId: 'api-usage-sessions',
     getRowId: (session) => this.sessionRowId(session),
-    pageSize: 10,
-    pageSizes: [10, 25, 50],
+    pageSize: 0,
     defaultSorting: [{ id: 'last_activity', desc: true }],
-    url: { prefix: 'sessions' },
     columns: this.sessionColumns(),
   });
 
@@ -674,10 +689,13 @@ export class ApiUsageView extends LitElement {
         .catch((error: unknown) =>
           console.error('Failed to load rate limit report:', error)
         );
+      // Sessions page on their own request, so a busy account's session
+      // count never holds up the cards above them.
+      void this.sessionPages.reset();
       const summary = await getAccountGatewayUsageSummary({
         ...params,
         includeBreakdown: true,
-        breakdowns: ['models', 'flows', 'sessions', 'days'],
+        breakdowns: ['models', 'flows', 'days'],
       });
       if (generation !== this.summaryLoadGeneration) return;
       this.summary = summary;
@@ -1413,8 +1431,21 @@ export class ApiUsageView extends LitElement {
     `;
   }
 
-  private renderSessionBreakdown(sessions: GatewayUsageBySession[]) {
-    if (sessions.length === 0) {
+  private renderSessionBreakdown() {
+    const pages = this.sessionPages;
+    if (pages.error) {
+      return html`<table-state
+        kind="error"
+        heading="Could not load sessions"
+        message=${pages.error}
+      >
+        <sl-button size="small" @click=${() => void pages.load()}>
+          Try again
+        </sl-button>
+      </table-state>`;
+    }
+    const sessions = pages.rows;
+    if (pages.loaded && sessions.length === 0 && pages.pageIndex === 0) {
       return html`
         <div class="empty-state">
           <sl-icon name="collection"></sl-icon>
@@ -1426,18 +1457,20 @@ export class ApiUsageView extends LitElement {
     return html`
       ${renderDataTableToolbar({
         table: this.sessionTable,
-        searchPlaceholder: 'Search sessions, models or sources',
-        searchLabel: 'Search runtime sessions',
-        count: sessionCountLabel(this.sessionTable),
+        searchPlaceholder: 'Search this page',
+        searchLabel: 'Search the runtime sessions on this page',
+        count: pages.countLabel || sessionCountLabel(this.sessionTable),
       })}
       <data-table
         class="session-list"
         .table=${this.sessionTable}
         .rows=${this.sessionTable.rows}
         .stickyHeader=${false}
+        .loading=${pages.loading}
         label="Recent runtime sessions"
         noun="sessions"
       ></data-table>
+      ${pages.renderPagination()}
     `;
   }
 
@@ -1781,9 +1814,7 @@ export class ApiUsageView extends LitElement {
                           Recent gateway activity grouped by runtime session
                         </span>
                       </div>
-                      ${this.renderSessionBreakdown(
-                        this.summary.usage_by_session
-                      )}
+                      ${this.renderSessionBreakdown()}
                     </sl-card>
 
                     <sl-card

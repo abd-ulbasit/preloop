@@ -1,5 +1,13 @@
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  type ListColumn,
+  type ListQuery,
+} from '../../table';
+import '../../table/data-table';
 import { formatUsd, formatUsdExact } from '../../utils/money';
 import { parseUTCDate } from '../../utils/date';
 import { html, css, unsafeCSS, nothing } from 'lit';
@@ -17,6 +25,7 @@ import {
   type IssueCostCoverage,
   type IssueCostExecution,
   type IssueCostFilter,
+  type IssueCostPage,
   type IssueCostReport,
   type IssueCostRow,
   type IssueCostSummary,
@@ -161,6 +170,20 @@ function safeHref(url: string | null): string | null {
  * of the executions that worked on it. Executions that could not be tied to
  * exactly one issue are shown as the unassigned bucket, never guessed.
  */
+/** Issue rows per page; the page used to draw every issue of the period. */
+export const ISSUE_PAGE_SIZE = 25;
+
+/** The server's sort key for a column id; they are the same strings. */
+function pageOf(query: ListQuery): IssueCostPage {
+  const sort = query.sorting[0];
+  return {
+    limit: query.pageSize,
+    offset: query.offset,
+    sort: sort?.id ?? 'cost',
+    order: sort && !sort.desc ? 'asc' : 'desc',
+  };
+}
+
 @customElement('issue-cost-view')
 export class IssueCostView extends AuthedElement {
   @state() private readinessEnabled = false;
@@ -182,11 +205,32 @@ export class IssueCostView extends AuthedElement {
     null;
   /** Bumped on each unassigned toggle and reload; stale responses drop. */
   private unassignedRequest = 0;
+  /** Bumped on each report fetch; an older page landing late is dropped. */
+  private reportRequest = 0;
+
+  /**
+   * The issue rows, 25 a page, sorted and paged on the server: a busy
+   * account has thousands of issues and the page used to draw all of them.
+   * Column ids are the server's sort keys.
+   */
+  readonly table = new ListTable<IssueCostRow>(this, {
+    listId: 'issue-costs',
+    mode: 'server',
+    pageSize: ISSUE_PAGE_SIZE,
+    pageSizes: [25, 50, 100],
+    getRowId: (row) => row.id,
+    defaultSorting: [{ id: 'cost', desc: true }],
+    persist: ['columnVisibility', 'columnSizing', 'pageSize', 'density'],
+    onQueryChange: (query) => void this.load(query),
+    columns: this.issueColumns(),
+  });
 
   static styles = [
     tableScrollStyles,
     [
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       css`
         :host {
           display: block;
@@ -228,6 +272,20 @@ export class IssueCostView extends AuthedElement {
           background: var(--sl-color-neutral-50);
         }
         .muted {
+          color: var(--console-meta-color);
+        }
+        .nowrap {
+          white-space: nowrap;
+        }
+        /* One line per issue; the full title is on hover. */
+        .issue-title {
+          max-width: 24rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        details.notes summary {
+          cursor: pointer;
           color: var(--console-meta-color);
         }
         .loading-state {
@@ -279,21 +337,39 @@ export class IssueCostView extends AuthedElement {
     }
   }
 
-  async load(): Promise<void> {
+  /**
+   * Fetch one page. A filter change passes no query and goes back to page
+   * one; the table's own sort and page changes pass theirs.
+   */
+  async load(query?: ListQuery): Promise<void> {
+    if (!query && this.table.pageIndex !== 0) {
+      // Resetting the page fires onQueryChange, which loads page one.
+      this.table.setPageIndex(0);
+      return;
+    }
+    const request = ++this.reportRequest;
     this.loading = true;
     this.error = null;
     try {
-      this.report = await getIssueCosts(this.filter());
+      const report = await getIssueCosts(
+        this.filter(),
+        pageOf(query ?? this.table.query)
+      );
+      if (request !== this.reportRequest) return;
+      this.report = report;
+      this.table.data = report.issues;
+      this.table.totalRows = report.total_issues ?? report.issues.length;
       this.expanded = {};
       this.unassignedRequest++;
       this.unassignedRuns = null;
     } catch (error) {
+      if (request !== this.reportRequest) return;
       this.error =
         error instanceof Error
           ? error.message
           : 'Failed to load cost per issue';
     } finally {
-      this.loading = false;
+      if (request === this.reportRequest) this.loading = false;
     }
   }
 
@@ -423,192 +499,270 @@ export class IssueCostView extends AuthedElement {
     </div>`;
   }
 
+  /** The expanded drill-down under one issue row, or nothing. */
   renderExecutions(row: IssueCostRow) {
     const state = this.expanded[row.id];
     if (!state) return nothing;
-    return html`<tr class="detail">
-      <td colspan=${this.readinessEnabled ? 12 : 11}>
-        ${this.renderExecutionTable(state, `Executions of ${row.issue_key}`)}
-      </td>
-    </tr>`;
+    return this.renderExecutionTable(state, `Executions of ${row.issue_key}`);
+  }
+
+  private renderReadiness(row: IssueCostRow) {
+    return html`${row.ticket_to_observed_ready_hours === null || row.ticket_to_observed_ready_hours === undefined ? 'Unknown' : formatIssueHours(row.ticket_to_observed_ready_hours)}
+      <div>
+        Scope: ${row.readiness_scope ?? 'unknown'}; policy:
+        ${row.readiness_policy_version ?? 'unconfigured'}
+      </div>
+      <div>
+        Current: ${row.latest_readiness_state ?? 'unknown'}; coverage:
+        ${row.latest_readiness_coverage ?? 'unsupported'}
+      </div>
+      <div>${(row.readiness_unknown_reasons ?? []).join(', ')}</div>
+      <div>
+        Sampled interval: ${row.readiness_observation_started_at ?? 'unknown'} –
+        ${row.readiness_observation_completed_at ?? 'unknown'}
+      </div>
+      <details>
+        <summary>Sampled gate evidence</summary>
+        <p>
+          Gate values may change during this interval. These reads do not form
+          an atomic snapshot or guarantee a merge.
+        </p>
+        ${(row.readiness_observations ?? []).map(
+          (observation) =>
+            html`<div>
+              <p>
+                PR ${observation.repository}#${observation.pr_id}; source
+                ${observation.source_sha ?? 'unknown'}; target
+                ${observation.target_sha ?? 'unknown'}
+              </p>
+              <ul>
+                ${observation.gates.map((gate) => html`<li>${gate.name}: ${gate.state}; ${gate.reason ?? ''}; source ${gate.source}; retrieved ${gate.retrieved_at}</li>`)}
+              </ul>
+            </div>`
+        )}
+      </details>`;
+  }
+
+  private summaryTable(listId: string, firstHeader: string) {
+    return new ListTable<IssueCostSummary>(this, {
+      listId,
+      pageSize: 5,
+      pageSizes: [5, 10, 25, 50],
+      getRowId: (item) => item.id ?? `none:${item.name}`,
+      defaultSorting: [{ id: 'cost', desc: true }],
+      persist: ['pageSize', 'density'],
+      columns: [
+        {
+          id: 'name',
+          header: firstHeader,
+          firstSort: 'asc',
+          value: (item) => item.name,
+          cell: (item) => item.name || 'No project',
+        },
+        {
+          id: 'issues',
+          header: 'Issues',
+          numeric: true,
+          sort: 'number',
+          cellClass: 'num',
+          value: (item) => item.issue_count,
+          cell: (item) => item.issue_count,
+        },
+        {
+          id: 'runs',
+          header: 'Runs',
+          numeric: true,
+          sort: 'number',
+          cellClass: 'num',
+          value: (item) => item.run_count,
+          cell: (item) => item.run_count,
+        },
+        {
+          id: 'cost',
+          header: 'Cost',
+          numeric: true,
+          sort: 'number',
+          cellClass: 'num',
+          value: (item) => item.estimated_cost,
+          cellTitle: (item) => issueCostTitle(item) || undefined,
+          cell: (item) => formatIssueAmount(item),
+        },
+      ],
+    });
+  }
+
+  /** The per-project and per-flow sums, five a page (a busy account has dozens of flows). */
+  readonly projectTable = this.summaryTable(
+    'issue-costs-by-project',
+    'Project'
+  );
+  readonly flowTable = this.summaryTable('issue-costs-by-flow', 'Flow');
+
+  private issueColumns(): Array<ListColumn<IssueCostRow>> {
+    return [
+      {
+        id: 'expand',
+        header: '',
+        pickerLabel: 'Expand',
+        hideable: false,
+        resizable: false,
+        width: 40,
+        cell: (row) =>
+          html`<button
+            class="expand"
+            aria-expanded=${this.expanded[row.id] ? 'true' : 'false'}
+            aria-label="Show executions of ${row.issue_key}"
+            @click=${() => void this.toggle(row)}
+          >
+            ${this.expanded[row.id] ? '▾' : '▸'}
+          </button>`,
+      },
+      {
+        id: 'tracker',
+        header: 'Tracker',
+        firstSort: 'asc',
+        width: 150,
+        cellClass: 'nowrap',
+        value: (row) => row.tracker_name || row.tracker_type,
+        cell: (row) => row.tracker_name || row.tracker_type,
+      },
+      {
+        id: 'issue',
+        header: 'Issue',
+        hideable: false,
+        firstSort: 'asc',
+        width: 320,
+        value: (row) => row.issue_key,
+        cell: (row) =>
+          html`${this.renderLink(row.issue_url, row.issue_key)}
+          ${
+            row.title
+              ? html`<div class="muted issue-title" title=${row.title}>
+                  ${row.title}
+                </div>`
+              : nothing
+          }`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        cellClass: 'num cost',
+        value: (row) => row.estimated_cost,
+        cellTitle: (row) => issueCostTitle(row) || undefined,
+        cell: (row) => formatIssueAmount(row),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        cellClass: 'num',
+        value: (row) => row.total_tokens,
+        cell: (row) => row.total_tokens.toLocaleString(),
+      },
+      {
+        id: 'runs',
+        header: 'Runs',
+        numeric: true,
+        cellClass: 'num',
+        value: (row) => row.run_count,
+        cell: (row) =>
+          html`${row.run_count}${
+            row.failed_run_count
+              ? html` <span class="muted"
+                  >(${row.failed_run_count} failed)</span
+                >`
+              : nothing
+          }`,
+      },
+      {
+        id: 'to_pr',
+        header: 'Run to PR',
+        numeric: true,
+        cellClass: 'num',
+        headerTitle: INTERVAL_TITLES.toPr,
+        value: (row) => row.first_event_to_pr_opened_hours,
+        cellTitle: (row) => OPENED_SOURCE_TITLES[row.pr_opened_at_source ?? ''],
+        cell: (row) => formatIssueHours(row.first_event_to_pr_opened_hours),
+      },
+      {
+        id: 'to_approval',
+        header: 'To recorded approval',
+        numeric: true,
+        cellClass: 'num',
+        headerTitle: INTERVAL_TITLES.toApproval,
+        value: (row) => row.pr_opened_to_approved_hours,
+        cell: (row) => formatIssueHours(row.pr_opened_to_approved_hours),
+      },
+      {
+        id: 'to_merge',
+        header: 'To merge',
+        numeric: true,
+        cellClass: 'num',
+        headerTitle: INTERVAL_TITLES.toMerge,
+        value: (row) => row.approved_to_merged_hours,
+        cell: (row) => formatIssueHours(row.approved_to_merged_hours),
+      },
+      {
+        id: 'estimate',
+        header: 'Estimate',
+        numeric: true,
+        cellClass: 'num estimate',
+        headerTitle: "The tracker's own estimate",
+        value: (row) => row.estimate_hours,
+        cellTitle: (row) => estimateTitle(row) || undefined,
+        cell: (row) => formatIssueEstimate(row),
+      },
+      {
+        id: 'readiness',
+        header: 'Ticket to observed ready under configured policy',
+        pickerLabel: 'Ticket to observed ready',
+        available: () => this.readinessEnabled,
+        cellTitle: () =>
+          'Sampled gate evidence over an interval; forge restrictions remain unknown.',
+        cell: (row) => this.renderReadiness(row),
+      },
+      {
+        id: 'pr',
+        header: 'PR',
+        width: 64,
+        cell: (row) => this.renderLink(row.pr_url, row.pr_url ? 'PR' : ''),
+      },
+    ];
   }
 
   renderIssues(report: IssueCostReport) {
-    if (!report.issues.length) {
+    if (!report.issues.length && !this.table.pageIndex) {
       return html`<p class="muted">No issue had agent work in this period.</p>`;
     }
-    return html`<div class="table-scroll">
-      <table class="styled-table" aria-label="Cost per issue">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Tracker</th>
-            <th>Issue</th>
-            <th class="num">Cost</th>
-            <th class="num">Tokens</th>
-            <th class="num">Runs</th>
-            <th class="num" title=${INTERVAL_TITLES.toPr}>Run to PR</th>
-            <th class="num" title=${INTERVAL_TITLES.toApproval}>
-              To recorded approval
-            </th>
-            <th class="num" title=${INTERVAL_TITLES.toMerge}>To merge</th>
-            <th class="num" title="The tracker's own estimate">Estimate</th>
-            ${this.readinessEnabled ? html`<th>Ticket to observed ready under configured policy</th>` : nothing}
-            <th>PR</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${report.issues.map(
-            (row) =>
-              html`<tr data-issue=${row.issue_key}>
-                  <td>
-                    <button
-                      class="expand"
-                      aria-expanded=${this.expanded[row.id] ? 'true' : 'false'}
-                      aria-label="Show executions of ${row.issue_key}"
-                      @click=${() => void this.toggle(row)}
-                    >
-                      ${this.expanded[row.id] ? '▾' : '▸'}
-                    </button>
-                  </td>
-                  <td>${row.tracker_name || row.tracker_type}</td>
-                  <td>
-                    ${this.renderLink(row.issue_url, row.issue_key)}
-                    ${
-                      row.title
-                        ? html`<div class="muted">${row.title}</div>`
-                        : nothing
-                    }
-                  </td>
-                  <td class="num cost" title=${issueCostTitle(row) || nothing}>
-                    ${formatIssueAmount(row)}
-                  </td>
-                  <td class="num">${row.total_tokens.toLocaleString()}</td>
-                  <td class="num">
-                    ${row.run_count}${
-                      row.failed_run_count
-                        ? html` <span class="muted"
-                            >(${row.failed_run_count} failed)</span
-                          >`
-                        : nothing
-                    }
-                  </td>
-                  <td
-                    class="num"
-                    title=${
-                      OPENED_SOURCE_TITLES[row.pr_opened_at_source ?? ''] ??
-                      nothing
-                    }
-                  >
-                    ${formatIssueHours(row.first_event_to_pr_opened_hours)}
-                  </td>
-                  <td class="num">
-                    ${formatIssueHours(row.pr_opened_to_approved_hours)}
-                  </td>
-                  <td class="num">
-                    ${formatIssueHours(row.approved_to_merged_hours)}
-                  </td>
-                  <td
-                    class="num estimate"
-                    title=${estimateTitle(row) || nothing}
-                  >
-                    ${formatIssueEstimate(row)}
-                  </td>
-                  ${
-                    this.readinessEnabled
-                      ? html`<td
-                          title="Sampled gate evidence over an interval; forge restrictions remain unknown."
-                        >
-                          ${row.ticket_to_observed_ready_hours === null || row.ticket_to_observed_ready_hours === undefined ? 'Unknown' : formatIssueHours(row.ticket_to_observed_ready_hours)}
-                          <div>
-                            Scope: ${row.readiness_scope ?? 'unknown'}; policy:
-                            ${row.readiness_policy_version ?? 'unconfigured'}
-                          </div>
-                          <div>
-                            Current: ${row.latest_readiness_state ?? 'unknown'};
-                            coverage:
-                            ${row.latest_readiness_coverage ?? 'unsupported'}
-                          </div>
-                          <div>
-                            ${(row.readiness_unknown_reasons ?? []).join(', ')}
-                          </div>
-                          <div>
-                            Sampled interval:
-                            ${row.readiness_observation_started_at ?? 'unknown'}
-                            –
-                            ${row.readiness_observation_completed_at ?? 'unknown'}
-                          </div>
-                          <details>
-                            <summary>Sampled gate evidence</summary>
-                            <p>
-                              Gate values may change during this interval. These
-                              reads do not form an atomic snapshot or guarantee
-                              a merge.
-                            </p>
-                            ${(row.readiness_observations ?? []).map(
-                              (observation) =>
-                                html`<div>
-                                  <p>
-                                    PR
-                                    ${observation.repository}#${observation.pr_id};
-                                    source
-                                    ${observation.source_sha ?? 'unknown'};
-                                    target
-                                    ${observation.target_sha ?? 'unknown'}
-                                  </p>
-                                  <ul>
-                                    ${observation.gates.map((gate) => html`<li>${gate.name}: ${gate.state}; ${gate.reason ?? ''}; source ${gate.source}; retrieved ${gate.retrieved_at}</li>`)}
-                                  </ul>
-                                </div>`
-                            )}
-                          </details>
-                        </td>`
-                      : nothing
-                  }
-                  <td>
-                    ${this.renderLink(row.pr_url, row.pr_url ? 'PR' : '')}
-                  </td>
-                </tr>
-                ${this.renderExecutions(row)}`
-          )}
-        </tbody>
-      </table>
-    </div>`;
+    return html`<data-table
+      .table=${this.table}
+      .rows=${this.table.rows}
+      .rowDetail=${(row: IssueCostRow) => this.renderExecutions(row)}
+      .loading=${this.loading}
+      .stickyHeader=${false}
+      label="Cost per issue"
+      noun="issues"
+    ></data-table>`;
   }
 
-  renderSummary(label: string, items: IssueCostSummary[]) {
+  renderSummary(
+    label: string,
+    items: IssueCostSummary[],
+    table: ListTable<IssueCostSummary>
+  ) {
+    table.data = items;
     return html`<sl-card>
       <h3 slot="header">${label}</h3>
       ${
         items.length
-          ? html`<div class="table-scroll">
-              <table class="styled-table" aria-label=${label}>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th class="num">Issues</th>
-                    <th class="num">Runs</th>
-                    <th class="num">Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${items.map(
-                    (item) =>
-                      html`<tr>
-                        <td>${item.name || 'No project'}</td>
-                        <td class="num">${item.issue_count}</td>
-                        <td class="num">${item.run_count}</td>
-                        <td
-                          class="num"
-                          title=${issueCostTitle(item) || nothing}
-                        >
-                          ${formatIssueAmount(item)}
-                        </td>
-                      </tr>`
-                  )}
-                </tbody>
-              </table>
-            </div>`
+          ? html`<data-table
+              .table=${table}
+              .rows=${table.rows}
+              .stickyHeader=${false}
+              label=${label}
+              noun=${label === 'By flow' ? 'flows' : 'projects'}
+            ></data-table>`
           : html`<p class="muted">Nothing in this period.</p>`
       }
     </sl-card>`;
@@ -699,16 +853,19 @@ export class IssueCostView extends AuthedElement {
           >Export JSON</sl-button
         >
       </div>
-      <p class="muted cost-note">
-        Cost is what Preloop estimated per run. Each row says how much of it is
-        actually priced: complete when every run has a cost, partial when some
-        runs do not, and Unknown instead of a dollar amount when none does.
-        Three sources stay deliberately apart: a CLI run's premium-request count
-        (a subscription has no per-run price), the daily GitHub Copilot import
-        (account level, never attributed to a ticket), and gateway-priced
-        estimates, which is what this page sums.
-      </p>
-      <p class="muted cycle-time-note">${CYCLE_TIME_NOTE}</p>
+      <details class="notes">
+        <summary>How cost and cycle time are measured</summary>
+        <p class="muted cost-note">
+          Cost is what Preloop estimated per run. Each row says how much of it
+          is actually priced: complete when every run has a cost, partial when
+          some runs do not, and Unknown instead of a dollar amount when none
+          does. Three sources stay deliberately apart: a CLI run's
+          premium-request count (a subscription has no per-run price), the daily
+          GitHub Copilot import (account level, never attributed to a ticket),
+          and gateway-priced estimates, which is what this page sums.
+        </p>
+        <p class="muted cycle-time-note">${CYCLE_TIME_NOTE}</p>
+      </details>
       ${
         this.error
           ? html`<sl-alert variant="danger" open role="alert"
@@ -739,8 +896,12 @@ export class IssueCostView extends AuthedElement {
               <sl-card>${this.renderIssues(report)}</sl-card>
               ${this.renderUnassigned(report)}
               <div class="summaries">
-                ${this.renderSummary('By project', report.by_project)}
-                ${this.renderSummary('By flow', report.by_flow)}
+                ${this.renderSummary(
+                  'By project',
+                  report.by_project,
+                  this.projectTable
+                )}
+                ${this.renderSummary('By flow', report.by_flow, this.flowTable)}
               </div>`
           : nothing
       }

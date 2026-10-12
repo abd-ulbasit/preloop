@@ -2225,6 +2225,81 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 cutoff = timestamp
         return list(keys)
 
+    #: Deepest session rank served by walking rows newest first; past it one
+    #: grouped query is cheaper than streaming that many rows into Python.
+    _SESSION_PAGE_WALK_MAX = 2000
+
+    def _session_keys_page(
+        self,
+        db: Session,
+        *,
+        offset: int,
+        limit: int,
+        **filters: Any,
+    ) -> list[tuple[Any, Any]]:
+        """Session/execution pairs ranked ``offset`` to ``offset + limit``.
+
+        Ranked by each pair's latest request, newest first. Early pages walk
+        rows newest first and stop as soon as the page is complete; deep
+        pages group the window once in SQL.
+
+        Args:
+            db: Database session.
+            offset: Pairs to skip.
+            limit: Pairs wanted.
+            **filters: Arguments for :meth:`_session_usage_conditions`.
+
+        Returns:
+            Pairs in recency order.
+        """
+        if offset + limit <= self._SESSION_PAGE_WALK_MAX:
+            keys = self._recent_session_keys(db, limit=offset + limit, **filters)
+            return keys[offset : offset + limit]
+        latest = func.max(ApiUsage.timestamp)
+        rows = (
+            db.query(ApiUsage.runtime_session_id, ApiUsage.flow_execution_id)
+            .filter(*self._session_usage_conditions(**filters))
+            .group_by(ApiUsage.runtime_session_id, ApiUsage.flow_execution_id)
+            .order_by(
+                latest.desc(),
+                ApiUsage.runtime_session_id,
+                ApiUsage.flow_execution_id,
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [(row[0], row[1]) for row in rows]
+
+    def count_gateway_sessions(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        start_date: datetime,
+        end_date: datetime,
+        ai_model_id: Optional[str] = None,
+        api_key_id: Optional[str] = None,
+        runtime_principal_id: Optional[str] = None,
+    ) -> int:
+        """Distinct session/execution pairs the session breakdown pages over."""
+        pairs = (
+            db.query(ApiUsage.runtime_session_id, ApiUsage.flow_execution_id)
+            .filter(
+                *self._session_usage_conditions(
+                    account_id=account_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    ai_model_id=ai_model_id,
+                    api_key_id=api_key_id,
+                    runtime_principal_id=runtime_principal_id,
+                )
+            )
+            .distinct()
+            .subquery("gateway_session_pairs")
+        )
+        return int(db.query(func.count()).select_from(pairs).scalar() or 0)
+
     def _session_usage_aggregate(
         self,
         db: Session,
@@ -2347,12 +2422,19 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         api_key_id: Optional[str] = None,
         runtime_principal_id: Optional[str] = None,
         limit: int = 20,
+        session_offset: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Group recent execution-backed gateway usage into session slices.
 
         Raw usage is aggregated by session and model first. Session name,
         agent, flow, and principal labels are joined onto that aggregate.
         ``limit`` applies only after the full aggregation.
+
+        With ``session_offset`` set, the call pages by session instead: it
+        returns every model slice of the ``limit`` sessions (runtime session
+        and flow execution pairs) that rank ``session_offset`` onward by
+        their latest request, so a page never cuts a session in half and
+        :meth:`count_gateway_sessions` is the exact total to page against.
         """
         filters = {
             "account_id": account_id,
@@ -2364,7 +2446,13 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         }
         # Aggregate only the sessions that can make the cut. Ranking every
         # session in the window first cost seconds on busy accounts (#1582).
-        session_keys = self._recent_session_keys(db, limit=limit, **filters)
+        paged = session_offset is not None
+        if paged:
+            session_keys = self._session_keys_page(
+                db, offset=session_offset or 0, limit=limit, **filters
+            )
+        else:
+            session_keys = self._recent_session_keys(db, limit=limit, **filters)
         if not session_keys:
             return []
         aggregated = self._session_usage_aggregate(
@@ -2459,7 +2547,8 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 resolved_runtime_principal_name,
             )
             .order_by(last_request_at.desc(), request_count.desc())
-            .limit(limit)
+            # A session page keeps every slice of its sessions.
+            .limit(None if paged else limit)
             .subquery("gateway_usage_by_session_top")
         )
         ranked_session = aliased(RuntimeSession)

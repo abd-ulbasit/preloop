@@ -65,6 +65,12 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
   @property({ attribute: false }) rowClass?: (row: TRow) => string;
   /** Selectable rows; others get no checkbox. */
   @property({ attribute: false }) rowSelectable?: (row: TRow) => boolean;
+  /**
+   * A full-width row drawn under a row (an expanded drill-down). Return
+   * `nothing` (or null/undefined) for a row that is collapsed. The detail
+   * row is not a data row: keyboard navigation and selection skip it.
+   */
+  @property({ attribute: false }) rowDetail?: (row: TRow) => unknown;
   /** Extra classes on the `<table>`, for a view's column widths. */
   @property({ type: String, attribute: 'table-class' }) tableClass = '';
   /** Accessible name of the table, e.g. "API keys". */
@@ -268,6 +274,17 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
     </tr>`;
   }
 
+  private renderRowWithDetail(row: TRow): TemplateResult {
+    const detail = this.rowDetail?.(row);
+    if (detail === undefined || detail === null || detail === nothing) {
+      return this.renderRow(row);
+    }
+    return html`${this.renderRow(row)}
+      <tr class="row-detail" data-detail-for=${this.table.idOf(row)}>
+        <td colspan=${this.columnCount}>${detail}</td>
+      </tr>`;
+  }
+
   private renderSkeleton(): TemplateResult {
     const cells = Array.from({ length: this.columnCount });
     return html`${Array.from(
@@ -377,7 +394,7 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
                         : repeat(
                             this.rows,
                             (row) => this.table.idOf(row),
-                            (row) => this.renderRow(row)
+                            (row) => this.renderRowWithDetail(row)
                           )
                     }
                   </tbody>

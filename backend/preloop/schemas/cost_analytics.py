@@ -335,6 +335,13 @@ class CostAnalyticsSummaryResponse(BaseModel):
     usage_by_model: List[GatewayUsageByModel] = Field(default_factory=list)
     usage_by_flow: List[GatewayUsageByFlow] = Field(default_factory=list)
     usage_by_session: List[GatewayUsageBySession] = Field(default_factory=list)
+    total_sessions: Optional[int] = Field(
+        None,
+        description=(
+            "Sessions in the period when the session breakdown is paged "
+            "(session_limit), on the first page only."
+        ),
+    )
     usage_by_tool: List[GatewayUsageByTool] = Field(default_factory=list)
     imported_usage: Optional[ImportedUsageSummary] = None
     subscription_usage: Optional[SubscriptionUsageSummary] = None

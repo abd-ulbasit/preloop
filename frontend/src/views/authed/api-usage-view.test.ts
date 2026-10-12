@@ -366,10 +366,16 @@ describe('ApiUsageView', () => {
       );
       const summaryCall = fetchStub
         .getCalls()
-        .find((call) =>
-          call.args[0].toString().includes('include_breakdown=true')
+        .find(
+          (call) =>
+            call.args[0].toString().includes('include_breakdown=true') &&
+            !call.args[0].toString().includes('session_limit')
         )!;
       expect(summaryCall.args[0].toString()).to.include('breakdown=models');
+      // Sessions page on their own request (#1585).
+      expect(summaryCall.args[0].toString()).not.to.include(
+        'breakdown=sessions'
+      );
       expect(summaryCall.args[0].toString()).not.to.include('breakdown=tools');
     } finally {
       release();
@@ -733,8 +739,12 @@ describe('ApiUsageView', () => {
       expect(url).to.not.contain('start_date=');
       expect(url).to.not.contain('end_date=');
     });
-    // No prior window exists, so no comparison request and no false delta.
-    expect(summaryCalls.length).to.equal(1);
+    // No prior window exists, so no comparison request and no false delta:
+    // one summary and its first page of sessions.
+    expect(summaryCalls.length).to.equal(2);
+    expect(
+      summaryCalls.filter((url) => url.includes('session_limit=10')).length
+    ).to.equal(1);
     expect(element.shadowRoot?.textContent).to.contain(
       'All recorded gateway spend'
     );
@@ -996,5 +1006,26 @@ describe('ApiUsageView', () => {
 
     expect(seen).to.have.length(1);
     expect(seen[0].detail.feature).to.equal('analytics_window_days');
+  });
+
+  it('pages sessions on the server and shows the total', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    await waitUntil(
+      () => (element as any).sessionPages.loaded,
+      'sessions never loaded'
+    );
+    const sessionUrls = () =>
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes('session_limit='));
+    expect(sessionUrls()[0]).to.contain('breakdown=sessions');
+    expect(sessionUrls()[0]).to.contain('session_offset=0');
+    (element as any).sessionPages.total = 60;
+    await (element as any).sessionPages.goTo(2);
+    expect(sessionUrls().at(-1)).to.contain('session_offset=20');
+    expect((element as any).sessionPages.total).to.equal(60);
   });
 });

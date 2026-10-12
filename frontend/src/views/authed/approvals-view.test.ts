@@ -129,6 +129,7 @@ describe('ApprovalsView', () => {
       })
     );
     localStorage.clear();
+    window.history.replaceState(null, '', window.location.pathname);
   });
 
   function decisionCall(action: 'approve' | 'decline') {
@@ -148,6 +149,7 @@ describe('ApprovalsView', () => {
 
   describe('waiting for you', () => {
     it('puts the waiting group before history and sorts it by expiry', async () => {
+      window.history.replaceState(null, '', '?status=all');
       const element = await renderList([
         baseRequest({ id: 'later', expires_at: inMinutes(40) }),
         baseRequest({
@@ -242,6 +244,7 @@ describe('ApprovalsView', () => {
     });
 
     it('moves a pending row to history when it expires while the list is open', async () => {
+      window.history.replaceState(null, '', '?status=all');
       const element = await renderList([
         baseRequest({
           id: 'about-to-expire',
@@ -1439,8 +1442,8 @@ describe('ApprovalsView', () => {
     });
   });
 
-  describe('load older (paging)', () => {
-    /** A full page of approved rows, newest first, starting at `skip`. */
+  describe('server paging', () => {
+    /** Approved rows, newest first, starting at `skip`. */
     function pageAt(skip: number, count: number, toolName = 'example_tool') {
       return Array.from({ length: count }, (_unused, index) =>
         baseRequest({
@@ -1457,117 +1460,136 @@ describe('ApprovalsView', () => {
       );
     }
 
-    function stubPagedApprovals(pages: Record<number, unknown[]>) {
+    const STATS = {
+      total: 40000,
+      pending: 1,
+      approved: 32000,
+      declined: 4000,
+      expired: 2000,
+      cancelled: 1999,
+      human_approved: 30000,
+      human_declined: 4000,
+      auto_approved_by_bypass: 2000,
+      avg_response_minutes: 7,
+      tools: ['example_tool', 'needle_tool'],
+    };
+
+    /** The list endpoint with `X-Total-Count`, and the stats endpoint. */
+    function stubServer(total: number) {
       fetchStub = sinon
         .stub(window, 'fetch')
-        .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = typeof input === 'string' ? input : input.toString();
-          const method = (init?.method || 'GET').toUpperCase();
-          if (url.includes('/api/v1/approval-requests') && method === 'GET') {
-            const skip = Number(
-              new URL(url, window.location.origin).searchParams.get('skip') ?? 0
-            );
-            return new Response(JSON.stringify(pages[skip] ?? []), {
+        .callsFake(async (input: RequestInfo | URL) => {
+          const url = new URL(String(input), window.location.origin);
+          const json = (data: unknown, headers: Record<string, string> = {}) =>
+            new Response(JSON.stringify(data), {
               status: 200,
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...headers },
+            });
+          if (url.pathname.endsWith('/approval-requests/stats')) {
+            return json(STATS);
+          }
+          if (url.pathname.endsWith('/approval-requests')) {
+            if (url.searchParams.get('status') === 'pending') {
+              return json([baseRequest({ id: 'waiting-1' })], {
+                'X-Total-Count': '1',
+              });
+            }
+            const skip = Number(url.searchParams.get('skip') ?? 0);
+            const limit = Number(url.searchParams.get('limit') ?? 25);
+            return json(pageAt(skip, Math.min(limit, total - skip)), {
+              'X-Total-Count': String(total),
             });
           }
-          return new Response(JSON.stringify({}), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
+          return json({});
         });
     }
 
-    function requestedSkips(): number[] {
+    function listCalls(): URLSearchParams[] {
       return fetchStub
         .getCalls()
-        .filter((call) =>
-          String(call.args[0]).includes('/api/v1/approval-requests')
-        )
-        .map((call) =>
-          Number(
-            new URL(
-              String(call.args[0]),
-              window.location.origin
-            ).searchParams.get('skip') ?? 0
-          )
-        );
+        .map((call) => new URL(String(call.args[0]), window.location.origin))
+        .filter((url) => url.pathname.endsWith('/approval-requests'))
+        .map((url) => url.searchParams);
     }
 
-    it('appends the next page with skip=loaded and drops the control on a short page', async () => {
-      stubPagedApprovals({
-        0: pageAt(0, 100),
-        100: pageAt(100, 100),
-        200: pageAt(200, 30),
-      });
+    async function mountView() {
       const element = (await fixture(
         html`<approvals-view></approvals-view>`
       )) as ApprovalsView;
-
-      await waitUntil(
-        () => !(element as any).loading,
-        'Approvals view did not finish loading'
-      );
+      await waitUntil(() => !(element as any).loading, 'did not load');
       await element.updateComplete;
+      return element;
+    }
 
-      const loadOlder = () =>
-        element.shadowRoot!.querySelector('[data-testid="load-older"]');
-
-      expect((element as any).approvalRequests.length).to.equal(100);
-      expect(loadOlder()).to.not.equal(null);
-
-      loadOlder()!.click();
-      await waitUntil(
-        () => (element as any).approvalRequests.length === 200,
-        'Older page did not append'
+    it('opens on Pending and does not load the history', async () => {
+      stubServer(60);
+      const element = await mountView();
+      expect((element as any).statusFilter).to.equal('pending');
+      expect(listCalls().map((params) => params.get('status'))).to.deep.equal([
+        'pending',
+      ]);
+      expect(element.shadowRoot!.querySelector('table-pagination')).to.equal(
+        null
       );
-      await element.updateComplete;
-      expect(loadOlder()).to.not.equal(null);
-
-      loadOlder()!.click();
-      await waitUntil(
-        () => (element as any).approvalRequests.length === 230,
-        'Final short page did not append'
+      // The strip counts the whole account, from the server.
+      const strip = element.shadowRoot!.querySelector('.stat-strip')!;
+      expect(strip.textContent!.replace(/\s+/g, ' ')).to.contain(
+        '40000 requests'
       );
-      await element.updateComplete;
-      expect(loadOlder()).to.equal(null);
-      expect(requestedSkips()).to.deep.equal([0, 100, 200]);
+      expect(strip.textContent).to.not.contain('Last');
     });
 
-    it('scopes the client-side search and never claims a bare no-match while truncated', async () => {
-      stubPagedApprovals({
-        0: pageAt(0, 100, 'example_tool'),
-        100: pageAt(100, 5, 'needle_tool'),
-      });
-      const element = (await fixture(
-        html`<approvals-view></approvals-view>`
-      )) as ApprovalsView;
+    it('pages the history on the server with the shared pager', async () => {
+      window.history.replaceState(null, '', '?status=all');
+      stubServer(60);
+      const element = await mountView();
+      const history = () =>
+        listCalls().filter((params) => params.get('status') !== 'pending');
+      expect(history().at(-1)!.get('skip')).to.equal('0');
+      expect(history().at(-1)!.get('limit')).to.equal('25');
+      expect(history().at(-1)!.has('status')).to.be.false;
+      const pager = element.shadowRoot!.querySelector(
+        'table-pagination'
+      ) as HTMLElement & { updateComplete: Promise<unknown> };
+      await pager.updateComplete;
+      expect(
+        pager.shadowRoot!.querySelector('.range')!.textContent!.trim()
+      ).to.equal('1-25 of 60 requests');
+      expect(
+        element
+          .shadowRoot!.querySelector('.results-count')!
+          .textContent!.replace(/\s+/g, ' ')
+      ).to.contain('60 requests match');
 
+      pager.dispatchEvent(
+        new CustomEvent('page-change', { detail: { pageIndex: 2 } })
+      );
+      await waitUntil(() => history().at(-1)!.get('skip') === '50');
       await waitUntil(
-        () => !(element as any).loading,
-        'Approvals view did not finish loading'
+        () => (element as any).historyRequests.length === 10,
+        'last page'
       );
-      await element.updateComplete;
+      expect((element as any).historyRequests[0].id).to.equal('ar-50');
+    });
 
-      (element as any).searchQuery = 'needle';
-      (element as any).applyFilters();
-      await element.updateComplete;
-
-      const scope = element.shadowRoot!.querySelector(
-        '[data-testid="search-scope"]'
+    it('sends status, tool and search to the server and restarts at page one', async () => {
+      window.history.replaceState(
+        null,
+        '',
+        '?status=approved&tool=needle_tool'
       );
-      expect(scope).to.not.equal(null);
-      expect(scope!.textContent!.replace(/\s+/g, ' ').trim()).to.contain(
-        'Searching the latest 100 requests'
-      );
-
-      const empty = element.shadowRoot!.querySelector('.empty-state');
-      expect(empty).to.not.equal(null);
-      expect(empty!.textContent).to.contain('in the latest 100 requests');
-      expect(empty!.textContent).to.not.contain(
-        'No requests match your filters.'
-      );
+      stubServer(60);
+      const element = await mountView();
+      (element as any).goToHistoryPage(1);
+      await waitUntil(() => listCalls().at(-1)!.get('skip') === '25');
+      (element as any).handleSearchInput({
+        target: { value: 'deploy' },
+      } as unknown as CustomEvent);
+      await waitUntil(() => listCalls().at(-1)!.get('q') === 'deploy');
+      const last = listCalls().at(-1)!;
+      expect(last.get('skip')).to.equal('0');
+      expect(last.get('status')).to.equal('approved');
+      expect(last.get('tool_name')).to.equal('needle_tool');
     });
   });
 });

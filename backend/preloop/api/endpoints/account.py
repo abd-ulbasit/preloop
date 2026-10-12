@@ -1414,6 +1414,19 @@ def get_account_gateway_usage_summary(
             "preserves all sections; ignored when include_breakdown=false."
         ),
     ),
+    session_limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=200,
+        description=(
+            "Page the session breakdown: every model row of this many "
+            "sessions, most recent first. Omitted keeps the historical 250 "
+            "most recent rows. The first page also returns total_sessions."
+        ),
+    ),
+    session_offset: int = Query(
+        0, ge=0, description="Sessions to skip when session_limit is set."
+    ),
 ):
     """Get account-scoped model gateway usage summary."""
     return ModelGatewayUsageService(db).get_account_summary(
@@ -1423,6 +1436,8 @@ def get_account_gateway_usage_summary(
         runtime_principal_id=runtime_principal_id,
         include_breakdown=include_breakdown,
         breakdowns=set(breakdown) if isinstance(breakdown, list) else None,
+        session_limit=session_limit,
+        session_offset=session_offset,
     )
 
 

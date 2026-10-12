@@ -1540,6 +1540,11 @@ export interface AccountGatewayUsageSummaryResponse {
   usage_by_model: GatewayUsageByModel[];
   usage_by_flow: GatewayUsageByFlow[];
   usage_by_session: GatewayUsageBySession[];
+  /**
+   * Sessions in the period, on the first page of a paged session breakdown
+   * (`session_limit`); absent otherwise.
+   */
+  total_sessions?: number | null;
   usage_by_tool?: GatewayUsageByTool[];
   /**
    * Set when the server answered from a pre-aggregated rollup rather than the

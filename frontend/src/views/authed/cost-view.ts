@@ -53,6 +53,7 @@ import type {
   ModelPriceOverrideCreate,
   ProviderBillingConnection,
 } from '../../types';
+import { SessionPages } from '../../controllers/session-pages';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import {
   ListTable,
@@ -316,9 +317,17 @@ export class CostView extends AuthedElement {
     dir: 'desc',
   };
   /**
-   * Sessions in the period, up to 250: paged, searchable and sortable on the
-   * shared table instead of one 26,000 px column.
+   * Sessions in the period, paged on the server by session with the total
+   * from the server (#1585); the table sorts and searches the page it shows.
    */
+  readonly sessionPages = new SessionPages(this, (sessionPage) =>
+    getCostAnalyticsSummary({
+      ...(this.currentPeriod ?? this.getDateParams()),
+      breakdowns: ['sessions'],
+      sessionPage,
+    })
+  );
+
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
     listId: 'cost-sessions',
     // One row per (session, model, provider): the slice is part of the id.
@@ -328,9 +337,8 @@ export class CostView extends AuthedElement {
         ? `${row.runtime_session_id}:${slice}`
         : `${this.getSessionTitle(row)}:${slice}:${row.last_activity_at ?? row.last_request_at ?? ''}`;
     },
-    pageSize: 25,
-    defaultSorting: [{ id: 'cost', desc: true }],
-    url: { prefix: 'sessions' },
+    pageSize: 0,
+    defaultSorting: [{ id: 'last_activity', desc: true }],
     columns: this.sessionColumns(),
   });
   @state() private userSort: SortState = { key: 'cost', dir: 'desc' };
@@ -1230,7 +1238,9 @@ export class CostView extends AuthedElement {
     const sections: Record<string, CostUsageBreakdown[]> = {
       agents: ['sessions', 'flows'],
       models: ['models'],
-      sessions: ['sessions'],
+      // Paged on its own request (sessionPages); Agents and Users still
+      // group the recent-session window.
+      sessions: [],
       users: ['sessions'],
       tools: ['tools'],
       imported: ['imported'],
@@ -1245,6 +1255,7 @@ export class CostView extends AuthedElement {
         this.loadBreakdowns(sections[tab], generation),
         tab === 'users' ? this.loadAgentOwners(generation) : undefined,
         tab === 'tools' ? this.loadToolFlagCount(generation) : undefined,
+        tab === 'sessions' ? this.sessionPages.reset() : undefined,
         tab === 'reconciliation'
           ? this.loadReconciliation(generation)
           : undefined,
@@ -3360,8 +3371,17 @@ export class CostView extends AuthedElement {
   }
 
   private renderSessionsTab() {
-    const sessions = this.summary?.usage_by_session || [];
-    if (!sessions.length) {
+    const pages = this.sessionPages;
+    if (pages.error) {
+      return html`<div class="empty" role="alert">
+        Could not load sessions. ${pages.error}
+        <sl-button size="small" @click=${() => void pages.load()}
+          >Try again</sl-button
+        >
+      </div>`;
+    }
+    const sessions = pages.rows;
+    if (pages.loaded && !sessions.length && pages.pageIndex === 0) {
       return html`<div class="empty">No session-attributed usage yet.</div>`;
     }
     this.sessionTable.data = sessions;
@@ -3369,17 +3389,19 @@ export class CostView extends AuthedElement {
       <div class="tab-panel-body">
         ${renderDataTableToolbar({
           table: this.sessionTable,
-          searchPlaceholder: 'Search sessions, agents or flows',
-          searchLabel: 'Search sessions',
-          count: sessionCountLabel(this.sessionTable),
+          searchPlaceholder: 'Search this page',
+          searchLabel: 'Search the sessions on this page',
+          count: pages.countLabel || sessionCountLabel(this.sessionTable),
         })}
         <div class="analytics-table-wrap">
           <data-table
             .table=${this.sessionTable}
             .rows=${this.sessionTable.rows}
+            .loading=${pages.loading}
             label="Session spend"
             noun="sessions"
           ></data-table>
+          ${pages.renderPagination()}
         </div>
       </div>
     `;

@@ -27,6 +27,9 @@ const KEYS: Key[] = Array.from({ length: 30 }, (_, index) => ({
   uses: index * 7,
 }));
 
+/** Drives the `available()` column below; off unless a test turns it on. */
+let notesAvailable = false;
+
 const COLUMNS: Array<ListColumn<Key>> = [
   {
     id: 'name',
@@ -55,6 +58,12 @@ const COLUMNS: Array<ListColumn<Key>> = [
     searchText: () => '',
     cell: (row) => String(row.uses),
   },
+  {
+    id: 'notes',
+    header: 'Notes',
+    available: () => notesAvailable,
+    cell: (row) => `note ${row.id}`,
+  },
 ];
 
 let counter = 0;
@@ -72,6 +81,7 @@ class Host extends LitElement {
   error: string | null = null;
   table!: ListTable<Key>;
   selection = new ListSelectionController<Key>(this, { idOf: (k) => k.id });
+  expanded = new Set<string>();
 
   init() {
     this.table = new ListTable<Key>(this, {
@@ -101,6 +111,10 @@ class Host extends LitElement {
         .selection=${this.selection}
         .rowActions=${(row: Key) => [{ id: 'del', label: `Delete ${row.name}` }]}
         .rowLabel=${(row: Key) => row.name}
+        .rowDetail=${(row: Key) =>
+          this.expanded.has(row.id)
+            ? html`<p class="detail">Detail of ${row.name}</p>`
+            : null}
         .loading=${this.loading}
         .error=${this.error}
         .empty=${{ heading: 'No API keys yet' }}
@@ -497,5 +511,44 @@ describe('<table-pagination>', () => {
     );
     expect(el.shadowRoot!.querySelector('nav')).to.not.exist;
     await aTimeout(0);
+  });
+});
+
+describe('data-table: rowDetail and available()', () => {
+  afterEach(() => {
+    notesAvailable = false;
+  });
+
+  it('draws a full-width detail row under an expanded row only', async () => {
+    const host = await mount();
+    expect(qa(host, 'tr.row-detail')).to.have.length(0);
+    host.expanded.add('k1');
+    host.requestUpdate();
+    await settle(host);
+    const details = qa(host, 'tr.row-detail');
+    expect(details).to.have.length(1);
+    expect(details[0].dataset.detailFor).to.equal('k1');
+    // Directly under its data row, spanning select + 3 columns + actions.
+    const previous = details[0].previousElementSibling as HTMLElement;
+    expect(previous.dataset.selectionId).to.equal('k1');
+    const cell = details[0].querySelector('td')!;
+    expect(cell.getAttribute('colspan')).to.equal('5');
+    expect(cell.textContent).to.contain('Detail of key-01');
+    // Keyboard navigation and row counts see data rows only.
+    expect(qa(host, 'tr[data-row]')).to.have.length(10);
+  });
+
+  it('hides an unavailable column from headers, cells and the picker', async () => {
+    const host = await mount();
+    const headerText = () =>
+      qa(host, 'thead th').map((th) => th.textContent!.trim());
+    expect(headerText().join('|')).to.not.contain('Notes');
+    expect(host.table.pickerColumns.map((c) => c.id)).to.not.include('notes');
+    notesAvailable = true;
+    host.requestUpdate();
+    await settle(host);
+    expect(headerText().join('|')).to.contain('Notes');
+    expect(host.table.pickerColumns.map((c) => c.id)).to.include('notes');
+    expect(q(host, 'tbody tr[data-row]').textContent).to.contain('note k0');
   });
 });

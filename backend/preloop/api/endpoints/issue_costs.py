@@ -56,6 +56,29 @@ def list_issue_costs(
     ),
     project_id: Optional[UUID] = Query(None),
     flow_id: Optional[UUID] = Query(None),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=500,
+        description=(
+            "Issue rows per page. Omit for every row (up to the report cap). "
+            "Summaries and `total_issues` always cover the whole filter."
+        ),
+    ),
+    offset: int = Query(0, ge=0, description="Issue rows to skip."),
+    sort: Literal[
+        "cost",
+        "tokens",
+        "runs",
+        "first_event",
+        "to_pr",
+        "to_approval",
+        "to_merge",
+        "estimate",
+        "issue",
+        "tracker",
+    ] = Query("cost", description="Issue row order."),
+    order: Literal["asc", "desc"] = Query("desc"),
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_active_user),
 ) -> IssueCostReport:
@@ -69,6 +92,10 @@ def list_issue_costs(
         end=end_date,
         project_id=project_id,
         flow_id=flow_id,
+        offset=offset,
+        page_size=limit,
+        sort=sort,
+        descending=order == "desc",
     )
 
 

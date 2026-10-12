@@ -178,6 +178,17 @@ export interface ListColumn<TRow extends RowData> {
    * `value` or `searchText` are never searched.
    */
   searchText?: (row: TRow) => string;
+  /**
+   * False while the column does not apply (a feature flag is off, a setting
+   * is missing). An unavailable column is neither drawn nor offered in the
+   * picker, and the operator's stored visibility for it is kept for when it
+   * comes back. Read on every paint, so it may depend on view state.
+   */
+  available?: () => boolean;
+}
+
+function isAvailable<TRow extends RowData>(column: ListColumn<TRow>): boolean {
+  return column.available ? column.available() : true;
 }
 
 /** Which state slices a list remembers between visits. */
@@ -472,7 +483,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     const visible: Array<ListColumn<TRow>> = [];
     for (const column of this.table.getVisibleLeafColumns()) {
       const declared = this.byId.get(column.id);
-      if (declared) visible.push(declared);
+      if (declared && isAvailable(declared)) visible.push(declared);
     }
     return visible;
   }
@@ -482,7 +493,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     const sorting = this.tableState.sorting ?? [];
     return this.table.getLeafHeaders().flatMap((header) => {
       const declared = this.byId.get(header.column.id);
-      if (!declared) return [];
+      if (!declared || !isAvailable(declared)) return [];
       const sorted = header.column.getIsSorted();
       const rank = sorting.findIndex((entry) => entry.id === header.column.id);
       return [
@@ -677,7 +688,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     visible: boolean;
     hideable: boolean;
   }> {
-    return this.columns.map((column) => ({
+    return this.columns.filter(isAvailable).map((column) => ({
       id: column.id,
       label: column.pickerLabel || column.header,
       group: column.group,

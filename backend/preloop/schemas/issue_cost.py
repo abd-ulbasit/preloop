@@ -350,6 +350,14 @@ class IssueCostReport(BaseModel):
         ),
     )
     issues: List[IssueCostRow]
+    total_issues: Optional[int] = Field(
+        None,
+        description=(
+            "Issues in the filter before paging. `issues` holds the requested "
+            "page; `by_project` and `by_flow` always cover all of them."
+        ),
+    )
+    offset: int = Field(0, description="Index of the first row in `issues`.")
     by_project: List[IssueCostSummary]
     by_flow: List[IssueCostSummary]
     unassigned: IssueCostUnassigned

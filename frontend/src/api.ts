@@ -1359,9 +1359,25 @@ function buildManagedAgentListQuery(
   return queryString ? `?${queryString}` : '';
 }
 
+/**
+ * One page of the session breakdown: every model row of `limit` sessions
+ * from `offset`, most recent first. The first page carries `total_sessions`.
+ */
+export interface SessionPage {
+  limit: number;
+  offset: number;
+}
+
+function appendSessionPage(query: URLSearchParams, page?: SessionPage) {
+  if (!page) return;
+  query.set('session_limit', String(page.limit));
+  query.set('session_offset', String(page.offset));
+}
+
 export async function getAccountGatewayUsageSummary(
   params: GatewayUsageSummaryParams & {
     breakdowns?: ('models' | 'flows' | 'sessions' | 'tools' | 'days')[];
+    sessionPage?: SessionPage;
   } = {}
 ): Promise<AccountGatewayUsageSummaryResponse> {
   const query = new URLSearchParams(
@@ -1369,6 +1385,7 @@ export async function getAccountGatewayUsageSummary(
   );
   for (const section of params.breakdowns || [])
     query.append('breakdown', section);
+  appendSessionPage(query, params.sessionPage);
   const queryString = query.size ? `?${query.toString()}` : '';
   const response = await fetchWithAuth(
     `/api/v1/account/gateway-usage/summary${queryString}`
@@ -1503,10 +1520,14 @@ export type CostUsageBreakdown =
   'models' | 'flows' | 'sessions' | 'tools' | 'days' | 'imported';
 
 export async function getCostAnalyticsSummary(
-  params: GatewayUsageSummaryParams & { breakdowns?: CostUsageBreakdown[] } = {}
+  params: GatewayUsageSummaryParams & {
+    breakdowns?: CostUsageBreakdown[];
+    sessionPage?: SessionPage;
+  } = {}
 ): Promise<CostAnalyticsSummaryResponse> {
   const query = new URLSearchParams(buildGatewayUsageQuery(params));
   params.breakdowns?.forEach((name) => query.append('breakdown', name));
+  appendSessionPage(query, params.sessionPage);
   const response = await fetchWithAuth(`/api/v1/cost/summary?${query}`);
   if (!response.ok) {
     const refused = await historyUnavailableError(response);
@@ -1674,6 +1695,9 @@ export interface IssueCostReport {
   project_id: string | null;
   flow_id: string | null;
   issues: IssueCostRow[];
+  /** Issues in the filter before paging; `issues` is one page of them. */
+  total_issues?: number | null;
+  offset?: number;
   by_project: IssueCostSummary[];
   by_flow: IssueCostSummary[];
   unassigned: IssueCostCoverage & {
@@ -1702,11 +1726,30 @@ function issueCostQuery(filter: IssueCostFilter): URLSearchParams {
   return query;
 }
 
-/** Issue-level cost and cycle time for one filter. */
+/** One page of issue rows, sorted on the server. */
+export interface IssueCostPage {
+  limit: number;
+  offset: number;
+  sort?: string;
+  order?: 'asc' | 'desc';
+}
+
+/**
+ * Issue-level cost and cycle time for one filter. With `page`, `issues` is
+ * that page and `total_issues` the count; the summaries cover everything.
+ */
 export async function getIssueCosts(
-  filter: IssueCostFilter = {}
+  filter: IssueCostFilter = {},
+  page?: IssueCostPage
 ): Promise<IssueCostReport> {
-  const query = issueCostQuery(filter).toString();
+  const params = issueCostQuery(filter);
+  if (page) {
+    params.set('limit', String(page.limit));
+    params.set('offset', String(page.offset));
+    if (page.sort) params.set('sort', page.sort);
+    if (page.order) params.set('order', page.order);
+  }
+  const query = params.toString();
   const response = await fetchWithAuth(
     query ? `/api/v1/cost/by-issue?${query}` : '/api/v1/cost/by-issue'
   );

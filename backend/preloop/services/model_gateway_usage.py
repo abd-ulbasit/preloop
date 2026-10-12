@@ -182,7 +182,16 @@ class ModelGatewayUsageService:
         include_breakdown: bool = True,
         exclude_retries: bool = False,
         breakdowns: Optional[set[UsageBreakdown]] = None,
+        session_limit: Optional[int] = None,
+        session_offset: int = 0,
     ) -> AccountGatewayUsageSummaryResponse:
+        """Totals and the selected breakdowns of the account's gateway usage.
+
+        ``session_limit`` pages the session breakdown by session (every model
+        slice of ``session_limit`` sessions from ``session_offset``) and fills
+        ``total_sessions`` on the first page. Without it the breakdown keeps
+        its historical 250 most recent slices.
+        """
         start_date, end_date = self._normalize_period(start_date, end_date)
         start_date, end_date = restrict_history_window(
             self.db, account=account, start_date=start_date, end_date=end_date
@@ -229,7 +238,26 @@ class ModelGatewayUsageService:
             )
         else:
             usage_by_flow = []
-        if "sessions" in selected:
+        total_sessions: Optional[int] = None
+        if "sessions" in selected and session_limit is not None:
+            session_filters: dict[str, Any] = {
+                "account_id": str(account.id),
+                "start_date": start_date,
+                "end_date": end_date,
+                "runtime_principal_id": runtime_principal_id,
+            }
+            usage_by_session = crud_api_usage.get_gateway_usage_by_session(
+                self.db,
+                limit=session_limit,
+                session_offset=session_offset,
+                **session_filters,
+            )
+            # Counted once per filter: later pages keep the first answer.
+            if session_offset == 0:
+                total_sessions = crud_api_usage.count_gateway_sessions(
+                    self.db, **session_filters
+                )
+        elif "sessions" in selected:
             usage_by_session = crud_api_usage.get_gateway_usage_by_session(
                 self.db,
                 account_id=str(account.id),
@@ -295,6 +323,7 @@ class ModelGatewayUsageService:
             usage_by_session=[
                 self._session_row_to_schema(row) for row in usage_by_session
             ],
+            total_sessions=total_sessions,
             usage_by_tool=usage_by_tool,
         )
 

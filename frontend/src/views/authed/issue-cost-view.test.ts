@@ -331,8 +331,13 @@ describe('IssueCostView', () => {
     await waitUntil(() => el.report !== null, 'report loaded');
     await el.updateComplete;
     const root = el.shadowRoot!;
+    const ids: Record<string, string> = Object.fromEntries(
+      report.issues.map((row) => [row.issue_key, row.id])
+    );
     const cost = (key: string) =>
-      root.querySelector(`tr[data-issue="${key}"] td.cost`) as HTMLElement;
+      root.querySelector(
+        `tr[data-selection-id="${ids[key]}"] td.cost`
+      ) as HTMLElement;
 
     expect(cost('example-org/example-repo#12').textContent!.trim()).to.equal(
       '$2.88'
@@ -366,9 +371,7 @@ describe('IssueCostView', () => {
     await waitUntil(() => el.report !== null, 'report loaded');
     await el.updateComplete;
     const root = el.shadowRoot!;
-    const row = root.querySelector(
-      'tr[data-issue="example-org/example-repo#12"]'
-    )!;
+    const row = root.querySelector('tr[data-selection-id="rollup-1"]')!;
     expect(row).to.exist;
     const cells = [...row.querySelectorAll('td')].map((cell) =>
       cell.textContent!.trim()
@@ -481,8 +484,11 @@ describe('IssueCostView', () => {
     const headers = [
       ...root.querySelectorAll('table[aria-label="Cost per issue"] th'),
     ];
+    // The definition is the sort button's title, the control that is hovered.
     const byText = (text: string) =>
-      headers.find((th) => th.textContent!.trim() === text) as HTMLElement;
+      headers
+        .find((th) => th.textContent!.trim() === text)!
+        .querySelector('.sort-button') as HTMLElement;
     expect(byText('Run to PR').title).to.contain(
       'earliest attributed execution start (not ticket creation)'
     );
@@ -513,5 +519,57 @@ describe('IssueCostView', () => {
     const exportUrl = requested.find((url) => url.includes('/export'))!;
     expect(exportUrl).to.contain('format=csv');
     expect(exportUrl).to.contain('flow_id=flow-1');
+  });
+
+  it('asks the server for one page of 25, sorted, and pages on', async () => {
+    const el = await fixture<IssueCostView>(
+      html`<issue-cost-view></issue-cost-view>`
+    );
+    await waitUntil(() => el.report !== null, 'report loaded');
+    const reportUrl = () =>
+      new URL(
+        requested.filter((url) => /\/cost\/by-issue\?/.test(url)).at(-1)!,
+        location.origin
+      ).searchParams;
+    expect(reportUrl().get('limit')).to.equal('25');
+    expect(reportUrl().get('offset')).to.equal('0');
+    expect(reportUrl().get('sort')).to.equal('cost');
+    expect(reportUrl().get('order')).to.equal('desc');
+    el.table.toggleSort('to_pr');
+    await waitUntil(() => reportUrl().get('sort') === 'to_pr');
+    expect(reportUrl().get('order')).to.equal('desc');
+    el.table.totalRows = 60;
+    el.table.setPageIndex(2);
+    await waitUntil(() => reportUrl().get('offset') === '50');
+    // A filter change starts over on page one.
+    el.flowId = 'flow-1';
+    await el.load();
+    await waitUntil(() => reportUrl().get('offset') === '0');
+    expect(reportUrl().get('flow_id')).to.equal('flow-1');
+  });
+
+  it('shows the readiness column only when the feature is on', async () => {
+    const el = await fixture<IssueCostView>(
+      html`<issue-cost-view></issue-cost-view>`
+    );
+    await waitUntil(() => el.report !== null, 'report loaded');
+    await el.updateComplete;
+    const headerText = () =>
+      [
+        ...el.shadowRoot!.querySelectorAll(
+          'table[aria-label="Cost per issue"] th'
+        ),
+      ]
+        .map((th) => th.textContent!.trim())
+        .join('|');
+    expect(headerText()).to.not.contain('observed ready');
+    (el as unknown as { readinessEnabled: boolean }).readinessEnabled = true;
+    await el.updateComplete;
+    await (
+      el.shadowRoot!.querySelector('data-table') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      }
+    ).updateComplete;
+    expect(headerText()).to.contain('observed ready');
   });
 });
