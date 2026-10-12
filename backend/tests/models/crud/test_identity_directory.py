@@ -37,6 +37,8 @@ def member(
 def test_one_person_pagination_search_and_filters(
     db_session: Session, verified: bool
 ) -> None:
+    member(db_session, name="Retained unrelated fixture")
+    initial_people, initial_active_members = identity_directory.counts(db_session)
     parent = member(db_session)
     child = member(db_session, person=parent.person)
     child.is_active = False
@@ -59,14 +61,21 @@ def test_one_person_pagination_search_and_filters(
     )["is_active"]
     # A deterministic tie break keeps different people on separate pages.
     parent.person.created_at = other.person.created_at
+    page_marker = "Directory tie " + uuid.uuid4().hex
+    parent.person.full_name = other.person.full_name = page_marker
     db_session.flush()
-    first, total = identity_directory.people(db_session, limit=1, sort_by="created_at")
+    first, total = identity_directory.people(
+        db_session, search=page_marker, limit=1, sort_by="created_at"
+    )
     second, next_total = identity_directory.people(
-        db_session, limit=1, offset=1, sort_by="created_at"
+        db_session, search=page_marker, limit=1, offset=1, sort_by="created_at"
     )
     assert total == next_total == 2
     assert first[0].id != second[0].id
-    assert identity_directory.counts(db_session) == (2, 2)
+    assert identity_directory.counts(db_session) == (
+        initial_people + 2,
+        initial_active_members + 2,
+    )
 
 
 def test_account_search_uses_identity_without_sibling_rows(db_session: Session) -> None:
