@@ -527,3 +527,180 @@ func TestHookEventCarriesOperatorNoteCursorAsk(t *testing.T) {
 		t.Fatal("claude ask must still carry")
 	}
 }
+
+func TestReceiptHookAcknowledgesOnlyAfterCarryingOutputAndFailsOpen(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	var out bytes.Buffer
+	ackCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/agents/notes/ack" {
+			ackCalls++
+			if !strings.Contains(out.String(), "additionalContext") {
+				t.Error("ack arrived before carrying output")
+			}
+			var payload struct {
+				NoteIDs   []string `json:"note_ids"`
+				SessionID string   `json:"session_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode receipt: %v", err)
+				return
+			}
+			if !reflect.DeepEqual(payload.NoteIDs, []string{"receipt-hook"}) || payload.SessionID != "receipt-session" {
+				t.Errorf("wrong ack: %#v", payload)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"decision": "allow", "operator_note": "<operator-notes><operator-note id=\"receipt-hook\">Read me</operator-note></operator-notes>"})
+	}))
+	defer server.Close()
+	writeTestPermissionCredential(t, home, "receipt-codex", permissionHookCredential{BaseURL: server.URL, Token: "agt_synthetic", Source: permissionSourceCodexCLI})
+	for _, event := range []string{"PermissionRequest", "PreToolUse"} {
+		out.Reset()
+		cmd := &cobra.Command{}
+		cmd.Flags().String("source", permissionSourceCodexCLI, "")
+		cmd.Flags().String("hook-event", event, "")
+		cmd.Flags().Bool("fail-open", false, "")
+		cmd.SetIn(strings.NewReader(`{"session_id":"receipt-session","hook_event_name":"` + event + `","tool_name":"Bash","tool_input":{"command":"pwd"}}`))
+		cmd.SetOut(&out)
+		if err := runAgentsPermissionHook(cmd, nil); err != nil {
+			t.Fatalf("hook did not fail open: %v", err)
+		}
+		if event == "PermissionRequest" && ackCalls != 0 {
+			t.Error("non-carrying hook acknowledged")
+		}
+	}
+	if ackCalls != 1 {
+		t.Errorf("acks = %d want 1", ackCalls)
+	}
+}
+
+func TestReceiptSpoolOverflowReportsDropAfterReplacement(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	dropped := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			NoteIDs []string `json:"note_ids"`
+			Reason  string   `json:"undeliverable_reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode drop: %v", err)
+			return
+		}
+		dropped = append(dropped, payload.NoteIDs...)
+		if payload.Reason != "spool_dropped" {
+			t.Errorf("reason = %q", payload.Reason)
+		}
+		path, err := operatorNoteSpoolPath(permissionSourceCodexCLI, "overflow-receipts")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		entries := readOperatorNoteSpool(path)
+		for _, entry := range entries {
+			if strings.Contains(entry.Note, `id="overflow-0"`) {
+				t.Error("drop receipt preceded durable spool replacement")
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	writeTestPermissionCredential(t, home, "overflow-codex", permissionHookCredential{BaseURL: server.URL, Token: "agt_synthetic", Source: permissionSourceCodexCLI})
+	for i := 0; i <= operatorNoteSpoolMaxEntries; i++ {
+		block := `<operator-note id="overflow-` + string(rune('0'+i)) + `">Read later</operator-note>`
+		spoolOperatorNote(permissionSourceCodexCLI, "overflow-receipts", block)
+	}
+	if !reflect.DeepEqual(dropped, []string{"overflow-0"}) {
+		t.Errorf("dropped ids = %v", dropped)
+	}
+}
+
+func TestReceiptExpiredSpoolFileReportsItsOwnSession(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			NoteIDs   []string `json:"note_ids"`
+			SessionID string   `json:"session_id"`
+			Reason    string   `json:"undeliverable_reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		calls++
+		if !reflect.DeepEqual(payload.NoteIDs, []string{"receipt-purge"}) || payload.SessionID != "receipt-purge-old" || payload.Reason != "spool_dropped" {
+			t.Errorf("wrong purge receipt: %#v", payload)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	writeTestPermissionCredential(t, home, "purge-codex", permissionHookCredential{BaseURL: server.URL, Token: "agt_synthetic", Source: permissionSourceCodexCLI})
+	spoolOperatorNote(permissionSourceCodexCLI, "receipt-purge-old", `<operator-note id="receipt-purge">Old block</operator-note>`)
+	path, err := operatorNoteSpoolPath(permissionSourceCodexCLI, "receipt-purge-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-operatorNoteSpoolTTL - time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	spoolOperatorNote(permissionSourceCodexCLI, "receipt-purge-new", `<operator-note id="receipt-new">New block</operator-note>`)
+	if calls != 1 {
+		t.Errorf("purge receipts = %d want 1", calls)
+	}
+}
+
+func TestReceiptExpiredSpoolSweepIsBoundedAndBatched(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	calls, ids := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			NoteIDs []string `json:"note_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		calls++
+		ids += len(payload.NoteIDs)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	writeTestPermissionCredential(t, home, "bounded-codex", permissionHookCredential{BaseURL: server.URL, Token: "agt_synthetic", Source: permissionSourceCodexCLI})
+	var paths []string
+	for _, session := range []string{"bounded-a", "bounded-b", "bounded-c"} {
+		for _, id := range []string{"one", "two", "three", "four", "five"} {
+			spoolOperatorNote(permissionSourceCodexCLI, session, `<operator-note id="`+session+"-"+id+`">Old</operator-note>`)
+		}
+		path, err := operatorNoteSpoolPath(permissionSourceCodexCLI, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	old := time.Now().Add(-operatorNoteSpoolTTL - time.Hour)
+	for _, path := range paths {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, err := operatorNoteSpoolPath(permissionSourceCodexCLI, "bounded-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	purgeExpiredOperatorNoteSpoolFiles(keep)
+	if calls != 1 || ids != 5 {
+		t.Errorf("sweep made %d requests for %d ids; want one request for five ids", calls, ids)
+	}
+	remaining := 0
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			remaining++
+		}
+	}
+	if remaining != 2 {
+		t.Errorf("remaining files = %d; want 2", remaining)
+	}
+}

@@ -35,7 +35,7 @@ import (
 //     postToolUseFailure, and those two hooks read only permission and
 //     user_message.
 //
-// The permission check marks a note delivered when it returns it, so a note
+// The permission check records a deferred claim for non-carrying hooks, so a note
 // that arrives on a hook that cannot render it must not be dropped. Those hooks
 // spool the block next to the hook credential, keyed by harness session, and
 // the next tool call's carrying hook (which the same onboarding installs)
@@ -64,6 +64,8 @@ const cursorAdditionalContextLimit = 10000
 
 // operatorNoteSpoolEntry is one claimed-but-unrendered note block.
 type operatorNoteSpoolEntry struct {
+	Source    string    `json:"source,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
 	Note      string    `json:"note"`
 	SpooledAt time.Time `json:"spooled_at"`
 }
@@ -154,6 +156,7 @@ func applyOperatorNoteDelivery(
 		blocks = append(blocks, claimed)
 	}
 	decision.OperatorNote = joinOperatorNoteBlocks(source, blocks)
+	receiptDroppedBlocks(source, sessionID, blocks, decision.OperatorNote)
 	return decision
 }
 
@@ -202,12 +205,16 @@ func spoolOperatorNote(source, sessionID, note string) {
 		return
 	}
 	entry := operatorNoteSpoolEntry{
+		Source:    source,
+		SessionID: sessionID,
 		Note:      note,
 		SpooledAt: time.Now().UTC(),
 	}
+	var dropped []operatorNoteSpoolEntry
 	err = withOperatorNoteSpoolLock(path, func() error {
 		entries := append(readOperatorNoteSpool(path), entry)
 		if len(entries) > operatorNoteSpoolMaxEntries {
+			dropped = entries[:len(entries)-operatorNoteSpoolMaxEntries]
 			entries = entries[len(entries)-operatorNoteSpoolMaxEntries:]
 		}
 		data, err := json.Marshal(entries)
@@ -222,6 +229,8 @@ func spoolOperatorNote(source, sessionID, note string) {
 	if err != nil {
 		return
 	}
+	// Report a drop only once the replacement is durable and the lock is released.
+	receiptSpoolDrops(source, sessionID, dropped)
 	purgeExpiredOperatorNoteSpoolFiles(path)
 }
 
@@ -251,14 +260,17 @@ func drainOperatorNoteSpool(source, sessionID string) []string {
 		return nil
 	}
 	var blocks []string
+	var dropped []operatorNoteSpoolEntry
 	for _, entry := range entries {
 		if time.Since(entry.SpooledAt) > operatorNoteSpoolTTL {
+			dropped = append(dropped, entry)
 			continue
 		}
 		if note := strings.TrimSpace(entry.Note); note != "" {
 			blocks = append(blocks, note)
 		}
 	}
+	receiptSpoolDrops(source, sessionID, dropped)
 	return blocks
 }
 
@@ -324,6 +336,8 @@ func writeOperatorNoteSpoolAtomic(path string, data []byte) error {
 // purgeExpiredOperatorNoteSpoolFiles deletes sibling spool files whose mtime is
 // older than the TTL. Called from spoolOperatorNote so expiry is storage
 // cleanup, not only a read-time filter. keepPath is the file just written.
+// Sweep at most one expired session per invocation and batch its receipt so
+// accumulated stale sessions cannot multiply network waits on a tool decision.
 func purgeExpiredOperatorNoteSpoolFiles(keepPath string) {
 	dir := filepath.Dir(keepPath)
 	entries, err := os.ReadDir(dir)
@@ -338,7 +352,8 @@ func purgeExpiredOperatorNoteSpoolFiles(keepPath string) {
 		if path == keepPath {
 			continue
 		}
-		_ = withOperatorNoteSpoolLock(path, func() error {
+		var dropped []operatorNoteSpoolEntry
+		err = withOperatorNoteSpoolLock(path, func() error {
 			info, err := os.Stat(path)
 			if err != nil {
 				return nil
@@ -346,8 +361,23 @@ func purgeExpiredOperatorNoteSpoolFiles(keepPath string) {
 			if time.Since(info.ModTime()) <= operatorNoteSpoolTTL {
 				return nil
 			}
-			_ = os.Remove(path)
+			entries := readOperatorNoteSpool(path)
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			dropped = entries
 			return nil
 		})
+		if err != nil {
+			continue
+		}
+		if len(dropped) == 0 {
+			continue
+		}
+		entry := dropped[0]
+		if entry.Source != "" && entry.SessionID != "" {
+			receiptSpoolDrops(entry.Source, entry.SessionID, dropped)
+		}
+		return
 	}
 }

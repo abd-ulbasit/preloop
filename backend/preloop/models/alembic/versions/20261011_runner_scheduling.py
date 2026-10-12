@@ -1,14 +1,14 @@
 """Add runner scheduling preferences.
 
 Revision ID: 20261011_runner_scheduling
-Revises: 20261012_identity_backfill
+Revises: 20261013_note_receipts
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision = "20261011_runner_scheduling"
-down_revision = "20261012_identity_backfill"
+down_revision = "20261013_note_receipts"
 branch_labels = None
 depends_on = None
 
