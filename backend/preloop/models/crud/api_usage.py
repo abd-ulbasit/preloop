@@ -12,6 +12,7 @@ from sqlalchemy import (
     and_,
     case,
     cast,
+    false,
     func,
     inspect,
     literal_column,
@@ -2147,6 +2148,83 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             for row in rows
         ]
 
+    @staticmethod
+    def _session_usage_conditions(
+        *,
+        account_id: str,
+        start_date: datetime,
+        end_date: datetime,
+        ai_model_id: Optional[str] = None,
+        api_key_id: Optional[str] = None,
+        runtime_principal_id: Optional[str] = None,
+    ) -> list[Any]:
+        """Row filter shared by the session aggregate and its key scan."""
+        conditions = [
+            ApiUsage.action_type == "model_gateway",
+            ApiUsage.account_id == account_id,
+            exclude_replay_usage_condition(),
+            or_(
+                ApiUsage.runtime_session_id.isnot(None),
+                ApiUsage.flow_execution_id.isnot(None),
+            ),
+            ApiUsage.timestamp >= start_date,
+            ApiUsage.timestamp < end_date,
+        ]
+        if ai_model_id:
+            conditions.append(ApiUsage.ai_model_id == ai_model_id)
+        if api_key_id:
+            conditions.append(ApiUsage.api_key_id == api_key_id)
+        if runtime_principal_id:
+            conditions.append(ApiUsage.runtime_principal_id == runtime_principal_id)
+        return conditions
+
+    #: Rows fetched per round trip while walking usage newest first.
+    _SESSION_KEY_SCAN_BATCH = 2000
+
+    def _recent_session_keys(
+        self,
+        db: Session,
+        *,
+        limit: int,
+        **filters: Any,
+    ) -> list[tuple[Any, Any]]:
+        """Return the ``limit`` most recently active session/execution pairs.
+
+        Walks matching rows newest first (``ix_api_usage_account_action_ts``
+        serves the order) and stops once ``limit`` distinct
+        ``(runtime_session_id, flow_execution_id)`` pairs are seen, plus any
+        pair tied with the last one on timestamp. Both pair columns are keys
+        of the session breakdown, so a breakdown group whose newest request
+        ranks in the top ``limit`` always belongs to one of these pairs.
+
+        Args:
+            db: Database session.
+            limit: Number of distinct pairs wanted.
+            **filters: Arguments for :meth:`_session_usage_conditions`.
+
+        Returns:
+            Pairs in recency order.
+        """
+        keys: dict[tuple[Any, Any], None] = {}
+        cutoff: Optional[datetime] = None
+        rows = (
+            db.query(
+                ApiUsage.runtime_session_id,
+                ApiUsage.flow_execution_id,
+                ApiUsage.timestamp,
+            )
+            .filter(*self._session_usage_conditions(**filters))
+            .order_by(ApiUsage.timestamp.desc())
+            .yield_per(self._SESSION_KEY_SCAN_BATCH)
+        )
+        for session_id, execution_id, timestamp in rows:
+            if cutoff is not None and timestamp < cutoff:
+                break
+            keys.setdefault((session_id, execution_id), None)
+            if cutoff is None and len(keys) >= limit:
+                cutoff = timestamp
+        return list(keys)
+
     def _session_usage_aggregate(
         self,
         db: Session,
@@ -2157,6 +2235,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         ai_model_id: Optional[str] = None,
         api_key_id: Optional[str] = None,
         runtime_principal_id: Optional[str] = None,
+        session_keys: Optional[Sequence[tuple[Any, Any]]] = None,
     ) -> Any:
         """Aggregate gateway rows by session and model, before descriptive joins.
 
@@ -2175,6 +2254,10 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             api_key_id: Restrict to one API key.
             runtime_principal_id: Restrict to one runtime principal on the
                 usage row (the same filter the breakdown applied before).
+            session_keys: When given, only rows whose
+                ``(runtime_session_id, flow_execution_id)`` pair is listed
+                are aggregated. Every row of a listed pair is included, so
+                the sums stay exact.
 
         Returns:
             A subquery of one row per identity group with summed tokens, cost,
@@ -2202,23 +2285,44 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             func.max(ApiUsage.timestamp).label("last_request_at"),
             *cache_split_columns(),
         ).filter(
-            ApiUsage.action_type == "model_gateway",
-            ApiUsage.account_id == account_id,
-            exclude_replay_usage_condition(),
-            or_(
-                ApiUsage.runtime_session_id.isnot(None),
-                ApiUsage.flow_execution_id.isnot(None),
-            ),
-            ApiUsage.timestamp >= start_date,
-            ApiUsage.timestamp < end_date,
+            *self._session_usage_conditions(
+                account_id=account_id,
+                start_date=start_date,
+                end_date=end_date,
+                ai_model_id=ai_model_id,
+                api_key_id=api_key_id,
+                runtime_principal_id=runtime_principal_id,
+            )
         )
-        if ai_model_id:
-            aggregated = aggregated.filter(ApiUsage.ai_model_id == ai_model_id)
-        if api_key_id:
-            aggregated = aggregated.filter(ApiUsage.api_key_id == api_key_id)
-        if runtime_principal_id:
+        if session_keys is not None:
+            session_ids = {key[0] for key in session_keys if key[0] is not None}
+            execution_ids = {key[1] for key in session_keys if key[1] is not None}
+            # The two IN lists let the planner use the per-column indexes;
+            # the pair test then drops rows of a listed session that belong
+            # to an execution pair which is not listed (and vice versa).
             aggregated = aggregated.filter(
-                ApiUsage.runtime_principal_id == runtime_principal_id
+                or_(
+                    ApiUsage.runtime_session_id.in_(session_ids),
+                    ApiUsage.flow_execution_id.in_(execution_ids),
+                ),
+                or_(
+                    *(
+                        and_(
+                            (
+                                ApiUsage.runtime_session_id == session_id
+                                if session_id is not None
+                                else ApiUsage.runtime_session_id.is_(None)
+                            ),
+                            (
+                                ApiUsage.flow_execution_id == execution_id
+                                if execution_id is not None
+                                else ApiUsage.flow_execution_id.is_(None)
+                            ),
+                        )
+                        for session_id, execution_id in session_keys
+                    ),
+                    false(),
+                ),
             )
         return aggregated.group_by(
             ApiUsage.runtime_session_id,
@@ -2250,14 +2354,21 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         agent, flow, and principal labels are joined onto that aggregate.
         ``limit`` applies only after the full aggregation.
         """
+        filters = {
+            "account_id": account_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ai_model_id": ai_model_id,
+            "api_key_id": api_key_id,
+            "runtime_principal_id": runtime_principal_id,
+        }
+        # Aggregate only the sessions that can make the cut. Ranking every
+        # session in the window first cost seconds on busy accounts (#1582).
+        session_keys = self._recent_session_keys(db, limit=limit, **filters)
+        if not session_keys:
+            return []
         aggregated = self._session_usage_aggregate(
-            db,
-            account_id=account_id,
-            start_date=start_date,
-            end_date=end_date,
-            ai_model_id=ai_model_id,
-            api_key_id=api_key_id,
-            runtime_principal_id=runtime_principal_id,
+            db, session_keys=session_keys, **filters
         )
         legacy_session_source_type = case(
             (aggregated.c.flow_execution_id.isnot(None), "flow_execution"),
@@ -2270,9 +2381,6 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         session_source_id = func.coalesce(
             RuntimeSession.session_source_id, legacy_session_source_id
         )
-        session_reference = func.coalesce(
-            RuntimeSession.session_reference, FlowExecution.agent_session_reference
-        )
         resolved_runtime_principal_type = func.coalesce(
             RuntimeSession.runtime_principal_type, aggregated.c.usage_principal_type
         )
@@ -2282,28 +2390,30 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         resolved_runtime_principal_name = func.coalesce(
             RuntimeSession.runtime_principal_name, aggregated.c.usage_principal_name
         )
-        rows = (
+        # Rank on narrow identity keys first, then hydrate only the rows that
+        # survive ``limit``. Titles, summaries and display names are
+        # functionally dependent on the keys (runtime session, flow, flow
+        # execution, managed agent), so leaving them out of the grouping
+        # keeps the result identical while the sort that feeds the
+        # aggregate no longer drags kilobyte-wide text through a spill to
+        # disk for every session group in the window.
+        request_count = func.coalesce(func.sum(aggregated.c.request_count), 0)
+        last_request_at = func.max(aggregated.c.last_request_at)
+        ranked = (
             db.query(
-                aggregated.c.ai_model_id,
+                aggregated.c.ai_model_id.label("ai_model_id"),
                 RuntimeSession.id.label("runtime_session_id"),
+                aggregated.c.flow_execution_id.label("flow_execution_id"),
+                aggregated.c.flow_id.label("flow_id"),
+                aggregated.c.model_alias.label("model_alias"),
+                aggregated.c.provider_name.label("provider_name"),
+                ManagedAgent.id.label("agent_id"),
                 session_source_type.label("session_source_type"),
                 session_source_id.label("session_source_id"),
-                RuntimeSession.title.label("session_title"),
-                RuntimeSession.summary.label("session_summary"),
                 resolved_runtime_principal_type.label("runtime_principal_type"),
                 resolved_runtime_principal_id.label("runtime_principal_id"),
                 resolved_runtime_principal_name.label("runtime_principal_name"),
-                ManagedAgent.id.label("agent_id"),
-                ManagedAgent.display_name.label("agent_name"),
-                aggregated.c.flow_execution_id,
-                aggregated.c.flow_id,
-                Flow.name.label("flow_name"),
-                session_reference.label("session_reference"),
-                aggregated.c.model_alias,
-                aggregated.c.provider_name,
-                func.coalesce(func.sum(aggregated.c.request_count), 0).label(
-                    "request_count"
-                ),
+                request_count.label("request_count"),
                 func.coalesce(func.sum(aggregated.c.prompt_tokens), 0).label(
                     "prompt_tokens"
                 ),
@@ -2316,7 +2426,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 func.coalesce(func.sum(aggregated.c.estimated_cost), 0.0).label(
                     "estimated_cost"
                 ),
-                func.max(aggregated.c.last_request_at).label("last_request_at"),
+                last_request_at.label("last_request_at"),
                 func.coalesce(func.sum(aggregated.c.cache_read_tokens), 0).label(
                     "cache_read_tokens"
                 ),
@@ -2331,37 +2441,50 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .outerjoin(
                 RuntimeSession, aggregated.c.runtime_session_id == RuntimeSession.id
             )
-            .outerjoin(Flow, aggregated.c.flow_id == Flow.id)
-            .outerjoin(
-                FlowExecution, aggregated.c.flow_execution_id == FlowExecution.id
-            )
             .outerjoin(
                 ManagedAgent, ManagedAgent.runtime_session_id == RuntimeSession.id
             )
             .group_by(
                 aggregated.c.ai_model_id,
                 RuntimeSession.id,
+                aggregated.c.flow_execution_id,
+                aggregated.c.flow_id,
+                aggregated.c.model_alias,
+                aggregated.c.provider_name,
+                ManagedAgent.id,
                 session_source_type,
                 session_source_id,
-                RuntimeSession.title,
-                RuntimeSession.summary,
                 resolved_runtime_principal_type,
                 resolved_runtime_principal_id,
                 resolved_runtime_principal_name,
-                ManagedAgent.id,
-                ManagedAgent.display_name,
-                aggregated.c.flow_execution_id,
-                aggregated.c.flow_id,
-                Flow.name,
-                session_reference,
-                aggregated.c.model_alias,
-                aggregated.c.provider_name,
             )
-            .order_by(
-                func.max(aggregated.c.last_request_at).desc(),
-                func.sum(aggregated.c.request_count).desc(),
-            )
+            .order_by(last_request_at.desc(), request_count.desc())
             .limit(limit)
+            .subquery("gateway_usage_by_session_top")
+        )
+        ranked_session = aliased(RuntimeSession)
+        ranked_execution = aliased(FlowExecution)
+        ranked_agent = aliased(ManagedAgent)
+        rows = (
+            db.query(
+                ranked,
+                ranked_session.title.label("session_title"),
+                ranked_session.summary.label("session_summary"),
+                ranked_agent.display_name.label("agent_name"),
+                Flow.name.label("flow_name"),
+                func.coalesce(
+                    ranked_session.session_reference,
+                    ranked_execution.agent_session_reference,
+                ).label("session_reference"),
+            )
+            .select_from(ranked)
+            .outerjoin(ranked_session, ranked.c.runtime_session_id == ranked_session.id)
+            .outerjoin(Flow, ranked.c.flow_id == Flow.id)
+            .outerjoin(
+                ranked_execution, ranked.c.flow_execution_id == ranked_execution.id
+            )
+            .outerjoin(ranked_agent, ranked.c.agent_id == ranked_agent.id)
+            .order_by(ranked.c.last_request_at.desc(), ranked.c.request_count.desc())
             .all()
         )
         result: list[dict[str, Any]] = [
