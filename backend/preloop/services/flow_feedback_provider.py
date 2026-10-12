@@ -29,7 +29,10 @@ JOB_TRACE_TAIL_BYTES = 4000
 JOB_TRACE_READ_BYTES = 64000
 # Failing jobs whose trace is read during one reconciliation.
 MAX_JOB_TRACES = 3
-# Keep Actions enrichment within the adoption preflight's twelve-read budget.
+# Actions jobs enriched per reconciliation. The cap stays inside the adoption
+# preflight's twelve-read budget. Further failing jobs on the same head are
+# deferred: once a read job is a confirmed script failure they ride along
+# with that repair instead of vetoing it as an unexplained failure.
 MAX_ACTIONS_JOB_READS = 2
 PROVIDER_INFRA_OUTCOMES = frozenset({"startup_failure"})
 # GitLab job/pipeline reads stay inside one page, like notes and statuses.
@@ -270,7 +273,8 @@ def classify_failure(item: dict[str, Any]) -> str:
     """Bucket one failing check from provider details only, never from log prose.
 
     Returns ``code`` (a repair round is warranted), ``infra`` or ``timeout``
-    (bounded retry then escalation), ``permission`` (a human must act) or
+    (bounded retry then escalation), ``permission`` (a human must act),
+    ``deferred`` (not read because the Actions budget was spent) or
     ``unknown`` (no usable evidence, so an explicit blocked reason).
     """
     reason = str(item.get("failure_reason") or "").strip().lower()
@@ -289,6 +293,10 @@ def classify_failure(item: dict[str, Any]) -> str:
         return "infra"
     if outcome == "timed_out":
         return "timeout"
+    if item.get("details_deferred") is True:
+        # The read budget was spent before this job. It is not evidence that
+        # the failure is unexplained; callers decide that from jobs we did read.
+        return "deferred"
     if reason in UNCLASSIFIED_REASONS or item.get("details_unavailable") is True:
         # The provider reported a failure it cannot explain, or its job detail
         # read was unavailable. Repairing on that evidence would be a guess.
@@ -314,6 +322,7 @@ def classify_checks(
     blocked = "required_checks_missing" if pending else None
     failures: list[dict[str, Any]] = []
     infra_failures: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
     if not selected and not allow_empty:
         return CheckClassification(True, False, "required_checks_missing", [], [])
     for item in selected:
@@ -335,12 +344,24 @@ def classify_checks(
                 infra_failures.append(item)
             elif category == "permission":
                 blocked = "ci_permission_required"
+            elif category == "deferred":
+                deferred.append(item)
             else:
                 blocked = "ci_failure_unclassified"
         elif conclusion in BLOCKED_OUTCOMES:
             blocked = f"ci_{conclusion}"
         else:
             blocked = "ci_unknown_outcome"
+    if deferred and blocked is None:
+        if failures:
+            # A confirmed script failure already warrants a repair. Jobs left
+            # unread because the Actions read budget was spent are the same
+            # head, so they travel with that repair instead of vetoing it.
+            failures.extend(deferred)
+        else:
+            # Nothing we read proved the branch failed. Unread jobs are not
+            # a reason to spend a repair turn.
+            blocked = "ci_failure_unclassified"
     return CheckClassification(
         pending,
         not pending and not failures and not infra_failures and not blocked,
@@ -548,7 +569,9 @@ class FeedbackProvider:
 
         Never fetch a provider-supplied URL. Only a numeric job identity is
         extracted; the read stays on the authoritative repository endpoint.
-        Missing, stale and over-budget evidence blocks speculative code repair.
+        Missing or stale evidence still blocks a speculative repair. Jobs past
+        the read budget are deferred and block only when no read job was a
+        confirmed script failure.
         """
         enriched = []
         reads = 0
@@ -566,11 +589,18 @@ class FeedbackProvider:
                 r"https://github\.com/[^/]+/[^/]+/actions/runs/[0-9]+/job/([0-9]+)(?:\?.*)?",
                 str(item.get("details_url") or ""),
             )
-            if (
-                item.get("head_sha") != sha
-                or identity is None
-                or reads >= MAX_ACTIONS_JOB_READS
-            ):
+            budget_exhausted = reads >= MAX_ACTIONS_JOB_READS
+            if item.get("head_sha") != sha or identity is None or budget_exhausted:
+                # A current-head job skipped only because the read budget is
+                # spent is deferred, not missing. Stale and untrusted URLs
+                # stay unexplained.
+                if (
+                    budget_exhausted
+                    and identity is not None
+                    and item.get("head_sha") == sha
+                ):
+                    item["details_deferred"] = True
+                    item.pop("details_unavailable", None)
                 continue
             reads += 1
             job = await _optional(
