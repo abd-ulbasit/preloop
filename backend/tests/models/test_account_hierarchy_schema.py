@@ -616,14 +616,21 @@ def test_tags_and_rules_reach_kinds_that_are_never_shared(db_session):
     savepoint.rollback()
 
 
-def test_verifying_a_row_verifies_its_provisional_person(db_session):
+def test_canonical_verification_verifies_provisional_person(db_session):
     """Signup, verify later, then an invite elsewhere: the first row keeps it."""
     first_account = _account(db_session, "first")
     first = _user(db_session, first_account, "gina@example.com", verified=False)
     assert first.person.email_verified_at is None
 
-    first.email_verified = True
-    db_session.flush()
+    from preloop.models.crud import crud_person
+
+    crud_person.verify_email(
+        db_session,
+        person_id=first.person_id,
+        expected_email=first.email,
+        expected_generation=0,
+        commit=False,
+    )
     assert first.person.email_verified_at is not None
 
     second = _user(
@@ -649,8 +656,8 @@ def test_verifying_a_row_never_takes_a_claimed_address(db_session):
     assert late.person_id != verified.person_id
 
 
-def test_deleting_the_last_row_deletes_its_person(db_session):
-    """Delete, then sign up again: the new row can hold the verified claim."""
+def test_deleting_last_membership_retains_identity_until_explicit_deletion(db_session):
+    """Last membership deletion retains credentials and the verified address claim."""
     from preloop.models.crud import crud_user
 
     account = _account(db_session, "acme")
@@ -658,10 +665,14 @@ def test_deleting_the_last_row_deletes_its_person(db_session):
     person_id = gone.person_id
     crud_user.hard_delete(db_session, user_id=gone.id, commit=False)
     db_session.expire_all()
-    assert db_session.get(models.Person, person_id) is None
+    assert db_session.get(models.Person, person_id) is not None
 
     again = _user(db_session, account, "ivy@example.com", verified=True)
-    assert again.person.email_verified_at is not None
+    assert again.person.email_verified_at is None
+    from preloop.models.crud import crud_person
+
+    crud_person.delete_identity(db_session, person_id=person_id, commit=False)
+    assert db_session.get(models.Person, person_id) is None
 
 
 def test_a_person_with_rows_left_survives_a_delete(db_session):

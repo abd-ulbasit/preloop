@@ -438,6 +438,111 @@ describe('AgentDetailView', () => {
     localStorage.clear();
   });
 
+  describe('live desktop (#870)', () => {
+    const endpoint = {
+      id: '00000000-0000-4000-8000-000000000001',
+      endpoint_id: 'host-endpoint-1',
+      hostname: 'agent-vm.example.com',
+      display: ':99',
+      managed_agent_id: 'agent-1',
+      runner_id: null,
+      state: 'online',
+      last_seen_at: '2026-10-11T18:00:00Z',
+      active_view: null,
+    };
+
+    function withEndpoints(respond: () => Response) {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          if (url.startsWith('/api/v1/desktop/endpoints?')) return respond();
+          return defaultFetch(input, init);
+        }
+      );
+    }
+
+    const desktopTab = (el: AgentDetailView) =>
+      el.shadowRoot!.querySelector('sl-tab[panel="desktop"]');
+
+    it('shows a Desktop tab with the viewer when an online endpoint is linked', async () => {
+      withEndpoints(
+        () =>
+          new Response(JSON.stringify({ endpoints: [endpoint] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => desktopTab(el), 'Desktop tab', { timeout: 5000 });
+      const lookup = fetchStub
+        .getCalls()
+        .map((call) => call.args[0].toString())
+        .find((url) => url.startsWith('/api/v1/desktop/endpoints?'))!;
+      expect(lookup).to.contain('managed_agent_id=agent-1');
+      expect(lookup).to.contain('state=online');
+      expect(desktopTab(el)!.textContent).to.contain('Desktop');
+
+      (el as any).activeTab = 'desktop';
+      await el.updateComplete;
+      const card = el.shadowRoot!.querySelector('.desktop-tab')!;
+      expect(card.textContent).to.contain('agent-vm.example.com');
+      const viewer = card.querySelector('desktop-view') as any;
+      expect(viewer).to.exist;
+      expect(viewer.endpointId).to.equal(endpoint.id);
+      await viewer.updateComplete;
+      // Nothing opens until the operator asks.
+      expect(viewer.viewerState).to.equal('idle');
+      expect(
+        viewer.shadowRoot.querySelector('sl-button.open').textContent
+      ).to.contain('Open live view');
+    });
+
+    it('has no Desktop tab when the server has desktop views off (404)', async () => {
+      withEndpoints(
+        () =>
+          new Response(
+            JSON.stringify({
+              detail: { code: 'desktop_views_disabled', message: 'off' },
+            }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => !(el as any).loading);
+      await waitUntil(() =>
+        fetchStub
+          .getCalls()
+          .some((call) =>
+            call.args[0].toString().startsWith('/api/v1/desktop/endpoints?')
+          )
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await el.updateComplete;
+      expect(desktopTab(el)).to.be.null;
+    });
+
+    it('has no Desktop tab when no linked endpoint is online', async () => {
+      withEndpoints(
+        () =>
+          new Response(
+            JSON.stringify({ endpoints: [{ ...endpoint, state: 'offline' }] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      const el = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(() => !(el as any).loading);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await el.updateComplete;
+      expect(desktopTab(el)).to.be.null;
+    });
+  });
+
   it('defers all editor catalogs on the sessions tab and shares a single load across editors', async () => {
     const el = await fixture<AgentDetailView>(
       html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
@@ -1054,14 +1159,17 @@ describe('AgentDetailView', () => {
 
     (element as any).agent = { ...(element as any).agent, desktop: 'vnc' };
     await element.updateComplete;
-    expect(badge()?.textContent).to.contain(
-      'Desktop: VNC (loopback, brokered access coming)'
-    );
+    expect(badge()?.textContent).to.contain('Desktop: VNC (loopback)');
 
     (element as any).agent = { ...(element as any).agent, desktop: 'rdp' };
     await element.updateComplete;
+    expect(badge()?.textContent).to.contain('Desktop: RDP (loopback)');
+
+    // An online desktop endpoint (#870) makes the live view reachable.
+    (element as any).desktopEndpoints = [{ id: 'endpoint-1' }];
+    await element.updateComplete;
     expect(badge()?.textContent).to.contain(
-      'Desktop: RDP (loopback, brokered access coming)'
+      'Desktop: RDP (live view available)'
     );
   });
 
@@ -1456,6 +1564,8 @@ describe('AgentDetailView', () => {
     // The toggle must stay unchecked after the re-render instead of bouncing
     // back to checked: an empty list is "all allowed", rendered as such.
     expect(gptToggle.checked).to.be.false;
+    // This fixture agent has no configured bindings, so an empty allowlist
+    // really is "every model allowed".
     const status = element.shadowRoot?.querySelector(
       '#available-models-status'
     );
@@ -1467,6 +1577,61 @@ describe('AgentDetailView', () => {
       'sl-input[label="Allowed models"]'
     ) as any;
     expect(overrideInput.value).to.equal('');
+  });
+
+  it('describes the configured-models default when bindings exist and no allowlist is set', async () => {
+    const element = await fixture<AgentDetailView>(
+      html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+    );
+
+    await waitUntil(
+      () => !(element as any).loading && (element as any).agent !== null,
+      'Agent detail view did not finish loading'
+    );
+
+    // Two onboarding bindings and an empty allowlist: the gateway offers the
+    // agent exactly those two models, and the status line must say so
+    // instead of claiming every model is allowed.
+    (element as any).agent = {
+      ...(element as any).agent,
+      configured_models: [
+        {
+          ai_model_id: 'model-astra',
+          gateway_alias: 'openai/gpt-6-astra',
+          config_key: 'model',
+          binding_type: 'configured',
+          is_primary: true,
+          status: 'gateway_ready',
+        },
+        {
+          ai_model_id: 'model-sol',
+          gateway_alias: 'openai/gpt-6.1-sol',
+          config_key: 'gateway.autoregister.gpt-6.1-sol',
+          binding_type: 'configured',
+          is_primary: false,
+          status: 'gateway_ready',
+        },
+      ],
+    };
+    (element as any).activeTab = 'models';
+    await waitUntil(() => (element as any).editorContextReady);
+    await element.updateComplete;
+    // The governance fixture allows openai/gpt-5; clear it the way the
+    // console does when the last checkbox is unchecked.
+    (element as any).governance = {
+      ...(element as any).governance,
+      allowed_models: [],
+    };
+    (element as any).allowedModelsText = '';
+    await element.updateComplete;
+
+    const status = element.shadowRoot?.querySelector(
+      '#available-models-status'
+    );
+    const text = getDeepText(status).replace(/\s+/g, ' ');
+    expect(text).to.contain('uses its configured models');
+    expect(text).to.contain('2');
+    expect(text).to.not.contain('Every model is currently allowed');
   });
 
   it('saving budgets no longer derives allowed_models from the budget keys', async () => {

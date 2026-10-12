@@ -60,6 +60,7 @@ import {
   updateAgentGovernance,
   updateAccountAgent,
   getFlows,
+  getUserProfile,
 } from '../../api';
 import type {
   GatewayUsageByModel,
@@ -98,6 +99,12 @@ import {
 } from '../../utils/agent-display';
 import { consoleDialogStyles } from '../../styles/console-dialog';
 import '../../components/capability-extension';
+import '../../components/desktop-view';
+import {
+  type DesktopEndpoint,
+  canTakeDesktopControl,
+  listOnlineDesktopEndpoints,
+} from '../../desktop-api';
 
 interface GovernanceToolDefinition {
   name: string;
@@ -164,9 +171,17 @@ export class AgentDetailView extends LitElement {
     | 'tools'
     | 'models'
     | 'vnc'
+    | 'desktop'
     | 'ssh'
     | 'dashboard'
     | 'associated-flows' = 'sessions';
+
+  /**
+   * Online desktop endpoints linked to this agent (#870). Empty while the
+   * server has desktop views off or absent, which hides the Desktop tab.
+   */
+  @state() private desktopEndpoints: DesktopEndpoint[] = [];
+  @state() private canControlDesktop = false;
 
   @state()
   private associatedFlows: any[] = [];
@@ -628,6 +643,7 @@ export class AgentDetailView extends LitElement {
       'tools',
       'models',
       'vnc',
+      'desktop',
       'ssh',
       'dashboard',
       'associated-flows',
@@ -855,6 +871,7 @@ export class AgentDetailView extends LitElement {
         void this.ensureEditorContext(isSoftRefresh);
       if (this.activeTab === 'associated-flows')
         void this.loadAssociatedFlows(true);
+      if (!isSoftRefresh) void this.loadDesktopEndpoints(generation);
     } catch (error) {
       if (generation !== this.detailLoadGeneration) return;
       console.error('Failed to load managed agent detail:', error);
@@ -1389,15 +1406,55 @@ export class AgentDetailView extends LitElement {
 
   /**
    * Loopback desktop the runtime advertised. Hidden when the agent has none.
-   * Brokered viewing is not available yet; the badge only names the signal.
+   * With an online desktop endpoint (#870) the Desktop tab views it live.
    */
   private renderDesktopBadge(): TemplateResult | typeof nothing {
     const desktop = this.agent?.desktop;
     if (desktop !== 'vnc' && desktop !== 'rdp') return nothing;
     const kind = desktop === 'rdp' ? 'RDP' : 'VNC';
+    const access =
+      this.desktopEndpoints.length > 0 ? 'live view available' : 'loopback';
     return html`<sl-badge class="desktop-badge" variant="primary" pill
-      >Desktop: ${kind} (loopback, brokered access coming)</sl-badge
+      >Desktop: ${kind} (${access})</sl-badge
     >`;
+  }
+
+  /**
+   * Looks up online desktop endpoints for the agent. Inert by design: any
+   * failure, a 404 from a server without desktop views, or none online all
+   * leave the list empty and the Desktop tab hidden.
+   */
+  private async loadDesktopEndpoints(generation: number): Promise<void> {
+    const agentId = this.agentId;
+    if (!agentId) return;
+    const [endpoints, profile] = await Promise.all([
+      listOnlineDesktopEndpoints({ managedAgentId: agentId }),
+      getUserProfile().catch(() => null),
+    ]);
+    if (generation !== this.detailLoadGeneration) return;
+    this.desktopEndpoints = endpoints;
+    this.canControlDesktop = canTakeDesktopControl(profile);
+    if (this.activeTab === 'desktop' && endpoints.length === 0) {
+      this.activeTab = 'sessions';
+    }
+  }
+
+  private renderDesktopTab(): TemplateResult {
+    const endpoint = this.desktopEndpoints[0];
+    return html`
+      <sl-card class="desktop-tab" style="width: 100%;">
+        <div slot="header">
+          Live desktop
+          <span style="color: var(--sl-color-neutral-600); font-weight: normal;"
+            >${endpoint.hostname} ${endpoint.display}</span
+          >
+        </div>
+        <desktop-view
+          .endpointId=${endpoint.id}
+          ?canControl=${this.canControlDesktop}
+        ></desktop-view>
+      </sl-card>
+    `;
   }
 
   private handleGatewayActivity(message: any): void {
@@ -3164,6 +3221,16 @@ export class AgentDetailView extends LitElement {
                 >
 
                 ${
+                  this.desktopEndpoints.length > 0
+                    ? html`<sl-tab
+                        slot="nav"
+                        panel="desktop"
+                        ?active=${this.activeTab === 'desktop'}
+                        >Desktop</sl-tab
+                      >`
+                    : nothing
+                }
+                ${
                   supportsSSH
                     ? html`
                         <sl-tab
@@ -3651,9 +3718,17 @@ export class AgentDetailView extends LitElement {
                             ${
                               (this.governance.allowed_models || []).length ===
                               0
-                                ? html`Every model is currently allowed. Check a
-                                  model to restrict this agent to selected
-                                  models only.`
+                                ? this.getConfiguredModelBindings().length > 0
+                                  ? html`No explicit allowlist: this agent uses
+                                    its configured models (the
+                                    ${this.getConfiguredModelBindings().length}
+                                    bound at onboarding or picked in the agent)
+                                    and nothing else. Check models to replace
+                                    that default with an explicit list.`
+                                  : html`Every model is currently allowed: this
+                                    agent has no configured models yet. Check a
+                                    model to restrict this agent to selected
+                                    models only.`
                                 : html`This agent may only use the checked
                                   models.`
                             }
@@ -3739,6 +3814,11 @@ export class AgentDetailView extends LitElement {
                 : nothing
             }
             ${this.activeTab === 'vnc' ? this.renderVNCTab() : nothing}
+            ${
+              this.activeTab === 'desktop' && this.desktopEndpoints.length > 0
+                ? this.renderDesktopTab()
+                : nothing
+            }
             ${this.activeTab === 'ssh' ? this.renderSSHTab() : nothing}
             ${
               this.activeTab === 'dashboard'

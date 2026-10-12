@@ -171,6 +171,8 @@ __all__ = [
     "DESKTOP_VIEW_OPEN_STATES",
     "DesktopEndpoint",
     "DesktopView",
+    "PersonAuthIdentity",
+    "PersonPasswordCredential",
     "AUDIT_OUTBOX_DELIVERED",
     "AUDIT_OUTBOX_FAILED",
     "AUDIT_OUTBOX_PENDING",
@@ -360,3 +362,5 @@ from .readiness import (
     ReadinessSeries,
     TicketCreationRecord,
 )
+
+from .person_auth_identity import PersonAuthIdentity, PersonPasswordCredential
