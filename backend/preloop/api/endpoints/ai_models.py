@@ -319,7 +319,7 @@ def list_ai_models(
     )
     own_models = [model for model in models if model.account_id is not None]
     built_in = [model for model in models if model.account_id is None]
-    account_has_default = any(model.is_default for model in own_models)
+    account_default_kinds = crud_ai_model.configured_account_default_kinds(own_models)
     visible = [
         *built_in,
         *filter_viewable(db, current_user, VISIBLE_AI_MODEL, [*own_models, *shared]),
@@ -328,7 +328,9 @@ def list_ai_models(
         visible, is_admin=getattr(current_user, "is_superuser", False) is True
     )
     return [
-        public_built_in_model(row, account_has_default=account_has_default)
+        public_built_in_model(
+            row, account_has_default=row.model_kind in account_default_kinds
+        )
         if not isinstance(row, SharedResourceRead) and row.account_id is None
         else row
         for row in priced
@@ -395,9 +397,7 @@ def get_ai_models_overview(
         account_id=current_user.account_id,
         include_built_in=built_in_models_enabled(),
     )
-    account_has_default = any(
-        model.account_id is not None and model.is_default for model in models
-    )
+    account_default_kinds = crud_ai_model.configured_account_default_kinds(models)
     models = [
         model
         for model in models
@@ -460,7 +460,10 @@ def get_ai_models_overview(
                 model_identifier=model.model_identifier,
                 model_alias=_gateway_alias(model),
                 is_default=bool(model.is_default)
-                and (model.account_id is not None or not account_has_default),
+                and (
+                    model.account_id is not None
+                    or model.model_kind not in account_default_kinds
+                ),
                 total_requests=requests,
                 successful_requests=max(requests - failed, 0),
                 failed_requests=failed,
@@ -520,7 +523,7 @@ def get_ai_model(
         return public_built_in_model(
             model,
             account_has_default=crud_ai_model.account_default_model_exists(
-                db, account_id=current_user.account_id
+                db, account_id=current_user.account_id, model_kind=model.model_kind
             ),
         )
     return model

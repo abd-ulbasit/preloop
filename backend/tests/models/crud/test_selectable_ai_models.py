@@ -143,6 +143,7 @@ def test_builtin_usage_is_scoped_to_the_requesting_account(
 
 @pytest.mark.parametrize("own_default", [None, False, True])
 @pytest.mark.parametrize("built_in_default", [False, True])
+@pytest.mark.parametrize("own_kind", ["llm", "stt", "tts"])
 def test_builtin_default_and_order_follow_account_configuration(
     client: TestClient,
     db_session: Session,
@@ -150,6 +151,7 @@ def test_builtin_default_and_order_follow_account_configuration(
     mocker: MockerFixture,
     own_default: bool | None,
     built_in_default: bool,
+    own_kind: str,
 ) -> None:
     """Account defaults override the built-in badge across catalog and detail."""
     mocker.patch(
@@ -181,6 +183,7 @@ def test_builtin_default_and_order_follow_account_configuration(
                 name="Own model",
                 provider_name="openai",
                 model_identifier="example-model",
+                meta_data={"service_kind": own_kind},
                 is_default=own_default,
                 created_at=datetime.now(UTC) - timedelta(minutes=2),
             )
@@ -218,7 +221,9 @@ def test_builtin_default_and_order_follow_account_configuration(
     catalog = client.get("/api/v1/ai-models")
     assert catalog.status_code == 200
     assert [row["id"] for row in catalog.json()] == expected_ids
-    expected_default = built_in_default and own_default is not True
+    expected_default = built_in_default and not (
+        own_default is True and own_kind == "llm"
+    )
     assert catalog.json()[0]["is_default"] is expected_default
     if owned:
         assert catalog.json()[1]["is_default"] is own_default
