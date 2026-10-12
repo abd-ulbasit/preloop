@@ -1,7 +1,7 @@
 """CRUD operations for models.User model."""
 
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 from sqlalchemy import text, update
 from sqlalchemy.orm import Query, Session
@@ -58,6 +58,52 @@ class CRUDUser(CRUDBase[models.User]):
             authorize_capacity(db, str(db_obj.account_id), "users")
         if "is_active" in obj_in and obj_in["is_active"] != db_obj.is_active:
             record_capacity_change(db, str(db_obj.account_id))
+        # Bounded compatibility: legacy CRUD callers write canonical identity,
+        # never an independent membership profile or password store.
+        from .person import IdentityProfileUpdate, crud_person
+
+        obj_in = dict(obj_in)
+        profile_fields = {
+            "username",
+            "email",
+            "full_name",
+            "avatar_url",
+            "avatar_source",
+        }
+        profile = {
+            key: obj_in.pop(key) for key in list(obj_in) if key in profile_fields
+        }
+        if profile:
+            crud_person.update_profile(
+                db,
+                membership_id=db_obj.id,
+                changes=cast(IdentityProfileUpdate, profile),
+                commit=False,
+            )
+        if "hashed_password" in obj_in:
+            password = obj_in.pop("hashed_password")
+            if password is None:
+                raise ValueError(
+                    "Removing a password requires an explicit credential operation"
+                )
+            crud_person.set_password(
+                db, membership_id=db_obj.id, hashed_password=password, commit=False
+            )
+        if "email_verified" in obj_in:
+            verified = obj_in.pop("email_verified")
+            person = crud_person.resolve_for_membership(db, membership_id=db_obj.id)
+            if verified and person.email_verified_at is None:
+                crud_person.verify_email(
+                    db,
+                    person_id=person.id,
+                    expected_email=person.email or "",
+                    expected_generation=person.auth_generation,
+                    commit=False,
+                )
+            elif not verified and person.email_verified_at is not None:
+                raise ValueError(
+                    "Unverifying identity requires an explicit address change"
+                )
         return super().update(db, db_obj=db_obj, obj_in=obj_in)
 
     def delete(self, db: Session, *, id: Any) -> Optional[models.User]:
@@ -258,9 +304,13 @@ class CRUDUser(CRUDBase[models.User]):
     def hard_delete(
         self, db: Session, *, user_id: uuid.UUID, commit: bool = True
     ) -> Optional[models.User]:
-        """Permanently delete a user, including their SSO/OAuth identity records.
+        """Permanently delete a membership while retaining canonical identity credentials.
 
-        The SSO identity fields (``user_source``, ``oauth_provider``,
+        Person-owned password, passkey and provider links survive membership
+        deletion. Tenant-scoped integration grants and analytics edges are
+        membership artifacts and are removed as before.
+
+        The legacy SSO identity fields (``user_source``, ``oauth_provider``,
         ``oauth_id``, ``external_id``) live on the user row itself and are
         removed with it. Provider token rows (``oauth_token``) and identity
         graph edges (``identity_link``) are removed explicitly rather than
@@ -367,16 +417,18 @@ class CRUDUser(CRUDBase[models.User]):
         Returns:
             The (possibly updated) user.
         """
-        if user.avatar_source == "manual":
+        from .person import crud_person
+
+        person = crud_person.resolve_for_membership(db, membership_id=user.id)
+        if person.avatar_source == "manual":
             return user
-        user.avatar_url = avatar_url
-        user.avatar_source = "sso"
-        db.add(user)
-        if commit:
-            db.commit()
-            db.refresh(user)
-        else:
-            db.flush()
+        crud_person.update_profile(
+            db,
+            membership_id=user.id,
+            changes={"avatar_url": avatar_url, "avatar_source": "sso"},
+            commit=commit,
+        )
+        db.refresh(user)
         return user
 
     def bump_auth_generation(self, db: Session, user_id: Any) -> int:

@@ -523,6 +523,7 @@ def test_revoked_key_denial_retains_safe_attribution(
     ci_resources: tuple[Any, ...],
     ci_http: None,
     caplog: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import logging
 
@@ -537,6 +538,9 @@ def test_revoked_key_denial_retains_safe_attribution(
     )
     app = FastAPI()
     app.add_middleware(RestrictedCiAuthMiddleware)
+    # Other app fixtures configure a non-propagating parent logger. Preserve
+    # production handlers while making caplog capture independent of test order.
+    monkeypatch.setattr(logging.getLogger("preloop"), "propagate", True)
     with caplog.at_level(logging.INFO, logger="preloop.api.middleware.ci_auth"):
         response = TestClient(app).get(
             "/protected", headers={"Authorization": f"Bearer {token}"}

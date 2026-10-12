@@ -20,10 +20,8 @@ without knowing about the tree or about persons:
   that address yet; otherwise it is provisional. The hook never links a new
   row to an existing person: merging memberships is a decision for the
   membership service, which has to prove the address first;
-* a user row whose ``email_verified`` turns true verifies its provisional
-  person, on the same terms: only when no verified person holds the address
-  yet. If one does, the row stays provisional for the membership service to
-  merge.
+* existing identity changes and verification go through canonical CRUD.
+  A copied membership verification flag never proves ownership of a Person.
 """
 
 from __future__ import annotations
@@ -33,12 +31,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, List
 
-from sqlalchemy import event, inspect, select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from .account import Account
 from .person import Person, normalize_email
+from .person_auth_identity import PersonAuthIdentity
 from .user import User
+from .webauthn_credential import WebAuthnCredential
 
 
 @dataclass(frozen=True)
@@ -146,6 +146,12 @@ def _verified_person_exists(session: Session, email: str) -> bool:
 
 def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
     if user.person_id is not None or user.person is not None:
+        if (
+            user.hashed_password is not None
+            or user.oauth_id is not None
+            or user.external_id is not None
+        ):
+            raise ValueError("Linked membership cannot introduce identity credentials")
         return
     email = normalize_email(user.email)
     verified = (
@@ -157,6 +163,14 @@ def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
         claimed.add(email)
     person = Person(
         id=uuid.uuid4(),
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        avatar_source=user.avatar_source,
+        hashed_password=user.hashed_password,
+        identity_status="active",
+        auth_generation=user.auth_generation or 0,
         email_normalized=email,
         email_verified_at=datetime.now(timezone.utc) if verified else None,
     )
@@ -164,23 +178,29 @@ def _fill_person(session: Session, user: User, claimed: set[str]) -> None:
     person.last_active_user = user
     user.person = person
     session.add(person)
-
-
-def _verify_person(session: Session, user: User, claimed: set[str]) -> None:
-    if True not in inspect(user).attrs.email_verified.history.added:
-        return
-    with session.no_autoflush:
-        person = user.person
-    if person is None or person.email_verified_at is not None:
-        return
-    email = normalize_email(user.email)
-    if email in claimed or _verified_person_exists(session, email):
-        return
-    claimed.add(email)
-    # A provisional person holds exactly this one row, so its address follows
-    # the row's current email.
-    person.email_normalized = email
-    person.email_verified_at = datetime.now(timezone.utc)
+    source = user.user_source or "local"
+    provider: str | None = None
+    subject: str | None = None
+    if source == "oauth" or source.startswith("oauth_"):
+        provider = user.oauth_provider or (
+            source[6:] if source.startswith("oauth_") else None
+        )
+        subject = user.oauth_id or user.external_id
+        if provider:
+            source = f"oauth_{provider}"
+    elif source != "local" and user.external_id:
+        provider = f"legacy-account:{user.account_id}"
+        subject = user.external_id
+    if provider and subject:
+        session.add(
+            PersonAuthIdentity(
+                person=person,
+                origin_user=user,
+                source=source,
+                provider=provider,
+                subject=subject,
+            )
+        )
 
 
 @event.listens_for(Session, "before_flush")
@@ -189,13 +209,14 @@ def _fill_hierarchy_defaults(
 ) -> None:
     """Give new accounts and users the hierarchy columns they must carry."""
     claimed: set[str] = set()
-    # Rows that already exist claim their address before new rows do, so the
-    # older, first-verified membership keeps the verified person.
-    for obj in list(session.dirty):
-        if isinstance(obj, User):
-            _verify_person(session, obj, claimed)
     for obj in list(session.new):
         if isinstance(obj, Account):
             _fill_account(obj)
         elif isinstance(obj, User):
             _fill_person(session, obj, claimed)
+        elif isinstance(obj, WebAuthnCredential) and obj.person_id is None:
+            with session.no_autoflush:
+                owner = obj.user or session.get(User, obj.user_id)
+            if owner is None:
+                raise ValueError("Passkey needs an explicit identity owner")
+            obj.person_id = owner.person_id or owner.person.id

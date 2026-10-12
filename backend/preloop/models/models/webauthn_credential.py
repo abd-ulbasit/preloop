@@ -37,12 +37,18 @@ class WebAuthnCredential(Base):
 
     __tablename__ = "webauthn_credential"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Origin membership; credential ownership belongs to person",
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("person.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="The user this passkey belongs to",
     )
     credential_id: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, index=True
@@ -55,7 +61,7 @@ class WebAuthnCredential(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    user: Mapped["User"] = relationship("User")
+    user: Mapped[Optional["User"]] = relationship("User")
 
     def __repr__(self) -> str:
         """Return a string representation of the credential."""
