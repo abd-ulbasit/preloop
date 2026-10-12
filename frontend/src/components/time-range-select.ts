@@ -4,6 +4,7 @@ import { customElement, property } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/divider/divider.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
+import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 
 export interface TimeRangeOption {
   value: string;
@@ -25,14 +26,33 @@ export class TimeRangeSelect extends LitElement {
   @property({ type: String }) value = '';
   @property({ type: Array }) options: TimeRangeOption[] = [];
   @property({ type: String }) ariaLabel = 'Time range';
+  /**
+   * The range just chosen is still loading. The chevron turns into a
+   * spinner, right where the operator just clicked, without taking any more
+   * room in a tight card header.
+   */
+  @property({ type: Boolean, reflect: true }) busy = false;
 
   static styles = css`
+    /* Never wider than the header it sits in: at 200% zoom a fixed width
+       pushed the control out of the Usage card. The width sits on the host,
+       where the container can clamp it; the select fills the host. */
     :host {
       display: inline-block;
+      max-width: 100%;
+      min-width: 0;
+      width: min(var(--time-range-select-width, 96px), 100%);
     }
 
     sl-select {
-      width: var(--time-range-select-width, 96px);
+      max-width: 100%;
+      width: 100%;
+    }
+
+    .busy-spinner {
+      font-size: 0.875rem;
+      --indicator-color: var(--sl-color-primary-600);
+      --track-width: 2px;
     }
 
     sl-select::part(combobox) {
@@ -86,6 +106,15 @@ export class TimeRangeSelect extends LitElement {
         value=${this.value}
         @sl-change=${this.handleChange}
       >
+        ${
+          this.busy
+            ? html`<sl-spinner
+                slot="expand-icon"
+                class="busy-spinner"
+                data-testid="time-range-busy"
+              ></sl-spinner>`
+            : nothing
+        }
         ${this.options.map(
           (option) =>
             html`${

@@ -12572,6 +12572,7 @@ paths:
         required: false
         schema:
           enum:
+          - hour
           - day
           - week
           - month
@@ -27592,6 +27593,7 @@ components:
         granularity:
           type: string
           enum:
+          - hour
           - day
           - week
           - month
@@ -27607,7 +27609,8 @@ components:
       - period_end
       - granularity
       title: CostTimeseriesResponse
-      description: Gateway spend bucketed by UTC day, week or month for one window.
+      description: Gateway spend bucketed by UTC hour, day, week or month for one
+        window.
     CreateVersionRequest:
       properties:
         description:

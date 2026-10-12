@@ -19,6 +19,7 @@ import '../../components/activity-feed.ts';
 import '../../components/inventory-card.ts';
 import '../../components/usage-card.ts';
 import {
+  DEFAULT_USAGE_RANGE,
   USAGE_RANGE_STORAGE_KEY,
   readStoredUsageRange,
 } from '../../components/usage-card';
@@ -36,6 +37,7 @@ import {
   getAccountRuntimeSessions,
   getApiKeys,
   getBudgetPolicies,
+  getCostTimeseries,
   BudgetPolicy,
   getFlowExecutions,
   getFlowSummaries,
@@ -76,6 +78,7 @@ import type {
   AccountRateLimitReportResponse,
   AIModelOverviewItem,
   GatewayTokenUsage,
+  GatewayUsageByDay,
   GatewayUsageBySession,
   GatewayUsageByTool,
   GatewayUsageSearchResultItem,
@@ -108,6 +111,10 @@ import {
   timeRangeShortLabel,
   type TimeRangeKey,
 } from '../../utils/time-range';
+import {
+  usageSeriesRequest,
+  type UsageSeriesGranularity,
+} from '../../utils/usage-projection';
 import { reducedMotionStyles } from '../../styles/reduced-motion';
 
 /**
@@ -301,6 +308,17 @@ export class DashboardView extends AuthedElement {
    * arrives, so this is deliberately not `fetchingGatewaySummary`.
    */
   @state() private updatingUsage = false;
+  /**
+   * The Usage card's chart, from the bounded `/cost/timeseries` rather than
+   * the heavy breakdown summary, so it paints with the headline (#1610).
+   * `usageSeriesRange` says which range it belongs to.
+   */
+  @state() private usageSeries: GatewayUsageByDay[] | null = null;
+  @state() private usageSeriesGranularity: UsageSeriesGranularity = 'day';
+  @state() private usageSeriesRange: TimeRangeKey | null = null;
+  /** The range the headline summary on screen was fetched for. */
+  private usageSummaryRange: TimeRangeKey | null = null;
+  private usageSeriesInFlight: TimeRangeKey | null = null;
   @state() private fetchingRecentExecutions = true;
   @state() private fetchingApprovals = true;
   @state() private fetchingAudit = true;
@@ -2001,6 +2019,7 @@ export class DashboardView extends AuthedElement {
         ),
       ]);
     if (range !== this.gatewayTimeRange) return;
+    void this.loadUsageSeries(range, { force: true });
     // Merge, never replace: the breakdown on screen came from a heavier
     // request that this one does not make.
     this.gatewaySummary = mergeGatewaySummaryPreservingBreakdown(
@@ -2213,6 +2232,112 @@ export class DashboardView extends AuthedElement {
   }
 
   /**
+   * The Usage card's range just changed.
+   *
+   * The card says it is updating until both the headline and the chart for
+   * the last chosen range are on screen. A refresh already in flight used to
+   * swallow the range change: `fetchDashboardData` queued it and returned at
+   * once, and the `.finally` that followed switched the indicator off while
+   * the old range's numbers sat under the new label. Now the card's own
+   * reads (light summary, prior window, chart) start immediately for the
+   * new range whatever else is in flight, every result is checked against
+   * the range still selected, and only the matching one turns the indicator
+   * off. The rest of the page follows through the usual (queued) refresh.
+   */
+  private changeUsageRange(): void {
+    const range = this.gatewayTimeRange;
+    markOverviewTiming('overview-usage-range-change');
+    this.updatingUsage = true;
+    void this.loadUsageSeries(range);
+    const busy =
+      this.refreshInFlight ||
+      this.backgroundRefreshInFlight ||
+      this.topicRefreshesInFlight.size > 0;
+    if (busy) void this.loadUsageHeadline(range);
+    void this.fetchDashboardData({ preserveLoadingState: true });
+  }
+
+  /**
+   * Record which range just landed and drop the indicator once the headline
+   * and the chart both belong to the range on screen.
+   */
+  private settleUsageUpdate(landed: {
+    summary?: TimeRangeKey;
+    series?: TimeRangeKey;
+  }): void {
+    if (landed.summary) this.usageSummaryRange = landed.summary;
+    if (landed.series) this.usageSeriesRange = landed.series;
+    const range = this.gatewayTimeRange;
+    if (this.usageSummaryRange === range && this.usageSeriesRange === range) {
+      this.updatingUsage = false;
+    }
+  }
+
+  /** The card's headline and delta for `range`, outside the page refresh. */
+  private async loadUsageHeadline(range: TimeRangeKey): Promise<void> {
+    const startDate = resolveTimeRange(range).startDate ?? undefined;
+    const prior = resolvePreviousTimeRange(range);
+    const [summary, priorSummary] = await Promise.all([
+      this.catchWith403Handling(
+        getAccountGatewayUsageSummary({ startDate, includeBreakdown: false }),
+        null
+      ),
+      this.catchWith403Handling(
+        getAccountGatewayUsageSummary({
+          startDate: prior.startDate ?? undefined,
+          endDate: prior.endDate ?? undefined,
+          includeBreakdown: false,
+        }),
+        null
+      ),
+    ]).catch(() => [null, null] as const);
+    if (!this.isConnected || range !== this.gatewayTimeRange) return;
+    this.gatewaySummary = mergeGatewaySummaryPreservingBreakdown(
+      this.gatewayUsageRange === range ? this.gatewaySummary : null,
+      summary
+    );
+    if (this.gatewayUsageRange !== range) this.gatewayUsageRange = null;
+    this.priorGatewaySummary = priorSummary;
+    this.settleUsageUpdate({ summary: range });
+  }
+
+  /**
+   * The card's chart for `range` from `/cost/timeseries`: one bounded,
+   * indexed request with the bucket size the range needs (hours for today,
+   * days for a week or a month, months for a year). A failed read leaves
+   * the card on the summary's own `requests_by_day`, if it has one.
+   */
+  private async loadUsageSeries(
+    range: TimeRangeKey,
+    options: { force?: boolean } = {}
+  ): Promise<void> {
+    if (this.usageSeriesInFlight === range) return;
+    if (!options.force && this.usageSeriesRange === range && this.usageSeries) {
+      this.settleUsageUpdate({ series: range });
+      return;
+    }
+    const request = usageSeriesRequest(range);
+    if (!request) {
+      this.settleUsageUpdate({ series: range });
+      return;
+    }
+    this.usageSeriesInFlight = range;
+    let rows: GatewayUsageByDay[] | null = null;
+    try {
+      rows = (await getCostTimeseries(request)).buckets;
+    } catch (error) {
+      console.warn('Usage chart series unavailable', error);
+    } finally {
+      if (this.usageSeriesInFlight === range) this.usageSeriesInFlight = null;
+    }
+    if (!this.isConnected || range !== this.gatewayTimeRange) return;
+    this.usageSeries = rows;
+    this.usageSeriesGranularity = request.granularity;
+    markOverviewTiming('overview-usage-series-ready');
+    this.settleUsageUpdate({ series: range });
+  }
+
+  /**
    * The first wave: what the top of the page needs and nothing else.
    *
    * Eight small requests in parallel, then `loading` is off. Everything
@@ -2265,6 +2390,10 @@ export class DashboardView extends AuthedElement {
     const startDateStr = this.getGatewayStartDate();
     const priorWindow = this.getPriorGatewayWindow();
 
+    // The chart's own small request, alongside the headline rather than
+    // behind the breakdown wave (#1610). Not awaited: nothing else reads it.
+    void this.loadUsageSeries(range);
+
     // Identity lists start with the fold, not after it. They do not block
     // `loading = false`, and each tab paints the moment its list lands.
     if (!options.preserveLoadingState) {
@@ -2300,7 +2429,7 @@ export class DashboardView extends AuthedElement {
             );
             if (this.gatewayUsageRange !== range) this.gatewayUsageRange = null;
             this.fetchingGatewaySummary = false;
-            this.updatingUsage = false;
+            this.settleUsageUpdate({ summary: range });
             this.loading = false;
           }
           return summary;
@@ -2402,7 +2531,7 @@ export class DashboardView extends AuthedElement {
       }
       this.priorGatewaySummary = priorGatewaySummary;
       this.fetchingGatewaySummary = false;
-      this.updatingUsage = false;
+      this.settleUsageUpdate({ summary: range });
 
       this.pendingApprovals = pendingApprovals.filter((approval) =>
         this.isUnexpiredPendingApproval(approval)
@@ -2446,7 +2575,7 @@ export class DashboardView extends AuthedElement {
       );
       this.error = 'Failed to load some overview dashboard data.';
       this.fetchingGatewaySummary = false;
-      this.updatingUsage = false;
+      this.settleUsageUpdate({ summary: range });
       this.fetchingRecentExecutions = false;
       this.fetchingApprovals = false;
       this.fetchingAgents = false;
@@ -3428,11 +3557,18 @@ export class DashboardView extends AuthedElement {
         ?updating=${this.updatingUsage}
         .error=${this.error}
         .timeRange=${this.gatewayTimeRange}
+        .series=${
+          this.usageSeriesRange === this.gatewayTimeRange
+            ? this.usageSeries
+            : null
+        }
+        .seriesGranularity=${this.usageSeriesGranularity}
+        ?seriesLoading=${this.usageSeriesRange !== this.gatewayTimeRange}
         .toolCallsCount=${this.toolCallsCount}
         @range-change=${(event: CustomEvent<{ value: string }>) => {
           event.stopPropagation();
           this.gatewayTimeRange =
-            normalizeTimeRangeKey(event.detail.value) ?? 'last-30';
+            normalizeTimeRangeKey(event.detail.value) ?? DEFAULT_USAGE_RANGE;
           try {
             localStorage.setItem(
               USAGE_RANGE_STORAGE_KEY,
@@ -3441,16 +3577,7 @@ export class DashboardView extends AuthedElement {
           } catch {
             // Non-fatal: the range still applies for this session.
           }
-          // The numbers on screen belong to the old range, so say they are
-          // being replaced instead of clearing them.
-          this.updatingUsage = true;
-          void this.fetchDashboardData({ preserveLoadingState: true }).finally(
-            () => {
-              // A refresh already in flight returns without fetching; the
-              // card should not be left spinning on it.
-              this.updatingUsage = false;
-            }
-          );
+          this.changeUsageRange();
         }}
         @configure-limits=${() => (this.showBudgetDialog = true)}
       ></usage-card>

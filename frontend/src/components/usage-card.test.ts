@@ -9,6 +9,8 @@ import {
 } from './usage-card';
 import type { UsageCard } from './usage-card';
 import type { BudgetPolicy } from '../api';
+import { budgetForecast } from '../utils/budget-forecast';
+import { formatUsd } from '../utils/money';
 import type { AccountGatewayUsageSummaryResponse } from '../types';
 
 function summaryFixture(
@@ -173,6 +175,8 @@ describe('usage-card', () => {
     const svg = element.shadowRoot!.querySelector('.sparkline')!;
     const line = svg.querySelector('polyline')!;
     const area = svg.querySelector('polygon')!;
+    expect(line).to.be.instanceOf(SVGPolylineElement);
+    expect(area).to.be.instanceOf(SVGPolygonElement);
     const linePoints = line.getAttribute('points')!.split(' ');
     const areaPoints = area.getAttribute('points')!.split(' ');
     // The area is the line plus the two baseline corners that close it.
@@ -226,10 +230,153 @@ describe('usage-card', () => {
   it('reads the saved range back, and ignores one it does not offer', () => {
     localStorage.setItem(USAGE_RANGE_STORAGE_KEY, 'this-year');
     expect(readStoredUsageRange()).to.equal('this-year');
+    localStorage.setItem(USAGE_RANGE_STORAGE_KEY, 'last-30');
+    expect(readStoredUsageRange()).to.equal('last-30');
     localStorage.setItem(USAGE_RANGE_STORAGE_KEY, 'all');
-    expect(readStoredUsageRange()).to.equal('last-30');
+    expect(readStoredUsageRange()).to.equal('this-month');
     localStorage.removeItem(USAGE_RANGE_STORAGE_KEY);
-    expect(readStoredUsageRange()).to.equal('last-30');
+    // A fresh browser opens on This month (#1610).
+    expect(readStoredUsageRange()).to.equal('this-month');
+  });
+
+  describe('to-date ranges', () => {
+    // Mid-month, local time, like an operator's browser.
+    const now = new Date('2026-10-15T12:00:00');
+
+    function octoberDays(count: number) {
+      return Array.from({ length: count }, (_, index) => ({
+        date: `2026-10-${String(index + 1).padStart(2, '0')}`,
+        request_count: 10,
+        estimated_cost: 10,
+        total_tokens: 1000,
+      }));
+    }
+
+    async function renderPeriod(
+      props: Partial<UsageCard> & { now: Date }
+    ): Promise<UsageCard> {
+      localStorage.setItem(USAGE_UNIT_STORAGE_KEY, 'dollars');
+      const element = await fixture<UsageCard>(html`
+        <usage-card
+          .summary=${props.summary ?? summaryFixture({ estimated_cost: 145 })}
+          .timeRange=${props.timeRange ?? 'this-month'}
+          .series=${props.series ?? octoberDays(15)}
+          .seriesGranularity=${props.seriesGranularity ?? 'day'}
+          .now=${props.now}
+        ></usage-card>
+      `);
+      await element.updateComplete;
+      return element;
+    }
+
+    it('spans the month, draws the data solid and the projection dashed', async () => {
+      const element = await renderPeriod({ now });
+      const svg = element.shadowRoot!.querySelector('.sparkline')!;
+      const line = svg.querySelector('.sparkline-line')!;
+      const dashed = svg.querySelector('.sparkline-projection-line')!;
+      const marker = svg.querySelector('.sparkline-now')!;
+      // Real SVG elements, not HTML elements that happen to be named polyline.
+      expect(line).to.be.instanceOf(SVGPolylineElement);
+      expect(dashed).to.be.instanceOf(SVGPolylineElement);
+      expect(dashed.getAttribute('stroke-dasharray')).to.equal('4 3');
+      expect(line.hasAttribute('stroke-dasharray')).to.equal(false);
+      expect(
+        svg.querySelector('.sparkline-projection-area')!.getAttribute('fill')
+      ).to.match(/^url\(#usage-sparkline-hatch-/);
+      const lastLine = line.getAttribute('points')!.split(' ').pop()!;
+      const firstDashed = dashed.getAttribute('points')!.split(' ')[0];
+      const nowX = marker.getAttribute('x1');
+      // Line, projection and the now marker meet at the same x.
+      expect(lastLine.split(',')[0]).to.equal(nowX);
+      expect(firstDashed.split(',')[0]).to.equal(nowX);
+      // The dashed line runs to the right edge: the whole month is on the axis.
+      expect(
+        dashed.getAttribute('points')!.split(' ').pop()!.split(',')[0]
+      ).to.equal('100.00');
+      // Both parts sit under the one reveal clip.
+      expect(dashed.parentElement).to.equal(line.parentElement);
+
+      const legend = text(element, '[data-testid="usage-projection-legend"]');
+      expect(legend).to.contain('so far');
+      expect(legend).to.contain('Projected:');
+      expect(legend).to.contain('by Oct 31');
+    });
+
+    it('ends on the same amount the monthly budget row forecasts', async () => {
+      const bounds = {
+        start: new Date('2026-10-01T00:00:00').toISOString(),
+        end: new Date('2026-11-01T00:00:00').toISOString(),
+      };
+      localStorage.setItem(USAGE_UNIT_STORAGE_KEY, 'dollars');
+      const element = await fixture<UsageCard>(html`
+        <usage-card
+          .summary=${summaryFixture({ estimated_cost: 145 })}
+          .timeRange=${'this-month'}
+          .series=${octoberDays(15)}
+          .now=${now}
+          .policies=${[
+            policyFixture({
+              current_spend_usd: 145,
+              period_start: bounds.start,
+              period_end: bounds.end,
+              hard_limit_usd: 10000,
+              soft_limit_usd: 0,
+            }),
+          ]}
+        ></usage-card>
+      `);
+      await element.updateComplete;
+      // The budget row forecasts on the real clock, so the same forecast is
+      // recomputed here for the pinned `now`.
+      const forecast = budgetForecast({
+        period: 'monthly',
+        spend: 145,
+        periodStart: bounds.start,
+        periodEnd: bounds.end,
+        now,
+      })!;
+      const dollars = text(element, '[data-testid="usage-projection-legend"]');
+      expect(dollars).to.contain(`Projected: ${formatUsd(forecast.amount)}`);
+    });
+
+    it('says it is too early to project in the first tenth of the period', async () => {
+      const element = await renderPeriod({
+        now: new Date('2026-10-02T09:00:00'),
+        series: octoberDays(2),
+      });
+      expect(element.shadowRoot!.querySelector('.sparkline-projection-line')).to
+        .not.exist;
+      expect(
+        text(element, '[data-testid="usage-projection-legend"]')
+      ).to.contain('too early to project');
+    });
+
+    it('keeps rolling ranges free of any projection', async () => {
+      const element = await renderPeriod({ now, timeRange: 'last-30' });
+      expect(element.shadowRoot!.querySelector('.sparkline-projection-line')).to
+        .not.exist;
+      expect(
+        element.shadowRoot!.querySelector(
+          '[data-testid="usage-projection-legend"]'
+        )
+      ).to.not.exist;
+    });
+
+    it('holds a chart-sized skeleton while the series loads', async () => {
+      const element = await fixture<UsageCard>(html`
+        <usage-card
+          .summary=${summaryFixture()}
+          .timeRange=${'this-month'}
+          ?seriesLoading=${true}
+        ></usage-card>
+      `);
+      await element.updateComplete;
+      expect(
+        element.shadowRoot!.querySelector(
+          '[data-testid="usage-sparkline-skeleton"]'
+        )
+      ).to.exist;
+    });
   });
 
   it('shows a budget row per global policy with the spend meter', async () => {
@@ -456,32 +603,40 @@ describe('usage-card', () => {
     expect(alert.textContent).to.contain('Failed to load usage');
   });
   describe('while a new range loads', () => {
-    it('keeps the numbers it has and marks them as being replaced', async () => {
-      const element = await renderCard({ updating: true });
+    it('names the new range at once and skeletons the old numbers', async () => {
+      const element = await renderCard({
+        updating: true,
+        timeRange: 'this-week',
+        summary: summaryFixture({ requests_by_day: daysFixture(7) }),
+      });
 
-      // The old range is still readable: a blank card would be a worse
-      // answer than a slightly stale one.
-      expect(text(element, '.primary-value')).to.equal('584.3M');
-      expect(element.shadowRoot!.querySelector('sl-skeleton')).to.not.exist;
+      // The label already says the range that is coming; the numbers that
+      // belong to the old one are not left on screen under it.
+      expect(text(element, '.primary-label')).to.contain('this week');
+      expect(element.shadowRoot!.querySelector('.primary-value')).to.not.exist;
       expect(
-        element.shadowRoot!.querySelector('[data-testid="usage-updating"]')
+        element.shadowRoot!.querySelector(
+          '[data-testid="usage-value-skeleton"]'
+        )
       ).to.exist;
+      expect(element.shadowRoot!.querySelector('.secondary-line')).to.not.exist;
+      expect(element.shadowRoot!.querySelector('.sparkline')).to.not.exist;
 
-      const body = element.shadowRoot!.querySelector('.body') as HTMLElement;
-      expect(body.classList.contains('is-updating')).to.equal(true);
-      expect(
-        getComputedStyle(body.querySelector('.primary-value')!).opacity
-      ).to.equal('0.6');
+      // The spinner sits in the range control, and screen readers hear it.
+      const select = element.shadowRoot!.querySelector('time-range-select')!;
+      expect(select.busy).to.equal(true);
+      const updating = element.shadowRoot!.querySelector(
+        '[data-testid="usage-updating"]'
+      )!;
+      expect(updating.getAttribute('role')).to.equal('status');
+      expect(updating.textContent).to.contain('Updating');
 
       element.updating = false;
       await element.updateComplete;
       expect(
         element.shadowRoot!.querySelector('[data-testid="usage-updating"]')
       ).to.not.exist;
-      expect(
-        getComputedStyle(element.shadowRoot!.querySelector('.primary-value')!)
-          .opacity
-      ).to.equal('1');
+      expect(text(element, '.primary-value')).to.equal('584.3M');
     });
 
     it('says the total came off a rollup only when the server says so', async () => {
@@ -575,7 +730,7 @@ describe('usage-card', () => {
         month
           .shadowRoot!.querySelector('.sparkline')!
           .getAttribute('aria-label')
-      ).to.equal('Tokens per day this month');
+      ).to.match(/^Tokens per day this month/);
 
       const today = await renderCard({
         timeRange: 'today',

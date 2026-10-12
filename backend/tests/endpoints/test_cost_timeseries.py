@@ -74,6 +74,40 @@ def test_timeseries_rejects_windows_over_a_year(client: Any) -> None:
 
 
 def test_timeseries_rejects_unknown_granularity(client: Any) -> None:
-    """Only day, week and month are buckets."""
-    response = client.get("/api/v1/cost/timeseries?granularity=hour")
+    """Only hour, day, week and month are buckets."""
+    response = client.get("/api/v1/cost/timeseries?granularity=minute")
+    assert response.status_code == 422
+
+
+def test_timeseries_hour_buckets(client: Any, db_session: Any, test_user: Any) -> None:
+    """Hour buckets carry the full UTC hour start."""
+    _log(db_session, test_user, datetime(2026, 3, 2, 10, 5, tzinfo=UTC), 1.0)
+    _log(db_session, test_user, datetime(2026, 3, 2, 10, 40, tzinfo=UTC), 2.0)
+    _log(db_session, test_user, datetime(2026, 3, 2, 13, 1, tzinfo=UTC), 4.0)
+    response = client.get(
+        "/api/v1/cost/timeseries",
+        params={
+            "start_date": "2026-03-02T00:00:00Z",
+            "end_date": "2026-03-03T00:00:00Z",
+            "granularity": "hour",
+        },
+    )
+    assert response.status_code == 200, response.text
+    got = {row["date"]: row["estimated_cost"] for row in response.json()["buckets"]}
+    assert got == pytest.approx(
+        {"2026-03-02T10:00:00Z": 3.0, "2026-03-02T13:00:00Z": 4.0}
+    )
+
+
+def test_timeseries_hour_window_capped_at_a_week(client: Any) -> None:
+    """Hour buckets refuse windows over 7 days."""
+    end = datetime(2026, 6, 1, tzinfo=UTC)
+    response = client.get(
+        "/api/v1/cost/timeseries",
+        params={
+            "start_date": (end - timedelta(days=8)).isoformat(),
+            "end_date": end.isoformat(),
+            "granularity": "hour",
+        },
+    )
     assert response.status_code == 422

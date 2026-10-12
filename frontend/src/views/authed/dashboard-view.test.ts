@@ -50,6 +50,8 @@ describe('DashboardView', () => {
   let breakdownCalls = 0;
   /** Holds every gateway summary call, for tests about a range change. */
   let summaryGate: Promise<void> | null;
+  /** Holds `GET /api/v1/cost/timeseries`, the Usage card's chart. */
+  let seriesGate: Promise<void> | null;
   /** Holds the Audit trail's count call (`limit=1`), not the page of events. */
   let auditCountGate: Promise<void> | null;
   /** Holds the secondary audit pass (exceptions, trackers, tool metrics). */
@@ -66,6 +68,7 @@ describe('DashboardView', () => {
     breakdownGate = null;
     breakdownCalls = 0;
     summaryGate = null;
+    seriesGate = null;
     auditCountGate = null;
     auditSecondaryGate = null;
     mePermissions = null;
@@ -455,6 +458,19 @@ describe('DashboardView', () => {
           return json(gatewaySummaryResponse);
         }
 
+        if (url.startsWith('/api/v1/cost/timeseries')) {
+          if (seriesGate) {
+            await seriesGate;
+          }
+          const params = new URL(url, 'http://x').searchParams;
+          return json({
+            period_start: params.get('start_date'),
+            period_end: params.get('end_date'),
+            granularity: params.get('granularity'),
+            buckets: [],
+          });
+        }
+
         if (url.startsWith('/api/v1/runtime-sessions')) {
           return json(runtimeSessionsResponse);
         }
@@ -727,7 +743,8 @@ describe('DashboardView', () => {
 
     // Tokens lead, dollars are one toggle away.
     expect(usageContent).to.contain('1.5K');
-    expect(usageContent).to.contain('tokens · 30d');
+    // A fresh browser opens the card on This month (#1610).
+    expect(usageContent).to.contain('tokens · this month');
     // The split lives in the figures element: input and output separately.
     const figures = usageCard?.shadowRoot?.querySelector('token-figures') as
       (HTMLElement & { updateComplete: Promise<unknown> }) | null;
@@ -1778,7 +1795,7 @@ describe('DashboardView', () => {
       expect(inventory.flowsTotal).to.equal(1);
       expect(inventory.modelsTotal).to.equal(1);
       expect(inventory.toolsTotal).to.equal(2);
-      expect(inventory.rangeLabel).to.equal('30d');
+      expect(inventory.rangeLabel).to.equal('this month');
 
       const tabs = [
         ...(inventory.shadowRoot?.querySelectorAll('sl-tab') || []),
@@ -1924,8 +1941,8 @@ describe('DashboardView', () => {
       element['gatewayTimeRange'] = 'last-24h';
       release();
       await pending;
-      expect(element['gatewayUsageRange']).to.equal('last-30');
-      expect(element['modelUsageRange']).to.equal('last-30');
+      expect(element['gatewayUsageRange']).to.equal('this-month');
+      expect(element['modelUsageRange']).to.equal('this-month');
       await element.updateComplete;
       const inventory = element.shadowRoot!.querySelector(
         'inventory-card'
@@ -2276,7 +2293,8 @@ describe('DashboardView', () => {
       // Inventory list once; preloop-deploy-wizard does not mount on
       // an onboarded account. The Attention inputs also read
       // /policies/notices/summary once (#959) and spend outlier
-      // findings once (#960), so the set is 29.
+      // findings once (#960), so the set is 29. The Usage card's chart
+      // reads /cost/timeseries once (#1610): 30.
       const pageUrls = fetchStub
         .getCalls()
         .map((call) => String(call.args[0]))
@@ -2287,7 +2305,11 @@ describe('DashboardView', () => {
             !url.startsWith('/api/v1/roles') &&
             !url.startsWith('/api/v1/users')
         );
-      expect(pageUrls.length, pageUrls.join('\n')).to.equal(29);
+      expect(pageUrls.length, pageUrls.join('\n')).to.equal(30);
+      expect(
+        pageUrls.filter((url) => url.startsWith('/api/v1/cost/timeseries'))
+          .length
+      ).to.equal(1);
       expect(
         pageUrls.filter((url) =>
           url.startsWith('/api/v1/policies/notices/summary')
@@ -2345,12 +2367,11 @@ describe('DashboardView', () => {
       }
     });
 
-    it('dims the usage numbers over a range change rather than blanking them', async () => {
+    it('shows the updating state over a range change until the new range lands', async () => {
       const element = await mountLoaded();
 
       const usage = element.shadowRoot?.querySelector('usage-card') as any;
-      const shown = usage.summary;
-      expect(shown, 'a summary on screen before the change').to.exist;
+      expect(usage.summary, 'a summary on screen before the change').to.exist;
 
       let releaseSummary = () => {};
       summaryGate = new Promise<void>((resolve) => {
@@ -2367,9 +2388,12 @@ describe('DashboardView', () => {
       await usage.updateComplete;
 
       expect(usage.updating, 'card told it is updating').to.be.true;
-      expect(usage.summary, 'last range still on screen').to.equal(shown);
-      expect(usage.shadowRoot.querySelector('.primary-value')).to.exist;
-      expect(usage.shadowRoot.querySelector('sl-skeleton')).to.not.exist;
+      // The label names the new range at once; the old numbers give way.
+      expect(usage.shadowRoot.textContent).to.contain('tokens · 1y');
+      expect(usage.shadowRoot.querySelector('.primary-value')).to.not.exist;
+      expect(
+        usage.shadowRoot.querySelector('[data-testid="usage-value-skeleton"]')
+      ).to.exist;
 
       summaryGate = null;
       releaseSummary();
@@ -2380,6 +2404,89 @@ describe('DashboardView', () => {
       await element.updateComplete;
       await usage.updateComplete;
       expect(usage.updating).to.be.false;
+      expect(usage.shadowRoot.querySelector('.primary-value')).to.exist;
+      localStorage.removeItem('overview_usage_range');
+    });
+
+    it('ends three quick range changes on the last one, indicator on throughout', async () => {
+      const element = await mountLoaded();
+      const usage = element.shadowRoot?.querySelector('usage-card') as any;
+
+      // A page refresh is in flight and held, as on a slow server.
+      let releaseSummary = () => {};
+      summaryGate = new Promise<void>((resolve) => {
+        releaseSummary = resolve;
+      });
+      let releaseSeries = () => {};
+      seriesGate = new Promise<void>((resolve) => {
+        releaseSeries = resolve;
+      });
+      const inFlight = element['fetchDashboardData']({
+        preserveLoadingState: true,
+      });
+      expect(element['refreshInFlight']).to.be.true;
+
+      const pick = async (value: string) => {
+        usage.dispatchEvent(
+          new CustomEvent('range-change', {
+            detail: { value },
+            bubbles: true,
+            composed: true,
+          })
+        );
+        await element.updateComplete;
+        expect(element['updatingUsage'], `updating after ${value}`).to.be.true;
+      };
+      await pick('this-week');
+      await pick('today');
+      await pick('last-7');
+
+      // Every held response lands now. The older ranges' answers must not
+      // switch the indicator off or show under the new label.
+      summaryGate = null;
+      releaseSummary();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(element['updatingUsage'], 'still waiting on the 7d chart').to.be
+        .true;
+
+      seriesGate = null;
+      releaseSeries();
+      await inFlight;
+      await waitUntil(
+        () => !element['updatingUsage'],
+        'the last range never settled'
+      );
+      await element.updateComplete;
+      await usage.updateComplete;
+      expect(element['gatewayTimeRange']).to.equal('last-7');
+      expect(element['usageSummaryRange']).to.equal('last-7');
+      expect(element['usageSeriesRange']).to.equal('last-7');
+      expect(usage.timeRange).to.equal('last-7');
+      expect(usage.shadowRoot.textContent).to.contain('tokens · 7d');
+      expect(usage.shadowRoot.querySelector('.primary-value')).to.exist;
+      const seriesUrls = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.startsWith('/api/v1/cost/timeseries'));
+      expect(
+        seriesUrls.some((url) => url.includes('granularity=hour')),
+        'Today asked for hour buckets'
+      ).to.be.true;
+      localStorage.removeItem('overview_usage_range');
+    });
+
+    it('opens on This month and keeps a stored range', async () => {
+      localStorage.removeItem('overview_usage_range');
+      const fresh = await mountDashboard();
+      expect(fresh['gatewayTimeRange']).to.equal('this-month');
+      fresh.remove();
+      localStorage.setItem('overview_usage_range', 'last-30');
+      try {
+        const stored = await mountDashboard();
+        expect(stored['gatewayTimeRange']).to.equal('last-30');
+      } finally {
+        localStorage.removeItem('overview_usage_range');
+      }
     });
 
     it('saves a calendar range and compares it with the whole prior period', async () => {
@@ -2749,7 +2856,7 @@ describe('DashboardView', () => {
       expect(foldUrls.length, foldUrls.join('\n')).to.be.at.most(12);
     });
 
-    it('answers a gateway event with four requests, not the page', async () => {
+    it('answers a gateway event with five requests, not the page', async () => {
       const element = await mountLoaded();
       await waitUntil(
         () => element['attentionInputs'] != null,
@@ -2790,7 +2897,8 @@ describe('DashboardView', () => {
             !url.startsWith('/api/v1/users') &&
             !url.startsWith('/api/v1/audit-logs')
         );
-      expect(urls.length, urls.join('\n')).to.be.at.most(4);
+      // The fold's four plus the Usage chart's series.
+      expect(urls.length, urls.join('\n')).to.be.at.most(5);
       expect(urls.some((url) => url.startsWith('/api/v1/flows'))).to.be.false;
       expect(urls.some((url) => url.includes('include_breakdown=true'))).to.be
         .false;

@@ -75,4 +75,34 @@ describe('time-range-select', () => {
 
     expect(emitted).to.equal(0);
   });
+
+  it('never grows wider than its container, even with a wide width set', async () => {
+    const wrapper = await fixture<HTMLDivElement>(html`
+      <div style="width: 80px; --time-range-select-width: 136px;">
+        <time-range-select
+          .value=${'month'}
+          .options=${OPTIONS}
+        ></time-range-select>
+      </div>
+    `);
+    const element = wrapper.querySelector('time-range-select')!;
+    await element.updateComplete;
+    const select = element.shadowRoot!.querySelector('sl-select')!;
+    expect(select.getBoundingClientRect().width).to.be.at.most(80);
+
+    wrapper.style.width = '400px';
+    expect(select.getBoundingClientRect().width).to.equal(136);
+  });
+
+  it('turns the chevron into a spinner while busy', async () => {
+    const element = await render();
+    expect(element.shadowRoot!.querySelector('[data-testid="time-range-busy"]'))
+      .to.not.exist;
+    element.busy = true;
+    await element.updateComplete;
+    const spinner = element.shadowRoot!.querySelector(
+      '[data-testid="time-range-busy"]'
+    )!;
+    expect(spinner.getAttribute('slot')).to.equal('expand-icon');
+  });
 });

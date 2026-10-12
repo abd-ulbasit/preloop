@@ -1,5 +1,5 @@
 import { formatUsd, formatUsdExact } from '../utils/money';
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
 import '@shoelace-style/shoelace/dist/components/alert/alert.js';
@@ -15,7 +15,10 @@ import './time-range-select.ts';
 import './token-figures.ts';
 
 import type { BudgetPolicy } from '../api';
-import type { AccountGatewayUsageSummaryResponse } from '../types';
+import type {
+  AccountGatewayUsageSummaryResponse,
+  GatewayUsageByDay,
+} from '../types';
 import { budgetTrackStyles, renderBudgetTrack } from '../styles/budget-track';
 import {
   isCalendarTimeRange,
@@ -28,8 +31,16 @@ import type { TimeRangeOption } from './time-range-select';
 import {
   budgetPeriodLabel,
   budgetForecastStyles,
+  forecastEndLabel,
   renderBudgetForecast,
 } from '../utils/budget-forecast';
+import {
+  buildUsageProjection,
+  isProjectedRange,
+  projectionPeriodFor,
+  seriesValues,
+  type UsageSeriesGranularity,
+} from '../utils/usage-projection';
 
 export type UsageUnit = 'tokens' | 'dollars';
 
@@ -55,7 +66,10 @@ export const USAGE_RANGE_OPTIONS: TimeRangeOption[] = [
 
 const USAGE_RANGE_KEYS = USAGE_RANGE_OPTIONS.map((option) => option.value);
 
-/** The range saved by the last visit, or 30d when none is saved or valid. */
+/** The card's range for a fresh browser (#1610). */
+export const DEFAULT_USAGE_RANGE: TimeRangeKey = 'this-month';
+
+/** The range saved by the last visit, or This month when none is saved or valid. */
 export function readStoredUsageRange(): TimeRangeKey {
   try {
     const stored = normalizeTimeRangeKey(
@@ -65,7 +79,7 @@ export function readStoredUsageRange(): TimeRangeKey {
   } catch {
     // Storage unavailable: fall through to the default.
   }
-  return 'last-30';
+  return DEFAULT_USAGE_RANGE;
 }
 
 /** How long a wait has to be before the card explains it. */
@@ -108,17 +122,31 @@ export class UsageCard extends LitElement {
   @property({ type: Array }) policies: BudgetPolicy[] = [];
   @property({ type: Boolean }) loading = false;
   /**
-   * A range change is in flight and the card is showing the range before it.
+   * A range change is in flight and the data on hand belongs to the range
+   * before it.
    *
-   * Blanking the card on every range change threw away a true answer to ask
-   * for another one, and for the second or two in between the account looked
-   * like it had no usage at all. The numbers stay, dimmed, with a spinner in
-   * the header saying they are about to be replaced.
+   * Dimming the old numbers (#1598) went unnoticed, and they could sit under
+   * the new range's label. The label now names the new range at once; the
+   * headline, delta, secondary line and chart become skeletons (never a
+   * zero, so the account never looks idle); budgets, which do not depend on
+   * the range, only dim; and the range select shows a spinner in place of
+   * its chevron (#1610).
    */
   @property({ type: Boolean }) updating = false;
   @property({ type: String }) error: string | null = null;
   /** A `TimeRangeKey` (any spelling `utils/time-range` reads), shared with the page. */
-  @property({ type: String }) timeRange: string = 'last-30';
+  @property({ type: String }) timeRange: string = DEFAULT_USAGE_RANGE;
+  /**
+   * Chart buckets from `/cost/timeseries` for `timeRange`, including the
+   * history before the period that the projection's shape reads. Null falls
+   * back to the summary's `requests_by_day`.
+   */
+  @property({ type: Array }) series: GatewayUsageByDay[] | null = null;
+  @property({ type: String }) seriesGranularity: UsageSeriesGranularity = 'day';
+  /** The chart's request is in flight and nothing is drawn yet. */
+  @property({ type: Boolean }) seriesLoading = false;
+  /** The clock the projection is cut on; tests pin it. */
+  @property({ attribute: false }) now: Date | null = null;
   @property({ type: Number }) toolCallsCount = 0;
 
   @state() private unit: UsageUnit = 'tokens';
@@ -164,13 +192,26 @@ export class UsageCard extends LitElement {
         gap: var(--sl-spacing-small);
       }
 
+      /* Flex children default to min-width: auto, which let a zoomed select
+         push the header past the card edge. With min-width: 0 the controls
+         shrink instead and wrap onto a second line inside the header. */
+      .header-controls,
+      .header-controls > * {
+        min-width: 0;
+      }
+
       /* Unit toggle and range live together in the header: they are the two
          controls that change what every number below them means. */
       .header-controls {
         align-items: center;
         display: flex;
+        flex-wrap: wrap;
         gap: var(--sl-spacing-small);
-        /* Wide enough for "This month", the longest range label. */
+        justify-content: flex-end;
+        max-width: 100%;
+        position: relative;
+        /* Wide enough for "This month", the longest range label, and never
+           wider than the header (time-range-select clamps it to 100%). */
         --time-range-select-width: 136px;
       }
 
@@ -183,24 +224,23 @@ export class UsageCard extends LitElement {
         color: var(--sl-color-neutral-900);
       }
 
-      /* The one place the card says it is working. Small enough to sit in a
-         title, and it is the second and last ambient motion on this card:
-         it exists only while a request is in flight. */
-      .updating-spinner {
-        font-size: 0.85rem;
-        --indicator-color: var(--sl-color-neutral-500);
-        --track-width: 2px;
+      /* The spinner itself is drawn inside the range select (its busy
+         state); this is the same news for screen readers. */
+      .visually-hidden {
+        clip: rect(0 0 0 0);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
       }
 
-      /* Last range's numbers, on their way out. Readable, clearly not
-         current, and in exactly the place the new ones will appear. */
-      .is-updating .primary-value,
-      .is-updating .primary-label,
-      .is-updating .delta,
-      .is-updating .secondary-line,
-      .is-updating .sparkline,
+      /* A range change used to dim the old numbers to 0.6, and nobody
+         noticed. The figures that belong to a range now give way to a
+         skeleton the moment the range changes; the label already names the
+         new range. Budgets do not depend on the range and only dim. */
       .is-updating .budgets {
-        opacity: 0.6;
+        opacity: 0.5;
       }
 
       .long-range-hint {
@@ -272,6 +312,41 @@ export class UsageCard extends LitElement {
         display: block;
         width: 100%;
         height: 40px;
+      }
+
+      /* Says which part of the chart is data and which is a guess. */
+      .sparkline-legend {
+        align-items: center;
+        color: var(--console-meta-color);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 0.75rem;
+        gap: var(--sl-spacing-x-small);
+        margin-top: var(--sl-spacing-2x-small);
+      }
+
+      .legend-item {
+        align-items: center;
+        display: inline-flex;
+        gap: var(--sl-spacing-2x-small);
+        white-space: nowrap;
+      }
+
+      .legend-total {
+        flex-basis: 100%;
+      }
+
+      .legend-swatch {
+        display: inline-block;
+        height: 0;
+        vertical-align: middle;
+        width: 16px;
+        border-top: 2px solid var(--sl-color-primary-500);
+      }
+
+      .legend-swatch.dashed {
+        border-top-style: dashed;
+        border-top-color: var(--sl-color-primary-400);
       }
 
       /* One deliberate motion on the Overview: the trend reveals itself
@@ -530,9 +605,13 @@ export class UsageCard extends LitElement {
     if (this.unit === 'dollars') {
       return html`
         <div>
-          <div class="primary-value">
-            ${html`<span title=${formatUsdExact(cost)}>${formatUsd(cost)}</span>`}
-          </div>
+          ${
+            this.updating
+              ? this.renderValueSkeleton()
+              : html`<div class="primary-value">
+                  <span title=${formatUsdExact(cost)}>${formatUsd(cost)}</span>
+                </div>`
+          }
           <div class="primary-label">
             <span>est. spend · ${this.rangeLabel}</span>
             ${this.renderProvenance()}
@@ -552,7 +631,13 @@ export class UsageCard extends LitElement {
 
     return html`
       <div>
-        <div class="primary-value">${this.formatCompactNumber(tokens)}</div>
+        ${
+          this.updating
+            ? this.renderValueSkeleton()
+            : html`<div class="primary-value">
+                ${this.formatCompactNumber(tokens)}
+              </div>`
+        }
         <div class="primary-label">
           <span>tokens · ${this.rangeLabel}</span>
           ${this.renderProvenance()}
@@ -560,6 +645,16 @@ export class UsageCard extends LitElement {
         ${this.renderDelta()} ${this.renderLongRangeHint()}
       </div>
     `;
+  }
+
+  /** Where the headline goes while the new range loads. */
+  private renderValueSkeleton() {
+    return html`<sl-skeleton
+      class="value-skeleton"
+      data-testid="usage-value-skeleton"
+      effect="sheen"
+      style="width: 45%; height: 2.2rem;"
+    ></sl-skeleton>`;
   }
 
   /** The value the delta compares, in whichever unit is showing. */
@@ -578,6 +673,12 @@ export class UsageCard extends LitElement {
   private renderDelta() {
     if (this.loading && !this.summary) {
       return nothing;
+    }
+    if (this.updating) {
+      return html`<sl-skeleton
+        effect="sheen"
+        style="width: 35%; height: 0.8rem; margin-top: var(--sl-spacing-2x-small);"
+      ></sl-skeleton>`;
     }
     const prior = this.valueFor(this.priorSummary);
     if (prior <= 0) {
@@ -599,7 +700,7 @@ export class UsageCard extends LitElement {
   }
 
   private renderSecondaryLine() {
-    if (this.loading && !this.summary) {
+    if ((this.loading && !this.summary) || this.updating) {
       return html`<sl-skeleton
         effect="sheen"
         style="width: 90%; height: 0.85rem;"
@@ -630,17 +731,50 @@ export class UsageCard extends LitElement {
   /** Unique per card: the clip path id lives in this card's shadow root. */
   private readonly sparklineClipId = `usage-sparkline-clip-${++sparklineClipSeq}`;
 
+  /** Unique per card: the hatch pattern id lives in this card's shadow root. */
+  private readonly sparklineHatchId = `usage-sparkline-hatch-${sparklineClipSeq}`;
+
+  private renderSparklineSkeleton() {
+    return html`<sl-skeleton
+      class="sparkline-skeleton"
+      data-testid="usage-sparkline-skeleton"
+      effect="sheen"
+      style="width: 100%; height: 40px;"
+    ></sl-skeleton>`;
+  }
+
+  /** The chart's rows and their bucket size, from the timeseries or the summary. */
+  private get chartRows(): {
+    rows: GatewayUsageByDay[];
+    granularity: UsageSeriesGranularity;
+  } | null {
+    if (this.series) {
+      return { rows: this.series, granularity: this.seriesGranularity };
+    }
+    const fallback = this.summary?.requests_by_day;
+    return fallback && fallback.length > 0
+      ? { rows: fallback, granularity: 'day' }
+      : null;
+  }
+
   /** Inline SVG: a trend line is worth more here than a charting library. */
   private renderSparkline() {
-    const days = this.summary?.requests_by_day || [];
-    if (days.length < 3) {
-      return nothing;
+    if (this.updating) return this.renderSparklineSkeleton();
+    const source = this.chartRows;
+    if (!source) {
+      return this.seriesLoading ? this.renderSparklineSkeleton() : nothing;
     }
-    const values = days.map((day) =>
+    if (isProjectedRange(this.timeRange)) {
+      return this.renderPeriodSparkline(source.rows, source.granularity);
+    }
+    const values = source.rows.map((day) =>
       this.unit === 'dollars'
         ? Number(day.estimated_cost || 0)
         : Number(day.total_tokens || 0)
     );
+    if (values.length < 3) {
+      return nothing;
+    }
     const max = Math.max(...values);
     const min = Math.min(...values);
     const span = max - min || 1;
@@ -654,17 +788,38 @@ export class UsageCard extends LitElement {
     });
     const areaPoints = `0,${height} ${points.join(' ')} ${width},${height}`;
 
+    return this.renderSparklineSvg(
+      this.unit === 'dollars'
+        ? `Estimated spend per day ${this.rangeSpan}`
+        : `Tokens per day ${this.rangeSpan}`,
+      svg`<polygon
+          class="sparkline-area"
+          points=${areaPoints}
+          fill="var(--sl-color-primary-500)"
+          opacity="0.12"
+        ></polygon>
+        <polyline
+          class="sparkline-line"
+          points=${points.join(' ')}
+          fill="none"
+          stroke="var(--sl-color-primary-500)"
+          stroke-width="1.5"
+          vector-effect="non-scaling-stroke"
+        ></polyline>`
+    );
+  }
+
+  /** One svg, one clip: the reveal uncovers data and projection together. */
+  private renderSparklineSvg(label: string, shapes: unknown) {
+    const width = 100;
+    const height = 40;
     return html`
       <svg
         class="sparkline"
         viewBox="0 0 ${width} ${height}"
         preserveAspectRatio="none"
         role="img"
-        aria-label=${
-          this.unit === 'dollars'
-            ? `Estimated spend per day ${this.rangeSpan}`
-            : `Tokens per day ${this.rangeSpan}`
-        }
+        aria-label=${label}
       >
         <defs>
           <clipPath id=${this.sparklineClipId}>
@@ -678,25 +833,176 @@ export class UsageCard extends LitElement {
               height=${height + 8}
             ></rect>
           </clipPath>
+          <pattern
+            id=${this.sparklineHatchId}
+            patternUnits="userSpaceOnUse"
+            width="2"
+            height="4"
+            patternTransform="rotate(45)"
+          >
+            <rect
+              width="0.6"
+              height="4"
+              fill="var(--sl-color-primary-500)"
+              opacity="0.35"
+            ></rect>
+          </pattern>
         </defs>
         <g class="sparkline-shapes" clip-path="url(#${this.sparklineClipId})">
-          <polygon
-            class="sparkline-area"
-            points=${areaPoints}
-            fill="var(--sl-color-primary-500)"
-            opacity="0.12"
-          ></polygon>
-          <polyline
-            class="sparkline-line"
-            points=${points.join(' ')}
-            fill="none"
-            stroke="var(--sl-color-primary-500)"
-            stroke-width="1.5"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
+          ${shapes}
         </g>
       </svg>
     `;
+  }
+
+  /**
+   * A to-date range: the whole period on the x axis, the data up to now as
+   * a solid line and area, then the projection as a dashed line over a
+   * hatched area, split by a thin "now" marker, with a legend that says so.
+   */
+  private renderPeriodSparkline(
+    rows: GatewayUsageByDay[],
+    granularity: UsageSeriesGranularity
+  ) {
+    const now = this.now ?? new Date();
+    const projection = buildUsageProjection({
+      range: this.timeRange,
+      totalSoFar: this.valueFor(this.summary),
+      values: seriesValues(rows, granularity, this.unit),
+      granularity,
+      now,
+    });
+    if (!projection || projection.slots.length < 2) return nothing;
+    const { slots, currentIndex } = projection;
+    const actual = slots.slice(0, currentIndex + 1).map((s) => s.actual || 0);
+    const projected =
+      projection.status === 'projected'
+        ? slots.slice(currentIndex).map((s) => s.projected || 0)
+        : [];
+    if (actual.every((v) => v <= 0) && projected.every((v) => v <= 0)) {
+      return nothing;
+    }
+    const width = 100;
+    const height = 40;
+    const max = Math.max(...actual, ...projected) || 1;
+    const step = width / (slots.length - 1);
+    const xy = (value: number, index: number) =>
+      `${(index * step).toFixed(2)},${(
+        height -
+        (value / max) * (height - 4) -
+        2
+      ).toFixed(2)}`;
+    const actualPoints = actual.map((v, i) => xy(v, i));
+    const nowX = (currentIndex * step).toFixed(2);
+    const projectedPoints = projected.map((v, i) => xy(v, currentIndex + i));
+    const bucket =
+      granularity === 'hour'
+        ? 'hour'
+        : granularity === 'month'
+          ? 'month'
+          : 'day';
+    const label = `${
+      this.unit === 'dollars' ? 'Estimated spend' : 'Tokens'
+    } per ${bucket} ${this.rangeSpan}${
+      projection.status === 'projected'
+        ? ', with a projection to the end of the period'
+        : ''
+    }`;
+
+    const chart = this.renderSparklineSvg(
+      label,
+      svg`<polygon
+          class="sparkline-area"
+          points=${`0,${height} ${actualPoints.join(' ')} ${nowX},${height}`}
+          fill="var(--sl-color-primary-500)"
+          opacity="0.12"
+        ></polygon>
+        <polyline
+          class="sparkline-line"
+          points=${actualPoints.join(' ')}
+          fill="none"
+          stroke="var(--sl-color-primary-500)"
+          stroke-width="1.5"
+          vector-effect="non-scaling-stroke"
+        ></polyline>
+        ${
+          projectedPoints.length > 0
+            ? svg`<polygon
+                  class="sparkline-projection-area"
+                  points=${`${nowX},${height} ${projectedPoints.join(' ')} ${width},${height}`}
+                  fill="url(#${this.sparklineHatchId})"
+                ></polygon>
+                <polyline
+                  class="sparkline-projection-line"
+                  points=${projectedPoints.join(' ')}
+                  fill="none"
+                  stroke="var(--sl-color-primary-400)"
+                  stroke-width="1.5"
+                  stroke-dasharray="4 3"
+                  vector-effect="non-scaling-stroke"
+                ></polyline>`
+            : nothing
+        }
+        <line
+          class="sparkline-now"
+          x1=${nowX}
+          x2=${nowX}
+          y1="0"
+          y2=${height}
+          stroke="var(--sl-color-neutral-500)"
+          stroke-width="1"
+          vector-effect="non-scaling-stroke"
+        ></line>`
+    );
+    return html`${chart}${this.renderProjectionLegend(projection)}`;
+  }
+
+  private renderProjectionLegend(
+    projection: NonNullable<ReturnType<typeof buildUsageProjection>>
+  ) {
+    const solid = html`<span class="legend-item"
+      ><span class="legend-swatch" aria-hidden="true"></span>so far</span
+    >`;
+    if (projection.status === 'too-early') {
+      return html`<div
+        class="sparkline-legend"
+        data-testid="usage-projection-legend"
+      >
+        ${solid}<span>· too early to project</span>
+      </div>`;
+    }
+    if (
+      projection.status !== 'projected' ||
+      projection.projectedTotal == null
+    ) {
+      return nothing;
+    }
+    const period = projectionPeriodFor(this.timeRange) ?? 'monthly';
+    const total =
+      this.unit === 'dollars'
+        ? formatUsd(projection.projectedTotal)
+        : `${this.formatCompactNumber(projection.projectedTotal)} tokens`;
+    const shape =
+      projection.shape === 'weekday'
+        ? 'spread by weekday pattern'
+        : projection.shape === 'hour-of-day'
+          ? 'spread by hour of day'
+          : 'spread evenly';
+    return html`<div
+      class="sparkline-legend"
+      data-testid="usage-projection-legend"
+      title=${`Projection: the rate so far carried to the end of the period, ${shape}.`}
+    >
+      ${solid}
+      <span class="legend-item"
+        ><span class="legend-swatch dashed" aria-hidden="true"></span
+        >projected</span
+      >
+      <span class="legend-total"
+        >Projected: ${total} by
+        ${forecastEndLabel(period, projection.end, 'local')}</span
+      >
+    </div>`;
   }
 
   private get globalPolicies(): BudgetPolicy[] {
@@ -855,23 +1161,23 @@ export class UsageCard extends LitElement {
     return html`
       <sl-card class="content-card">
         <div slot="header" class="header">
-          <div class="title">
-            Usage
+          <div class="title">Usage</div>
+          <div class="header-controls">
             ${
               this.updating
-                ? html`<sl-spinner
-                    class="updating-spinner"
+                ? html`<span
+                    class="visually-hidden"
                     data-testid="usage-updating"
-                    aria-label="Updating usage"
-                  ></sl-spinner>`
+                    role="status"
+                    >Updating usage</span
+                  >`
                 : nothing
             }
-          </div>
-          <div class="header-controls">
             ${this.renderUnitToggle()}
             <time-range-select
               ariaLabel="Usage time range"
-              .value=${normalizeTimeRangeKey(this.timeRange) ?? 'last-30'}
+              ?busy=${this.updating}
+              .value=${normalizeTimeRangeKey(this.timeRange) ?? DEFAULT_USAGE_RANGE}
               .options=${USAGE_RANGE_OPTIONS}
               @range-change=${this.handleRangeChange}
             ></time-range-select>
