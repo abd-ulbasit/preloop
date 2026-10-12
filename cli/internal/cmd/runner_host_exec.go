@@ -188,7 +188,7 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	harness := hostExecProfileHarness(profile)
 	if harness == "" {
-		return hostExecProfile{}, fmt.Errorf("host profile executable must be Cursor agent, cursor-agent or copilot")
+		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot or devin")
 	}
 	if len(profile.ModelMap) > 64 {
 		return hostExecProfile{}, fmt.Errorf("model_map supports at most 64 entries")
@@ -197,6 +197,12 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 		if !hostExecModelRe.MatchString(requested) || !hostExecModelRe.MatchString(alias) {
 			return hostExecProfile{}, fmt.Errorf("invalid model_map entry")
 		}
+	}
+	if harness == hostExecHarnessDevin {
+		if err := validateDevinHostExecProfile(profile); err != nil {
+			return hostExecProfile{}, err
+		}
+		return profile, nil
 	}
 	if harness == hostExecHarnessCopilot {
 		if err := validateCopilotHostExecProfile(profile); err != nil {
@@ -282,6 +288,8 @@ func hostExecIsCursorBinary(executable string) bool {
 // the control plane checks against the leased agent type.
 func hostExecProfileHarness(profile hostExecProfile) string {
 	switch {
+	case hostExecBinaryBase(profile.Executable) == "devin":
+		return hostExecHarnessDevin
 	case hostExecIsCursorBinary(profile.Executable):
 		return hostExecHarnessCursor
 	case hostExecIsCopilotBinary(profile.Executable):
@@ -602,6 +610,7 @@ func buildHostExecArgs(profile hostExecProfile, job map[string]any, workspace st
 // hostExecRun is a prepared host job: the CLI command plus the work that
 // must happen before it starts (checkout) and after it ends (cleanup).
 type hostExecRun struct {
+	resultPath  string
 	cmd         *exec.Cmd
 	timeout     time.Duration
 	workspace   string
@@ -720,6 +729,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 		}
 	}
 	var args []string
+	var resultPath string
 	env := hostExecFlowEnv(
 		hostExecChildEnv(runtime.GOOS, wantHarness, profile, os.Environ()), job,
 	)
@@ -734,6 +744,16 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 			args = append(args, "--resume="+resume.SessionID)
 		}
 		env = copilotHostExecEnv(env)
+	} else if wantHarness == hostExecHarnessDevin {
+		if !devinApprovalHooksInstalled() {
+			err = fmt.Errorf("devin_approval_hook_missing: run preloop agents onboard Devin --approvals")
+		} else {
+			resultPath, err = newDevinExportPath()
+			if err == nil {
+				files = append(files, resultPath)
+				args, err = buildDevinHostExecArgs(profile, job, resultPath, "")
+			}
+		}
 	} else {
 		args, err = buildHostExecArgs(profile, job, workspace, mcpArgs...)
 	}
@@ -753,6 +773,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	cmd.WaitDelay = 250 * time.Millisecond
 	return &hostExecRun{
 		cmd:         cmd,
+		resultPath:  resultPath,
 		timeout:     hostExecTimeout(profile, job),
 		workspace:   workspace,
 		checkout:    checkout,
@@ -792,6 +813,7 @@ func cloneJobWithPrompt(job map[string]any, prompt string) map[string]any {
 // ceiling it may lower, never raise.
 func runnerHeartbeatMessage(concurrency int) map[string]any {
 	msg := publicationHeartbeat()
+	msg["docker_available"] = advertisedDockerAvailable()
 	msg["host_exec_profiles"] = hostExecAdvertisements()
 	msg["authorized_directories"] = authorizedDirectoryAdvertisements()
 	runnerInventory.addToHeartbeat(msg)
@@ -881,7 +903,7 @@ func beginHostExecJob(
 	}
 	cmd, timeout := run.cmd, run.timeout
 	agentType, _ := job["agent_type"].(string)
-	buffer := &runnerLogBuffer{native: true, harness: hostExecHarnessForAgentType(agentType)}
+	buffer := &runnerLogBuffer{native: true, harness: hostExecHarnessForAgentType(agentType), resultPath: run.resultPath}
 	cmd.Stdout, cmd.Stderr = buffer, buffer
 	gate := &hostExecGate{}
 	jobs.start(&runnerJob{executionID: executionID, cmd: cmd, halted: halted, hostGate: gate})

@@ -22,7 +22,7 @@ func TestAgentCapabilitiesRegistry(t *testing.T) {
 		"OpenClaw":         {controlSupported, controlSupported, controlSupported},
 		"Hermes":           {controlSupported, controlSupported, controlSupported},
 		"Antigravity":      {controlUnsupported, controlUnsupported, controlSupported},
-		"Devin":            {controlUnsupported, controlUnsupported, controlSupported},
+		"Devin":            {controlUnsupported, controlSupported, controlSupported},
 		"Copilot CLI":      {controlUnsupported, controlSupported, controlSupported},
 	}
 	if len(expected) != len(agentSpecs) {

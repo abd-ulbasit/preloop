@@ -228,7 +228,7 @@ func TestBuildHarnessInventoryHandwrittenCopilotProfileSuppressesGenerated(t *te
 	if cursor.GeneratedProfile == nil || *cursor.GeneratedProfile != "cursor" {
 		t.Fatalf("cursor generated profile = %v", cursor.GeneratedProfile)
 	}
-	if cursor.LoginState != "signed_out" || cursor.LoginSource != "cli_status" || cursor.SupportLevel != "flows_only" {
+	if cursor.LoginState != "signed_out" || cursor.LoginSource != "cli_status" || cursor.SupportLevel != "flows_and_sessions" {
 		t.Fatalf("cursor = %+v", cursor)
 	}
 	generated := generatedHostExecProfiles(inv)
@@ -332,9 +332,9 @@ func TestDiscoveredHarnessMapping(t *testing.T) {
 
 func TestCursorLoginFromStatus(t *testing.T) {
 	cases := map[string]string{
-		"Not logged in":                  "signed_out",
+		"Not logged in":                   "signed_out",
 		"✓ Logged in as jane@example.com": "signed_in",
-		"something else":                 "unknown",
+		"something else":                  "unknown",
 	}
 	for output, want := range cases {
 		if got := cursorLoginFromStatus(output, true); got != want {

@@ -64,6 +64,8 @@ func permissionSourceForAgent(agent AgentConfig) string {
 		return permissionSourceCursor
 	case strings.EqualFold(strings.TrimSpace(agent.Name), "Copilot CLI"):
 		return permissionSourceCopilotCLI
+	case isDevinAgent(agent):
+		return permissionSourceDevinCLI
 	case isOpenCodeAgent(agent):
 		return permissionSourceOpenCode
 	default:
@@ -123,6 +125,8 @@ func approvalHookConfigPath(source string) (string, error) {
 		return "", err
 	}
 	switch source {
+	case permissionSourceDevinCLI:
+		return devinConfigPath("config.json")
 	case permissionSourceClaudeCode:
 		return filepath.Join(home, ".claude", "settings.json"), nil
 	case permissionSourceCodexCLI:
@@ -315,6 +319,17 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 	}
 
 	switch source {
+	case permissionSourceDevinCLI:
+		for _, event := range []string{"PreToolUse", "PermissionRequest"} {
+			if err := upsertNestedCommandHook(configPath, event, "", command, hostTimeoutSeconds); err != nil {
+				return err
+			}
+		}
+		for _, event := range sessionHookEvents {
+			if err := upsertNestedCommandHook(configPath, event, "", sessionHookCommand(source), sessionHookTimeoutSeconds); err != nil {
+				return err
+			}
+		}
 	case permissionSourceClaudeCode:
 		if err := upsertNestedCommandHook(configPath, "PreToolUse", "*", command, hostTimeoutSeconds); err != nil {
 			return err
@@ -484,6 +499,12 @@ func removeApprovalHooks(agent AgentConfig, out io.Writer) error {
 	}
 
 	switch source {
+	case permissionSourceDevinCLI:
+		for _, event := range append([]string{"PreToolUse", "PermissionRequest"}, sessionHookEvents...) {
+			if err := removeNestedCommandHook(configPath, event, false); err != nil {
+				return err
+			}
+		}
 	case permissionSourceClaudeCode:
 		// settings.json holds unrelated user settings, so never delete the file.
 		if err := removeNestedCommandHook(configPath, "PreToolUse", false); err != nil {
@@ -1033,6 +1054,10 @@ func loadJSONDocumentIfExists(path string) (map[string]interface{}, bool, error)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return map[string]interface{}{}, true, nil
+	}
+	if filepath.Base(filepath.Dir(path)) == "devin" && filepath.Base(path) == "config.json" {
+		doc, err := loadDevinDocument(path)
+		return doc, true, err
 	}
 	var doc map[string]interface{}
 	if err := json.Unmarshal(data, &doc); err != nil {

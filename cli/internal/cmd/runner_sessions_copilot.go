@@ -36,10 +36,11 @@ type runnerSessionTurnSpec struct {
 }
 
 type runnerSessionTurnResult struct {
-	Status    string
-	ErrorCode string
-	Error     string
-	Usage     map[string]any
+	HarnessSessionID string
+	Status           string
+	ErrorCode        string
+	Error            string
+	Usage            map[string]any
 	// SessionCreated reports that the harness now has this session on disk,
 	// so the next turn resumes it.
 	SessionCreated bool

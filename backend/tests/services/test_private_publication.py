@@ -377,6 +377,10 @@ def test_lease_requires_ready_publication_helper(case, capable):
         "helper_ready": capable,
         "helper_image": IMAGE,
     }
+    # Container publication leases require Docker and untagged acceptance.
+    # This test varies helper readiness, not those scheduling gates.
+    case.runner.capabilities = {"docker_available": True}
+    case.runner.accept_untagged = True
     case.db.commit()
     leased = lease_job(
         case.db,

@@ -495,3 +495,74 @@ def test_unknown_host_exec_lease_agent_type_fails() -> None:
         pending_job={**_COPILOT_LEASE, "agent_type": "codex"},
     )
     assert (status, error) == ("FAILED", "Invalid durable host execution lease")
+
+
+def test_devin_native_profile_and_completion() -> None:
+    runner = SimpleNamespace(
+        capabilities={
+            "host_exec_profiles": [
+                {
+                    "name": "devin",
+                    "capabilities": ["host_exec", "devin_cli"],
+                    "models": ["swe-2-high"],
+                }
+            ]
+        }
+    )
+    assert is_host_exec_agent_type("devin")
+    assert host_exec_harness("devin") == "devin_cli"
+    assert (
+        host_exec_model_identifier("devin", {"devin_model": "swe-2-high"})
+        == "swe-2-high"
+    )
+    assert runner_has_host_exec_profile(
+        runner, "devin", "swe-2-high", agent_type="devin"
+    )
+    assert not runner_has_host_exec_profile(runner, "devin", agent_type="copilot")
+    pending = {
+        "agent_type": "devin",
+        "host_exec_profile": "devin",
+        "completion_protocol": "host_exec",
+    }
+    message = {
+        "status": "SUCCEEDED",
+        "host_exec_profile": "devin",
+        "completion_protocol": "host_exec",
+        "exit_code": 0,
+        "result": {
+            "status": "success",
+            "harness": "devin_cli",
+            "session_id": "session-123",
+        },
+    }
+    status, error, result = finalize_runner_completion(message, pending)
+    assert status == "SUCCEEDED", error
+    assert result["gateway_metered"] is False
+    message["result"]["harness"] = "copilot_cli"
+    assert finalize_runner_completion(message, pending)[0] == "FAILED"
+
+
+def test_devin_harness_selection_survives_registration() -> None:
+    from preloop.services.host_exec import host_exec_effective_profile
+
+    stored = normalize_host_exec_advertisements(
+        [
+            {
+                "name": "devin",
+                "capabilities": ["host_exec", "devin_cli"],
+                "models": ["swe-2-high"],
+            }
+        ]
+    )
+    assert runner_has_host_exec_profile(
+        SimpleNamespace(capabilities=stored), "devin", agent_type="devin"
+    )
+    assert host_exec_effective_profile("devin", {"harness": "devin_cli"}) == "devin"
+    assert (
+        host_exec_flow_error(
+            agent_type="devin",
+            agent_config={"harness": "devin_cli"},
+            runner_pool="devin_cli",
+        )
+        is None
+    )

@@ -398,6 +398,9 @@ func hostExecMCPConfig(harness, workspace, token string) ([]string, []string, er
 			"type": "http", "url": mcpURL, "headers": headers, "tools": []string{"*"},
 		}}}
 		args = []string{"--additional-mcp-config=@" + path}
+	case hostExecHarnessDevin:
+		path = filepath.Join(workspace, ".devin", "mcp_config.local.json")
+		doc = map[string]any{"mcpServers": map[string]any{hostExecMCPServerName: map[string]any{"url": mcpURL, "headers": headers}}}
 	case hostExecHarnessCursor:
 		path = filepath.Join(workspace, ".cursor", "mcp.json")
 		doc = map[string]any{"mcpServers": map[string]any{hostExecMCPServerName: map[string]any{

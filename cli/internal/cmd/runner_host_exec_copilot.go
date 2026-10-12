@@ -25,6 +25,7 @@ import (
 // https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference.
 
 const (
+	hostExecHarnessDevin   = "devin_cli"
 	hostExecHarnessCursor  = "cursor_cli"
 	hostExecHarnessCopilot = "copilot_cli"
 
@@ -71,6 +72,8 @@ func hostExecIsCopilotBinary(executable string) bool {
 // runner must use. Unknown types return "" and fail closed.
 func hostExecHarnessForAgentType(agentType string) string {
 	switch agentType {
+	case "devin":
+		return hostExecHarnessDevin
 	case "cursor":
 		return hostExecHarnessCursor
 	case "copilot":

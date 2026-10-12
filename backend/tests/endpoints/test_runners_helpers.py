@@ -1,6 +1,7 @@
 """Focused tests for self-hosted runner WebSocket helpers."""
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -591,6 +592,14 @@ async def test_hello_null_host_exec_profiles_leaves_capabilities_empty(
         "set_publication_capabilities",
         _stub_capability_writer(runner),
     )
+
+    def update_capabilities(
+        _db: Any, *, db_obj: SimpleNamespace, obj_in: dict[str, Any]
+    ) -> SimpleNamespace:
+        db_obj.capabilities = obj_in["capabilities"]
+        return db_obj
+
+    monkeypatch.setattr(runners.crud_flow_runner, "update", update_capabilities)
 
     await runners.runner_ws(websocket, runner.id, MagicMock())
 

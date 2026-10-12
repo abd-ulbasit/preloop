@@ -120,6 +120,12 @@ class RunnerRemoteSessionService:
         # The runner row lock serializes concurrent starts on one runner, so
         # the count and the insert cannot interleave.
         crud_runner_remote_session.lock_runner(db, runner_id=plan.runner.id)
+        runner = crud_flow_runner.get(db, id=plan.runner.id)
+        if runner is not None and runner.paused:
+            db.rollback()
+            raise _error(
+                "runner_paused", "Resume the runner before starting a session."
+            )
         if limit and self.count_active(db, runner_id=str(plan.runner.id)) >= limit:
             db.commit()
             raise _error(

@@ -3087,6 +3087,11 @@ class FlowTriggerService:
                 escalation=no_progress_escalation,
                 retry_of_execution_id=retry_of_execution_id,
             )
+        from preloop.services.runner_service import validate_runner_capabilities
+
+        validate_runner_capabilities(
+            self.db, flow, {"trigger_event_data": trigger_details}
+        )
         attach_trigger_subject(trigger_details)
         attach_workspace_file_paths(trigger_details)
 
