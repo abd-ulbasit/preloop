@@ -41,7 +41,8 @@ jobs:
         working-directory: cli
     env:
       PRELOOP_DISABLE_TELEMETRY: 'true'
-      GOMAXPROCS: '2'
+      GOMAXPROCS: ${{ github.event_name == 'workflow_dispatch' && inputs.execution_host_tests && '1' || '2' }}
+      FUZZ_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.execution_host_tests && '1' || '2' }}
       GOMEMLIMIT: 512MiB
       GOCACHE: ${{ github.workspace }}/.fuzz-cache
       FUZZ_PACKAGE: ${{ matrix.package }}
@@ -76,10 +77,10 @@ jobs:
         run: |
           mkdir -p fuzz-results
           go version > fuzz-results/toolchain.txt
-          printf 'target=%s\nseconds=%s\nworkers=2\n' "$FUZZ_TARGET" "$FUZZ_SECONDS" > fuzz-results/budget.txt
+          printf 'target=%s\nseconds=%s\nworkers=%s\n' "$FUZZ_TARGET" "$FUZZ_SECONDS" "$FUZZ_WORKERS" > fuzz-results/budget.txt
           go test "$FUZZ_PACKAGE" -run '^$' \
             -fuzz "^${FUZZ_TARGET}$" -fuzztime "${FUZZ_SECONDS}s" \
-            -fuzzminimizetime 20s -parallel 2 -timeout 15m \
+            -fuzzminimizetime 20s -parallel "$FUZZ_WORKERS" -timeout 15m \
             2>&1 | tee fuzz-results/fuzz.log
 
       - name: Retain logs and crashing inputs
