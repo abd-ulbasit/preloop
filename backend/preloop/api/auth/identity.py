@@ -2,11 +2,24 @@
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from typing import Any, Mapping
 from uuid import UUID
 
 from preloop.models import models
 from preloop.models.crud import crud_account, crud_person
 from preloop.models.crud.person import IdentityUnavailableError
+
+
+def require_session_profile_edit(user: models.User, changes: Mapping[str, Any]) -> None:
+    """Require a login session to edit canonical login/recovery identifiers."""
+    if getattr(user, "_auth_api_key", None) is not None and {
+        "username",
+        "email",
+    }.intersection(changes):
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in to change your username or recovery email",
+        )
 
 
 def require_active_identity(

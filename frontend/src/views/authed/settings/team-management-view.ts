@@ -829,7 +829,7 @@ export class TeamManagementView extends LitElement {
                     <div class="member-item">
                       <div class="member-info">
                         <span class="member-name">
-                          ${user?.full_name || user?.username || 'Unknown user'}
+                          ${user?.full_name || user?.username || 'Identity unavailable'}
                         </span>
                         <span class="member-email">${user?.email || ''}</span>
                       </div>
@@ -871,7 +871,8 @@ export class TeamManagementView extends LitElement {
                 .map(
                   (user) => html`
                     <sl-option value=${user.id}>
-                      ${user.full_name || user.username} (${user.email})
+                      ${user.full_name || user.username || 'Identity unavailable'}
+                      ${user.email ? `(${user.email})` : ''}
                     </sl-option>
                   `
                 )}

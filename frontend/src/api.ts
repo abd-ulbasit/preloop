@@ -161,6 +161,8 @@ export function invalidateUserProfileCache(): void {
   userProfileCache = null;
   userProfileInflight = null;
   userProfileEpoch += 1;
+  inFlightGets.delete(coalesceKey('/api/v1/auth/users/me'));
+  inFlightGets.delete(coalesceKey('/api/v1/auth/users/me', true));
 }
 
 export function invalidateApiCaches(): void {
@@ -3705,6 +3707,8 @@ export async function commitIssueDependencies(
 export interface UserProfile {
   /** The caller's user id. Matches an approval workflow's approver_user_ids. */
   id: string;
+  /** Canonical person; id remains the account membership identifier. */
+  person_id?: string | null;
   account_id: string;
   username: string;
   email: string;
@@ -3757,8 +3761,8 @@ export async function uploadAvatar(file: File): Promise<AvatarResponse> {
     }
     throw new Error(`Failed to upload avatar (${response.status})`);
   }
-  // Profile changed -- drop cached /me so the next reader gets fresh data.
-  userProfileCache = null;
+  // Discard profile reads started before the canonical avatar changed.
+  invalidateUserProfileCache();
   return response.json();
 }
 
@@ -3769,7 +3773,7 @@ export async function deleteAvatar(): Promise<AvatarResponse> {
   if (!response.ok) {
     throw new Error('Failed to delete avatar');
   }
-  userProfileCache = null;
+  invalidateUserProfileCache();
   return response.json();
 }
 
@@ -3816,18 +3820,25 @@ export async function getAccountDetails() {
   return response.json();
 }
 
-export async function updateUserProfile(details: { full_name: string }) {
+export async function updateUserProfile(details: {
+  full_name?: string;
+  username?: string;
+  email?: string;
+}): Promise<UserProfile> {
   const response = await fetchWithAuth('/api/v1/auth/users/me', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(details),
   });
   if (!response.ok) {
-    throw new Error('Failed to update user profile');
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(detail, 'Failed to update user profile')
+    );
   }
   const data = await response.json();
   // Profile changed — drop cached /me so the next reader gets fresh data.
-  userProfileCache = null;
+  invalidateUserProfileCache();
   return data;
 }
 
