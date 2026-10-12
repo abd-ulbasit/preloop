@@ -8,6 +8,7 @@ import {
   deleteAvatar,
   resendVerificationEmail,
   invalidateUserProfileCache,
+  signOut,
   type UserProfile,
 } from '../../../api';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
@@ -24,6 +25,10 @@ export class ProfileView extends LitElement {
 
   @state()
   private fullName = '';
+
+  @state() private username = '';
+  @state() private email = '';
+  @state() private signInRequired = false;
 
   @state()
   private updateProfileMessage = '';
@@ -44,6 +49,8 @@ export class ProfileView extends LitElement {
     try {
       this.user = await getUserProfile();
       this.fullName = this.user?.full_name || '';
+      this.username = this.user.username;
+      this.email = this.user.email;
     } catch (error) {
       console.error('Failed to load account details', error);
       this.updateProfileMessage = 'Failed to load account details.';
@@ -53,10 +60,33 @@ export class ProfileView extends LitElement {
   async handleUpdateProfile(event: Event) {
     event.preventDefault();
     try {
-      await updateUserProfile({ full_name: this.fullName });
-      this.updateProfileMessage = 'Profile updated successfully.';
+      const changes: { full_name: string; username?: string; email?: string } =
+        { full_name: this.fullName };
+      if (this.username !== this.user?.username)
+        changes.username = this.username;
+      if (this.email !== this.user?.email) changes.email = this.email;
+      const previousEmail = this.user?.email;
+      this.user = await updateUserProfile(changes);
+      this.signInRequired =
+        previousEmail?.trim().toLowerCase() !==
+        this.user.email.trim().toLowerCase();
+      this.updateProfileMessage = this.signInRequired
+        ? 'Email updated. Sign in again and verify your new address. Your sessions in every account have ended.'
+        : 'Profile updated successfully. These details are shared across your accounts.';
+      if (this.signInRequired) {
+        await signOut({
+          serverSignOut: false,
+          destination: '/login',
+          navigate: () => {},
+        });
+      } else {
+        window.dispatchEvent(
+          new CustomEvent('auth-change', { bubbles: true, composed: true })
+        );
+      }
     } catch (error) {
-      this.updateProfileMessage = 'Failed to update profile.';
+      this.updateProfileMessage =
+        error instanceof Error ? error.message : 'Failed to update profile.';
     }
   }
 
@@ -116,6 +146,9 @@ export class ProfileView extends LitElement {
         };
       }
       this.avatarMessage = 'Avatar updated.';
+      window.dispatchEvent(
+        new CustomEvent('auth-change', { bubbles: true, composed: true })
+      );
     } catch (error) {
       this.avatarMessage =
         error instanceof Error ? error.message : 'Failed to upload avatar.';
@@ -134,6 +167,9 @@ export class ProfileView extends LitElement {
         };
       }
       this.avatarMessage = 'Avatar removed.';
+      window.dispatchEvent(
+        new CustomEvent('auth-change', { bubbles: true, composed: true })
+      );
     } catch (error) {
       this.avatarMessage = 'Failed to remove avatar.';
     }
@@ -191,19 +227,32 @@ export class ProfileView extends LitElement {
                 }
               </div>
 
+              <p>
+                Your username, email, name and avatar are shared across your
+                accounts. Changing email ends all sessions and requires
+                verification.
+              </p>
+              ${this.signInRequired ? html`<a href="/login">Sign in with your updated identity</a>` : ''}
               <form @submit="${this.handleUpdateProfile}">
                 <sl-input
                   label="Username"
-                  .value="${this.user?.username || ''}"
-                  readonly
+                  .value="${this.username}"
+                  minlength="3"
+                  maxlength="50"
+                  required
+                  ?disabled=${this.signInRequired}
+                  @sl-input=${(e: Event) => (this.username = (e.target as HTMLInputElement).value)}
                 ></sl-input>
                 <sl-input
                   label="Email"
-                  .value="${this.user?.email || ''}"
-                  readonly
+                  .value="${this.email}"
+                  type="email"
+                  required
+                  ?disabled=${this.signInRequired}
+                  @sl-input=${(e: Event) => (this.email = (e.target as HTMLInputElement).value)}
                 ></sl-input>
                 ${
-                  this.user
+                  this.user && !this.signInRequired
                     ? html`<div class="email-verification">
                         <p>
                           Email status:
@@ -247,7 +296,10 @@ export class ProfileView extends LitElement {
                   @sl-input="${(e: Event) =>
                     (this.fullName = (e.target as HTMLInputElement).value)}"
                 ></sl-input>
-                <sl-button variant="primary" type="submit"
+                <sl-button
+                  variant="primary"
+                  type="submit"
+                  ?disabled=${this.signInRequired}
                   >Update Profile</sl-button
                 >
                 ${

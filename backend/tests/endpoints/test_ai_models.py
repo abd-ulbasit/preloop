@@ -1299,8 +1299,8 @@ async def test_builtin_catalog_preserves_shared_models(
     result = await maybe_await(
         ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
     )
-    assert result[0] is shared
-    assert result[1].is_built_in
+    assert result[0].is_built_in
+    assert result[1] is shared
 
 
 @pytest.mark.asyncio

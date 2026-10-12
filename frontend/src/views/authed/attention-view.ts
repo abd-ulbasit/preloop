@@ -1469,7 +1469,7 @@ export class AttentionView extends AuthedElement {
                               href=${
                                 model.aiModelId
                                   ? `/console/ai-models/${model.aiModelId}?pricing=edit`
-                                  : '/console/cost?panel=pricing'
+                                  : '/console/cost/spend?panel=pricing'
                               }
                               >${zeroPriced.length > 0 ? 'Edit price' : 'Set price'}</a
                             >
@@ -1484,7 +1484,7 @@ export class AttentionView extends AuthedElement {
           : nothing
       }
       <div class="evidence-actions">
-        <sl-button size="small" href="/console/cost?panel=pricing"
+        <sl-button size="small" href="/console/cost/spend?panel=pricing"
           >Open pricing</sl-button
         >
       </div>

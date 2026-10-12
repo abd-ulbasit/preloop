@@ -1,4 +1,5 @@
 import { LitElement } from 'lit';
+import { withSafeIcon } from './utils/icon-name';
 import { Router } from './router';
 import { DEFAULT_SIMILARITY_THRESHOLD } from './config';
 import { PermissionError, permissionErrorFromResponse } from './permissions';
@@ -105,6 +106,7 @@ import type {
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEndpointCreated,
+  GatewayUsageByDay,
 } from './types';
 
 // Global refresh promise to prevent concurrent refresh requests
@@ -159,6 +161,8 @@ export function invalidateUserProfileCache(): void {
   userProfileCache = null;
   userProfileInflight = null;
   userProfileEpoch += 1;
+  inFlightGets.delete(coalesceKey('/api/v1/auth/users/me'));
+  inFlightGets.delete(coalesceKey('/api/v1/auth/users/me', true));
 }
 
 export function invalidateApiCaches(): void {
@@ -1474,6 +1478,32 @@ export async function getCostAnalyticsSummary(
     if (refused) throw refused;
     throw new Error('Failed to fetch cost analytics summary');
   }
+  return response.json();
+}
+
+export type CostGranularity = 'day' | 'week' | 'month';
+
+/** Gateway spend per UTC bucket; `date` is the bucket start (YYYY-MM-DD). */
+export interface CostTimeseriesResponse {
+  period_start: string;
+  period_end: string;
+  granularity: CostGranularity;
+  buckets: GatewayUsageByDay[];
+}
+
+/** Spend chart series. The server caps a window at 366 days. */
+export async function getCostTimeseries(params: {
+  startDate: string;
+  endDate: string;
+  granularity: CostGranularity;
+}): Promise<CostTimeseriesResponse> {
+  const query = new URLSearchParams({
+    start_date: params.startDate,
+    end_date: params.endDate,
+    granularity: params.granularity,
+  });
+  const response = await fetchWithAuth(`/api/v1/cost/timeseries?${query}`);
+  if (!response.ok) throw new Error('Failed to fetch spend over time');
   return response.json();
 }
 
@@ -3414,14 +3444,17 @@ export async function listProjectsForOrg(
 
 export async function getDuplicateIssues(
   status: 'opened' | 'closed' | 'all' = 'opened'
-) {
+): Promise<DuplicatePair[]> {
+  // Exact path, no trailing slash: "/issue-duplicates/" answers with a
+  // redirect that a TLS-terminating proxy turns into a blocked http:// URL.
   const response = await fetchWithAuth(
-    `/api/v1/issue-duplicates/?status=${status}`
+    `/api/v1/issue-duplicates?status=${status}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch duplicate issues');
   }
-  return response.json();
+  const data = await response.json();
+  return Array.isArray(data?.duplicates) ? data.duplicates : [];
 }
 
 export async function getIssueCount(): Promise<{ total_issues: number }> {
@@ -3674,6 +3707,8 @@ export async function commitIssueDependencies(
 export interface UserProfile {
   /** The caller's user id. Matches an approval workflow's approver_user_ids. */
   id: string;
+  /** Canonical person; id remains the account membership identifier. */
+  person_id?: string | null;
   account_id: string;
   username: string;
   email: string;
@@ -3726,8 +3761,8 @@ export async function uploadAvatar(file: File): Promise<AvatarResponse> {
     }
     throw new Error(`Failed to upload avatar (${response.status})`);
   }
-  // Profile changed -- drop cached /me so the next reader gets fresh data.
-  userProfileCache = null;
+  // Discard profile reads started before the canonical avatar changed.
+  invalidateUserProfileCache();
   return response.json();
 }
 
@@ -3738,7 +3773,7 @@ export async function deleteAvatar(): Promise<AvatarResponse> {
   if (!response.ok) {
     throw new Error('Failed to delete avatar');
   }
-  userProfileCache = null;
+  invalidateUserProfileCache();
   return response.json();
 }
 
@@ -3785,18 +3820,25 @@ export async function getAccountDetails() {
   return response.json();
 }
 
-export async function updateUserProfile(details: { full_name: string }) {
+export async function updateUserProfile(details: {
+  full_name?: string;
+  username?: string;
+  email?: string;
+}): Promise<UserProfile> {
   const response = await fetchWithAuth('/api/v1/auth/users/me', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(details),
   });
   if (!response.ok) {
-    throw new Error('Failed to update user profile');
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(detail, 'Failed to update user profile')
+    );
   }
   const data = await response.json();
   // Profile changed — drop cached /me so the next reader gets fresh data.
-  userProfileCache = null;
+  invalidateUserProfileCache();
   return data;
 }
 
@@ -4301,7 +4343,8 @@ export async function getFlowSummaries(
   const query = params.toString() ? `?${params.toString()}` : '';
   const response = await fetchWithAuth(`/api/v1/flows/summary${query}`);
   if (!response.ok) throw new Error('Failed to fetch flow summaries');
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4334,7 +4377,8 @@ export async function getFlows(
   if (!response.ok) {
     throw new Error('Failed to fetch flows');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /**
@@ -4374,7 +4418,7 @@ export async function getFlow(flowId: string): Promise<any> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow');
   }
-  return response.json();
+  return withSafeIcon(await response.json());
 }
 
 /**
@@ -4519,7 +4563,8 @@ export async function getFlowPresets(): Promise<any[]> {
   if (!response.ok) {
     throw new Error('Failed to fetch flow presets');
   }
-  return response.json();
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(withSafeIcon) : rows;
 }
 
 /** One page of executions plus how many rows the filters matched. */
@@ -5671,6 +5716,27 @@ export async function getIssueCompliance(
     throw new Error('Failed to fetch issue compliance');
   }
   return response.json();
+}
+
+/**
+ * Stored compliance results for a page of issues in one request. Never
+ * triggers model calls; unscored issues are simply absent from the map.
+ */
+export async function getIssueComplianceBatch(
+  issueIds: string[],
+  promptName: string
+): Promise<Record<string, IssueComplianceResult>> {
+  if (issueIds.length === 0) return {};
+  const response = await fetchWithAuth('/api/v1/issue_compliance/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issue_ids: issueIds, prompt_name: promptName }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch issue compliance');
+  }
+  const data = await response.json();
+  return data?.results ?? {};
 }
 
 export async function getComplianceImprovementSuggestion(
@@ -7467,6 +7533,191 @@ export async function disconnectBitbucket(trackerId: string): Promise<void> {
       'Failed to disconnect the Bitbucket connection'
     );
   }
+}
+
+// Managed Jira Cloud OAuth (Atlassian OAuth 2.0 3LO, issue #1579). Served by
+// the jira_oauth managed-provider plugin and advertised through
+// `features.jira_cloud_oauth`. As with Bitbucket, the console only handles an
+// opaque completion handle: no code, token or secret reaches the browser.
+export const JIRA_CLOUD_OAUTH_FEATURE = 'jira_cloud_oauth';
+export const JIRA_CONNECT_HANDLE_PARAM = 'jira_connect';
+export const JIRA_CONNECT_TRACKER_PARAM = 'jira_tracker';
+export const JIRA_CONNECT_ERROR_PARAM = 'jira_error';
+
+export type JiraConnectionState =
+  | 'connected'
+  | 'site_required'
+  | 'reconnect_required'
+  | 'disconnected'
+  | 'unavailable'
+  | 'not_managed';
+
+export interface JiraConnectionActor {
+  account_id?: string | null;
+  name?: string | null;
+}
+
+export interface JiraSite {
+  /** Atlassian cloudId. */
+  id: string;
+  name?: string | null;
+  url: string;
+  scopes?: string[] | null;
+}
+
+export interface JiraConnectionStatus {
+  tracker_id: string;
+  name: string;
+  provider: string;
+  managed: boolean;
+  state: JiraConnectionState;
+  consumer_configured: boolean;
+  cloud_id?: string | null;
+  site_url?: string | null;
+  site_name?: string | null;
+  actor?: JiraConnectionActor | null;
+  /** Actual access-token expiry reported by the provider service (ISO). */
+  expires_at?: string | null;
+  rotation_version?: number | null;
+  granted_scopes?: string[] | null;
+  reconnect_reason?: string | null;
+}
+
+/** Human-readable text for the sanitized error codes the callback may carry. */
+export function describeJiraConnectError(code: string): string {
+  switch (code) {
+    case 'access_denied':
+      return 'Jira access was declined. No connection was created.';
+    case 'invalid_state':
+      return 'The Jira consent link expired or was already used. Start again.';
+    case 'session_mismatch':
+      return 'The Jira callback arrived in a different browser session. Start again from this browser.';
+    case 'exchange_failed':
+      return 'Atlassian did not complete the authorization. Try again in a moment.';
+    case 'no_sites':
+      return 'The Atlassian account did not grant access to any Jira site.';
+    case 'not_configured':
+      return 'Managed Jira connections are not configured on this deployment.';
+    default:
+      return `Jira connection failed (${code}).`;
+  }
+}
+
+async function jiraConnectRequest<T>(
+  path: string,
+  fallback: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetchWithAuth(`/api/v1/auth/jira${path}`, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = body?.detail ?? body?.message;
+    if (response.status === 501 || detail === 'not_configured') {
+      throw new Error(describeJiraConnectError('not_configured'));
+    }
+    throw new Error(typeof detail === 'string' ? detail : fallback);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json().catch(() => undefined as T);
+}
+
+function jsonInit(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+function returnQuery(returnPath?: string): string {
+  return returnPath ? `?return_path=${encodeURIComponent(returnPath)}` : '';
+}
+
+const jiraTrackerPath = (trackerId: string) =>
+  `/trackers/${encodeURIComponent(trackerId)}`;
+
+export function startJiraConnect(
+  returnPath?: string
+): Promise<BitbucketAuthorizationStart> {
+  return jiraConnectRequest(
+    `/authorize${returnQuery(returnPath)}`,
+    'Failed to start the Jira connection',
+    { credentials: 'include' }
+  );
+}
+
+export function completeJiraConnect(body: {
+  handle: string;
+  name?: string;
+  cloud_id?: string;
+}): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    '/complete',
+    'Failed to complete the Jira connection',
+    jsonInit('POST', body)
+  );
+}
+
+export function getJiraConnectionStatus(
+  trackerId: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/status`,
+    'Failed to read the Jira connection status'
+  );
+}
+
+export function getJiraSites(
+  trackerId: string
+): Promise<{ sites: JiraSite[] }> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/sites`,
+    'Failed to list the Jira sites for this connection'
+  );
+}
+
+export function bindJiraSite(
+  trackerId: string,
+  cloudId: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/binding`,
+    'Failed to select the Jira site',
+    jsonInit('PUT', { cloud_id: cloudId })
+  );
+}
+
+export function startJiraReconnect(
+  trackerId: string,
+  returnPath?: string
+): Promise<BitbucketAuthorizationStart> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/reconnect${returnQuery(returnPath)}`,
+    'Failed to start the Jira reconnect',
+    { method: 'POST', credentials: 'include' }
+  );
+}
+
+export function completeJiraReconnect(
+  trackerId: string,
+  handle: string
+): Promise<JiraConnectionStatus> {
+  return jiraConnectRequest(
+    `${jiraTrackerPath(trackerId)}/reconnect/complete`,
+    'Failed to complete the Jira reconnect',
+    jsonInit('POST', { handle })
+  );
+}
+
+export async function disconnectJira(trackerId: string): Promise<void> {
+  await jiraConnectRequest<void>(
+    `${jiraTrackerPath(trackerId)}/disconnect`,
+    'Failed to disconnect the Jira connection',
+    { method: 'POST' }
+  );
 }
 
 // GitHub App OAuth API

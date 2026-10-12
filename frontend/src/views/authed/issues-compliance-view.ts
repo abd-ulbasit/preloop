@@ -28,6 +28,7 @@ import {
   listOrganizations,
   searchIssues,
   getIssueCompliance,
+  getIssueComplianceBatch,
   getCompliancePrompts,
 } from '../../api';
 import type {
@@ -426,22 +427,23 @@ export class IssuesComplianceView extends LitElement {
     }
   }
 
+  /**
+   * Stored scores for the whole page in one request (was one model-backed
+   * GET per row). Rows without a stored score show "Not scored" and a Score
+   * action; scoring stays an explicit, per-issue model call.
+   */
   async fetchComplianceResults() {
-    for (const issue of this._issues) {
-      if (!this._isViewActive) {
-        break;
-      }
-
-      const issueId = issue.id;
-      // Skip if we already have the result or if it's already loading.
-      if (
-        this._complianceResults[issueId] ||
-        this._loadingCompliance[issueId]
-      ) {
-        continue;
-      }
-
-      await this._loadComplianceResult(issueId);
+    const missing = this._issues
+      .map((issue) => issue.id)
+      .filter((id) => !this._complianceResults[id]);
+    if (!this._isViewActive || missing.length === 0) return;
+    const prompt = this._selectedCompliancePrompt;
+    try {
+      const results = await getIssueComplianceBatch(missing, prompt);
+      if (prompt !== this._selectedCompliancePrompt) return;
+      this._complianceResults = { ...this._complianceResults, ...results };
+    } catch (error) {
+      console.warn('Failed to fetch stored compliance scores:', error);
     }
   }
 

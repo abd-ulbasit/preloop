@@ -41,6 +41,17 @@ import type {
   GatewayUsageBySession,
 } from '../../types';
 import consoleStyles from '../../styles/console-styles.css?inline';
+import { tableScrollStyles } from '../../styles/table-scroll';
+import { totalTokensOf } from '../../components/token-figures';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  renderDataTableToolbar,
+} from '../../table';
+import type { ListColumn } from '../../table';
+import '../../table/data-table';
+import { sessionCountLabel } from '../../utils/session-count';
 import { shortExecutionId } from '../../utils/execution-subject';
 import {
   isHistoryUnavailable,
@@ -128,9 +139,40 @@ export class ApiUsageView extends LitElement {
   private searchDebounce?: ReturnType<typeof setTimeout>;
 
   private searchRequestId = 0;
+  /** Long lists show their first rows until the reader asks for all. */
+  @state() private expandedLists = new Set<'days'>();
+
+  /**
+   * Runtime sessions in the period: up to 250 from the summary, so they are
+   * paged, sortable and searchable rather than one 45,000 px column.
+   */
+  readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
+    listId: 'api-usage-sessions',
+    getRowId: (session) => this.sessionRowId(session),
+    pageSize: 10,
+    pageSizes: [10, 25, 50],
+    defaultSorting: [{ id: 'last_activity', desc: true }],
+    url: { prefix: 'sessions' },
+    columns: this.sessionColumns(),
+  });
+
+  /** Models in the period, most expensive first, paged at ten. */
+  readonly modelTable = new ListTable<GatewayUsageByModel>(this, {
+    listId: 'api-usage-models',
+    getRowId: (model) =>
+      `${model.provider_name ?? ''}/${model.model_alias ?? ''}`,
+    pageSize: 10,
+    pageSizes: [10, 25, 50],
+    defaultSorting: [{ id: 'cost', desc: true }],
+    url: { prefix: 'models' },
+    columns: this.modelColumns(),
+  });
 
   static styles = [
+    tableScrollStyles,
     unsafeCSS(consoleStyles),
+    listTableStyles,
+    dataTableStyles,
     css`
       :host {
         display: block;
@@ -315,7 +357,7 @@ export class ApiUsageView extends LitElement {
       }
 
       .daily-row {
-        grid-template-columns: minmax(110px, 140px) minmax(0, 1fr) 90px 120px;
+        grid-template-columns: minmax(90px, 120px) minmax(0, 1fr) 90px 90px;
         padding: var(--sl-spacing-small) 0;
         border-bottom: 1px solid var(--sl-color-neutral-200);
       }
@@ -344,7 +386,7 @@ export class ApiUsageView extends LitElement {
 
       .breakdown-header,
       .breakdown-row {
-        grid-template-columns: minmax(0, 2fr) 110px 120px 110px;
+        grid-template-columns: minmax(0, 2fr) 90px 100px 90px;
         padding: var(--sl-spacing-small) 0;
         border-bottom: 1px solid var(--sl-color-neutral-200);
       }
@@ -378,26 +420,64 @@ export class ApiUsageView extends LitElement {
         flex-direction: column;
       }
 
-      .session-header,
-      .session-row {
-        display: grid;
-        grid-template-columns: minmax(0, 2.2fr) 90px 120px 100px 170px;
-        gap: var(--sl-spacing-small);
-        align-items: center;
+      /* Token figures (in, out, cache hit and miss) need their own wide
+         track; in a 120px one they ran over the Cost column. */
+      .model-breakdown .breakdown-header,
+      .model-breakdown .breakdown-row {
+        grid-template-columns:
+          minmax(160px, 2fr) 80px minmax(220px, 1.4fr)
+          90px;
+      }
+
+      /* The flow card sits in the narrow column: tokens get the room of a
+         whole row under the name instead of a 100px track. */
+      .flow-breakdown .breakdown-header,
+      .flow-breakdown .breakdown-row {
+        grid-template-columns: minmax(0, 1fr) 70px 80px;
+      }
+
+      .flow-breakdown .breakdown-header > :nth-child(3) {
+        display: none;
+      }
+
+      .flow-breakdown .breakdown-row > :nth-child(3) {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        text-align: left;
+      }
+
+      .stat-detail token-figures,
+      .model-breakdown token-figures,
+      .session-list token-figures {
+        display: block;
+        white-space: normal;
+      }
+
+      /* One provider snapshot per row: name on the left, headroom on the
+         right, each with room to wrap. Reusing the four-track breakdown grid
+         squeezed the name to zero width in the narrow column, which drew
+         provider names one letter per line. */
+      .snapshot-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: var(--sl-spacing-2x-small) var(--sl-spacing-medium);
         padding: var(--sl-spacing-small) 0;
         border-bottom: 1px solid var(--sl-color-neutral-200);
       }
 
-      .session-header {
-        color: var(--sl-color-neutral-600);
-        font-size: var(--sl-font-size-x-small);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        font-weight: 600;
+      .snapshot-row:last-child {
+        border-bottom: none;
       }
 
-      .session-row:last-child {
-        border-bottom: none;
+      .snapshot-row > * {
+        min-width: 10ch;
+      }
+
+      .list-more {
+        display: flex;
+        justify-content: center;
+        padding-top: var(--sl-spacing-small);
       }
 
       .session-primary {
@@ -490,6 +570,11 @@ export class ApiUsageView extends LitElement {
       }
 
       @media (max-width: 720px) {
+        .model-breakdown .breakdown-row,
+        .model-breakdown .breakdown-header {
+          grid-template-columns: 1fr;
+        }
+
         .daily-row {
           grid-template-columns: 1fr;
         }
@@ -499,15 +584,6 @@ export class ApiUsageView extends LitElement {
         }
 
         .breakdown-row {
-          grid-template-columns: 1fr;
-          gap: var(--sl-spacing-2x-small);
-        }
-
-        .session-header {
-          display: none;
-        }
-
-        .session-row {
           grid-template-columns: 1fr;
           gap: var(--sl-spacing-2x-small);
         }
@@ -1091,7 +1167,7 @@ export class ApiUsageView extends LitElement {
                   <div class="breakdown-list">
                     ${snapshots.map(
                       (snapshot) => html`
-                        <div class="breakdown-row">
+                        <div class="snapshot-row">
                           <div class="breakdown-primary">
                             <div class="breakdown-name">
                               ${snapshot.model_alias || 'Unknown model'}
@@ -1131,6 +1207,35 @@ export class ApiUsageView extends LitElement {
     `;
   }
 
+  /**
+   * The first `limit` rows of a long list, plus a toggle to show the rest.
+   * Only the daily bars use it now: they read as a chart, not a table.
+   * Models and sessions are on the shared data table.
+   */
+  private windowed<T>(
+    key: 'days',
+    rows: T[],
+    limit: number
+  ): { visible: T[]; toggle: unknown } {
+    if (rows.length <= limit) return { visible: rows, toggle: nothing };
+    const expanded = this.expandedLists.has(key);
+    const toggle = html`<div class="list-more">
+      <sl-button
+        size="small"
+        variant="text"
+        data-list-toggle=${key}
+        @click=${() => {
+          const next = new Set(this.expandedLists);
+          if (expanded) next.delete(key);
+          else next.add(key);
+          this.expandedLists = next;
+        }}
+        >${expanded ? `Show top ${limit}` : `Show all ${rows.length}`}</sl-button
+      >
+    </div>`;
+    return { visible: expanded ? rows : rows.slice(0, limit), toggle };
+  }
+
   private renderDailyUsage(days: GatewayUsageByDay[]) {
     if (days.length === 0) {
       return html`
@@ -1142,6 +1247,10 @@ export class ApiUsageView extends LitElement {
     }
 
     const maxRequests = Math.max(...days.map((day) => day.request_count), 1);
+    // Days run oldest first; the collapsed list keeps the most recent ones.
+    const expanded = this.expandedLists.has('days');
+    const { toggle } = this.windowed('days', days, 14);
+    const visible = expanded ? days : days.slice(-14);
 
     return html`
       <div class="daily-list">
@@ -1152,7 +1261,7 @@ export class ApiUsageView extends LitElement {
           .unlocksAtPlanName=${this.historyWindow?.unlocks_at_plan_name ?? null}
           .unlocksAtPlan=${this.historyWindow?.unlocks_at_plan ?? null}
         ></history-cutoff-row>
-        ${days.map(
+        ${visible.map(
           (day) => html`
             <div class="daily-row">
               <div>${this.formatDateLabel(day.date)}</div>
@@ -1172,6 +1281,7 @@ export class ApiUsageView extends LitElement {
           `
         )}
       </div>
+      ${toggle}
     `;
   }
 
@@ -1184,49 +1294,69 @@ export class ApiUsageView extends LitElement {
         </div>
       `;
     }
+    this.modelTable.data = models;
+    return html`<data-table
+      class="model-breakdown"
+      .table=${this.modelTable}
+      .rows=${this.modelTable.rows}
+      .stickyHeader=${false}
+      label="Usage by model"
+      noun="models"
+    ></data-table>`;
+  }
 
-    const sortedModels = [...models].sort(
-      (left, right) =>
-        right.estimated_cost - left.estimated_cost ||
-        right.request_count - left.request_count
-    );
-
-    return html`
-      <div class="breakdown-list">
-        <div class="breakdown-header">
-          <div>Model</div>
-          <div class="cell-numeric">Requests</div>
-          <div class="cell-numeric">Tokens</div>
-          <div class="cell-numeric">Cost</div>
-        </div>
-        ${sortedModels.map(
-          (model) => html`
-            <div class="breakdown-row">
-              <div class="breakdown-primary">
-                <div class="breakdown-name">
-                  ${model.model_alias || 'Unnamed model'}
-                </div>
-                <div class="breakdown-secondary">
-                  ${model.provider_name || 'Unknown provider'}
-                </div>
-              </div>
-              <div class="cell-numeric">
-                ${this.formatNumber(model.request_count)}
-              </div>
-              <div class="cell-numeric">
-                <token-figures
-                  .usage=${model.token_usage}
-                  expanded
-                ></token-figures>
-              </div>
-              <div class="cell-numeric">
-                ${html`<span title=${formatUsdExact(model.estimated_cost)}>${formatUsd(model.estimated_cost)}</span>`}
-              </div>
+  private modelColumns(): Array<ListColumn<GatewayUsageByModel>> {
+    return [
+      {
+        id: 'model',
+        header: 'Model',
+        hideable: false,
+        firstSort: 'asc',
+        value: (model) => model.model_alias || '',
+        searchText: (model) =>
+          `${model.model_alias ?? ''} ${model.provider_name ?? ''}`,
+        cell: (model) =>
+          html`<div class="breakdown-primary">
+            <div class="breakdown-name">
+              ${model.model_alias || 'Unnamed model'}
             </div>
-          `
-        )}
-      </div>
-    `;
+            <div class="breakdown-secondary">
+              ${model.provider_name || 'Unknown provider'}
+            </div>
+          </div>`,
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (model) => model.request_count,
+        cell: (model) => this.formatNumber(model.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (model) => totalTokensOf(model.token_usage),
+        cell: (model) =>
+          html`<token-figures
+            .usage=${model.token_usage}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (model) => model.estimated_cost,
+        cell: (model) =>
+          html`<span title=${formatUsdExact(model.estimated_cost)}
+            >${formatUsd(model.estimated_cost)}</span
+          >`,
+      },
+    ];
   }
 
   private renderFlowBreakdown(flows: GatewayUsageByFlow[]) {
@@ -1246,7 +1376,7 @@ export class ApiUsageView extends LitElement {
     );
 
     return html`
-      <div class="breakdown-list">
+      <div class="breakdown-list flow-breakdown">
         <div class="breakdown-header">
           <div>Flow</div>
           <div class="cell-numeric">Requests</div>
@@ -1292,99 +1422,167 @@ export class ApiUsageView extends LitElement {
         </div>
       `;
     }
-
-    const sortedSessions = [...sessions].sort(
-      (left, right) =>
-        parseUTCDate(
-          this.getSessionLastActivity(right) || '1970-01-01T00:00:00Z'
-        ).getTime() -
-          parseUTCDate(
-            this.getSessionLastActivity(left) || '1970-01-01T00:00:00Z'
-          ).getTime() || right.request_count - left.request_count
-    );
-
+    this.sessionTable.data = sessions;
     return html`
-      <div class="session-list">
-        <div class="session-header">
-          <div>Runtime session</div>
-          <div class="cell-numeric">Requests</div>
-          <div class="cell-numeric">Tokens</div>
-          <div class="cell-numeric">Cost</div>
-          <div>Last activity</div>
-        </div>
-        ${sortedSessions.map((session) => {
-          const sourceType = this.getSessionSourceType(session);
-          const sourceId = this.getSessionSourceId(session);
-          const lastActivity = this.getSessionLastActivity(session);
-          const flowBacked = this.isFlowBackedSession(session);
-          const sessionHref = this.getRuntimeSessionHref(session);
-
-          return html`
-            <div class="session-row">
-              <div class="session-primary">
-                <div class="breakdown-name">
-                  ${
-                    sessionHref
-                      ? html`<a class="session-link" href=${sessionHref}
-                          >${this.getSessionDisplayName(session)}</a
-                        >`
-                      : this.getSessionDisplayName(session)
-                  }
-                </div>
-                <div class="breakdown-secondary">
-                  ${session.model_alias || 'Unknown model'}
-                  ${session.provider_name ? `\u00b7 ${session.provider_name}` : ''}
-                </div>
-                ${
-                  sourceId
-                    ? html`
-                        <div class="session-meta">
-                          ${
-                            flowBacked
-                              ? html`Flow execution:
-                                  <a
-                                    class="session-link"
-                                    href=${`/console/flows/executions/${sourceId}`}
-                                    title=${sourceId}
-                                    >${this.shortSourceId(sourceId)}</a
-                                  >`
-                              : html`${this.getSessionSourceLabel(sourceType)}
-                                  <code title=${sourceId}
-                                    >${this.shortSourceId(sourceId)}</code
-                                  >`
-                          }
-                        </div>
-                      `
-                    : ''
-                }
-              </div>
-              <div
-                class="cell-numeric"
-                title=${this.formatNumber(session.request_count)}
-              >
-                ${this.formatCompactNumber(session.request_count)}
-              </div>
-              <div class="cell-numeric">
-                <token-figures
-                  .usage=${session.token_usage}
-                  expanded
-                ></token-figures>
-              </div>
-              <div class="cell-numeric">
-                ${html`<span title=${formatUsdExact(session.estimated_cost)}>${formatUsd(session.estimated_cost)}</span>`}
-              </div>
-              <div>
-                ${
-                  lastActivity
-                    ? this.formatDateTimeLabel(lastActivity)
-                    : 'Unknown'
-                }
-              </div>
-            </div>
-          `;
-        })}
-      </div>
+      ${renderDataTableToolbar({
+        table: this.sessionTable,
+        searchPlaceholder: 'Search sessions, models or sources',
+        searchLabel: 'Search runtime sessions',
+        count: sessionCountLabel(this.sessionTable),
+      })}
+      <data-table
+        class="session-list"
+        .table=${this.sessionTable}
+        .rows=${this.sessionTable.rows}
+        .stickyHeader=${false}
+        label="Recent runtime sessions"
+        noun="sessions"
+      ></data-table>
     `;
+  }
+
+  /**
+   * Stable across refreshes and unique per row. The summary returns one row
+   * per (session, model, provider), so the model slice is part of the id.
+   */
+  private sessionRowId(session: GatewayUsageBySession): string {
+    const record = session as unknown as Record<string, unknown>;
+    const sessionId =
+      record.runtime_session_id ??
+      record.session_id ??
+      `${this.getSessionSourceType(session)}:${this.getSessionSourceId(session)}`;
+    return `${sessionId}:${session.model_alias ?? ''}:${session.provider_name ?? ''}`;
+  }
+
+  private renderSessionIdentity(session: GatewayUsageBySession) {
+    const sourceType = this.getSessionSourceType(session);
+    const sourceId = this.getSessionSourceId(session);
+    const flowBacked = this.isFlowBackedSession(session);
+    const sessionHref = this.getRuntimeSessionHref(session);
+    return html`<div class="session-primary">
+      <div class="breakdown-name">
+        ${
+          sessionHref
+            ? html`<a class="session-link" href=${sessionHref}
+                >${this.getSessionDisplayName(session)}</a
+              >`
+            : this.getSessionDisplayName(session)
+        }
+      </div>
+      <div class="breakdown-secondary">
+        ${session.model_alias || 'Unknown model'}
+        ${session.provider_name ? `\u00b7 ${session.provider_name}` : ''}
+      </div>
+      ${
+        sourceId
+          ? html`
+              <div class="session-meta">
+                ${
+                  flowBacked
+                    ? html`Flow execution:
+                        <a
+                          class="session-link"
+                          href=${`/console/flows/executions/${sourceId}`}
+                          title=${sourceId}
+                          >${this.shortSourceId(sourceId)}</a
+                        >`
+                    : html`${this.getSessionSourceLabel(sourceType)}
+                        <code title=${sourceId}
+                          >${this.shortSourceId(sourceId)}</code
+                        >`
+                }
+              </div>
+            `
+          : ''
+      }
+    </div>`;
+  }
+
+  private sessionColumns(): Array<ListColumn<GatewayUsageBySession>> {
+    const lastActivity = (session: GatewayUsageBySession) => {
+      const value = this.getSessionLastActivity(session);
+      return value ? parseUTCDate(value).getTime() : 0;
+    };
+    return [
+      {
+        id: 'session',
+        header: 'Runtime session',
+        hideable: false,
+        width: 320,
+        firstSort: 'asc',
+        value: (session) => this.getSessionDisplayName(session),
+        searchText: (session) =>
+          [
+            this.getSessionDisplayName(session),
+            session.model_alias,
+            session.provider_name,
+            this.getSessionSourceId(session),
+            this.getSessionSourceLabel(this.getSessionSourceType(session)),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        cellClass: 'session-cell',
+        cell: (session) => this.renderSessionIdentity(session),
+      },
+      {
+        id: 'requests',
+        header: 'Requests',
+        numeric: true,
+        sort: 'number',
+        value: (session) => session.request_count,
+        searchText: () => '',
+        cellTitle: (session) => this.formatNumber(session.request_count),
+        cell: (session) => this.formatCompactNumber(session.request_count),
+      },
+      {
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (session) => totalTokensOf(session.token_usage),
+        searchText: () => '',
+        cell: (session) =>
+          html`<token-figures
+            total-only
+            .usage=${session.token_usage}
+          ></token-figures>`,
+      },
+      {
+        id: 'tokens_detail',
+        header: 'Token breakdown',
+        group: 'Tokens',
+        visible: false,
+        searchText: () => '',
+        cell: (session) =>
+          html`<token-figures
+            .usage=${session.token_usage}
+            expanded
+          ></token-figures>`,
+      },
+      {
+        id: 'cost',
+        header: 'Cost',
+        numeric: true,
+        sort: 'number',
+        value: (session) => session.estimated_cost,
+        searchText: () => '',
+        cell: (session) =>
+          html`<span title=${formatUsdExact(session.estimated_cost)}
+            >${formatUsd(session.estimated_cost)}</span
+          >`,
+      },
+      {
+        id: 'last_activity',
+        header: 'Last activity',
+        sort: 'number',
+        value: lastActivity,
+        searchText: () => '',
+        cell: (session) => {
+          const value = this.getSessionLastActivity(session);
+          return value ? this.formatDateTimeLabel(value) : 'Unknown';
+        },
+      },
+    ];
   }
 
   private renderSearchResults(
@@ -1510,176 +1708,170 @@ export class ApiUsageView extends LitElement {
 
   render() {
     return html`
-      <view-header headerText="API usage" width="extra-wide"></view-header>
-      <div class="column-layout dashboard extra-wide">
-        <div class="main-column">
-          <div class="page">
-            <div class="toolbar">
-              <time-range-select
-                ariaLabel="Gateway usage range"
-                .value=${this.selectedRange}
-                .options=${DATE_RANGE_OPTIONS}
-                @range-change=${this.handleRangeChange}
-              ></time-range-select>
-              <span class="range-window">${this.rangeWindowLabel()}</span>
-              <sl-input
-                class="usage-search"
-                label="Search captured interactions"
-                placeholder="Search prompts, outputs, or metadata"
-                clearable
-                .value=${this.searchQuery}
-                @sl-input=${this.handleSearchQueryChange}
-                @sl-clear=${this.handleSearchQueryChange}
-              >
-                <sl-icon name="search" slot="prefix"></sl-icon>
-              </sl-input>
-            </div>
+      <div class="page">
+        <view-header
+          headerText="Gateway traffic"
+          description="How much went through the gateway, and how close is it to provider rate limits?"
+        ></view-header>
+        <div class="toolbar">
+          <time-range-select
+            ariaLabel="Gateway usage range"
+            .value=${this.selectedRange}
+            .options=${DATE_RANGE_OPTIONS}
+            @range-change=${this.handleRangeChange}
+          ></time-range-select>
+          <span class="range-window">${this.rangeWindowLabel()}</span>
+          <sl-input
+            class="usage-search"
+            label="Search captured interactions"
+            placeholder="Search prompts, outputs, or metadata"
+            clearable
+            .value=${this.searchQuery}
+            @sl-input=${this.handleSearchQueryChange}
+            @sl-clear=${this.handleSearchQueryChange}
+          >
+            <sl-icon name="search" slot="prefix"></sl-icon>
+          </sl-input>
+        </div>
 
-            <capability-extension
-              name="usage-rollup"
-              .context=${{ range: this.selectedRange }}
-            ></capability-extension>
-            ${
-              this.error
-                ? html`
-                    <sl-alert variant="danger" open>
-                      <sl-icon
-                        slot="icon"
-                        name="exclamation-triangle"
-                      ></sl-icon>
-                      ${this.error}
-                    </sl-alert>
-                  `
-                : ''
-            }
-            ${
-              this.loading && !this.summary
-                ? html`
-                    <sl-card>
-                      <div
-                        class="loading-state"
-                        role="status"
-                        aria-live="polite"
-                        aria-busy="true"
-                      >
-                        <sl-spinner></sl-spinner>
-                        <div>Loading gateway usage summary...</div>
+        <capability-extension
+          name="usage-rollup"
+          .context=${{ range: this.selectedRange }}
+        ></capability-extension>
+        ${
+          this.error
+            ? html`
+                <sl-alert variant="danger" open>
+                  <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                  ${this.error}
+                </sl-alert>
+              `
+            : ''
+        }
+        ${
+          this.loading && !this.summary
+            ? html`
+                <sl-card>
+                  <div
+                    class="loading-state"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                  >
+                    <sl-spinner></sl-spinner>
+                    <div>Loading gateway usage summary...</div>
+                  </div>
+                </sl-card>
+              `
+            : this.summary
+              ? html`
+                  <div
+                    class="results ${this.loading ? 'is-updating' : ''}"
+                    aria-busy=${this.loading ? 'true' : 'false'}
+                  >
+                    ${this.renderSummary(this.summary)}
+
+                    <sl-card class="breakdown-card">
+                      <div slot="header" class="section-header">
+                        <div class="section-title">
+                          <sl-icon name="collection"></sl-icon>
+                          <span>Recent runtime sessions</span>
+                        </div>
+                        <span class="section-subtitle">
+                          Recent gateway activity grouped by runtime session
+                        </span>
                       </div>
+                      ${this.renderSessionBreakdown(
+                        this.summary.usage_by_session
+                      )}
                     </sl-card>
-                  `
-                : this.summary
-                  ? html`
-                      <div
-                        class="results ${this.loading ? 'is-updating' : ''}"
-                        aria-busy=${this.loading ? 'true' : 'false'}
-                      >
-                        ${this.renderSummary(this.summary)}
+
+                    <sl-card
+                      class="breakdown-card ${
+                        this.searchLoading ? 'is-updating' : ''
+                      }"
+                      aria-busy=${this.searchLoading ? 'true' : 'false'}
+                    >
+                      <div slot="header" class="section-header">
+                        <div class="section-title">
+                          <sl-icon name="search"></sl-icon>
+                          <span>Captured interactions</span>
+                        </div>
+                        <span class="section-subtitle">
+                          ${
+                            this.searchQuery.trim()
+                              ? 'Search results from the indexed gateway corpus'
+                              : 'Recent indexed gateway interactions'
+                          }
+                        </span>
+                      </div>
+                      ${this.renderSearchResults(this.searchResults)}
+                    </sl-card>
+
+                    <sl-card class="breakdown-card">
+                      <div slot="header" class="section-header">
+                        <div class="section-title">
+                          <sl-icon name="cpu"></sl-icon>
+                          <span>Usage by model</span>
+                        </div>
+                        <span class="section-subtitle">
+                          Top models by cost and volume
+                        </span>
+                      </div>
+                      ${this.renderModelBreakdown(this.summary.usage_by_model)}
+                    </sl-card>
+
+                    <div class="content-grid">
+                      <div class="stack">
+                        <sl-card class="breakdown-card">
+                          <div slot="header" class="section-header">
+                            <div class="section-title">
+                              <sl-icon name="bar-chart"></sl-icon>
+                              <span>Daily activity</span>
+                            </div>
+                            <span class="section-subtitle">
+                              Requests and spend over time
+                            </span>
+                          </div>
+                          ${this.renderDailyUsage(this.summary.requests_by_day)}
+                        </sl-card>
+                      </div>
+
+                      <div class="stack">
+                        ${this.renderBudgetCard(this.summary)}
+                        ${
+                          this.rateLimitReport
+                            ? this.renderRateLimitCard(this.rateLimitReport)
+                            : ''
+                        }
 
                         <sl-card class="breakdown-card">
                           <div slot="header" class="section-header">
                             <div class="section-title">
-                              <sl-icon name="collection"></sl-icon>
-                              <span>Recent runtime sessions</span>
+                              <sl-icon name="diagram-3"></sl-icon>
+                              <span>Usage by flow</span>
                             </div>
                             <span class="section-subtitle">
-                              Recent gateway activity grouped by runtime session
+                              Flow-level gateway consumption
                             </span>
                           </div>
-                          ${this.renderSessionBreakdown(
-                            this.summary.usage_by_session
+                          ${this.renderFlowBreakdown(
+                            this.summary.usage_by_flow
                           )}
                         </sl-card>
-
-                        <sl-card
-                          class="breakdown-card ${
-                            this.searchLoading ? 'is-updating' : ''
-                          }"
-                          aria-busy=${this.searchLoading ? 'true' : 'false'}
-                        >
-                          <div slot="header" class="section-header">
-                            <div class="section-title">
-                              <sl-icon name="search"></sl-icon>
-                              <span>Captured interactions</span>
-                            </div>
-                            <span class="section-subtitle">
-                              ${
-                                this.searchQuery.trim()
-                                  ? 'Search results from the indexed gateway corpus'
-                                  : 'Recent indexed gateway interactions'
-                              }
-                            </span>
-                          </div>
-                          ${this.renderSearchResults(this.searchResults)}
-                        </sl-card>
-
-                        <div class="content-grid">
-                          <div class="stack">
-                            <sl-card class="breakdown-card">
-                              <div slot="header" class="section-header">
-                                <div class="section-title">
-                                  <sl-icon name="bar-chart"></sl-icon>
-                                  <span>Daily activity</span>
-                                </div>
-                                <span class="section-subtitle">
-                                  Requests and spend over time
-                                </span>
-                              </div>
-                              ${this.renderDailyUsage(this.summary.requests_by_day)}
-                            </sl-card>
-
-                            <sl-card class="breakdown-card">
-                              <div slot="header" class="section-header">
-                                <div class="section-title">
-                                  <sl-icon name="cpu"></sl-icon>
-                                  <span>Usage by model</span>
-                                </div>
-                                <span class="section-subtitle">
-                                  Top models by cost and volume
-                                </span>
-                              </div>
-                              ${this.renderModelBreakdown(
-                                this.summary.usage_by_model
-                              )}
-                            </sl-card>
-                          </div>
-
-                          <div class="stack">
-                            ${this.renderBudgetCard(this.summary)}
-                            ${
-                              this.rateLimitReport
-                                ? this.renderRateLimitCard(this.rateLimitReport)
-                                : ''
-                            }
-
-                            <sl-card class="breakdown-card">
-                              <div slot="header" class="section-header">
-                                <div class="section-title">
-                                  <sl-icon name="diagram-3"></sl-icon>
-                                  <span>Usage by flow</span>
-                                </div>
-                                <span class="section-subtitle">
-                                  Flow-level gateway consumption
-                                </span>
-                              </div>
-                              ${this.renderFlowBreakdown(
-                                this.summary.usage_by_flow
-                              )}
-                            </sl-card>
-                          </div>
-                        </div>
                       </div>
-                    `
-                  : html`
-                      <sl-card>
-                        <div class="empty-state">
-                          <sl-icon name="inbox"></sl-icon>
-                          <div>No gateway usage summary is available yet.</div>
-                        </div>
-                      </sl-card>
-                    `
-            }
-          </div>
-        </div>
+                    </div>
+                  </div>
+                `
+              : html`
+                  <sl-card>
+                    <div class="empty-state">
+                      <sl-icon name="inbox"></sl-icon>
+                      <div>No gateway usage summary is available yet.</div>
+                    </div>
+                  </sl-card>
+                `
+        }
       </div>
     `;
   }

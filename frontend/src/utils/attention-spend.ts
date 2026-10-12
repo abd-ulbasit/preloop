@@ -92,7 +92,7 @@ function spendHref(finding: SpendOutlierFinding): string {
       finding.runtime_session_id
     )}`;
   }
-  return '/console/cost';
+  return '/console/cost/spend';
 }
 
 /** One card per open finding: who, which rule, the numbers and the day. */

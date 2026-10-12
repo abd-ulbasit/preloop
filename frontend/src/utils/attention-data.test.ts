@@ -225,6 +225,17 @@ describe('loadAttentionInputs', () => {
     ).to.be.true;
   });
 
+  it('asks the summary for the per-model breakdown only', async () => {
+    await loadAttentionInputs();
+    // The rules read usage_by_model and nothing else; sessions, flows, tools
+    // and days made this the slowest Overview call (#1582).
+    const summaryUrl = requestedUrls().find((url) =>
+      url.startsWith('/api/v1/account/gateway-usage/summary')
+    );
+    const params = new URL(summaryUrl!, 'http://x').searchParams;
+    expect(params.getAll('breakdown')).to.eql(['models']);
+  });
+
   it('loads the active dismissals alongside the rest', async () => {
     const inputs = await loadAttentionInputs();
 

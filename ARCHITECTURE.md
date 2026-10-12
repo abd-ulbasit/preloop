@@ -703,8 +703,30 @@ without a provider credential still require explicit email verification.
 Cloud's hosted-model capability adds the active built-in
 `qwen/deepseek-v4.1-flash-hosted` to the account model catalog and flow selectors.
 The model is read-only, and retired system rows remain available only for
-historical references. OSS deployments do not expose built-ins by default.
+historical references. The catalog lists built-ins first; their Default badge
+appears only when the system row is default and the account has no configured
+default of the same service kind. OSS deployments do not expose built-ins by default.
 Built-in detail usage is scoped to the requesting account; operator credentials
 and routing metadata are never included in the public catalog. Preset cloning
 prefers a usable account model and otherwise binds the built-in. Hosted allowance
 and Free's one-time credit continue to be enforced by the gateway at execution.
+
+### Canonical identity presentation
+
+A profile read carries `person_id` separately from `id` (the current account
+membership) and `account_id`. Names, email verification and avatars come from the
+canonical Person. Self profile and avatar edits update that Person from either
+membership; an email change follows the canonical verification/conflict contract
+and revokes every session. Username and recovery-email edits require an
+authenticated login session; API keys may edit display names but cannot change
+those identifiers through either OSS or EE profile routes. An unavailable
+canonical self profile returns 401. Tenant membership administration changes account
+access, not another person's profile or credentials.
+
+The core identity directory searches canonical fields inside one account for
+member lists. Its platform queries paginate people and expand explicit
+memberships, preserving historical event membership IDs and account attribution.
+A quarantined migration identity displays an unavailable state without exposing
+a generated membership alias or relaxing authentication. Account seat counts
+continue to count active membership rows. No presentation migration is required;
+apply the identity schema/backfill and authentication changes first.

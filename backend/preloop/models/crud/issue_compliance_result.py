@@ -33,6 +33,32 @@ class CRUDIssueComplianceResult(CRUDBase[IssueComplianceResult]):
             )
         return query.first()
 
+    def get_for_issues_and_prompt(
+        self,
+        db: Session,
+        *,
+        issue_ids: List[str],
+        prompt_id: str,
+        account_id: str,
+    ) -> List[IssueComplianceResult]:
+        """Get stored results for many issues in one account-scoped query.
+
+        Read-only: issues without a stored result are simply absent.
+        """
+        if not issue_ids:
+            return []
+        return (
+            db.query(self.model)
+            .join(Issue, self.model.issue_id == Issue.id)
+            .join(Tracker, Issue.tracker_id == Tracker.id)
+            .filter(
+                self.model.issue_id.in_(issue_ids),
+                self.model.prompt_id == prompt_id,
+                Tracker.account_id == account_id,
+            )
+            .all()
+        )
+
     def delete_by_issue_id(self, db: Session, *, issue_id: str) -> int:
         """Delete all compliance results for a given issue_id."""
         num_deleted = (

@@ -279,7 +279,8 @@ describe('UserManagementView', () => {
       deactivate.click();
       const prompt = await answerConfirmDialog(false);
       expect(prompt).to.contain('alice@example.com');
-      expect(prompt).to.contain('can no longer sign in');
+      expect(prompt).to.contain('access to this account');
+      expect(prompt).to.contain('Other account memberships');
       await element.updateComplete;
       expect(deactivateCalls()).to.have.length(0);
 
@@ -300,8 +301,8 @@ describe('UserManagementView', () => {
     ].map((icon) => icon.getAttribute('label'));
     expect(labels).to.deep.equal([
       'Manage roles',
-      'Edit user',
-      'Deactivate user',
+      'Edit account membership',
+      'Deactivate account membership',
     ]);
   });
 
@@ -517,5 +518,73 @@ describe('UserManagementView subaccount access', () => {
         'a[href="/console/settings/access-grants"]'
       )
     ).to.exist;
+  });
+});
+
+describe('membership editing scope', () => {
+  it('shows an explicit unavailable state for a quarantined identity', async () => {
+    invalidateApiCaches();
+    localStorage.setItem('accessToken', 'test-token');
+    const fetchStub = sinon.stub(window, 'fetch').callsFake(
+      async (input) =>
+        new Response(
+          JSON.stringify(
+            String(input).includes('features')
+              ? { features: { user_management: true }, plugins: [] }
+              : String(input).includes('/auth/')
+                ? { permissions: null }
+                : String(input).includes('/roles')
+                  ? { roles: [] }
+                  : {
+                      users: [
+                        {
+                          id: 'membership-child',
+                          account_id: 'account-child',
+                          person_id: 'person-example',
+                          username: null,
+                          email: null,
+                          full_name: null,
+                          identity_status: 'quarantined',
+                          is_active: true,
+                        },
+                      ],
+                      total: 1,
+                    }
+          ),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    try {
+      const element = await fixture<UserManagementView>(
+        html`<user-management-view></user-management-view>`
+      );
+      await waitUntil(() => !(element as any).isLoading);
+      await element.updateComplete;
+      expect(element.shadowRoot!.textContent).to.contain(
+        'Identity unavailable'
+      );
+      expect(element.shadowRoot!.textContent).to.contain(
+        'migration conflict resolution'
+      );
+      element.openEditModal((element as any).users[0]);
+      await element.updateComplete;
+      expect((element as any).editUser).to.deep.equal({ is_active: true });
+      const dialog = element.shadowRoot!.querySelector(
+        'sl-dialog[label="Edit account membership"]'
+      )!;
+      expect(dialog.querySelector('sl-input')).to.equal(null);
+      expect(dialog.textContent).to.contain('Identity unavailable');
+      expect(dialog.textContent).to.contain('membership-child');
+      const pending = element.handleDeactivateUser((element as any).users[0]);
+      const prompt = await answerConfirmDialog(false);
+      await pending;
+      expect(prompt).to.contain('Identity unavailable');
+      expect(prompt).to.contain('membership-child');
+      expect(prompt).not.to.contain('null');
+    } finally {
+      fetchStub.restore();
+      localStorage.clear();
+      invalidateApiCaches();
+    }
   });
 });

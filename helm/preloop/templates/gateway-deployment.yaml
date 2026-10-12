@@ -233,6 +233,40 @@ spec:
             - name: GITHUB_APP_SLUG
               value: {{ .Values.githubApp.slug | quote }}
             {{- end }}
+            {{- if .Values.bitbucketOauth.enabled }}
+            - name: BITBUCKET_OAUTH_CLIENT_ID
+              value: {{ .Values.bitbucketOauth.clientId | quote }}
+            - name: BITBUCKET_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "preloop.secretName" . }}
+                  key: bitbucket-oauth-client-secret
+            {{- if .Values.bitbucketOauth.callbackUrl }}
+            - name: BITBUCKET_OAUTH_CALLBACK_URL
+              value: {{ .Values.bitbucketOauth.callbackUrl | quote }}
+            {{- end }}
+            {{- if .Values.bitbucketOauth.scopes }}
+            - name: BITBUCKET_OAUTH_SCOPES
+              value: {{ .Values.bitbucketOauth.scopes | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.atlassianOauth.enabled }}
+            - name: ATLASSIAN_OAUTH_CLIENT_ID
+              value: {{ .Values.atlassianOauth.clientId | quote }}
+            - name: ATLASSIAN_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "preloop.secretName" . }}
+                  key: atlassian-oauth-client-secret
+            {{- if .Values.atlassianOauth.callbackUrl }}
+            - name: ATLASSIAN_OAUTH_CALLBACK_URL
+              value: {{ .Values.atlassianOauth.callbackUrl | quote }}
+            {{- end }}
+            {{- if .Values.atlassianOauth.scopes }}
+            - name: ATLASSIAN_OAUTH_SCOPES
+              value: {{ .Values.atlassianOauth.scopes | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.googleOauth.enabled }}
             - name: GOOGLE_OAUTH_CLIENT_ID
               value: {{ .Values.googleOauth.clientId | quote }}
