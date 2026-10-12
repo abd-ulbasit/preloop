@@ -168,6 +168,8 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "PersonAuthIdentity",
+    "PersonPasswordCredential",
     "DESKTOP_VIEW_OPEN_STATES",
     "DesktopEndpoint",
     "DesktopView",
@@ -360,3 +362,5 @@ from .readiness import (
     ReadinessSeries,
     TicketCreationRecord,
 )
+
+from .person_auth_identity import PersonAuthIdentity, PersonPasswordCredential

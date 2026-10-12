@@ -17,7 +17,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20261011_desktop_views"
-down_revision: Union[str, None] = "20261011_audit_outbox"
+down_revision: Union[str, None] = "20261012_identity_backfill"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 # Alembic reads these module globals by name; keep a local reference so static

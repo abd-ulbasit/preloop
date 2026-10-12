@@ -213,6 +213,14 @@ from .tool_cost_flag import CRUDToolCostFlag, crud_tool_cost_flag
 from .tool_output_filter import CRUDToolOutputFilter, crud_tool_output_filter
 from .tracker import CRUDTracker, crud_tracker
 from .tracker_scope_rule import CRUDTrackerScopeRule
+from .person import (
+    CRUDPerson,
+    IdentityConflictError,
+    IdentityUnavailableError,
+    IdentityProfile,
+    IdentityProfileUpdate,
+    crud_person,
+)
 from .user import AmbiguousEmailError, CRUDUser, crud_user
 from .user_invitation import CRUDUserInvitation, crud_user_invitation
 from .visitor import CRUDVisitor, crud_visitor
@@ -280,6 +288,12 @@ crud_tool_access_rule = CRUDToolAccessRule()  # Instantiate CRUDToolAccessRule
 
 
 __all__ = [
+    "CRUDPerson",
+    "IdentityConflictError",
+    "IdentityUnavailableError",
+    "IdentityProfile",
+    "IdentityProfileUpdate",
+    "crud_person",
     "crud_callback_key_binding",
     "crud_callback_receipt",
     "crud_ci_administration",

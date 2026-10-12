@@ -1,19 +1,4 @@
-"""Person: the human behind one or more membership (``user``) rows.
-
-One membership is one ``user`` row, scoped to one account as before. A person
-links the rows that belong to the same human, so the same credentials can reach
-several accounts with a different role in each. Nothing in this repository
-reads the link yet: it is schema for the account hierarchy work (#986).
-
-A person whose ``email_verified_at`` is NULL is provisional. It holds exactly
-one row and is never merged into another person before its email is verified,
-so pre-registering an unverified address cannot capture somebody else's
-memberships. The partial unique index keeps one verified person per address.
-
-A person lives as long as it has a row: deleting its last ``user`` row deletes
-it (trigger ``trg_user_deleted``), so an orphan never keeps an address's
-verified claim.
-"""
+"""Canonical human identity, retained independently of account memberships."""
 
 from __future__ import annotations
 
@@ -21,7 +6,16 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +47,25 @@ class Person(Base):
 
     __tablename__ = "person"
 
+    username: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, index=True
+    )
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    full_name: Mapped[Optional[str]] = mapped_column(String(255))
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text)
+    avatar_source: Mapped[Optional[str]] = mapped_column(String(20))
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255))
+    identity_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    auth_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Non-secret actionable reason when migration cannot prove canonical ownership.
+    migration_conflict: Mapped[Optional[str]] = mapped_column(Text)
+    # Administrative ownership-evidence reference; never credentials or addresses.
+    migration_resolution: Mapped[Optional[str]] = mapped_column(Text)
+
     email_normalized: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -73,7 +86,7 @@ class Person(Base):
             use_alter=True,
         ),
         nullable=True,
-        comment="The membership row holding password, passkeys and OAuth links",
+        comment="Legacy preferred membership; never the credential owner",
     )
     last_active_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -100,6 +113,11 @@ class Person(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "identity_status IN ('active', 'suspended', 'quarantined')",
+            name="ck_person_identity_status",
+        ),
+        CheckConstraint("auth_generation >= 0", name="ck_person_auth_generation"),
         Index(
             "uq_person_email_verified",
             "email_normalized",
@@ -111,3 +129,11 @@ class Person(Base):
     def __repr__(self) -> str:
         """String representation."""
         return f"<Person(id={self.id}, email={self.email_normalized})>"
+
+    def to_dict(self) -> dict:
+        """Return identity metadata without password material."""
+        return {
+            key: value
+            for key, value in super().to_dict().items()
+            if key != "hashed_password"
+        }

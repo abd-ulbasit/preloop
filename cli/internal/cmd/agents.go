@@ -266,12 +266,6 @@ func mcpOnlyAgentModelNote(agent AgentConfig) string {
 	}
 	scope := ": only calls routed through the managed MCP entry reach Preloop. "
 	switch {
-	case isClaudeDesktopAgent(agent):
-		return mcpOnlySupportLabel + scope +
-			"Onboarding adds a managed MCP bridge and does not configure Desktop model routing by itself. " +
-			"To route Desktop model traffic through Preloop, run " +
-			"`preloop agents onboard \"Claude Desktop\" --model-route direct` (or `--model-route apps-gateway`) " +
-			"and deploy the printed managed configuration with your MDM."
 	case strings.EqualFold(strings.TrimSpace(agent.Name), "cursor"):
 		return mcpOnlySupportLabel + scope +
 			"Cursor native action gates are supported separately via --approvals. " +
@@ -496,6 +490,8 @@ type runtimeSessionTokenResponse struct {
 }
 
 type mcpServerResponse struct {
+	Status     string                 `json:"status,omitempty"`
+	LastError  string                 `json:"last_error,omitempty"`
 	ID         string                 `json:"id"`
 	Name       string                 `json:"name"`
 	URL        string                 `json:"url"`
@@ -780,6 +776,11 @@ type localEnrollmentState struct {
 	// OffboardArchived checkpoints completed recovery/config restore/archive so
 	// cleanup can be retried even after its model credential has been deleted.
 	OffboardArchived bool `json:"offboard_archived,omitempty"`
+	// ClaudeDesktopModelRoutePath is the OS managed configuration the
+	// default onboarding installed for Claude Desktop model routing;
+	// offboarding removes that path (removeClaudeDesktopModelRoute) rather
+	// than recomputing it.
+	ClaudeDesktopModelRoutePath string `json:"claude_desktop_model_route_path,omitempty"`
 	// CodexOAuthSyncedLastRefresh is the auth.json or Keychain last_refresh
 	// value last pushed for this enrollment. The Codex permission hook
 	// compares the local ChatGPT login against it.
@@ -2548,6 +2549,16 @@ func executeOffboard(agent AgentConfig, autoApprove bool, modelRemovalPolicy, se
 		// after credentials were recovered.
 		if err := removeClaudeAPIKeyApproval(agent); err != nil {
 			fmt.Printf("  Warning: could not remove the gateway key approval from Claude Code's user config: %v\n", err)
+		}
+		if isClaudeDesktopAgent(agent) {
+			// The default onboarding installed Desktop's model route into the
+			// OS managed configuration; take it out again, or Desktop keeps
+			// asking the credential helper for a key after the agent is gone.
+			recordedPath := ""
+			if state != nil {
+				recordedPath = state.ClaudeDesktopModelRoutePath
+			}
+			removeClaudeDesktopModelRoute(os.Stdin, os.Stdout, strings.TrimRight(client.BaseURL(), "/"), recordedPath, autoApprove)
 		}
 		if state != nil {
 			if _, err := restoreAgentFromBackup(agent, state); err != nil {
@@ -5123,7 +5134,10 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 			result.Skipped = append(result.Skipped, name)
 			continue
 		}
-		if _, ok := existingByName[name]; ok {
+		if existing, ok := existingByName[name]; ok {
+			if warning := importedMCPServerWarning(name, existing); warning != "" {
+				result.Warnings = append(result.Warnings, warning)
+			}
 			result.Reused = append(result.Reused, name)
 			continue
 		}
@@ -5132,6 +5146,9 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 			return nil, fmt.Errorf("failed to add discovered MCP server %q: %w", name, err)
 		}
 		result.Added = append(result.Added, name)
+		if warning := importedMCPServerWarning(name, created); warning != "" {
+			result.Warnings = append(result.Warnings, warning)
+		}
 		if importMode == "command" {
 			result.ImportedFromCommand = append(result.ImportedFromCommand, name)
 		}
@@ -5142,6 +5159,15 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 	sort.Strings(result.Skipped)
 	sort.Strings(result.Warnings)
 	return result, nil
+}
+
+// importedMCPServerWarning distinguishes registration from a usable connection.
+// Do not echo last_error: older servers can store raw credential-bearing URLs.
+func importedMCPServerWarning(name string, server mcpServerResponse) string {
+	if server.Status == "error" || (server.Status != "active" && server.LastError != "") {
+		return fmt.Sprintf("MCP server %q is registered, but Preloop could not connect or discover its tools. Check connectivity and authentication in the console, then rescan. Localhost servers must be reachable from the Preloop host; locally cached sign-ins may require reconnecting in Preloop.", name)
+	}
+	return ""
 }
 
 func normalizeDiscoveredTransport(server MCPDef) string {
