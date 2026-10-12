@@ -87,6 +87,14 @@ describe('kill-switch-store', () => {
     off();
   });
 
+  it('keeps a state this tab wrote over a read that started before it', async () => {
+    answer = CLEAR;
+    const pending = refreshKillSwitch({ force: true });
+    setKillSwitchStatus(HALTED);
+    await pending;
+    expect(getKillSwitchSnapshot()).to.equal(HALTED);
+  });
+
   it('keeps the last known state when a read fails', async () => {
     setKillSwitchStatus(HALTED);
     answer = null;

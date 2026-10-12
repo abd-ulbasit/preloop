@@ -72,6 +72,10 @@ export function refreshKillSwitch(
 
 /** Record a state this tab just wrote (halt or resume) and tell everyone. */
 export function setKillSwitchStatus(next: KillSwitchStatus): void {
+  // A read that started before this write must not land after it and put
+  // the old state back.
+  inflight = null;
+  epoch += 1;
   status = next;
   readAt = Date.now();
   lastFailed = false;
