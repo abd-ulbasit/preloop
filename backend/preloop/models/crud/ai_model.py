@@ -45,12 +45,9 @@ class CRUDAIModel(CRUDBase[AIModel]):
     @staticmethod
     def _is_retired_system_model(ai_model: AIModel) -> bool:
         """Retain historical global rows without selecting them for new work."""
-        metadata = ai_model.meta_data if isinstance(ai_model.meta_data, dict) else {}
-        gateway = metadata.get("gateway")
-        return ai_model.account_id is None and (
-            metadata.get("retired") is True
-            or (isinstance(gateway, dict) and gateway.get("enabled") is False)
-        )
+        from preloop.services.built_in_models import is_retired_system_model
+
+        return is_retired_system_model(ai_model)
 
     @staticmethod
     def _model_kind(ai_model: AIModel) -> str:
@@ -556,7 +553,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
                 )
             )
             visible = or_(own, built_in)
-        return (
+        candidates = (
             db.query(self.model)
             .options(joinedload(self.model.credentials_secret))
             .filter(visible)
@@ -567,6 +564,9 @@ class CRUDAIModel(CRUDBase[AIModel]):
             )
             .all()
         )
+        return [
+            model for model in candidates if not self._is_retired_system_model(model)
+        ]
 
     def get_for_account(
         self,

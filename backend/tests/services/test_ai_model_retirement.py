@@ -99,3 +99,34 @@ def test_existing_disabled_gateway_marker_retires_global_model() -> None:
         crud_ai_model.get_default_active_model(db, account_id=str(own.account_id))
         is own
     )
+
+
+@pytest.mark.parametrize(
+    "retirement", [{"retired": True}, {"gateway": {"enabled": False}}]
+)
+def test_selectable_catalog_and_built_in_availability_share_retirement(
+    retirement: dict[str, object],
+) -> None:
+    from preloop.services.built_in_models import (
+        BUILT_IN_MODEL_ALIAS,
+        is_available_built_in_model,
+    )
+
+    retired = _model()
+    retired.meta_data = {
+        "gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS},
+        **retirement,
+    }
+    active = _model()
+    active.meta_data = {
+        "gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS}
+    }
+    own = _model(owned=True, retired=True)
+    selected = crud_ai_model.get_selectable_for_account(
+        _database([retired, active, own]),
+        account_id=own.account_id,
+        include_built_in=True,
+    )
+    assert selected == [active, own]
+    assert not is_available_built_in_model(retired)
+    assert is_available_built_in_model(active)
