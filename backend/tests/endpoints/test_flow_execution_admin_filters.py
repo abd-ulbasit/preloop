@@ -36,7 +36,7 @@ def test_end_time_window_matches_page_and_count(
         crud_flow_execution.update(
             db_session,
             run,
-            FlowExecutionUpdate(start_time=now - timedelta(days=3), end_time=ended),
+            FlowExecutionUpdate(end_time=ended),
         )
     filters = {
         "account_id": str(test_user.account_id),
@@ -60,7 +60,6 @@ def test_lightweight_projection_and_equal_time_pagination(
             FlowExecutionCreate(flow_id=flow.id, status="RUNNING", start_time=now),
         )
         ids.append(run.id)
-        crud_flow_execution.update(db_session, run, FlowExecutionUpdate(start_time=now))
     db_session.expire_all()
     statements: list[str] = []
 
@@ -87,3 +86,41 @@ def test_lightweight_projection_and_equal_time_pagination(
         assert len(statements) == before
     finally:
         event.remove(bind, "before_cursor_execute", record)
+
+
+def test_completion_order_places_nulls_last_and_breaks_ties(
+    db_session: Session, test_user: models.User
+) -> None:
+    flow = _create_flow(db_session, test_user, "Completion ordering")
+    now = datetime.now(timezone.utc)
+    completed_ids = []
+    for offset in [0, 0, -1, None]:
+        run = crud_flow_execution.create(
+            db_session,
+            FlowExecutionCreate(flow_id=flow.id, status="FAILED", start_time=now),
+        )
+        if offset is not None:
+            crud_flow_execution.update(
+                db_session,
+                run,
+                FlowExecutionUpdate(end_time=now + timedelta(hours=offset)),
+            )
+            completed_ids.append(run.id)
+        else:
+            unfinished_id = run.id
+    expected = sorted(completed_ids[:2], reverse=True) + [
+        completed_ids[2],
+        unfinished_id,
+    ]
+    rows = [
+        crud_flow_execution.get_multi(
+            db_session,
+            account_id=str(test_user.account_id),
+            statuses=["FAILED"],
+            sort_by="end_time",
+            skip=offset,
+            limit=1,
+        )[0]
+        for offset in range(4)
+    ]
+    assert [run.id for run in rows] == expected

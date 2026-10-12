@@ -151,6 +151,14 @@ def resolve_execution_agent_selection(
 class FlowExecution(Base):
     __tablename__ = "flow_execution"
     __table_args__ = (
+        # Failure monitoring orders by completion and counts recent endings.
+        # PostgreSQL needs the explicit NULLS LAST order to avoid a sort.
+        Index(
+            "ix_flow_execution_status_completion",
+            "status",
+            text("end_time DESC NULLS LAST"),
+            text("id DESC"),
+        ).ddl_if(dialect="postgresql"),
         # Resume chain members (repair turns only), for the chain cost rollup
         # on the executions list. Created by 20261003_resume_root_idx;
         # declared here so autogenerate does not propose dropping it.
