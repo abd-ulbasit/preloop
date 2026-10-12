@@ -67,6 +67,7 @@ class Host extends LitElement {
   url = false;
   queries: ListQuery[] = [];
   activated: Key[] = [];
+  activatedPrevented: boolean[] = [];
   loading = false;
   error: string | null = null;
   table!: ListTable<Key>;
@@ -106,8 +107,10 @@ class Host extends LitElement {
         label="API keys"
         noun="keys"
         activatable
-        @row-activate=${(event: CustomEvent) =>
-          this.activated.push(event.detail.row)}
+        @row-activate=${(event: CustomEvent) => {
+          this.activated.push(event.detail.row);
+          this.activatedPrevented.push(event.detail.event.defaultPrevented);
+        }}
       ></data-table>
     `;
   }
@@ -347,6 +350,23 @@ describe('<data-table>', () => {
       new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
     );
     expect(host.activated).to.have.length(2);
+    // Consumers that skip prevented events (link handling) still act on it.
+    expect(host.activatedPrevented).to.deep.equal([false, false]);
+  });
+
+  it('announces a multi-select grid only when rows can be selected', async () => {
+    const host = await mount();
+    await settle(host);
+    const table = q(host, 'table');
+    expect(table.getAttribute('role')).to.equal('grid');
+    expect(table.getAttribute('aria-multiselectable')).to.equal('true');
+    const plain = await fixture<DerivedRowsHost>(
+      html`<test-derived-rows-host></test-derived-rows-host>`
+    );
+    await aTimeout(20);
+    const bare = plain.shadowRoot!.querySelector('table')!;
+    expect(bare.hasAttribute('role')).to.equal(false);
+    expect(bare.hasAttribute('aria-multiselectable')).to.equal(false);
   });
 
   it('arrow keys move focus between rows and Space selects', async () => {

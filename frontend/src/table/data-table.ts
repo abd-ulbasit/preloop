@@ -161,9 +161,11 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
         next = rows[rows.length - 1];
         break;
       case 'Enter':
+        // Dispatch first: consumers that honour `defaultPrevented` (the
+        // views' click handlers do, for links) must see an untouched event.
         if (this.activatable) {
-          event.preventDefault();
           this.activate(row, event);
+          event.preventDefault();
         }
         return;
       case ' ':
@@ -359,6 +361,8 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
             : html`<div class="table-scroll data-table-scroll">
                 <table
                   class="styled-table ${this.tableClass}"
+                  role=${this.selection ? 'grid' : nothing}
+                  aria-multiselectable=${this.selection ? 'true' : nothing}
                   aria-label=${this.label || nothing}
                   aria-busy=${this.loading ? 'true' : 'false'}
                   aria-rowcount=${this.table.totalRows ?? nothing}

@@ -323,8 +323,19 @@ describe('AuditView', () => {
     expect(new URLSearchParams(window.location.search).get('size')).to.equal(
       '100'
     );
+    (element as any)._goToPage(1);
+    await waitUntil(() => requested.length > 3, 'no fourth request');
+    expect(new URLSearchParams(window.location.search).get('page')).to.equal(
+      '2'
+    );
+    // Clearing filters starts over at page 1, and the address bar says so.
+    (element as any)._clearFilters();
+    expect(new URLSearchParams(window.location.search).get('page')).to.equal(
+      null
+    );
     element.remove();
     window.history.replaceState(null, '', window.location.pathname);
+    localStorage.removeItem('preloop.table.audit-events');
   });
 
   it('shows a first-run empty state when no audit events exist', async () => {
