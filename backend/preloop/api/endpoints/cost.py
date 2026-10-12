@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
@@ -20,6 +22,7 @@ from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.common import get_account_or_404
 from preloop.models.crud import crud_api_usage
 from preloop.models.db.session import get_db_session
+from preloop.models.models.account import Account
 from preloop.models.models.user import User
 from preloop.schemas.cost_analytics import (
     CostAnalyticsSummaryResponse,
@@ -157,11 +160,63 @@ def get_cost_summary(
         None,
         description="Optional breakdown selection. Repeat for multiple sections; omitted returns all. Ignored when include_breakdown=false.",
     ),
+    compare_start_date: Optional[datetime] = Query(
+        None,
+        description=(
+            "Start of a comparison window. With compare_end_date, the "
+            "response carries that window's totals in `previous`, so a page "
+            "comparing two ranges needs one request instead of two."
+        ),
+    ),
+    compare_end_date: Optional[datetime] = Query(
+        None, description="End of the comparison window; see compare_start_date."
+    ),
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_active_user),
 ) -> CostAnalyticsSummaryResponse:
     """Return the OSS cost overview using gateway usage and pricing metadata."""
+    if (compare_start_date is None) != (compare_end_date is None):
+        raise HTTPException(
+            status_code=422,
+            detail="compare_start_date and compare_end_date go together.",
+        )
     account = get_account_or_404(db, current_user)
+    summary = _build_cost_summary(
+        db,
+        account=account,
+        start_date=start_date,
+        end_date=end_date,
+        runtime_principal_id=runtime_principal_id,
+        exclude_retries=exclude_retries,
+        include_breakdown=include_breakdown,
+        breakdown=breakdown,
+    )
+    if compare_start_date is not None and compare_end_date is not None:
+        summary.previous = _build_cost_summary(
+            db,
+            account=account,
+            start_date=compare_start_date,
+            end_date=compare_end_date,
+            runtime_principal_id=runtime_principal_id,
+            exclude_retries=exclude_retries,
+            include_breakdown=False,
+            breakdown=None,
+        )
+    return summary
+
+
+def _build_cost_summary(
+    db: Session,
+    *,
+    account: Account,
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+    runtime_principal_id: Optional[str],
+    exclude_retries: bool,
+    include_breakdown: bool,
+    breakdown: Optional[list[UsageBreakdown]],
+) -> CostAnalyticsSummaryResponse:
+    """One window of the cost overview (totals, and breakdowns if asked)."""
     selected = set(breakdown) if breakdown is not None else None
     include_imported = include_breakdown and (
         selected is None or "imported" in selected
@@ -298,8 +353,46 @@ def get_cost_health(
     unnoticed.
     """
     account = get_account_or_404(db, current_user)
-    result = run_accounting_checks(db, account_id=str(account.id), window_hours=hours)
-    return CostHealthResponse(**result)
+    account_id = str(account.id)
+    key = (account_id, hours)
+    now = time.monotonic()
+    with _HEALTH_CACHE_LOCK:
+        cached = _HEALTH_CACHE.get(key)
+        generation = _HEALTH_GENERATION.get(account_id, 0)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    result = CostHealthResponse(
+        **run_accounting_checks(db, account_id=account_id, window_hours=hours)
+    )
+    with _HEALTH_CACHE_LOCK:
+        # A reprice that finished while this ran made the result stale:
+        # serve it once, but do not keep it for the next minute.
+        if _HEALTH_GENERATION.get(account_id, 0) == generation:
+            if len(_HEALTH_CACHE) >= _HEALTH_CACHE_MAX_ENTRIES:
+                _HEALTH_CACHE.clear()
+            _HEALTH_CACHE[key] = (now + HEALTH_CACHE_TTL_SECONDS, result)
+    return result
+
+
+# The accounting self-check reads a day (up to a week) of gateway and audit
+# rows. It changes slowly and the Spend page asks it on every load, so each
+# worker keeps an answer per (account, window) for a minute (#1583). A
+# reprice drops the account's entries; nothing else the check reads is
+# changed by a user action that expects to see it at once.
+HEALTH_CACHE_TTL_SECONDS = 60.0
+_HEALTH_CACHE_MAX_ENTRIES = 1024
+_HEALTH_CACHE: dict[tuple[str, int], tuple[float, CostHealthResponse]] = {}
+# Bumped by every reprice of the account, so a check that started before it
+# is not stored after it.
+_HEALTH_GENERATION: dict[str, int] = {}
+_HEALTH_CACHE_LOCK = threading.Lock()
+
+
+def _forget_cost_health(account_id: str) -> None:
+    with _HEALTH_CACHE_LOCK:
+        _HEALTH_GENERATION[account_id] = _HEALTH_GENERATION.get(account_id, 0) + 1
+        for key in [key for key in _HEALTH_CACHE if key[0] == account_id]:
+            del _HEALTH_CACHE[key]
 
 
 @router.post("/reprice", response_model=RepriceResponse)
@@ -341,6 +434,8 @@ def reprice_account_gateway_usage(
         only_unpriced=reprice_in.only_unpriced,
         dry_run=reprice_in.dry_run,
     )
+    if not reprice_in.dry_run:
+        _forget_cost_health(str(repricing_account_id))
     return RepriceResponse(
         submitted_async=False,
         rows_examined=result.rows_examined,

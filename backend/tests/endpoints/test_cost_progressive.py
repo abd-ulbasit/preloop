@@ -119,3 +119,53 @@ def test_repeated_selection_preserves_requested_groups(
         "sessions": 1,
         "days": 0,
     }
+
+
+def test_compare_window_rides_along_as_previous(
+    client: Any, db_session: Any, test_user: Any
+) -> None:
+    """One request answers both the range and the comparison range (#1583)."""
+    from datetime import timedelta
+
+    now = datetime.now(UTC)
+    for days_ago, cost in ((1, 0.25), (10, 1.5), (11, 0.5)):
+        row = crud_api_usage.log_gateway_request(
+            db_session,
+            endpoint="/openai/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            duration=0.1,
+            account_id=str(test_user.account_id),
+            model_alias="openai/gpt-5",
+            provider_name="openai",
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            estimated_cost=cost,
+        )
+        row.timestamp = (now - timedelta(days=days_ago)).replace(tzinfo=None)
+    db_session.commit()
+
+    params = {
+        "start_date": (now - timedelta(days=7)).isoformat(),
+        "end_date": now.isoformat(),
+        "compare_start_date": (now - timedelta(days=14)).isoformat(),
+        "compare_end_date": (now - timedelta(days=7)).isoformat(),
+        "include_breakdown": "false",
+    }
+    body = client.get("/api/v1/cost/summary", params=params).json()
+    assert body["estimated_cost"] == pytest.approx(0.25)
+    assert body["previous"]["estimated_cost"] == pytest.approx(2.0)
+    assert body["previous"]["total_requests"] == 2
+    assert body["previous"]["usage_by_model"] == []
+    assert body["previous"]["previous"] is None
+
+    plain = client.get(
+        "/api/v1/cost/summary",
+        params={k: v for k, v in params.items() if not k.startswith("compare")},
+    ).json()
+    assert plain["previous"] is None
+
+    half = dict(params)
+    del half["compare_end_date"]
+    assert client.get("/api/v1/cost/summary", params=half).status_code == 422

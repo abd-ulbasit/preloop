@@ -338,6 +338,13 @@ class CostAnalyticsSummaryResponse(BaseModel):
     usage_by_tool: List[GatewayUsageByTool] = Field(default_factory=list)
     imported_usage: Optional[ImportedUsageSummary] = None
     subscription_usage: Optional[SubscriptionUsageSummary] = None
+    previous: Optional["CostAnalyticsSummaryResponse"] = Field(
+        default=None,
+        description=(
+            "Totals for the comparison window (compare_start_date and "
+            "compare_end_date), without breakdowns. Null unless asked for."
+        ),
+    )
 
 
 class RepriceRequest(BaseModel):
