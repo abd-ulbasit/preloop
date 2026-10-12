@@ -16,6 +16,22 @@ from .base import CRUDBase
 # tool_call row was written for the same correlation_id.
 STANDALONE_POLICY_ACTIONS = ("policy_deny", "policy_require_approval")
 _GROUP_ANCHOR_ACTIONS = ("tool_call", *STANDALONE_POLICY_ACTIONS)
+# Actions that always anchor their own group in the grouped timeline.
+PRIMARY_ACTIONS = (
+    "tool_call",
+    "model_gateway_request",
+    "authentication",
+    "configuration_change",
+    "permission_check",
+    "role_assigned",
+    "role_removed",
+    "runtime_session_created",
+    "runtime_session_updated",
+    "runtime_session_ended",
+)
+# The grouped total is counted per branch and summed, which is only right
+# while no action can match both branches.
+assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
 # The only ``details`` keys the grouped timeline reads to build groups.
 _GROUPING_DETAIL_KEYS = ("correlation_id", "decision", "approval_id", "estimated_cost")
 
@@ -418,22 +434,24 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         # Step 1: Fetch primary events (tool_call + non-tool standalone events)
         # Tool calls are the primary grouping anchors.
         # Non-tool events (auth, config_change, permission_check) are standalone.
-        primary_actions = [
-            "tool_call",
-            "model_gateway_request",
-            "authentication",
-            "configuration_change",
-            "permission_check",
-            "role_assigned",
-            "role_removed",
-            "runtime_session_created",
-            "runtime_session_updated",
-            "runtime_session_ended",
-        ]
 
-        primary_query = db.query(AuditLog).filter(
-            AuditLog.account_id == account_id_str,
-        )
+        # Filters every count and page shares, whatever the event type.
+        scope_filters: List[Any] = [AuditLog.account_id == account_id_str]
+        if consent_ref is not None:
+            scope_filters.append(
+                AuditLog.details.op("->")("grant").op("->>")("consent_ref")
+                == consent_ref
+            )
+        if start_date:
+            scope_filters.append(AuditLog.timestamp >= start_date)
+        if end_date:
+            scope_filters.append(AuditLog.timestamp <= end_date)
+        if tool_name_filter:
+            scope_filters.append(AuditLog.resource_id.ilike(f"%{tool_name_filter}%"))
+
+        # The total is counted per part: one count per OR branch, so the
+        # plain action branch stays an index-only count.
+        count_conditions: List[Any]
 
         # Apply event type filter
         if event_type_filter:
@@ -457,15 +475,22 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                     & (AuditLog.details["config_type"].astext.in_(config_subtypes))
                 )
 
-            if type_conditions:
-                primary_query = primary_query.filter(or_(*type_conditions))
-            else:
+            if not type_conditions:
                 # No valid filters → return nothing
                 return [], 0
+            anchor_condition = or_(*type_conditions)
+            count_conditions = [anchor_condition]
         else:
             # Policy decisions are normally sub-events of a tool_call. A
             # deny (or a require_approval that never executed) writes no
             # tool_call row, so such decisions anchor their own group.
+            #
+            # ``OFFSET 0`` keeps this a per-row probe of
+            # ``ix_audit_log_account_correlation``. Without it Postgres may
+            # hash every tool_call of the account instead, which reads (and
+            # detoasts) each one's full ``details`` with its tool result:
+            # on an account with a long history that hash alone took most
+            # of the request (#1592).
             tool_call_row = aliased(AuditLog)
             has_tool_call = (
                 db.query(tool_call_row.id)
@@ -475,31 +500,22 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                     tool_call_row.details["correlation_id"].astext
                     == AuditLog.details["correlation_id"].astext,
                 )
+                .offset(0)
                 .exists()
             )
-            primary_query = primary_query.filter(
-                or_(
-                    AuditLog.action.in_(primary_actions),
-                    and_(
-                        AuditLog.action.in_(STANDALONE_POLICY_ACTIONS),
-                        ~has_tool_call,
-                    ),
-                )
+            standalone_condition = and_(
+                AuditLog.action.in_(STANDALONE_POLICY_ACTIONS),
+                ~has_tool_call,
             )
+            anchor_condition = or_(
+                AuditLog.action.in_(PRIMARY_ACTIONS), standalone_condition
+            )
+            count_conditions = [
+                AuditLog.action.in_(PRIMARY_ACTIONS),
+                standalone_condition,
+            ]
 
-        if consent_ref is not None:
-            primary_query = primary_query.filter(
-                AuditLog.details.op("->")("grant").op("->>")("consent_ref")
-                == consent_ref
-            )
-        if start_date:
-            primary_query = primary_query.filter(AuditLog.timestamp >= start_date)
-        if end_date:
-            primary_query = primary_query.filter(AuditLog.timestamp <= end_date)
-        if tool_name_filter:
-            primary_query = primary_query.filter(
-                AuditLog.resource_id.ilike(f"%{tool_name_filter}%")
-            )
+        primary_query = db.query(AuditLog).filter(*scope_filters, anchor_condition)
 
         if outcome_filter:
             # When outcome_filter is used, we must evaluate the outcomes of groups.
@@ -514,8 +530,16 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             )
             total = 0
         else:
-            # Count total before pagination
-            total = primary_query.count()
+            # Count total before pagination. The branches are disjoint
+            # (different actions), so their counts add up.
+            total = sum(
+                db.query(func.count())
+                .select_from(AuditLog)
+                .filter(*scope_filters, condition)
+                .scalar()
+                or 0
+                for condition in count_conditions
+            )
 
             # Fetch the page of primary events
             primary_events = _narrow_audit_rows(

@@ -634,6 +634,41 @@ class TestGroupedStandalonePolicyDecisions:
         ]
         assert [s.action for s in by_cid["c-both"]["sub_events"]] == ["policy_deny"]
 
+    def test_total_adds_both_branches_on_a_short_page(
+        self, db_session: Session, test_account, events
+    ):
+        # The total is counted per branch (#1592); a one-row page must still
+        # report every primary event, standalone decisions included.
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, limit=1
+        )
+        assert len(groups) == 1
+        assert total == 4
+
+    def test_tool_call_probe_is_not_hashed(
+        self, db_session: Session, test_account, events
+    ):
+        # A hashed subplan would read every tool_call's details (#1592).
+        # ``OFFSET 0`` keeps the EXISTS a per-row index probe.
+        from sqlalchemy import event as sa_event
+
+        statements: list[str] = []
+
+        def _capture(conn, cursor, statement, *args):
+            statements.append(statement)
+
+        bind = db_session.get_bind()
+        sa_event.listen(bind, "before_cursor_execute", _capture)
+        try:
+            crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id
+            )
+        finally:
+            sa_event.remove(bind, "before_cursor_execute", _capture)
+        probes = [s for s in statements if "EXISTS" in s]
+        assert probes
+        assert all("OFFSET" in s for s in probes)
+
     def test_tool_name_filter_matches_standalone_deny(
         self, db_session: Session, test_account, events
     ):
@@ -801,3 +836,13 @@ class TestGroupedStandalonePolicyDecisions:
         assert details["decision"] == "deny"
         assert details["estimated_cost"] == 2.5
         assert isinstance(details["estimated_cost"], (int, float))
+
+
+def test_grouped_total_branches_are_disjoint():
+    """The grouped total sums one count per branch (#1592); no action may be in both."""
+    from preloop.models.crud.audit_log import (
+        PRIMARY_ACTIONS,
+        STANDALONE_POLICY_ACTIONS,
+    )
+
+    assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
