@@ -3,9 +3,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from preloop.models.crud import crud_audit_log, crud_account, crud_user
+from preloop.models.crud.audit_log import _narrow_audit_rows
+from preloop.models.models.audit_log import AuditLog
 
 
 @pytest.fixture
@@ -662,3 +665,139 @@ class TestGroupedStandalonePolicyDecisions:
             db_session, account_id=test_account.id, outcome_filter=["deny"]
         )
         assert {g["correlation_id"] for g in groups} == {"c-deny", "c-both"}
+
+    def test_groups_are_built_narrow_and_return_full_rows(
+        self, db_session: Session, test_account, events
+    ):
+        """Only the returned page is loaded in full (#1592).
+
+        Grouping reads four ``details`` keys, so the 5000-event outcome
+        window is fetched without the rest of ``details``. The page that is
+        returned must still carry complete ORM rows, sub-events included.
+        """
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        engine = db_session.get_bind()
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            groups, _ = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, outcome_filter=["deny"]
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        by_cid = {g["correlation_id"]: g for g in groups}
+        both = by_cid["c-both"]
+        assert isinstance(both["primary_event"], AuditLog)
+        assert both["primary_event"].details["tool_name"] == "rm"
+        assert all(isinstance(sub, AuditLog) for sub in both["sub_events"])
+        assert both["sub_events"][0].details["tool_name"] == "rm"
+        # Only the final hydration selects the details column itself.
+        full_row_reads = [
+            s for s in statements if "audit_log.details AS audit_log_details" in s
+        ]
+        assert len(full_row_reads) == 1
+        assert "audit_log.id IN" in full_row_reads[0]
+
+    def test_cost_filter_uses_estimated_cost_on_the_narrow_path(
+        self, db_session: Session, test_account
+    ):
+        """min_cost/max_cost read numeric estimated_cost from the narrow row."""
+        self._log(
+            db_session,
+            test_account,
+            "tool_call",
+            "read_file",
+            "c-cheap",
+            estimated_cost=0.25,
+        )
+        self._log(
+            db_session,
+            test_account,
+            "tool_call",
+            "write_file",
+            "c-mid",
+            estimated_cost=1.5,
+        )
+        self._log(
+            db_session,
+            test_account,
+            "tool_call",
+            "deploy",
+            "c-high",
+            estimated_cost=8.0,
+        )
+
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session,
+            account_id=test_account.id,
+            min_cost=1.0,
+            max_cost=2.0,
+        )
+        assert total == 1
+        assert [g["correlation_id"] for g in groups] == ["c-mid"]
+        primary = groups[0]["primary_event"]
+        assert isinstance(primary, AuditLog)
+        assert primary.details["estimated_cost"] == 1.5
+        assert primary.details["tool_name"] == "write_file"
+
+        cheap, cheap_total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, max_cost=1.0
+        )
+        assert cheap_total == 1
+        assert cheap[0]["correlation_id"] == "c-cheap"
+        assert isinstance(cheap[0]["primary_event"], AuditLog)
+        assert cheap[0]["primary_event"].details["estimated_cost"] == 0.25
+
+        high, high_total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, min_cost=5.0
+        )
+        assert high_total == 1
+        assert high[0]["correlation_id"] == "c-high"
+        assert isinstance(high[0]["primary_event"], AuditLog)
+        assert high[0]["primary_event"].details["estimated_cost"] == 8.0
+
+    def test_narrow_and_full_details_share_the_group_outcome(
+        self, db_session: Session, test_account
+    ):
+        """Extra details keys do not change the outcome taken from decision.
+
+        Grouping reads only the projected keys. A row that also stores
+        ``tool_name`` still takes its outcome from ``decision`` (else status),
+        and the narrow projection drops ``tool_name`` while keeping
+        ``correlation_id`` and numeric ``estimated_cost``.
+        """
+        row = self._log(
+            db_session,
+            test_account,
+            "policy_deny",
+            "drop_table",
+            "c-narrow",
+            "denied",
+            estimated_cost=2.5,
+        )
+        row.details = {**row.details, "decision": "deny"}
+        db_session.flush()
+
+        groups, _ = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id
+        )
+        full_outcome = row.details.get("decision") or row.status
+        assert [g["correlation_id"] for g in groups] == ["c-narrow"]
+        assert groups[0]["outcome"] == full_outcome == "deny"
+        assert groups[0]["primary_event"].status == "denied"
+        assert groups[0]["primary_event"].details["tool_name"] == "drop_table"
+
+        narrow = _narrow_audit_rows(
+            db_session.query(AuditLog).filter(AuditLog.id == row.id)
+        )
+        assert len(narrow) == 1
+        details = narrow[0].details or {}
+        assert "tool_name" not in details
+        assert details["correlation_id"] == "c-narrow"
+        assert details["decision"] == "deny"
+        assert details["estimated_cost"] == 2.5
+        assert isinstance(details["estimated_cost"], (int, float))
