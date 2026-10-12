@@ -79,7 +79,7 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vite-plugin-css-injected-by-js": "^5.0.2",
-    "ws": "^7.5.10"
+    "ws": "^8.22.0"
   },
   "lint-staged": {
     "src/**/*.ts": "prettier --write"
