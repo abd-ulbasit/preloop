@@ -65,6 +65,8 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
   @property({ attribute: false }) rowClass?: (row: TRow) => string;
   /** Selectable rows; others get no checkbox. */
   @property({ attribute: false }) rowSelectable?: (row: TRow) => boolean;
+  /** Extra classes on the `<table>`, for a view's column widths. */
+  @property({ type: String, attribute: 'table-class' }) tableClass = '';
   /** Accessible name of the table, e.g. "API keys". */
   @property({ type: String }) label = '';
   /** Plural noun for the pagination range and default empty copy. */
@@ -356,7 +358,7 @@ export class DataTable<TRow extends RowData = RowData> extends LitElement {
             ? state
             : html`<div class="table-scroll data-table-scroll">
                 <table
-                  class="styled-table"
+                  class="styled-table ${this.tableClass}"
                   aria-label=${this.label || nothing}
                   aria-busy=${this.loading ? 'true' : 'false'}
                   aria-rowcount=${this.table.totalRows ?? nothing}

@@ -4,6 +4,10 @@ import { formatUsd, formatUsdExact } from '../../utils/money';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
+import { ListTable, dataTableStyles, listTableStyles } from '../../table';
+import type { ListColumn } from '../../table';
+import '../../table/data-table';
+import '../../table/column-picker';
 import '@shoelace-style/shoelace/dist/components/alert/alert.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
@@ -348,6 +352,8 @@ export class FlowsView extends LitElement {
     [
       consoleDialogStyles,
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       unsafeCSS(executionSubjectCss),
       css`
         :host {
@@ -397,11 +403,6 @@ export class FlowsView extends LitElement {
          sized to their widest plausible number and nothing more. A flow
          called "Release Sentinel db-migration" must be readable without a
          tooltip, which is what the first screenshot round got wrong. */
-        /* The select column is fixed: the shared 40px keeps the flow name
-         starting at the same x as on agents, keys and models. */
-        .col-select {
-          width: 40px;
-        }
         .col-flow {
           width: 25%;
         }
@@ -427,46 +428,10 @@ export class FlowsView extends LitElement {
         .col-cost {
           width: 96px;
         }
-        .col-actions {
-          width: 72px;
-        }
         /* First and last columns keep the card's own gutter. */
         .flows-table th:first-child .sort-button,
         .flows-table td:first-child {
           padding-left: var(--sl-spacing-medium);
-        }
-        .sort-button {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          width: 100%;
-          background: none;
-          border: none;
-          cursor: pointer;
-          font: inherit;
-          font-weight: var(--sl-font-weight-semibold);
-          font-size: var(--sl-font-size-x-small);
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          color: var(--sl-color-neutral-600);
-          padding: var(--sl-spacing-small);
-        }
-        th.numeric .sort-button {
-          justify-content: flex-end;
-        }
-        .sort-button:hover,
-        .sort-button:focus-visible {
-          color: var(--sl-color-neutral-900);
-        }
-        th.active .sort-button {
-          color: var(--sl-color-neutral-900);
-        }
-        .sort-caret {
-          font-size: 0.75em;
-          opacity: 0.55;
-        }
-        th.active .sort-caret {
-          opacity: 1;
         }
         .flow-row {
           cursor: pointer;
@@ -837,8 +802,19 @@ export class FlowsView extends LitElement {
   @state() private narrowViewport = false;
   @state() private filters: FlowFilterState = { ...EMPTY_FLOW_FILTERS };
   @state() private range: FlowRange = 'month';
-  @state() private sortKey: FlowListSortKey = 'last_run';
-  @state() private sortDirection: SortDirection = 'desc';
+  /**
+   * Columns, sort, widths, density. The view keeps its own filters (they
+   * persist with the view mode and feed the cards too); the model sorts what
+   * they let through, for the table and the cards alike.
+   */
+  readonly table = new ListTable<FlowListRow>(this, {
+    listId: 'flows',
+    getRowId: (row) => row.id,
+    columns: this.flowColumns(),
+    defaultSorting: [{ id: 'last_run', desc: true }],
+    persist: ['columnVisibility', 'columnSizing', 'density'],
+    url: true,
+  });
 
   private presetsLoaded = false;
   private unsubscribe?: () => void;
@@ -1270,11 +1246,7 @@ export class FlowsView extends LitElement {
 
   /** The rows the filters matched, in the chosen order. */
   get visibleRows(): FlowListRow[] {
-    return sortFlowListRows(
-      filterFlowRows(this.rows, this.filters),
-      this.sortKey,
-      this.sortDirection
-    );
+    return this.table.rows;
   }
 
   /**
@@ -1284,6 +1256,13 @@ export class FlowsView extends LitElement {
    * search had already taken off the page for a frame.
    */
   protected willUpdate(): void {
+    // Name order first, so the model's stable sort breaks ties by name and
+    // rows never shuffle between renders of the same data.
+    this.table.data = sortFlowListRows(
+      filterFlowRows(this.rows, this.filters),
+      'flow',
+      'asc'
+    );
     this.selection.setItems(
       this.loadError || this.flows.length === 0 ? [] : this.visibleRows
     );
@@ -1322,24 +1301,6 @@ export class FlowsView extends LitElement {
       this.filters.presets.length ||
       this.filters.statuses.length
     );
-  }
-
-  /**
-   * Clicking a header sorts by that column; clicking the active one flips the
-   * direction. Text columns start ascending (A first), numeric and time
-   * columns start descending, which is what an operator scanning for the
-   * busiest or most recent flow expects.
-   */
-  private toggleSort(key: FlowListSortKey) {
-    if (this.sortKey === key) {
-      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
-      return;
-    }
-    this.sortKey = key;
-    this.sortDirection =
-      key === 'runs' || key === 'failed' || key === 'cost' || key === 'last_run'
-        ? 'desc'
-        : 'asc';
   }
 
   // --- Row actions ---
@@ -1794,133 +1755,71 @@ export class FlowsView extends LitElement {
             void this.loadRangeStats();
           }}
         ></time-range-select>
+        ${
+          this.currentView === 'list'
+            ? html`<column-picker
+                .columns=${this.table.pickerColumns}
+                ?can-reset=${this.table.hasColumnChanges}
+                density=${this.table.density}
+                @column-toggle=${(event: CustomEvent) =>
+                  this.table.setVisible(event.detail.id, event.detail.visible)}
+                @columns-reset=${() => this.table.resetColumns()}
+                @density-change=${(event: CustomEvent) =>
+                  this.table.setDensity(event.detail.density)}
+              ></column-picker>`
+            : nothing
+        }
         <span slot="count">${this.resultsLabel}</span>
         ${this.renderBulkBar()}
       </list-toolbar>
     `;
   }
 
-  private renderSortableHeader(
-    key: FlowListSortKey,
-    label: string,
-    numeric = false
-  ) {
-    const active = this.sortKey === key;
-    const ariaSort = active
-      ? this.sortDirection === 'asc'
-        ? 'ascending'
-        : 'descending'
-      : 'none';
-    return html`
-      <th
-        class="sortable ${numeric ? 'numeric' : ''} ${active ? 'active' : ''}"
-        aria-sort=${ariaSort}
-        scope="col"
-      >
-        <button
-          type="button"
-          class="sort-button"
-          data-sort-key=${key}
-          @click=${() => this.toggleSort(key)}
-        >
-          <span>${label}</span>
-          <sl-icon
-            class="sort-caret"
-            name=${
-              active
-                ? this.sortDirection === 'asc'
-                  ? 'caret-up-fill'
-                  : 'caret-down-fill'
-                : 'chevron-expand'
-            }
-          ></sl-icon>
-        </button>
-      </th>
-    `;
-  }
-
   private renderListView() {
-    const rows = this.visibleRows;
-    if (rows.length === 0) {
+    if (this.visibleRows.length === 0) {
       return html`<sl-card class="table-card"
-        ><div class="empty-state">${this.emptyResultText}</div></sl-card
-      >`;
+        ><table-state
+          class="empty-state"
+          kind=${this.hasActiveFilters ? 'no-results' : 'empty'}
+          heading=${this.emptyResultText}
+        ></table-state
+      ></sl-card>`;
     }
-    const rangeNote = `In the last ${this.rangeLabel}${this.sampleNote}`;
     return html`
       <sl-card class="table-card">
-        <div class="table-scroll">
-          <table
-            class="styled-table flows-table"
-            role="grid"
-            aria-multiselectable="true"
-            aria-label="Flows"
-          >
-            <colgroup>
-              <col class="col-select" />
-              <col class="col-flow" />
-              <col class="col-trigger" />
-              <col class="col-status" />
-              <col class="col-last-run" />
-              <col class="col-runs" />
-              <col class="col-failed" />
-              <col class="col-tokens" />
-              <col class="col-cost" />
-              <col class="col-actions" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th class="select-cell">
-                  <list-select-checkbox
-                    label="Select all flows"
-                    ?checked=${this.selection.allSelected}
-                    ?indeterminate=${this.selection.someSelected}
-                    ?disabled=${this.selection.busy}
-                    @selection-toggle=${this.selection.handleToggleEvent}
-                  ></list-select-checkbox>
-                </th>
-                ${this.renderSortableHeader('flow', 'Flow')}
-                ${this.renderSortableHeader('trigger', 'Trigger')}
-                ${this.renderSortableHeader('status', 'Status')}
-                ${this.renderSortableHeader('last_run', 'Last run')}
-                ${this.renderSortableHeader('runs', 'Runs', true)}
-                ${this.renderSortableHeader('failed', 'Failed', true)}
-                ${this.renderSortableHeader('tokens', 'Tokens', true)}
-                ${this.renderSortableHeader('cost', '$ est.', true)}
-                <th class="actions-cell">
-                  <span class="visually-hidden">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              ${repeat(
-                rows,
-                (row) => row.id,
-                (row) => this.renderListRow(row, rangeNote)
-              )}
-            </tbody>
-          </table>
-        </div>
+        <data-table
+          .table=${this.table}
+          .rows=${this.visibleRows}
+          .selection=${this.selection}
+          .rowActions=${(row: FlowListRow) => this.getRowActions(row)}
+          .rowLabel=${(row: FlowListRow) => row.name}
+          .rowClass=${() => 'flow-row'}
+          table-class="flows-table"
+          label="Flows"
+          noun="flows"
+          activatable
+          @row-activate=${(event: CustomEvent) =>
+            this.handleRowClick(event.detail.event, event.detail.row)}
+        ></data-table>
       </sl-card>
     `;
   }
 
-  private renderListRow(row: FlowListRow, rangeNote: string) {
-    return html`
-      <tr
-        class="flow-row"
-        data-selection-id=${row.id}
-        aria-selected=${this.selection.isSelected(row.id) ? 'true' : 'false'}
-        @click=${(event: MouseEvent) => this.handleRowClick(event, row)}
-      >
-        <td
-          class="select-cell"
-          @click=${(event: Event) => event.stopPropagation()}
-        >
-          ${this.renderSelectCheckbox(row)}
-        </td>
-        <td class="flow-cell" title=${row.name}>
-          <div class="flow-identity">
+  /** The list's columns. Ids are stored and linked: renaming one is a break. */
+  private flowColumns(): Array<ListColumn<FlowListRow>> {
+    const rangeNote = () => `In the last ${this.rangeLabel}${this.sampleNote}`;
+    return [
+      {
+        id: 'flow',
+        header: 'Flow',
+        hideable: false,
+        firstSort: 'asc',
+        value: (row) => row.name,
+        searchText: (row) => `${row.name} ${row.presetLabel}`,
+        cellClass: 'flow-cell',
+        cellTitle: (row) => row.name,
+        cell: (row) =>
+          html`<div class="flow-identity">
             <sl-icon name=${row.icon}></sl-icon>
             <div class="flow-identity-text">
               <a class="row-link" href=${row.detailUrl}>${row.name}</a>
@@ -1928,70 +1827,109 @@ export class FlowsView extends LitElement {
                 ${row.presetLabel}
               </div>
             </div>
-          </div>
-        </td>
-        <td class="muted-cell" title=${row.triggerTitle}>
-          ${row.triggerLabel}
-        </td>
-        <td>
-          <sl-badge
+          </div>`,
+      },
+      {
+        id: 'trigger',
+        header: 'Trigger',
+        firstSort: 'asc',
+        value: (row) => row.triggerLabel,
+        cellClass: 'muted-cell',
+        cellTitle: (row) => row.triggerTitle,
+        cell: (row) => row.triggerLabel,
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        firstSort: 'asc',
+        value: (row) => row.statusLabel,
+        cell: (row) =>
+          html`<sl-badge
             class="status-chip"
             variant=${FLOW_STATUS_VARIANTS[row.status]}
             pill
             >${row.statusLabel}</sl-badge
-          >
-        </td>
-        <td>${this.renderLastRun(row)}</td>
-        <td class="numeric" title=${rangeNote}>
-          ${
-            row.runs > 0
-              ? html`<a
-                  class="row-link"
-                  style="display: inline;"
-                  href="/console/flows/executions?flow_id=${row.id}"
-                  >${row.runs.toLocaleString()}</a
-                >`
-              : html`<span class="muted-cell">0</span>`
-          }
-        </td>
-        <td class="numeric" title=${rangeNote}>
-          ${
-            row.failed > 0
-              ? row.failed.toLocaleString()
-              : html`<span class="muted-cell">0</span>`
-          }
-        </td>
-        <!-- Tokens before cost, over the same window, and silent for the
-             same reason the cost is. -->
-        <td class="numeric" title=${`Tokens, last ${this.rangeLabel}`}>
-          <token-figures total-only .usage=${row.tokenUsage}></token-figures>
-        </td>
-        <!-- Only a server that measured this window can state a spend for
-             it. Without stats_since the cost is unknown, and "-" says that;
-             "$0.00" would be a figure the page made up. -->
-        <td class="numeric" title=${`Estimated spend, last ${this.rangeLabel}`}>
-          ${
-            row.countsFromServer && row.runs > 0
-              ? html`<span title=${formatUsdExact(row.cost)}
-                  >${formatUsd(row.cost)}</span
-                >`
-              : html`<span class="muted-cell">-</span>`
-          }
-        </td>
-        <td class="actions-cell">
-          <div
-            class="row-actions"
-            @click=${(event: Event) => event.stopPropagation()}
-            @keydown=${(event: Event) => event.stopPropagation()}
-          >
-            <resource-actions
-              .actions=${this.getRowActions(row)}
-              menu-only
-            ></resource-actions>
-          </div>
-        </td>
-      </tr>
-    `;
+          >`,
+      },
+      {
+        id: 'last_run',
+        header: 'Last run',
+        headerClass: 'col-last-run',
+        sort: 'number',
+        value: (row) => {
+          const time = timeValue(row.lastRun?.start_time);
+          return Number.isFinite(time) ? time : 0;
+        },
+        searchText: () => '',
+        cell: (row) => this.renderLastRun(row),
+      },
+      {
+        id: 'runs',
+        header: 'Runs',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.runs,
+        searchText: () => '',
+        cellTitle: rangeNote,
+        cell: (row) =>
+          row.runs > 0
+            ? html`<a
+                class="row-link"
+                style="display: inline;"
+                href="/console/flows/executions?flow_id=${row.id}"
+                >${row.runs.toLocaleString()}</a
+              >`
+            : html`<span class="muted-cell">0</span>`,
+      },
+      {
+        id: 'failed',
+        header: 'Failed',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.failed,
+        searchText: () => '',
+        cellTitle: rangeNote,
+        cell: (row) =>
+          row.failed > 0
+            ? row.failed.toLocaleString()
+            : html`<span class="muted-cell">0</span>`,
+      },
+      {
+        // Tokens before cost, over the same window, and silent for the
+        // same reason the cost is.
+        id: 'tokens',
+        header: 'Tokens',
+        numeric: true,
+        sort: 'number',
+        value: (row) => totalTokensOf(row.tokenUsage),
+        searchText: () => '',
+        cellTitle: () => `Tokens, last ${this.rangeLabel}`,
+        cell: (row) =>
+          html`<token-figures
+            total-only
+            .usage=${row.tokenUsage}
+          ></token-figures>`,
+      },
+      {
+        // Only a server that measured this window can state a spend for it.
+        // Without stats_since the cost is unknown, and "-" says that;
+        // "$0.00" would be a figure the page made up.
+        id: 'cost',
+        header: '$ est.',
+        pickerLabel: 'Estimated cost',
+        numeric: true,
+        sort: 'number',
+        value: (row) => row.cost,
+        searchText: () => '',
+        cellTitle: () => `Estimated spend, last ${this.rangeLabel}`,
+        cell: (row) =>
+          row.countsFromServer && row.runs > 0
+            ? html`<span title=${formatUsdExact(row.cost)}
+                >${formatUsd(row.cost)}</span
+              >`
+            : html`<span class="muted-cell">-</span>`,
+      },
+    ];
   }
 
   private renderLastRun(row: FlowListRow) {
@@ -2041,13 +1979,13 @@ export class FlowsView extends LitElement {
    * so cmd-click and middle-click open a tab. Let the browser handle those and
    * any click that started inside a link, a button or the kebab.
    */
-  private handleRowClick(event: MouseEvent, row: FlowListRow) {
+  private handleRowClick(event: MouseEvent | KeyboardEvent, row: FlowListRow) {
     if (event.defaultPrevented) return;
     if (
       event.metaKey ||
       event.ctrlKey ||
       event.shiftKey ||
-      event.button !== 0
+      (event instanceof MouseEvent && event.button !== 0)
     ) {
       return;
     }

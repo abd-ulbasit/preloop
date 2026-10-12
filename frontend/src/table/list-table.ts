@@ -165,6 +165,11 @@ export interface ListColumn<TRow extends RowData> {
    * passes the filter through `onQueryChange` untouched.
    */
   filter?: 'text' | 'select';
+  /**
+   * Which way the first click sorts. Defaults to descending (recent and
+   * expensive first); names and labels read better A to Z.
+   */
+  firstSort?: 'asc' | 'desc';
   /** The choices of a `select` filter. */
   filterOptions?: Array<{ value: string; label: string }>;
   /**
@@ -213,6 +218,11 @@ export interface ListTableOptions<TRow extends RowData> {
    * avoids doing until someone asks.
    */
   persist?: PersistedSlice[];
+  /**
+   * The order the list opens in when nothing is remembered or linked. It is
+   * left out of the URL, so a list in its own order has a clean address.
+   */
+  defaultSorting?: Array<{ id: string; desc: boolean }>;
   /** `client` (default) or `server`; see the class comment. */
   mode?: 'client' | 'server';
   /**
@@ -308,6 +318,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
   private serverRowCount: number | null = null;
   private serverHasMore = false;
   private readonly getRowId: (row: TRow) => string;
+  private readonly defaultSorting: Array<{ id: string; desc: boolean }>;
   private readonly onQueryChange?: (query: ListQuery) => void;
   private readonly url: TableUrlOptions | null;
   readonly mode: 'client' | 'server';
@@ -322,6 +333,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
     this.persisted = options.persist ?? DEFAULT_PERSISTED;
     this.mode = options.mode ?? 'client';
     this.getRowId = options.getRowId;
+    this.defaultSorting = options.defaultSorting ?? [];
     this.onQueryChange = options.onQueryChange;
     this.url = options.url === true ? {} : options.url ? options.url : null;
     this.paginated = (options.pageSize ?? 0) > 0;
@@ -760,6 +772,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
       this.persists('sorting') && stored.sorting
         ? stored.sorting.filter((entry) => this.byId.has(entry.id))
         : [];
+    if (!sorting.length) sorting = this.defaultSorting.map((e) => ({ ...e }));
     let pageSize =
       this.persists('pageSize') && stored.pageSize && declaredPageSize > 0
         ? stored.pageSize
@@ -839,8 +852,15 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
 
   private urlSnapshot() {
     const query = this.query;
+    const isDefault =
+      query.sorting.length === this.defaultSorting.length &&
+      query.sorting.every(
+        (entry, index) =>
+          entry.id === this.defaultSorting[index].id &&
+          entry.desc === this.defaultSorting[index].desc
+      );
     return {
-      sorting: query.sorting,
+      sorting: isDefault ? [] : query.sorting,
       search: query.search,
       filters: query.filters,
       pageIndex: this.paginated ? query.pageIndex : 0,
@@ -885,7 +905,7 @@ export class ListTable<TRow extends RowData> implements ReactiveController {
       enableHiding: column.hideable !== false,
       enableResizing: column.resizable !== false,
       size: column.width,
-      sortDescFirst: true,
+      sortDescFirst: column.firstSort !== 'asc',
       enableColumnFilter: Boolean(column.filter),
       enableGlobalFilter: Boolean(column.searchText || column.value),
       filterFn: (column.filter === 'select'
