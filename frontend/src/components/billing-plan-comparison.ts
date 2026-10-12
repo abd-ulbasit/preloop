@@ -1,7 +1,7 @@
 import { formatCurrencyCents, formatCurrencyCentsExact } from '../utils/money';
 import { parseUTCDate } from '../utils/date';
 import { LitElement, css, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { fetchWithAuth } from '../api';
 import { cheapestPlanUnlocking } from '../utils/premium-features';
 import type {
@@ -85,6 +85,12 @@ export class BillingPlanComparison extends LitElement {
   } | null = null;
   private revision = 0;
   private expiryTimer?: number;
+  /**
+   * Options the host page has already read, used once by the first load.
+   * Later loads (a reconcile, a reload after a change) always ask.
+   */
+  @property({ attribute: false }) initialOptions: PlanChangeOptions | null =
+    null;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -260,15 +266,25 @@ export class BillingPlanComparison extends LitElement {
     this.accepted = false;
     this.error = '';
     this.permissionChanged(false);
+    // The plan page has just read these options to draw its cards; the first
+    // load takes that answer instead of asking the same question again.
+    const seeded =
+      !intent?.reconcile && !this.options ? this.initialOptions : null;
+    this.initialOptions = null;
     try {
-      const response = await fetchWithAuth(
-        intent?.reconcile
-          ? '/api/v1/billing/plan-change-options?reconcile=true'
-          : '/api/v1/billing/plan-change-options',
-        { cache: 'no-store' }
-      );
-      if (!response.ok) throw new Error(await this.responseError(response));
-      const options = (await response.json()) as PlanChangeOptions;
+      let options: PlanChangeOptions;
+      if (seeded) {
+        options = seeded;
+      } else {
+        const response = await fetchWithAuth(
+          intent?.reconcile
+            ? '/api/v1/billing/plan-change-options?reconcile=true'
+            : '/api/v1/billing/plan-change-options',
+          { cache: 'no-store' }
+        );
+        if (!response.ok) throw new Error(await this.responseError(response));
+        options = (await response.json()) as PlanChangeOptions;
+      }
       if (revision !== this.revision || !this.isConnected) return;
       const firstLoad = !this.options;
       this.options = options;

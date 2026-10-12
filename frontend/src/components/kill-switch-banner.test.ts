@@ -11,6 +11,7 @@ import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import './kill-switch-banner.ts';
 import type { KillSwitchBanner } from './kill-switch-banner.ts';
 import type { KillSwitchStatus } from '../types';
+import { resetKillSwitchStore } from '../services/kill-switch-store';
 
 const INACTIVE: KillSwitchStatus = { active: false, scopes: [] };
 
@@ -67,6 +68,7 @@ describe('kill-switch-banner', () => {
   let el: KillSwitchBanner;
 
   beforeEach(async () => {
+    resetKillSwitchStore();
     localStorage.setItem('accessToken', 'test-token');
     (
       window as unknown as { __deactivateBodies?: string[] }
@@ -79,6 +81,8 @@ describe('kill-switch-banner', () => {
   });
 
   async function mount(statusByCall: KillSwitchStatus[]): Promise<void> {
+    // Each mount is a fresh page: forget the state the last one read.
+    resetKillSwitchStore();
     const original = window.fetch;
     const bodies: string[] = [];
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

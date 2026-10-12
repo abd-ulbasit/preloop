@@ -213,10 +213,16 @@ def check_or_create_issue_duplicate(
     try:
         creds_kwargs = resolve_model_call_credentials(default_model, db=db)
         try:
+            # The model's own endpoint, as the other two calls in this file
+            # do. Without it a default model served anywhere but OpenAI
+            # (OpenRouter, a gateway, a self-hosted server) was sent to
+            # api.openai.com with its own key, and every check answered 500
+            # (#1588).
             client = build_aux_openai_client(
                 openai,
                 default_model,
                 creds_kwargs,
+                include_api_base=True,
                 static_key_fallback=os.getenv("OPENAI_API_KEY"),
                 timeout=30.0,
                 max_retries=0,

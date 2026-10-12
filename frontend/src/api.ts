@@ -165,7 +165,18 @@ export function invalidateUserProfileCache(): void {
   inFlightGets.delete(coalesceKey('/api/v1/auth/users/me', true));
 }
 
+/**
+ * Module stores outside this file that hold account data register here, so
+ * the sign-out broom reaches them without this file importing each one.
+ */
+const apiCacheResetHooks = new Set<() => void>();
+
+export function onApiCachesInvalidated(reset: () => void): void {
+  apiCacheResetHooks.add(reset);
+}
+
 export function invalidateApiCaches(): void {
+  for (const reset of apiCacheResetHooks) reset();
   featuresCache = null;
   featuresInflight = null;
   featuresEpoch += 1;
@@ -542,8 +553,16 @@ export async function fetchWithAuth(
   options: AuthFetchOptions = {}
 ): Promise<Response> {
   const method = (options.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    // A write makes every read already in the air a read of the past: a
+    // caller that asks again after this must get a request of its own, not
+    // join one that started before the change.
+    inFlightGets.clear();
+  }
   // Only plain reads: a body, a signal or a custom header makes the call the
   // caller's own, and anything that is not a GET may change something.
+  // A read that must bypass the HTTP cache is its own request too: callers
+  // that ask that way count on an answer nobody else started.
   const coalescable =
     method === 'GET' &&
     !options.body &&
@@ -2822,11 +2841,19 @@ export async function getAccountRuntimeSessionInteractions(
   return response.json();
 }
 
+/**
+ * Model turns merged into a session's activity timeline when it opens: the
+ * latest ones. A busy session's full set was a megabyte (#1586).
+ */
+export const SESSION_ACTIVITY_TURNS = 50;
+
 export async function getAccountRuntimeSessionActivityTimeline(
-  runtimeSessionId: string
+  runtimeSessionId: string,
+  options: { limit?: number } = {}
 ): Promise<RuntimeSessionActivityListResponse> {
+  const limit = options.limit ?? SESSION_ACTIVITY_TURNS;
   const response = await fetchWithAuth(
-    `/api/v1/runtime-sessions/${runtimeSessionId}/activity`
+    `/api/v1/runtime-sessions/${runtimeSessionId}/activity?limit=${limit}`
   );
   if (!response.ok) {
     // This is the call that refuses when a session's whole activity sits
@@ -4849,7 +4876,13 @@ export async function getFlowExecutionMetrics(executionId: string): Promise<{
 
 export async function getFlowExecutionLogs(
   executionId: string,
-  options?: { tail?: number; skip?: number; limit?: number }
+  options?: {
+    tail?: number;
+    skip?: number;
+    limit?: number;
+    /** Leave out model call rows (read from the gateway-events endpoint). */
+    excludeModelCalls?: boolean;
+  }
 ): Promise<{
   logs: any[];
   source: 'container' | 'database';
@@ -4862,6 +4895,7 @@ export async function getFlowExecutionLogs(
     params.append('skip', options.skip.toString());
   if (options?.limit !== undefined)
     params.append('limit', options.limit.toString());
+  if (options?.excludeModelCalls) params.append('exclude_model_calls', 'true');
 
   const queryString = params.toString();
   const url = `/api/v1/flows/executions/${executionId}/logs${queryString ? `?${queryString}` : ''}`;

@@ -729,6 +729,7 @@ class RuntimeSessionExplorerService:
         *,
         account: Account,
         runtime_session_id: str,
+        interaction_limit: int = 100,
     ) -> RuntimeSessionActivityListResponse:
         history_window = resolve_history_window(self.db, account=account)
         summary_row = crud_runtime_session.get_account_session_summary(
@@ -762,7 +763,7 @@ class RuntimeSessionExplorerService:
             end_date=end_date,
             runtime_session_id=runtime_session_id,
             flow_execution_id=flow_execution_id,
-            limit=100,
+            limit=interaction_limit,
             offset=0,
         )
         interaction_items = [

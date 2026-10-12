@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -144,6 +144,7 @@ class CRUDFlowExecutionLog(CRUDBase[models.FlowExecutionLog]):
         skip: int = 0,
         limit: Optional[int] = None,
         log_types: Optional[Sequence[str]] = None,
+        exclude_log_types: Optional[Sequence[str]] = None,
     ) -> List[models.FlowExecutionLog]:
         query = select(models.FlowExecutionLog).filter(
             models.FlowExecutionLog.execution_id == execution_id,
@@ -152,6 +153,14 @@ class CRUDFlowExecutionLog(CRUDBase[models.FlowExecutionLog]):
             # Filter in SQL so the tail counts only the requested rows: a long
             # run's agent log lines must not push its model calls out of it.
             query = query.filter(models.FlowExecutionLog.log_type.in_(log_types))
+        if exclude_log_types:
+            # A NULL log_type is a plain log line, never an excluded type.
+            query = query.filter(
+                or_(
+                    models.FlowExecutionLog.log_type.is_(None),
+                    models.FlowExecutionLog.log_type.not_in(exclude_log_types),
+                )
+            )
 
         if desc:
             query = query.order_by(models.FlowExecutionLog.timestamp.desc())

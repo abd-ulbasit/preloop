@@ -1,7 +1,12 @@
 import { parseUTCDate } from '../utils/date';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { deactivateKillSwitch, getKillSwitchStatus } from '../api';
+import { deactivateKillSwitch } from '../api';
+import {
+  refreshKillSwitch,
+  setKillSwitchStatus,
+  subscribeKillSwitch,
+} from '../services/kill-switch-store';
 import type { KillSwitchScope, KillSwitchStatus } from '../types';
 
 /**
@@ -33,7 +38,7 @@ export class KillSwitchBanner extends LitElement {
   @state()
   private stale = false;
 
-  private pollTimer?: number;
+  private unsubscribe?: () => void;
 
   private static readonly SCOPE_LABELS: Record<
     KillSwitchScope,
@@ -169,29 +174,38 @@ export class KillSwitchBanner extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    void this.refresh();
-    // Poll so a halt activated from another surface (API, CLI, a
-    // teammate's console) shows up in an already-open tab.
-    this.pollTimer = window.setInterval(() => void this.refresh(), 10000);
+    // The console's one shared poll, so a halt activated from another
+    // surface (API, CLI, a teammate's console) shows up in an already-open
+    // tab without this banner and the Emergency page asking separately.
+    this.unsubscribe = subscribeKillSwitch((status, failed) =>
+      this.apply(status, failed)
+    );
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    if (this.pollTimer) window.clearInterval(this.pollTimer);
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  /** Ask again now instead of waiting for the shared poll. */
+  private async refresh() {
+    await refreshKillSwitch({ force: true });
   }
 
   /**
-   * Reload halt status. A failed read keeps the last known status: this
-   * banner is the account's only persistent halted signal, so a transient
-   * poll failure must not make it vanish. Only a successful read clears it.
+   * Take a halt status read. A failed read keeps the last known status:
+   * this banner is the account's only persistent halted signal, so a
+   * transient poll failure must not make it vanish. Only a successful read
+   * clears it.
    */
-  private async refresh() {
-    try {
-      this.status = await getKillSwitchStatus();
-      this.stale = false;
-    } catch {
+  private apply(status: KillSwitchStatus | null, failed: boolean) {
+    if (failed) {
       this.stale = this.status !== null;
+      return;
     }
+    this.status = status;
+    this.stale = false;
   }
 
   private async handleResume(target: KillSwitchScope | 'all') {
@@ -202,11 +216,13 @@ export class KillSwitchBanner extends LitElement {
         ? this.status!.scopes.map((entry) => entry.scope)
         : [target];
     try {
-      this.status = await deactivateKillSwitch({
+      const next = await deactivateKillSwitch({
         scopes,
         reason: 'Staged recovery from console banner',
       });
+      this.status = next;
       this.stale = false;
+      setKillSwitchStatus(next);
       this.dispatchEvent(
         new CustomEvent('kill-switch-changed', {
           bubbles: true,

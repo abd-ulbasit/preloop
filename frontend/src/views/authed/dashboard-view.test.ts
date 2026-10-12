@@ -483,6 +483,18 @@ describe('DashboardView', () => {
           return json(gatewaySearchResponse);
         }
 
+        if (url.startsWith('/api/v1/audit-logs/overview')) {
+          if (auditCountGate) {
+            await auditCountGate;
+          }
+          return json({
+            events_total: auditResponse.total,
+            tool_calls_total: auditResponse.total,
+            tool_calls_failed: 0,
+            exceptions: auditResponse,
+          });
+        }
+
         if (url.startsWith('/api/v1/audit-logs/grouped')) {
           if (/[?&]limit=1(&|$)/.test(url) && auditCountGate) {
             await auditCountGate;
@@ -677,8 +689,23 @@ describe('DashboardView', () => {
       urls.filter((url) => url.startsWith('/api/v1/agents')).length
     ).to.equal(1);
     expect(urls.some((url) => url === '/api/v1/auth/api-usage')).to.be.false;
-    expect(urls.some((url) => url.startsWith('/api/v1/audit-logs/grouped'))).to
-      .be.true;
+    // One people list for the page and the activity feed: the feed waits for
+    // the page's list instead of racing it with its own (#1590).
+    expect(
+      urls.filter((url) => url.startsWith('/api/v1/users')).length
+    ).to.equal(1);
+    // The page's audit figures and exceptions are one request (#1590); the
+    // grouped timeline is the activity feed's own.
+    expect(
+      urls.filter((url) => url.startsWith('/api/v1/audit-logs/overview')).length
+    ).to.equal(1);
+    expect(
+      urls.filter(
+        (url) =>
+          url.startsWith('/api/v1/audit-logs/grouped') &&
+          (url.includes('outcome=') || /[?&]limit=1(&|$)/.test(url))
+      )
+    ).to.deep.equal([]);
     expect(urls).to.include('/api/v1/trackers');
     expect(urls).to.include('/api/v1/mcp-servers');
     expect(urls).to.include('/api/v1/tools/summary');
@@ -1641,8 +1668,7 @@ describe('DashboardView', () => {
         .map((call) => String(call.args[0]))
         .filter(
           (url) =>
-            url.startsWith('/api/v1/audit-logs/grouped') &&
-            url.includes('limit=1') &&
+            url.startsWith('/api/v1/audit-logs/overview') &&
             url.includes('start_date=')
         );
       expect(counted.length, 'one range-scoped audit count').to.equal(1);

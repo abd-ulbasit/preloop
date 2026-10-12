@@ -361,15 +361,23 @@ function providerErrorMessage(detail?: string | null): string {
   return liftLogfmtErrorField(firstErrorLine(text));
 }
 
-/** Log rows the page asks for before it has painted anything else. */
-const INITIAL_LOGS_TAIL = 500;
+/**
+ * Log rows the page asks for before it has painted anything else. The
+ * newest ones: older rows load on demand. 500 rows of agent output were
+ * megabytes on a long run (#1586).
+ */
+const INITIAL_LOGS_TAIL = 200;
 
 /**
  * Model calls the page reads up front. Most runs make fewer, so for them the
  * first read is the whole list; a longer run shows its newest calls and the
  * timeline offers the rest.
  */
-export const INITIAL_GATEWAY_EVENTS_TAIL = 500;
+export const INITIAL_GATEWAY_EVENTS_TAIL = 200;
+
+/** Timeline rows drawn at first, and how many more each "earlier" click adds. */
+export const TIMELINE_ROWS_SHOWN = 60;
+const TIMELINE_ROWS_STEP = 100;
 
 /**
  * The gateway-events endpoint returns every log row of the execution; only
@@ -1056,6 +1064,10 @@ export class FlowExecutionView extends LitElement {
   @state()
   private activeTab: ExecutionTab = 'timeline';
 
+  /** How many of the newest timeline rows are drawn. */
+  @state()
+  private timelineRowsShown = TIMELINE_ROWS_SHOWN;
+
   /** Hook sessions and seat usage of a Copilot or Cursor host run. */
   @state()
   private hostSessions: HostExecSessionsResponse | null = null;
@@ -1087,6 +1099,7 @@ export class FlowExecutionView extends LitElement {
 
   private invalidateExecutionRequests() {
     this.executionGeneration++;
+    this.timelineRowsShown = TIMELINE_ROWS_SHOWN;
     this.metadataRevision++;
     this.observedAgentStart = undefined;
     window.clearTimeout(this.metadataRefreshTimer);
@@ -1359,9 +1372,6 @@ export class FlowExecutionView extends LitElement {
     this.isFetchingMoreLogs = true;
     const FETCH_LIMIT = 500;
 
-    // We want to skip what we've already fetched.
-    this.logsSkip += FETCH_LIMIT;
-
     try {
       // Remember the current scroll position so we can restore it after adding logs at the top
       const scrollElement =
@@ -1377,6 +1387,7 @@ export class FlowExecutionView extends LitElement {
       const logsResult = await getFlowExecutionLogs(this.executionId, {
         tail: FETCH_LIMIT,
         skip: this.logsSkip,
+        excludeModelCalls: true,
       });
 
       if (
@@ -1386,6 +1397,9 @@ export class FlowExecutionView extends LitElement {
       ) {
         // Prepend new logs to the existing logs array
         this.logs = [...logsResult.logs, ...this.logs];
+        // `logsSkip` counts the newest rows already read, so the next page
+        // starts where this one ended whatever size the first read was.
+        this.logsSkip += logsResult.logs.length;
         this.hasMoreLogs = !!logsResult.has_more;
 
         // Restore scroll position so content doesn't jump
@@ -1403,8 +1417,6 @@ export class FlowExecutionView extends LitElement {
       }
     } catch (error) {
       console.error('Failed to load previous logs:', error);
-      // Revert skip on failure
-      this.logsSkip -= FETCH_LIMIT;
     } finally {
       this.isFetchingMoreLogs = false;
       this.requestUpdate();
@@ -1890,6 +1902,9 @@ export class FlowExecutionView extends LitElement {
     this.logsSkip = 0;
     const logsResult = await getFlowExecutionLogs(executionId, {
       tail: INITIAL_LOGS_TAIL,
+      // Model calls come from the gateway-events read as cards; as log rows
+      // they were a second, much larger copy of each call.
+      excludeModelCalls: true,
     }).catch((error) => {
       console.error('Failed to fetch logs:', error);
       if (
@@ -1909,6 +1924,7 @@ export class FlowExecutionView extends LitElement {
     if (!current()) return;
     if (logsResult && Array.isArray(logsResult.logs)) {
       this.logs = logsResult.logs;
+      this.logsSkip = logsResult.logs.length;
       this.hasMoreLogs = !!logsResult.has_more;
     }
     this.hydrateToolActivityLogs();
@@ -2981,6 +2997,11 @@ export class FlowExecutionView extends LitElement {
 
   private renderTimelinePanel(running: boolean) {
     const rows = this.getTimelineRows();
+    // The newest entries, oldest first. A long run is hundreds of rows, and
+    // drawing all of them made the page tens of thousands of pixels tall
+    // before anyone scrolled (#1586).
+    const hiddenRows = Math.max(0, rows.length - this.timelineRowsShown);
+    const visibleRows = hiddenRows > 0 ? rows.slice(hiddenRows) : rows;
     // The first reads only. Status rows from the detail row can already be
     // showing, so this is a line under them, not a replacement for them.
     const timelineLoading =
@@ -3018,7 +3039,26 @@ export class FlowExecutionView extends LitElement {
           @scroll=${this.handleTimelineScroll}
         >
           ${
-            this.gatewayEventsTruncated
+            hiddenRows > 0
+              ? html`<div
+                  class="load-previous"
+                  data-testid="timeline-earlier-entries"
+                >
+                  <sl-button
+                    size="small"
+                    variant="default"
+                    @click=${() => {
+                      this.timelineRowsShown += TIMELINE_ROWS_STEP;
+                    }}
+                  >
+                    Show ${Math.min(hiddenRows, TIMELINE_ROWS_STEP)} earlier
+                    entr${Math.min(hiddenRows, TIMELINE_ROWS_STEP) === 1 ? 'y' : 'ies'}
+                  </sl-button>
+                </div>`
+              : ''
+          }
+          ${
+            this.gatewayEventsTruncated && hiddenRows === 0
               ? html`<div
                   class="load-previous timeline-truncated"
                   data-testid="timeline-truncated"
@@ -3054,7 +3094,7 @@ export class FlowExecutionView extends LitElement {
               ? html`<div class="panel-empty">
                   Nothing recorded for this run yet.
                 </div>`
-              : rows.map((row) => this.renderTimelineRow(row))
+              : visibleRows.map((row) => this.renderTimelineRow(row))
           }
           ${
             timelineLoading
@@ -4223,7 +4263,8 @@ ${log.payload.content}</pre>
       // Fetch final logs from the stopped container
       try {
         const logsResponse = await getFlowExecutionLogs(this.executionId, {
-          tail: 500,
+          tail: INITIAL_LOGS_TAIL,
+          excludeModelCalls: true,
         });
         if (logsResponse.logs && Array.isArray(logsResponse.logs)) {
           this.logs = logsResponse.logs;

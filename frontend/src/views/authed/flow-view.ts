@@ -316,6 +316,8 @@ export class FlowView extends LitElement {
   };
 
   @state() private longRunningAgents: any[] = [];
+  /** Whether `longRunningAgents` is the server's answer, not a fallback. */
+  private agentsLoaded = false;
   @state() private flowExecutionPath: 'ephemeral' | 'persistent' = 'ephemeral';
   @state() private targetAgentId = '';
   @state() private sourcePresetId?: string;
@@ -439,6 +441,7 @@ export class FlowView extends LitElement {
 
   private async loadFlowData(urlParams: URLSearchParams) {
     const generation = ++this.flowLoadGeneration;
+    this.agentsLoaded = false;
     this.flowReady = false;
     this.loadError = null;
     this.referenceListsFailed = [];
@@ -553,6 +556,7 @@ export class FlowView extends LitElement {
       const agentsRes = await getAccountAgents({ limit: 100 });
       if (generation !== this.flowLoadGeneration) return;
       this.longRunningAgents = agentsRes.items || [];
+      this.agentsLoaded = true;
 
       if (this.flow && this.flow.agent_config) {
         const cfg =
@@ -1712,6 +1716,7 @@ ${(this.flow.custom_commands.commands || []).join('\n')}</pre>
       () => html`
         <preloop-flow-form
           .flow=${this.flow}
+          .prefetchedAgents=${this.agentsLoaded ? this.longRunningAgents : null}
           @flow-submit=${(e: CustomEvent) => {
             // Hand the save back so the form's button stays busy until the
             // request settles; a double click must not create two flows.

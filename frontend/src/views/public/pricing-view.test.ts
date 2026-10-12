@@ -3,6 +3,10 @@ import sinon from 'sinon';
 import './pricing-view';
 import { PublicPricingView } from './pricing-view';
 import { CLOUD_LEAD_FALLBACK } from '../../pricing-ssr';
+import { resetPricingContentForTests } from '../../utils/pricing-content';
+
+// The pricing content is read once per page; each test is a fresh page.
+beforeEach(() => resetPricingContentForTests());
 
 const tick = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 

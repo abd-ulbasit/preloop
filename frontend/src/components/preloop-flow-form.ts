@@ -527,6 +527,12 @@ export class PreloopFlowForm extends LitElement {
     this.requestUpdate();
   }
 
+  /**
+   * The account's agents when the host page has already read them (the
+   * page reads the same list first). Null means the form asks itself.
+   */
+  @property({ attribute: false }) prefetchedAgents: any[] | null = null;
+
   @property({ type: Object })
   flow: any = {};
 
@@ -868,7 +874,11 @@ export class PreloopFlowForm extends LitElement {
         getAIModels().catch(remember('models')),
         getAllTools().catch(() => []),
         getMCPServers().catch(() => []),
-        getAccountAgents({ limit: 100 }).catch(() => ({ items: [] })),
+        // The flow page has usually just read this list to decide what to
+        // render; take its answer rather than ask again.
+        this.prefetchedAgents
+          ? Promise.resolve({ items: this.prefetchedAgents })
+          : getAccountAgents({ limit: 100 }).catch(() => ({ items: [] })),
         getFlowPresets().catch(() => []),
         getRunners().catch(() => []),
         getAccountOrganization().catch(() => null),

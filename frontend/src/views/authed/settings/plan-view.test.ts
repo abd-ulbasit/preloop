@@ -11,6 +11,10 @@ import {
 } from '../../../utils/premium-features';
 import './plan-view';
 import type { PlanView } from './plan-view';
+import { resetPricingContentForTests } from '../../../utils/pricing-content';
+
+// The pricing content is read once per page; each test is a fresh page.
+beforeEach(() => resetPricingContentForTests());
 
 /** The published cloud ladder, as the public pricing page reads it. */
 const CONTENT = {
@@ -397,6 +401,25 @@ describe('PlanView', () => {
     expect(
       (element.shadowRoot?.textContent ?? '').replace(/\s+/g, ' ')
     ).to.contain('Compare cloud plans');
+  });
+
+  it('reads the plan-change options and the price list once per load', async () => {
+    const element = await mount();
+    const comparison = element.shadowRoot?.querySelector(
+      'billing-plan-comparison'
+    ) as HTMLElement & { updateComplete: Promise<boolean> };
+    await waitUntil(
+      () => !(comparison as any).loading,
+      'the comparison never loaded'
+    );
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    // The comparison takes the answer the page just read (#1593).
+    expect(
+      urls.filter((url) => url.includes('/billing/plan-change-options'))
+    ).to.have.length(1);
+    expect(
+      urls.filter((url) => url.includes('/landing-content.json')).length
+    ).to.be.at.most(1);
   });
 
   it('opens on annual, like the public page', async () => {

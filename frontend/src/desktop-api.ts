@@ -7,7 +7,7 @@
  * list and the console renders nothing, so the UI stays inert until the
  * backend ships and is switched on.
  */
-import { fetchWithAuth, isSameOriginPath } from './api';
+import { fetchWithAuth, getFeatures, isSameOriginPath } from './api';
 import { hasPermission, type UserPermissions } from './permissions';
 
 /**
@@ -119,13 +119,21 @@ export interface DesktopEndpointFilter {
 /**
  * Online desktop endpoints linked to an agent, runner or session.
  *
- * Returns an empty list when the feature is off or absent (404) or the
+ * Returns an empty list without a request when `/features` says desktop
+ * views are off, and an empty list when the feature is absent (404) or the
  * caller may not use it (403): in both cases there is nothing to offer.
  * Passive, so a failure never interrupts the page that asked.
  */
 export async function listOnlineDesktopEndpoints(
   filter: DesktopEndpointFilter
 ): Promise<DesktopEndpoint[]> {
+  // A server that says desktop views are off has nothing to list: do not
+  // ask (it answers 404). A server too old to say still gets asked.
+  try {
+    if ((await getFeatures()).features?.desktop_views === false) return [];
+  } catch {
+    // Unknown: ask, as before.
+  }
   const params = new URLSearchParams({ state: 'online' });
   if (filter.managedAgentId)
     params.set('managed_agent_id', filter.managedAgentId);

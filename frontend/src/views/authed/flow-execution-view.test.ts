@@ -517,6 +517,51 @@ describe('FlowExecutionView', () => {
     return element;
   }
 
+  it('reads a bounded first page and draws only the newest timeline rows (#1586)', async () => {
+    const element = (await fixture(
+      html`<flow-execution-view></flow-execution-view>`
+    )) as FlowExecutionView;
+    element.executionId = 'exec-1';
+    await waitUntil(
+      () =>
+        (element as any).execution?.id === 'exec-1' &&
+        !(element as any).isLoading,
+      'Execution view did not finish loading'
+    );
+
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    const logsRead = urls.find((url) => url.includes('/exec-1/logs'))!;
+    expect(logsRead).to.contain('tail=200');
+    // Model calls are the gateway-events read; the logs leave them out.
+    expect(logsRead).to.contain('exclude_model_calls=true');
+    const eventsRead = urls.find((url) => url.includes('/gateway-events'))!;
+    expect(eventsRead).to.contain('tail=200');
+
+    // 150 model calls make 150 rows; 60 are drawn, the rest on request.
+    (element as any).gatewayEvents = Array.from({ length: 150 }, (_, i) => ({
+      id: `call-${i}`,
+      execution_id: 'exec-1',
+      timestamp: new Date(
+        Date.parse('2026-03-09T10:00:00Z') + i * 1000
+      ).toISOString(),
+      type: 'model_gateway_call',
+      payload: { api_usage_id: `usage-${i}`, request_id: `req-${i}` },
+    }));
+    await element.updateComplete;
+    const drawn = () =>
+      element.shadowRoot!.querySelectorAll(
+        '[data-testid="timeline-stream"] .timeline-row'
+      ).length;
+    expect(drawn()).to.be.at.most(60);
+    const earlier = element.shadowRoot!.querySelector(
+      '[data-testid="timeline-earlier-entries"] sl-button'
+    ) as HTMLElement;
+    expect(earlier, 'show earlier entries').to.exist;
+    earlier.click();
+    await element.updateComplete;
+    expect(drawn()).to.be.greaterThan(100);
+  });
+
   it('puts what the run was about under the flow name (wave 4)', async () => {
     const element = (await fixture(
       html`<flow-execution-view></flow-execution-view>`

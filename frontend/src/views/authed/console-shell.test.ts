@@ -7,6 +7,10 @@ import { LOCATION_CHANGED, Router } from '../../router';
 import { publishAttentionSummary } from '../../utils/attention-summary';
 import './console-shell';
 import type { ConsoleShell } from './console-shell';
+import { resetPricingContentForTests } from '../../utils/pricing-content';
+
+// The pricing content is read once per page; each test is a fresh page.
+beforeEach(() => resetPricingContentForTests());
 
 const SIDEBAR_BREAKPOINT = 768;
 

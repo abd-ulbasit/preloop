@@ -64,6 +64,7 @@ class TestGetFeatures:
                 "account_hierarchy": False,
                 "abac_rules": False,
                 "ticket_readiness": False,
+                "desktop_views": False,
             },
         }
         mock_get_plugin_manager.assert_called_once()
@@ -103,6 +104,7 @@ class TestGetFeatures:
                 "account_hierarchy": False,
                 "abac_rules": False,
                 "ticket_readiness": False,
+                "desktop_views": False,
             },
         }
 
@@ -133,7 +135,7 @@ class TestGetFeatures:
         assert "plugins" in result
         assert "features" in result
         assert len(result["plugins"]) == 3
-        assert len(result["features"]) == 17
+        assert len(result["features"]) == 18
         assert result["features"]["policy_simulation"] is True
         assert result["features"]["session_optimization"] is True
         assert result["features"]["chat_connections"] is True
@@ -522,3 +524,26 @@ def test_static_plugin_cannot_relabel_runtime_edition(
         }
         users.has_any_users.return_value = True
         assert get_features(db=MagicMock())["edition"] == expected
+
+
+@patch("preloop.api.auth.bootstrap.crud_user")
+@patch("preloop.api.endpoints.features.get_plugin_manager")
+def test_features_report_desktop_views(
+    mock_get_plugin_manager, mock_crud_user, monkeypatch
+):
+    """The console skips the online-desktop lookup when this says off."""
+    from preloop.api.endpoints.features import get_features
+    from preloop.config import settings
+
+    mock_plugin_manager = MagicMock()
+    mock_plugin_manager.get_enabled_features.return_value = {
+        "plugins": [],
+        "features": {},
+    }
+    mock_get_plugin_manager.return_value = mock_plugin_manager
+    mock_crud_user.has_any_users.return_value = True
+
+    monkeypatch.setattr(settings, "desktop_views_enabled", True)
+    assert get_features(db=MagicMock())["features"]["desktop_views"] is True
+    monkeypatch.setattr(settings, "desktop_views_enabled", False)
+    assert get_features(db=MagicMock())["features"]["desktop_views"] is False

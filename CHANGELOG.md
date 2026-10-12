@@ -733,6 +733,25 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Fixed
 
+- **Console requests (#1590, #1591, #1593, #1586, #1588)**: pages ask each
+  question once. The kill switch is one shared poll for the banner and the
+  Emergency page, a write from the tab stops later reads from joining an
+  older one, the plan page hands its plan-change options to the comparison
+  card, the price list is read once per page, the flow form takes the agents
+  the flow page just read, the invite dialog reads teams and roles only when
+  it opens, the model pages skip the reload that the socket's first sign-in
+  triggered, a refused realtime subscription is no longer delivered as news,
+  and the CI capabilities read is shared. The Overview reads its audit
+  figures and exceptions in one `GET /audit-logs/overview` (Enterprise)
+  started with the fold. The execution page reads the newest 200 log lines
+  without model call rows (`exclude_model_calls`), sends each line once, and
+  draws the newest 60 timeline rows; metadata-only gateway events leave out
+  request and response bodies. The model page opens no session by itself,
+  and a session opens with its latest 50 turns (`/activity?limit`). Session
+  and agent pages ask for online desktops only when `/features` reports
+  `desktop_views`, and the duplicate check calls the default model at its
+  own endpoint instead of api.openai.com.
+
 - **Re-onboarding no longer strands gateway-registered subscription models.**
   Picking a model in Codex CLI's or Claude Code's own picker makes the
   gateway register a sibling row on the agent's subscription-OAuth secret and

@@ -152,6 +152,14 @@ interface GroupedAuditResponse {
   total: number;
 }
 
+/** `GET /audit-logs/overview`: the four audit reads of this page in one. */
+interface AuditOverviewResponse {
+  events_total: number | null;
+  tool_calls_total: number;
+  tool_calls_failed: number;
+  exceptions: GroupedAuditResponse;
+}
+
 interface Tracker {
   id: string;
   name: string;
@@ -412,6 +420,12 @@ export class DashboardView extends AuthedElement {
   @state() private userManagementEnabled = false;
   /** True once the feature flags have answered, either way. */
   @state() private featuresResolved = false;
+  /** Whether the profile, and with it the permissions, has answered. */
+  @state() private profileResolved = false;
+  /** The people list started with the fold, for the deferred pass to join. */
+  private usersPromise: Promise<void> | null = null;
+  /** The audit overview started with the fold, for the deferred pass. */
+  private auditOverviewPromise: Promise<AuditOverviewResponse> | null = null;
   /** Rate-limited requests for the gateway row; null when the call failed. */
   @state() private rateLimitReport: AccountRateLimitReportResponse | null =
     null;
@@ -1482,6 +1496,8 @@ export class DashboardView extends AuthedElement {
       console.error('Failed to fetch user profile:', error);
       this.isAdmin = false;
       this.permissions = null;
+    } finally {
+      this.profileResolved = true;
     }
   }
 
@@ -2402,6 +2418,20 @@ export class DashboardView extends AuthedElement {
 
     try {
       const adminPromise = this.fetchAdminStatus();
+      const featuresPromise = this.fetchFeatures();
+      if (!options.preserveLoadingState) {
+        // The activity feed waits for this list instead of asking for its
+        // own, so it starts as soon as the permission and the licence flag
+        // are known rather than after the fold: started later, the feed's
+        // wait ran out and the page asked for the same list twice.
+        this.usersPromise = Promise.all([adminPromise, featuresPromise]).then(
+          () => this.fetchUsersList()
+        );
+        // The audit figures are the slowest read on the page. Asked with
+        // the fold, they are not a whole fold's wait behind it.
+        this.auditOverviewPromise = this.fetchAuditOverview(startDateStr);
+        this.auditOverviewPromise.catch(() => undefined);
+      }
       const [
         gatewaySummary,
         priorGatewaySummary,
@@ -2505,7 +2535,7 @@ export class DashboardView extends AuthedElement {
           this.fetchingAgents = false;
           return agents;
         }),
-        this.fetchFeatures(),
+        featuresPromise,
       ]);
       await adminPromise;
       if (
@@ -2620,7 +2650,7 @@ export class DashboardView extends AuthedElement {
       startDateStr,
       options.range
     );
-    const secondaryPromise = this.fetchSecondaryDashboardData();
+    const secondaryPromise = this.fetchSecondaryDashboardData(startDateStr);
 
     await Promise.all([inventoryPromise, breakdownPromise]);
     markOverviewTiming('overview-inventory-ready');
@@ -2782,7 +2812,8 @@ export class DashboardView extends AuthedElement {
         // The failures card shows a handful, and it should be the handful
         // that happened in the range the page is showing.
         this.refreshGatewayInteractions(startDateStr),
-        this.refreshAuditEventCount(startDateStr),
+        // The audit event count arrives with the audit overview, in the
+        // secondary pass.
         executionsPromise,
       ]);
 
@@ -2823,47 +2854,89 @@ export class DashboardView extends AuthedElement {
   }
 
   /**
+   * The people list, for the Users tab and for the activity feed's names.
+   * Its own request, awaited by nothing else: the Users tab can list the
+   * people the moment their names arrive, without waiting for the tools.
+   */
+  private async fetchUsersList(): Promise<void> {
+    this.fetchingUsers = true;
+    try {
+      const users = await this.catchWith403Handling(
+        // User management is a licensed feature, not a hosting model:
+        // a self-hosted Enterprise account has teammates too, and the
+        // Inventory's Users tab is gated on the same flag and on
+        // view_users. Both the flags and the profile have answered by
+        // the time this fetch runs, so a reader without the
+        // permission does not spend a request on a certain 403.
+        this.fetchesUsers
+          ? getUsers()
+          : Promise.resolve({
+              users: [],
+              total: 0,
+              skip: 0,
+              limit: 0,
+            }),
+        {
+          users: [],
+          total: 0,
+          skip: 0,
+          limit: 0,
+        }
+      );
+      this.accountUsers = Array.isArray(users.users)
+        ? (users.users as AccountUser[]).filter(
+            (user) => user.is_active !== false
+          )
+        : [];
+      this.enabledUsersCount = Array.isArray(users.users)
+        ? users.users.filter((u: { is_active?: boolean }) => u.is_active).length
+        : 0;
+    } catch (error) {
+      console.error('Failed to load users', error);
+    } finally {
+      this.fetchingUsers = false;
+    }
+  }
+
+  /**
    * Audit exceptions, teammates, the tool catalogue and the model list. The
    * usage breakdown used to be awaited here too; it is now started beside
    * this pass so the attention loader can reuse it.
    */
-  private async fetchSecondaryDashboardData() {
+  private async fetchSecondaryDashboardData(startDateStr: string) {
     this.fetchingAudit = true;
     this.fetchingMCPAndTools = true;
 
     const pAudit = (async () => {
       try {
-        const [
-          audit,
-          trackers,
-          issueCount,
-          toolCallsStats,
-          failedToolCallsStats,
-        ] = await Promise.all([
-          this.catchWith403Handling(this.fetchAuditExceptions(), {
-            groups: [],
-            total: 0,
-          }),
+        // The audit figures land on their own: the Audit trail line does
+        // not wait for the trackers or the issue count.
+        const started = this.auditOverviewPromise;
+        this.auditOverviewPromise = null;
+        const overviewPromise = (
+          started ?? this.fetchAuditOverview(startDateStr)
+        )
+          .then((overview) => {
+            this.auditGroups = overview.exceptions.groups || [];
+            this.auditEventCount = overview.events_total;
+            this.toolCallsCount = overview.tool_calls_total || 0;
+            this.failedToolCallsCount = overview.tool_calls_failed || 0;
+          })
+          .catch((error) => {
+            console.error('Failed to load the audit overview', error);
+          })
+          .finally(() => {
+            // The audit event count is the last figure the Audit trail line
+            // waits on: the sessions count landed with the fold.
+            this.fetchingAuditTrail = false;
+          });
+        const [trackers, issueCount] = await Promise.all([
           this.catchWith403Handling(getTrackers(), [] as Tracker[]),
           this.catchWith403Handling(getIssueCount(), { total_issues: 0 }),
-          this.catchWith403Handling(
-            fetchWithAuth(
-              '/api/v1/audit-logs/grouped?event_type=tool_call&limit=1'
-            ).then((r) => r.json()),
-            { total: 0 }
-          ),
-          this.catchWith403Handling(
-            fetchWithAuth(
-              '/api/v1/audit-logs/grouped?event_type=tool_call&outcome=failed&limit=1'
-            ).then((r) => r.json()),
-            { total: 0 }
-          ),
+          overviewPromise,
         ]);
-        this.auditGroups = audit.groups || [];
         this.trackers = trackers;
         this.totalIssues = issueCount.total_issues;
-        this.toolCallsCount = toolCallsStats?.total || 0;
-        this.failedToolCallsCount = failedToolCallsStats?.total || 0;
       } catch (error) {
         console.error('Failed to load audit data', error);
       } finally {
@@ -2871,48 +2944,10 @@ export class DashboardView extends AuthedElement {
       }
     })();
 
-    // Its own request, awaited by nothing else: the Users tab can list the
-    // people the moment their names arrive, without waiting for the tools.
-    const pUsers = (async () => {
-      this.fetchingUsers = true;
-      try {
-        const users = await this.catchWith403Handling(
-          // User management is a licensed feature, not a hosting model:
-          // a self-hosted Enterprise account has teammates too, and the
-          // Inventory's Users tab is gated on the same flag and on
-          // view_users. Both the flags and the profile have answered by
-          // the time this secondary fetch runs, so a reader without the
-          // permission does not spend a request on a certain 403.
-          this.fetchesUsers
-            ? getUsers()
-            : Promise.resolve({
-                users: [],
-                total: 0,
-                skip: 0,
-                limit: 0,
-              }),
-          {
-            users: [],
-            total: 0,
-            skip: 0,
-            limit: 0,
-          }
-        );
-        this.accountUsers = Array.isArray(users.users)
-          ? (users.users as AccountUser[]).filter(
-              (user) => user.is_active !== false
-            )
-          : [];
-        this.enabledUsersCount = Array.isArray(users.users)
-          ? users.users.filter((u: { is_active?: boolean }) => u.is_active)
-              .length
-          : 0;
-      } catch (error) {
-        console.error('Failed to load users', error);
-      } finally {
-        this.fetchingUsers = false;
-      }
-    })();
+    // Started with the fold (see `fetchDashboardData`); a pass that did not
+    // start it, or whose list failed, asks here.
+    const pUsers = this.usersPromise ?? this.fetchUsersList();
+    this.usersPromise = null;
 
     const pTools = (async () => {
       try {
@@ -3011,6 +3046,65 @@ export class DashboardView extends AuthedElement {
     } finally {
       this.fetchingModelUsage = false;
     }
+  }
+
+  /**
+   * The audit figures this page shows, in one request: the event count for
+   * the range, the tool call totals, and the exceptions card. They used to
+   * be four grouped-timeline requests, each as slow as the timeline. A
+   * server without the overview endpoint (older or partial deploys) answers
+   * 404, and the page asks the four questions the old way.
+   */
+  private async fetchAuditOverview(
+    startDateStr: string
+  ): Promise<AuditOverviewResponse> {
+    const params = new URLSearchParams();
+    params.set('start_date', startDateStr);
+    params.set('exceptions_limit', '12');
+    const response = await fetchWithAuth(
+      `/api/v1/audit-logs/overview?${params}`
+    );
+    if (response.ok) return response.json();
+    if (response.status !== 404) {
+      // No permission or a failing server: the figures stay empty, as the
+      // separate reads did.
+      return {
+        events_total: null,
+        tool_calls_total: 0,
+        tool_calls_failed: 0,
+        exceptions: { groups: [], total: 0 },
+      };
+    }
+    const total = (url: string) =>
+      this.catchWith403Handling(
+        fetchWithAuth(url).then(async (r) => {
+          if (!r.ok) throw new Error(`Audit count failed: ${r.status}`);
+          const body = (await r.json()) as { total?: number };
+          return typeof body.total === 'number' ? body.total : null;
+        }),
+        null as number | null
+      );
+    const countParams = new URLSearchParams();
+    countParams.set('limit', '1');
+    countParams.set('start_date', startDateStr);
+    const [exceptions, eventsTotal, toolCalls, failedToolCalls] =
+      await Promise.all([
+        this.catchWith403Handling(this.fetchAuditExceptions(), {
+          groups: [],
+          total: 0,
+        }),
+        total(`/api/v1/audit-logs/grouped?${countParams}`),
+        total('/api/v1/audit-logs/grouped?event_type=tool_call&limit=1'),
+        total(
+          '/api/v1/audit-logs/grouped?event_type=tool_call&outcome=failed&limit=1'
+        ),
+      ]);
+    return {
+      events_total: eventsTotal,
+      tool_calls_total: toolCalls ?? 0,
+      tool_calls_failed: failedToolCalls ?? 0,
+      exceptions,
+    };
   }
 
   private async fetchAuditExceptions(): Promise<GroupedAuditResponse> {
@@ -3282,13 +3376,17 @@ export class DashboardView extends AuthedElement {
     }
   }
 
-  /** The exceptions card on its own, for the background timer. */
+  /** The audit figures and the exceptions card, for the background timer. */
   private async refreshAuditExceptions(): Promise<void> {
-    const audit = await this.catchWith403Handling(this.fetchAuditExceptions(), {
-      groups: [],
-      total: 0,
-    });
-    this.auditGroups = audit.groups || [];
+    const overview = await this.catchWith403Handling(
+      this.fetchAuditOverview(this.getGatewayStartDate()),
+      null
+    );
+    if (!overview) return;
+    this.auditGroups = overview.exceptions.groups || [];
+    this.auditEventCount = overview.events_total;
+    this.toolCallsCount = overview.tool_calls_total || 0;
+    this.failedToolCallsCount = overview.tool_calls_failed || 0;
   }
 
   private get gatewayRangeLabel(): string {
@@ -4494,7 +4592,9 @@ export class DashboardView extends AuthedElement {
         .executions=${this.flowExecutions}
         .budgetPolicies=${this.budgetPolicies}
         .users=${this.accountUsers}
-        ?usersFromHost=${this.fetchesUsers}
+        ?usersFromHost=${
+          !this.profileResolved || !this.featuresResolved || this.fetchesUsers
+        }
         @open-budget-limits=${() => (this.showBudgetDialog = true)}
       ></activity-feed>
     `;

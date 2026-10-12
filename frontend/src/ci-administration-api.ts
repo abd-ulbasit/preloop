@@ -83,8 +83,25 @@ async function request<T>(
     );
   return response.status === 204 ? (undefined as T) : response.json();
 }
+/**
+ * The console shell reads the capabilities on every page and the CI
+ * identities page reads them as it mounts, in the same moment. These reads
+ * are `no-store`, which `fetchWithAuth` never coalesces, so the two callers
+ * share one request here. Nothing is kept once it settles.
+ */
+let capabilitiesInFlight: Promise<CiCapabilities> | null = null;
+function readCapabilities(): Promise<CiCapabilities> {
+  if (!capabilitiesInFlight) {
+    capabilitiesInFlight = request<CiCapabilities>('/capabilities').finally(
+      () => {
+        capabilitiesInFlight = null;
+      }
+    );
+  }
+  return capabilitiesInFlight;
+}
 export const ciAdministration = {
-  capabilities: (): Promise<CiCapabilities> => request('/capabilities'),
+  capabilities: (): Promise<CiCapabilities> => readCapabilities(),
   list: (): Promise<CiIdentity[]> => request(''),
   get: (principal: string): Promise<CiIdentity> => request(`/${id(principal)}`),
   preview: (grant: CiGrant): Promise<CiPreview> =>

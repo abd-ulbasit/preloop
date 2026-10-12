@@ -105,6 +105,10 @@ def get_features(db: Session = Depends(get_db_session)) -> Dict[str, Any]:
 
     result["features"]["ticket_readiness"] = settings.ticket_readiness_enabled
     result["features"]["bitbucket_dc"] = bitbucket_dc_enabled()
+    # Live desktop views (DESKTOP_VIEWS_ENABLED). The console asks for online
+    # desktops on session and agent pages only when this is on; asking a
+    # server with it off answered 404 on every visit.
+    result["features"]["desktop_views"] = settings.desktop_views_enabled
 
     # Account capabilities (multiple accounts per person, parent and
     # subaccount trees, tag based access rules) are provided by an extension
