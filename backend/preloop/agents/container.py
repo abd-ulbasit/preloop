@@ -39,6 +39,7 @@ from .kubernetes_placement import (
     client_tolerations as agent_client_tolerations,
     node_selector as agent_node_selector,
     runtime_class_name as agent_runtime_class_name,
+    priority_class_name as agent_priority_class_name,
 )
 from preloop.services.mcp_config_service import MCPConfigService
 from preloop.agents.verification import build_verification_gate_shell
@@ -1365,16 +1366,24 @@ class ContainerAgentExecutor(AgentExecutor):
             raise RuntimeError("kubernetes_asyncio is not installed")
 
         if not self._k8s_initialized:
-            # Load in-cluster config when running inside K8s, otherwise load from kubeconfig
-            try:
-                config.load_incluster_config()
-                self.logger.info("Loaded in-cluster Kubernetes config")
-            except config.ConfigException:
-                await config.load_kube_config(config_file=os.environ.get("KUBECONFIG"))
-                self.logger.info("Loaded Kubernetes config from kubeconfig")
-
-            # Create ApiClient for proper resource management
-            self._k8s_api_client = client.ApiClient()
+            # Keep execution credentials private to this executor. Other application
+            # clients must continue to use the control-plane cluster.
+            configuration = client.Configuration()
+            execution_kubeconfig = os.getenv("PRELOOP_EXECUTION_KUBECONFIG")
+            if execution_kubeconfig:
+                await config.load_kube_config(
+                    config_file=execution_kubeconfig,
+                    client_configuration=configuration,
+                )
+            else:
+                try:
+                    config.load_incluster_config(client_configuration=configuration)
+                except config.ConfigException:
+                    await config.load_kube_config(
+                        config_file=os.environ.get("KUBECONFIG"),
+                        client_configuration=configuration,
+                    )
+            self._k8s_api_client = client.ApiClient(configuration=configuration)
             self._k8s_batch_api = client.BatchV1Api(self._k8s_api_client)
             self._k8s_core_api = client.CoreV1Api(self._k8s_api_client)
             self._k8s_initialized = True
@@ -1737,6 +1746,9 @@ class ContainerAgentExecutor(AgentExecutor):
             mcp_env = MCPConfigService.generate_mcp_environment_vars(
                 allowed_mcp_servers, allowed_mcp_tools
             )
+            mcp_env["PRELOOP_MCP_URL"] = env.get("PRELOOP_MCP_URL") or os.getenv(
+                "PRELOOP_MCP_URL_K8S", mcp_env["PRELOOP_MCP_URL"]
+            )
             env.update(mcp_env)
 
             if account_api_token:
@@ -1746,8 +1758,17 @@ class ContainerAgentExecutor(AgentExecutor):
                 allowed_mcp_servers,
                 allowed_mcp_tools,
                 account_api_token=account_api_token,
+                preloop_url=(
+                    os.getenv("PRELOOP_EXECUTION_API_URL", "").rstrip("/")
+                    or env["PRELOOP_MCP_URL"].removesuffix("/mcp/v1")
+                ),
             )
             env.setdefault("MCP_CONFIG_JSON", json.dumps(mcp_config))
+
+        if os.getenv("PRELOOP_EXECUTION_API_URL"):
+            env["PRELOOP_MCP_URL"] = (
+                os.environ["PRELOOP_EXECUTION_API_URL"].rstrip("/") + "/mcp/v1"
+            )
 
         # Convert env dict to list of V1EnvVar. Git credentials are merged in
         # here rather than baked into the agent script, so the token stays out
@@ -1910,6 +1931,7 @@ class ContainerAgentExecutor(AgentExecutor):
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",
+                priority_class_name=agent_priority_class_name() or None,
                 # Sandbox runtime and node placement for the agent pod.
                 # ``None`` omits the key, which is what keeps a stock
                 # install on the node default.

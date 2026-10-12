@@ -1093,12 +1093,24 @@ export class CostView extends AuthedElement {
       }
       void this.loadContext(generation);
       void this.loadAccountingFindings(generation);
+      // The comparison range rides along in the same request (#1583): one
+      // summary call for the headline figures and their deltas.
+      const previousPeriod = this.digestPeriod
+        ? null
+        : this.getPreviousDateParams(range);
       const summary = await getCostAnalyticsSummary({
         ...period,
         includeBreakdown: false,
+        ...(previousPeriod
+          ? {
+              compareStartDate: previousPeriod.startDate,
+              compareEndDate: previousPeriod.endDate,
+            }
+          : {}),
       });
       if (generation !== this.loadGeneration) return;
       this.summary = summary;
+      this.previousRangeSummary = summary.previous ?? null;
       this.currentPeriod = this.digestPeriod
         ? { ...period }
         : {
@@ -1107,8 +1119,6 @@ export class CostView extends AuthedElement {
           };
       this.loadedAt = new Date().toISOString();
       this.loading = false;
-      if (!this.digestPeriod)
-        void this.loadPreviousRangeSummary(generation, range);
       void this.loadTab(this.activeTab, generation);
       if (summary.imported_usage?.event_count)
         void this.loadTab('imported', generation);
@@ -1201,22 +1211,6 @@ export class CostView extends AuthedElement {
       if (generation === this.loadGeneration) this.teamNames = names;
     } catch {
       // Labels only: a team row falls back to "Team".
-    }
-  }
-
-  private async loadPreviousRangeSummary(
-    generation: number,
-    range: DateRangePreset
-  ): Promise<void> {
-    try {
-      const previous = await getCostAnalyticsSummary({
-        ...this.getPreviousDateParams(range),
-        includeBreakdown: false,
-      });
-      if (generation === this.loadGeneration)
-        this.previousRangeSummary = previous;
-    } catch {
-      if (generation === this.loadGeneration) this.previousRangeSummary = null;
     }
   }
 

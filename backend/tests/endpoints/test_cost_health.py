@@ -5,9 +5,22 @@ state, streaming-usage regression detection, unpriced-cost detection,
 account scoping of the counters, query-param validation, and auth.
 """
 
+import pytest
+
+from preloop.api.endpoints import cost as cost_endpoints
 from preloop.models.crud import crud_account, crud_api_usage, crud_audit_log, crud_user
 
 COST_HEALTH = "/api/v1/cost/health"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_health_cache():
+    """Each test sees the checks it set up, not a cached answer."""
+    cost_endpoints._HEALTH_CACHE.clear()
+    cost_endpoints._HEALTH_GENERATION.clear()
+    yield
+    cost_endpoints._HEALTH_CACHE.clear()
+    cost_endpoints._HEALTH_GENERATION.clear()
 
 
 def _log_usage(db, *, account_id, user_id=None, **overrides):
@@ -221,6 +234,7 @@ def test_cost_health_flags_raw_vs_normalized_token_mismatch(
     row.cache_read_tokens = 8
     row.reasoning_tokens = 2
     db_session.commit()
+    cost_endpoints._HEALTH_CACHE.clear()  # the repair, not the cache, is under test
     body = client.get(COST_HEALTH).json()
     assert _checks_by_key(body)["token_details_normalized"]["status"] == "pass"
     assert body["status"] == "pass"
@@ -303,3 +317,75 @@ def test_cost_health_requires_authentication(app, db_session):
     with TestClient(app) as anon_client:
         response = anon_client.get(COST_HEALTH)
     assert response.status_code in (401, 403)
+
+
+def test_cost_health_is_cached_per_account_and_window(
+    client, db_session, test_user, monkeypatch
+):
+    """The self-check runs once a minute per (account, window) (#1583)."""
+    calls = []
+    real = cost_endpoints.run_accounting_checks
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs["window_hours"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cost_endpoints, "run_accounting_checks", counting)
+    first = client.get(COST_HEALTH)
+    # New traffic inside the TTL does not re-run the check.
+    _log_usage(db_session, account_id=test_user.account_id, user_id=test_user.id)
+    second = client.get(COST_HEALTH)
+    assert first.json() == second.json()
+    assert calls == [24]
+    # Another window is its own entry.
+    assert client.get(f"{COST_HEALTH}?hours=48").json()["window_hours"] == 48
+    assert calls == [24, 48]
+    # After the TTL the check runs again and sees the new row.
+    monkeypatch.setattr(cost_endpoints, "HEALTH_CACHE_TTL_SECONDS", 0.0)
+    cost_endpoints._HEALTH_CACHE.clear()
+    third = client.get(COST_HEALTH)
+    assert calls == [24, 48, 24]
+    assert third.json()["status"] != "skip"
+
+
+def test_reprice_drops_the_cached_health(client, db_session, test_user):
+    """POST /cost/reprice forgets the account's cached self-check, only it."""
+    from datetime import datetime, timedelta, timezone
+
+    first = client.get(COST_HEALTH).json()
+    assert first["status"] == "skip"
+    other_key = ("someone-else", 24)
+    cost_endpoints._HEALTH_CACHE[other_key] = (float("inf"), None)
+    now = datetime.now(timezone.utc)
+    window = {
+        "start_date": (now - timedelta(days=1)).isoformat(),
+        "end_date": now.isoformat(),
+    }
+
+    dry = client.post("/api/v1/cost/reprice", json={**window, "dry_run": True})
+    assert dry.status_code == 200
+    assert (str(test_user.account_id), 24) in cost_endpoints._HEALTH_CACHE
+
+    real = client.post("/api/v1/cost/reprice", json=window)
+    assert real.status_code == 200
+    assert (str(test_user.account_id), 24) not in cost_endpoints._HEALTH_CACHE
+    assert other_key in cost_endpoints._HEALTH_CACHE
+
+
+def test_check_racing_a_reprice_is_not_cached(
+    client, db_session, test_user, monkeypatch
+):
+    """A check computed while a reprice ran is served, not kept (review)."""
+    real = cost_endpoints.run_accounting_checks
+
+    def reprice_meanwhile(*args, **kwargs):
+        result = real(*args, **kwargs)
+        cost_endpoints._forget_cost_health(str(test_user.account_id))
+        return result
+
+    monkeypatch.setattr(cost_endpoints, "run_accounting_checks", reprice_meanwhile)
+    assert client.get(COST_HEALTH).status_code == 200
+    assert (str(test_user.account_id), 24) not in cost_endpoints._HEALTH_CACHE
+    monkeypatch.setattr(cost_endpoints, "run_accounting_checks", real)
+    assert client.get(COST_HEALTH).status_code == 200
+    assert (str(test_user.account_id), 24) in cost_endpoints._HEALTH_CACHE

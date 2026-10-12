@@ -1783,6 +1783,8 @@ export interface CostAnalyticsSummaryResponse extends AccountGatewayUsageSummary
   subscription_usage?: SubscriptionUsageSummary | null;
   // Absent on older servers; the console treats missing as "none named".
   unpriced_models?: UnpricedModelUsage[];
+  // Totals of the comparison window, when one was asked for.
+  previous?: CostAnalyticsSummaryResponse | null;
 }
 
 export interface ProviderBillingConnection {

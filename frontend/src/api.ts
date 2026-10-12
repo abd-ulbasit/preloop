@@ -1523,11 +1523,18 @@ export async function getCostAnalyticsSummary(
   params: GatewayUsageSummaryParams & {
     breakdowns?: CostUsageBreakdown[];
     sessionPage?: SessionPage;
+    /** A comparison window; its totals come back as `previous`. */
+    compareStartDate?: string;
+    compareEndDate?: string;
   } = {}
 ): Promise<CostAnalyticsSummaryResponse> {
   const query = new URLSearchParams(buildGatewayUsageQuery(params));
   params.breakdowns?.forEach((name) => query.append('breakdown', name));
   appendSessionPage(query, params.sessionPage);
+  if (params.compareStartDate && params.compareEndDate) {
+    query.set('compare_start_date', params.compareStartDate);
+    query.set('compare_end_date', params.compareEndDate);
+  }
   const response = await fetchWithAuth(`/api/v1/cost/summary?${query}`);
   if (!response.ok) {
     const refused = await historyUnavailableError(response);

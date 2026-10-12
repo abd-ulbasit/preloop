@@ -58,6 +58,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "preloop.executionEnv" . | nindent 12 }}
             - name: PRELOOP_URL
               value: {{ .Values.environment.preloopUrl | quote }}
             - name: HOST
@@ -95,7 +96,7 @@ spec:
             - name: AGENT_MEMORY_REQUEST
               value: {{ .Values.agentExecution.limitRange.container.defaultRequestMemory | quote }}
             - name: AGENT_EXECUTION_NAMESPACE
-              value: {{ .Values.agentExecution.namespace.create | ternary .Values.agentExecution.namespace.name .Release.Namespace | quote }}
+              value: {{ include "preloop.executionNamespace" . | quote }}
             {{- if .Values.agentExecution.runtimeClassName }}
             - name: AGENT_RUNTIME_CLASS_NAME
               value: {{ .Values.agentExecution.runtimeClassName | quote }}
@@ -300,6 +301,11 @@ spec:
               containerPort: 8000
               protocol: TCP
           volumeMounts:
+            {{- if .Values.agentExecution.kubeconfigSecret }}
+            - name: execution-kubeconfig
+              mountPath: /var/run/preloop/execution
+              readOnly: true
+            {{- end }}
             {{- if .Values.profiling.enabled }}
             - name: profiling-storage
               mountPath: /tmp/profiling
@@ -338,6 +344,11 @@ spec:
             successThreshold: 1
             failureThreshold: 6
       volumes:
+        {{- if .Values.agentExecution.kubeconfigSecret }}
+        - name: execution-kubeconfig
+          secret:
+            secretName: {{ .Values.agentExecution.kubeconfigSecret }}
+        {{- end }}
       {{- if .Values.profiling.enabled }}
         - name: profiling-storage
           persistentVolumeClaim:

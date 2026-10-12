@@ -1,3 +1,4 @@
+{{- if not .Values.agentExecution.kubeconfigSecret -}}
 {{- if .Values.agentExecution.networkPolicy.enabled -}}
 {{- $np := .Values.agentExecution.networkPolicy -}}
 {{- $agentNamespace := .Values.agentExecution.namespace.create | ternary .Values.agentExecution.namespace.name .Release.Namespace -}}
@@ -234,4 +235,6 @@ spec:
       max:
         cpu: {{ .Values.agentExecution.limitRange.pod.maxCpu | quote }}
         memory: {{ .Values.agentExecution.limitRange.pod.maxMemory | quote }}
+{{- end }}
+
 {{- end }}

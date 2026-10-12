@@ -51,6 +51,10 @@ protected willUpdate() {
 }
 
 render() {
+  const emptyState = {
+    heading: 'No API keys yet',
+    action: { label: 'Add an API key', onClick },
+  };
   return html`
     ${renderDataTableToolbar({ table: this.table, selection: this.selection,
       bulkActions: this.bulkActions, onBulkAction: (id) => this.bulk(id),
@@ -58,7 +62,7 @@ render() {
     <data-table .table=${this.table} .rows=${this.table.rows}
       .selection=${this.selection} .rowActions=${(k) => this.actionsFor(k)}
       .loading=${this.loading} .error=${this.error} @retry=${this.load}
-      .empty=${{ heading: 'No API keys yet', action: { label: 'Add an API key', onClick } }}
+      .empty=${emptyState}
       label="API keys" noun="keys" activatable @row-activate=${this.open}>
     </data-table>`;
 }
