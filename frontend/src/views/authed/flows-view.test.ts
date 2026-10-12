@@ -1,5 +1,6 @@
 import { html, fixture, expect, nextFrame, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
+import { Router } from '../../router';
 
 import '../../components/view-header.ts';
 import './flows-view';
@@ -982,6 +983,23 @@ describe('FlowsView', () => {
       expect(flowSort.closest('th')?.getAttribute('aria-sort')).to.equal(
         'descending'
       );
+    });
+
+    it('opens a flow when Enter is pressed on its focused row', async () => {
+      const element = await renderFlows();
+      const go = sinon.stub(Router, 'go');
+      try {
+        const row =
+          element.shadowRoot!.querySelector<HTMLElement>('tbody tr.flow-row')!;
+        row.focus();
+        row.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+        );
+        expect(go.calledOnce, 'Enter navigated').to.equal(true);
+        expect(String(go.firstCall.args[0])).to.match(/^\/console\/flows\//);
+      } finally {
+        go.restore();
+      }
     });
 
     it('gives every row a real link to its flow', async () => {

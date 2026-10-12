@@ -637,12 +637,15 @@ export class AuditView extends AuthedElement {
       min_cost: this._minCost,
       max_cost: this._maxCost,
     });
+    // Every filter change starts again at page 1, so the page in the address
+    // bar is written with the filters: a reload must not restore page 3 of a
+    // different query.
+    this._syncPageLocation();
   }
 
   private _applyFilters() {
     this._page = 0;
     this._syncFilterLocation();
-    this._syncPageLocation();
     this._cancelToolSearch();
     this._loadTimeline();
   }
@@ -685,8 +688,8 @@ export class AuditView extends AuthedElement {
     this._endDate = '';
     this._minCost = '';
     this._maxCost = '';
-    this._syncFilterLocation();
     this._page = 0;
+    this._syncFilterLocation();
     this._loadTimeline();
   }
 
