@@ -3414,14 +3414,17 @@ export async function listProjectsForOrg(
 
 export async function getDuplicateIssues(
   status: 'opened' | 'closed' | 'all' = 'opened'
-) {
+): Promise<DuplicatePair[]> {
+  // Exact path, no trailing slash: "/issue-duplicates/" answers with a
+  // redirect that a TLS-terminating proxy turns into a blocked http:// URL.
   const response = await fetchWithAuth(
-    `/api/v1/issue-duplicates/?status=${status}`
+    `/api/v1/issue-duplicates?status=${status}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch duplicate issues');
   }
-  return response.json();
+  const data = await response.json();
+  return Array.isArray(data?.duplicates) ? data.duplicates : [];
 }
 
 export async function getIssueCount(): Promise<{ total_issues: number }> {
@@ -5671,6 +5674,27 @@ export async function getIssueCompliance(
     throw new Error('Failed to fetch issue compliance');
   }
   return response.json();
+}
+
+/**
+ * Stored compliance results for a page of issues in one request. Never
+ * triggers model calls; unscored issues are simply absent from the map.
+ */
+export async function getIssueComplianceBatch(
+  issueIds: string[],
+  promptName: string
+): Promise<Record<string, IssueComplianceResult>> {
+  if (issueIds.length === 0) return {};
+  const response = await fetchWithAuth('/api/v1/issue_compliance/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issue_ids: issueIds, prompt_name: promptName }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch issue compliance');
+  }
+  const data = await response.json();
+  return data?.results ?? {};
 }
 
 export async function getComplianceImprovementSuggestion(

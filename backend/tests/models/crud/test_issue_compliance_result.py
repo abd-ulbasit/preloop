@@ -168,3 +168,41 @@ class TestIssueComplianceResultCRUD:
         assert updated.compliance_factor == 0.85
         assert updated.reason == "Good test coverage"
         assert updated.prompt_id == "test_coverage"  # Unchanged
+
+
+def test_get_for_issues_and_prompt_is_one_scoped_query(
+    db_session: Session, create_issue, create_tracker
+):
+    """Batch lookup returns only stored rows of the caller's account."""
+    tracker = create_tracker()
+    scored = create_issue(tracker=tracker)
+    unscored = create_issue(tracker=tracker)
+    other_tracker = create_tracker()
+    foreign = create_issue(tracker=other_tracker)
+    for issue, prompt in ((scored, "dor"), (scored, "other"), (foreign, "dor")):
+        db_session.add(
+            IssueComplianceResult(
+                issue_id=issue.id,
+                prompt_id=prompt,
+                name="DoR",
+                compliance_factor=0.5,
+                reason="r",
+                suggestion="s",
+            )
+        )
+    db_session.commit()
+
+    rows = issue_compliance_result.get_for_issues_and_prompt(
+        db_session,
+        issue_ids=[str(scored.id), str(unscored.id), str(foreign.id)],
+        prompt_id="dor",
+        account_id=tracker.account_id,
+    )
+
+    assert [(r.issue_id, r.prompt_id) for r in rows] == [(scored.id, "dor")]
+    assert (
+        issue_compliance_result.get_for_issues_and_prompt(
+            db_session, issue_ids=[], prompt_id="dor", account_id=tracker.account_id
+        )
+        == []
+    )

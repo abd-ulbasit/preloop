@@ -61,6 +61,19 @@ function issueStatusLabel(status: string | null | undefined): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }
 
+/** Parallel verdict checks per page load. */
+const VERDICT_CONCURRENCY = 2;
+
+/** A failure of the verdict service as a whole, not of one pair. */
+function isServiceFailure(error: unknown): boolean {
+  if (!(error instanceof VerdictError)) return false;
+  return (
+    error.code === 'no_default_ai_model' ||
+    error.status === 404 ||
+    error.status >= 500
+  );
+}
+
 @customElement('issues-view')
 export class IssuesView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
@@ -378,18 +391,44 @@ export class IssuesView extends LitElement {
       this._setVerdict(this._pairKey(pair), { state: 'checking' });
     }
 
-    await Promise.all(pending.map((pair) => this._fetchVerdictForPair(pair)));
+    // A small pool instead of one request per row, and a breaker: once the
+    // verdict service itself fails (5xx, 404, no model) the remaining rows
+    // are marked without calling it again. Each row keeps its Review action.
+    const queue = [...pending];
+    let tripped: VerdictState | null = null;
+    const worker = async () => {
+      for (let pair = queue.shift(); pair; pair = queue.shift()) {
+        if (tripped) {
+          this._setVerdict(this._pairKey(pair), tripped);
+          continue;
+        }
+        const failure = await this._fetchVerdictForPair(pair);
+        if (failure && !tripped) tripped = failure;
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(VERDICT_CONCURRENCY, queue.length) },
+        worker
+      )
+    );
   }
 
-  private async _fetchVerdictForPair(pair: DuplicatePair) {
+  /** Fetch one verdict; returns the state to apply to the rest on a service failure. */
+  private async _fetchVerdictForPair(
+    pair: DuplicatePair
+  ): Promise<VerdictState | null> {
     const pairKey = this._pairKey(pair);
     this._setVerdict(pairKey, { state: 'checking' });
     try {
       const verdict = await checkAIVerdict(pair.issue1.id, pair.issue2.id);
       this._setVerdict(pairKey, { state: 'done', verdict });
+      return null;
     } catch (error) {
-      console.error(`Failed to fetch AI verdict for ${pairKey}:`, error);
-      this._setVerdict(pairKey, this._stateFromError(error));
+      console.warn(`AI verdict unavailable for ${pairKey}:`, error);
+      const next = this._stateFromError(error);
+      this._setVerdict(pairKey, next);
+      return isServiceFailure(error) ? next : null;
     }
   }
 

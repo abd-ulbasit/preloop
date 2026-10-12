@@ -18,6 +18,19 @@ from preloop.models.models import AIModel, Issue, Organization, Project, User
 from preloop.services.secret_service import ResolvedModelCredentials
 
 
+@pytest.fixture(autouse=True)
+def _plain_model_credentials(request, mocker):
+    """Resolve mock models to their plain api_key (no secret backend)."""
+    if "via_vault" in request.node.name:
+        return
+    mocker.patch(
+        "preloop.api.endpoints.issue_compliance.resolve_model_call_credentials",
+        side_effect=lambda model, db=None: (
+            {"api_key": model.api_key} if model.api_key else {}
+        ),
+    )
+
+
 @pytest.fixture
 def mock_user() -> MagicMock:
     """Provide a mock User/Account for tests."""
@@ -207,7 +220,7 @@ class TestCalculateIssueCompliance:
         assert exc_info.value.status_code == 404
         assert "Issue not found" in str(exc_info.value.detail)
 
-    def test_no_default_ai_model_raises_500(
+    def test_no_default_ai_model_raises_422(
         self, mock_user, mock_settings, mock_issue, mock_project, mocker
     ):
         """Raises 500 when no default AI model is configured."""
@@ -244,10 +257,10 @@ class TestCalculateIssueCompliance:
                 settings=mock_settings,
             )
 
-        assert exc_info.value.status_code == 500
-        assert "No default active AI model" in str(exc_info.value.detail)
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "no_default_ai_model"
 
-    def test_no_api_key_raises_500(
+    def test_no_api_key_raises_422(
         self, mock_user, mock_settings, mock_issue, mock_project, mock_ai_model, mocker
     ):
         """Raises 500 when OpenAI API key is not configured."""
@@ -287,8 +300,8 @@ class TestCalculateIssueCompliance:
                 settings=mock_settings,
             )
 
-        assert exc_info.value.status_code == 500
-        assert "OpenAI API key" in str(exc_info.value.detail)
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "ai_model_key_missing"
 
     def test_success_creates_new_result(
         self, mock_user, mock_settings, mock_issue, mock_project, mock_ai_model, mocker
@@ -354,7 +367,7 @@ class TestCalculateIssueCompliance:
         assert new_result.short_name == "DoR"
         mock_crud.create.assert_called_once()
 
-    def test_openai_api_error_raises_500(
+    def test_openai_api_error_raises_502(
         self, mock_user, mock_settings, mock_issue, mock_project, mock_ai_model, mocker
     ):
         """Raises 500 when OpenAI API call fails."""
@@ -400,7 +413,7 @@ class TestCalculateIssueCompliance:
                 settings=mock_settings,
             )
 
-        assert exc_info.value.status_code == 500
+        assert exc_info.value.status_code == 502
         assert "AI model API error" in str(exc_info.value.detail)
 
     def test_invalid_json_response_raises_500(
@@ -1381,3 +1394,158 @@ class TestUpdateIssueContent:
         assert call_kwargs["issue_id"] == "issue-789"
         assert call_kwargs["issue_update"].title == "Updated Title"
         assert call_kwargs["issue_update"].description == "Updated desc"
+
+
+class TestUpdateIssueContentOwnership:
+    """The destructive deletes must not run for another account's issue."""
+
+    @pytest.mark.asyncio
+    async def test_foreign_issue_is_404_and_deletes_nothing(self, mock_user, mocker):
+        from preloop.schemas.issue import IssueUpdate
+
+        mocker.patch(
+            "preloop.api.endpoints.issue_compliance.crud_issue"
+        ).get.return_value = None
+        mock_update_issue = mocker.patch(
+            "preloop.api.endpoints.issue_compliance.update_issue"
+        )
+        mock_crud_compliance = mocker.patch(
+            "preloop.api.endpoints.issue_compliance.crud_issue_compliance_result"
+        )
+        mock_crud_duplicate = mocker.patch(
+            "preloop.api.endpoints.issue_compliance.crud_issue_duplicate"
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await update_issue_content(
+                issue_id="someone-elses",
+                issue_update=IssueUpdate(title="x", description="y"),
+                db=MagicMock(),
+                current_user=mock_user,
+            )
+
+        assert exc_info.value.status_code == 404
+        mock_crud_compliance.delete_by_issue_id.assert_not_called()
+        mock_crud_duplicate.remove_by_issue_id.assert_not_called()
+        mock_update_issue.assert_not_called()
+
+
+class TestIssueComplianceBatch:
+    """POST /issue_compliance/batch replaces the per-row N+1."""
+
+    PROMPTS = {
+        "dor_compliance_v1": {
+            "name": "Definition of Ready",
+            "short_name": "DoR",
+            "evaluate": {"name": "e", "system": "s", "user": "u"},
+            "propose_improvement": {"name": "p", "system": "s", "user": "u"},
+        }
+    }
+
+    def _row(self, issue_id: str) -> MagicMock:
+        from datetime import datetime, timezone
+
+        row = MagicMock()
+        row.id = f"r-{issue_id}"
+        row.issue_id = issue_id
+        row.prompt_id = "dor_compliance_v1"
+        row.name = "Definition of Ready"
+        row.compliance_factor = 0.5
+        row.reason = "r"
+        row.suggestion = "s"
+        row.annotated_description = None
+        row.created_at = datetime.now(timezone.utc)
+        row.updated_at = datetime.now(timezone.utc)
+        return row
+
+    def test_returns_stored_rows_in_one_query_without_model_calls(
+        self, mock_user, mock_settings, mocker
+    ):
+        from preloop.api.endpoints.issue_compliance import get_issue_compliance_batch
+        from preloop.schemas.issue_compliance import IssueComplianceBatchRequest
+
+        mocker.patch(
+            "preloop.api.endpoints.issue_compliance.load_compliance_prompts_config",
+            return_value=self.PROMPTS,
+        )
+        crud = mocker.patch(
+            "preloop.api.endpoints.issue_compliance.crud_issue_compliance_result"
+        )
+        crud.get_for_issues_and_prompt.return_value = [self._row("a")]
+        ai = mocker.patch("preloop.api.endpoints.issue_compliance.crud_ai_model")
+        openai_ctor = mocker.patch(
+            "preloop.api.endpoints.issue_compliance.openai.OpenAI"
+        )
+
+        resp = get_issue_compliance_batch(
+            body=IssueComplianceBatchRequest(
+                issue_ids=["a", "b", "a"], prompt_name="dor_compliance_v1"
+            ),
+            db=MagicMock(),
+            current_user=mock_user,
+            settings=mock_settings,
+        )
+
+        assert list(resp.results) == ["a"]
+        assert resp.results["a"].short_name == "DoR"
+        crud.get_for_issues_and_prompt.assert_called_once()
+        kwargs = crud.get_for_issues_and_prompt.call_args.kwargs
+        assert kwargs["issue_ids"] == ["a", "b"]
+        assert kwargs["account_id"] == mock_user.account_id
+        ai.get_default_active_model.assert_not_called()
+        openai_ctor.assert_not_called()
+
+    def test_unknown_prompt_is_404(self, mock_user, mock_settings, mocker):
+        from preloop.api.endpoints.issue_compliance import get_issue_compliance_batch
+        from preloop.schemas.issue_compliance import IssueComplianceBatchRequest
+
+        mocker.patch(
+            "preloop.api.endpoints.issue_compliance.load_compliance_prompts_config",
+            return_value={},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            get_issue_compliance_batch(
+                body=IssueComplianceBatchRequest(issue_ids=["a"], prompt_name="nope"),
+                db=MagicMock(),
+                current_user=mock_user,
+                settings=mock_settings,
+            )
+        assert exc_info.value.status_code == 404
+
+    def test_batch_size_is_bounded(self):
+        from pydantic import ValidationError
+
+        from preloop.schemas.issue_compliance import IssueComplianceBatchRequest
+
+        with pytest.raises(ValidationError):
+            IssueComplianceBatchRequest(
+                issue_ids=[str(i) for i in range(201)], prompt_name="p"
+            )
+
+
+def test_issue_without_project_is_404_not_500(
+    mock_user, mock_settings, mock_issue, mocker
+):
+    """A dangling project used to AttributeError into a 500."""
+    mocker.patch(
+        "preloop.api.endpoints.issue_compliance.load_compliance_prompts_config",
+        return_value=TestIssueComplianceBatch.PROMPTS,
+    )
+    mocker.patch(
+        "preloop.api.endpoints.issue_compliance.crud_issue_compliance_result"
+    ).get_by_issue_id_and_prompt_id.return_value = None
+    mocker.patch(
+        "preloop.api.endpoints.issue_compliance.crud_issue"
+    ).get.return_value = mock_issue
+    mocker.patch(
+        "preloop.api.endpoints.issue_compliance.crud_project"
+    ).get.return_value = None
+    with pytest.raises(HTTPException) as exc_info:
+        _calculate_issue_compliance(
+            issue_id="issue-789",
+            prompt_name="dor_compliance_v1",
+            db=MagicMock(),
+            current_user=mock_user,
+            settings=mock_settings,
+        )
+    assert exc_info.value.status_code == 404
