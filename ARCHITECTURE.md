@@ -592,6 +592,13 @@ Devin CLI host execution uses bounded ATIF exports for completion and stores the
 CLI-created session id before subsequent remote turns. Model inference stays on
 Cognition; managed MCP and permission hooks use Preloop.
 
+Optional deployments may register `analytics_detail_policy` to reduce derived
+gateway analytics after a monthly quota is exhausted. The post-response path
+keeps token/cost accounting, audit and session activity, marks affected rows
+with `meta_data.ingest_degraded`, and omits content search, content-derived
+summaries and tool enrichment. LLM session optimization falls back to its
+deterministic analyzers. With no registered policy, OSS retains full detail.
+The policy never changes forwarded requests or governance decisions.
 ## Canonical person identities
 
 `Person` owns the chosen username, address and verification, shared name/avatar,
