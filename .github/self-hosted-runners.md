@@ -120,3 +120,17 @@ group). If neither works, the step fails with
     sudo find /home/github/runner*/_work ! -user github -print -quit
     sudo chown -R github:github /home/github/runner*/_work
     sudo find /home/github/runner*/_work ! -user github | wc -l   # expect 0
+
+## Isolated execution host tests
+
+`gce-tests-only` is the registration label for the repository-scoped isolated
+test pool. Its runners register with `--no-default-labels`, so the backend
+overflow selector cannot accidentally choose them. Only a manual dispatch of
+`fuzz.yml` with `execution_host_tests: true` selects this pool; PRs and schedules
+keep their existing hosted routing.
+
+The pool runs each assignment in a fresh restricted Kubernetes pod with a new
+workspace, a tokenless service account, and no host Docker socket, kubeconfig,
+cloud identity, or deployment credentials. A serialized controller reuses only
+the repository runner identity and starts `run.sh --once` for each pod. These
+tests yield to hosted flow executions and use a reduced fuzz worker budget.

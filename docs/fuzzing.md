@@ -21,7 +21,9 @@ substitutes for the other or proves the absence of vulnerabilities.
 ## Budgets and safety
 
 - Relevant PRs: 60 seconds of mutation per target, two workers per job.
-- Nightly and manual runs: 600 seconds per target, two workers per job.
+- Nightly and hosted manual runs: 600 seconds per target, two workers per job.
+- Manual isolated opt-in (`execution_host_tests: true`): 60 seconds per target,
+  one worker per job, with matrix jobs serialized on the isolated test pool.
 - Two matrix jobs maximum; job timeout 20 minutes, Go test timeout 15 minutes,
   and failure minimization capped at 20 seconds.
 - Inputs larger than 64 KiB are skipped. This bounds normal test cost; it does
