@@ -50,9 +50,11 @@ class TeamMemberResponse(BaseModel):
     added_at: datetime
     added_by: Optional[UUID]
 
-    # Nested user info
-    username: str
-    email: str
+    # Canonical identity; user_id remains the account membership actor.
+    person_id: Optional[UUID] = None
+    identity_status: str = "active"
+    username: Optional[str]
+    email: Optional[str]
     full_name: Optional[str]
 
     @field_serializer("id", "team_id", "user_id")

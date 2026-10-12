@@ -138,7 +138,9 @@ class AuthUserUpdate(BaseModel):
 
     model_config = {"title": "AuthUserUpdate"}
 
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, max_length=255)
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    email: Optional[EmailStr] = None
 
 
 # Capabilities an OSS runner may offer. The schema default, the profile
@@ -213,6 +215,10 @@ class AuthUserResponse(BaseModel):
             "workflow's approver_user_ids to tell whether a pending approval "
             "is waiting for this person."
         ),
+    )
+    person_id: Optional[UUID] = Field(
+        None,
+        description="Stable canonical person identity; id remains the account membership ID.",
     )
     account_id: UUID = Field(..., description="The account this user belongs to.")
     username: str

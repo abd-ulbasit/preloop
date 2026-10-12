@@ -23820,6 +23820,14 @@ components:
           description: The caller's user id. Clients compare it against an approval
             workflow's approver_user_ids to tell whether a pending approval is waiting
             for this person.
+        person_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Person Id
+          description: Stable canonical person identity; id remains the account membership
+            ID.
         account_id:
           type: string
           format: uuid
@@ -23901,8 +23909,22 @@ components:
         full_name:
           anyOf:
           - type: string
+            maxLength: 255
           - type: 'null'
           title: Full Name
+        username:
+          anyOf:
+          - type: string
+            maxLength: 50
+            minLength: 3
+          - type: 'null'
+          title: Username
+        email:
+          anyOf:
+          - type: string
+            format: email
+          - type: 'null'
+          title: Email
       type: object
       title: AuthUserUpdate
       description: User update model.

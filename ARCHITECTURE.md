@@ -700,3 +700,20 @@ Built-in detail usage is scoped to the requesting account; operator credentials
 and routing metadata are never included in the public catalog. Preset cloning
 prefers a usable account model and otherwise binds the built-in. Hosted allowance
 and Free's one-time credit continue to be enforced by the gateway at execution.
+
+### Canonical identity presentation
+
+A profile read carries `person_id` separately from `id` (the current account
+membership) and `account_id`. Names, email verification and avatars come from the
+canonical Person. Self profile and avatar edits update that Person from either
+membership; an email change follows the canonical verification/conflict contract
+and revokes every session. Tenant membership administration changes account
+access, not another person's profile or credentials.
+
+The core identity directory searches canonical fields inside one account for
+member lists. Its platform queries paginate people and expand explicit
+memberships, preserving historical event membership IDs and account attribution.
+A quarantined migration identity displays an unavailable state without exposing
+a generated membership alias or relaxing authentication. Account seat counts
+continue to count active membership rows. No presentation migration is required;
+apply the identity schema/backfill and authentication changes first.

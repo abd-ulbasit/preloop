@@ -108,6 +108,7 @@ from .discovered_agent_candidate import (
 from .discovery_observation import crud_discovery_observation
 from .embedding import CRUDEmbeddingModel, CRUDIssueEmbedding
 from .event import CRUDEvent, crud_event
+from .identity_directory import identity_directory
 from .flow import CRUDFlow  # Import CRUDFlow class
 from .flow_execution import CRUDFlowExecution
 from .flow_execution_log import CRUDFlowExecutionLog
@@ -287,6 +288,7 @@ crud_tool_access_rule = CRUDToolAccessRule()  # Instantiate CRUDToolAccessRule
 
 
 __all__ = [
+    "identity_directory",
     "CRUDPerson",
     "IdentityConflictError",
     "IdentityUnavailableError",
