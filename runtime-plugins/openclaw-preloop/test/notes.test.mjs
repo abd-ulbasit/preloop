@@ -8,7 +8,7 @@ function fixture() {
   const text =
     '<operator-notes><operator-note id="note-1">Synthetic steer.</operator-note></operator-notes>';
   const notes = new OperatorNotes(
-    "https://example.com",
+    "https://example.com/api/v1/agents/permission-check",
     "agt_synthetic",
     async (url, init) => {
       const body = JSON.parse(init.body);
@@ -151,7 +151,7 @@ test("missing identity, invalid registration and unavailable server never claim"
     async () => ({ ok: true, json: async () => ({}) }),
   ]) {
     const notes = new OperatorNotes(
-      "https://example.com",
+      "https://example.com/api/v1/agents/permission-check",
       "agt_synthetic",
       fetchImpl,
     );
@@ -162,7 +162,7 @@ test("missing identity, invalid registration and unavailable server never claim"
 test("authoritative end is posted even after registered-session cache eviction", async () => {
   const calls = [];
   const notes = new OperatorNotes(
-    "https://example.com",
+    "https://example.com/api/v1/agents/permission-check",
     "agt_synthetic",
     async (url, init) => {
       const route = url.split("/agents/")[1];
@@ -198,7 +198,7 @@ for (const heldRoute of ["session-start", "notes/pending"]) {
       entered = resolve;
     });
     const notes = new OperatorNotes(
-      "https://example.com",
+      "https://example.com/api/v1/agents/permission-check",
       "agt_synthetic",
       async (url, init) => {
         const route = url.split("/agents/")[1];
@@ -248,7 +248,7 @@ test("cache stays bounded when every registered build is active", async () => {
     filled = resolve;
   });
   const notes = new OperatorNotes(
-    "https://example.com",
+    "https://example.com/api/v1/agents/permission-check",
     "agt_synthetic",
     async (url) => {
       if (url.endsWith("/session-start")) {

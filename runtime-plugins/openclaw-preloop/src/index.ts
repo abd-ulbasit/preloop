@@ -184,15 +184,13 @@ export class PreloopOpenClawPlugin {
     const config = this.controlConfig ?? this.loadConfig();
     if (
       config.enabled === false ||
-      !config.control_ws_url ||
+      (!config.control_ws_url && !config.permission_check_url) ||
       !config.bearer_token
     )
       return undefined;
     if (!this.notes) {
-      const url = new URL(config.control_ws_url);
-      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
       this.notes = new OperatorNotes(
-        url.origin,
+        this.permissionCheckUrl(config),
         config.bearer_token,
         (this.fetchImpl ?? fetch) as NoteFetch,
       );
@@ -556,16 +554,20 @@ export class PreloopOpenClawPlugin {
   }
 
   /**
-   * Derive the REST API base URL from the Agent Control WS URL, e.g.
-   * `wss://host/api/v1/agents/control/ws` -> `https://host`.
+   * Derive the permission endpoint from the control URL, retaining its path prefix.
    */
   permissionCheckUrl(config: ControlConfig): string {
     if (config.permission_check_url) {
       return config.permission_check_url;
     }
     const wsUrl = new URL(config.control_ws_url!);
-    const httpProtocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
-    return `${httpProtocol}//${wsUrl.host}/api/v1/agents/permission-check`;
+    wsUrl.protocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
+    wsUrl.pathname = wsUrl.pathname.endsWith("/control/ws")
+      ? wsUrl.pathname.slice(0, -"control/ws".length) + "permission-check"
+      : "/api/v1/agents/permission-check";
+    wsUrl.search = "";
+    wsUrl.hash = "";
+    return wsUrl.toString();
   }
 
   /**

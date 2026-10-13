@@ -548,16 +548,20 @@ export class PreloopOpenCodePlugin {
   }
 
   /**
-   * Derive the REST API base URL from the Agent Control WS URL, e.g.
-   * `wss://host/api/v1/agents/control/ws` -> `https://host`.
+   * Derive the permission endpoint from the control URL, retaining its path prefix.
    */
   permissionCheckUrl(config: ControlConfig): string {
     if (config.permission_check_url) {
       return config.permission_check_url;
     }
     const wsUrl = new URL(config.control_ws_url!);
-    const httpProtocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
-    return `${httpProtocol}//${wsUrl.host}/api/v1/agents/permission-check`;
+    wsUrl.protocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
+    wsUrl.pathname = wsUrl.pathname.endsWith("/control/ws")
+      ? wsUrl.pathname.slice(0, -"control/ws".length) + "permission-check"
+      : "/api/v1/agents/permission-check";
+    wsUrl.search = "";
+    wsUrl.hash = "";
+    return wsUrl.toString();
   }
 
   /**
@@ -1026,10 +1030,12 @@ export class PreloopOpenCodePlugin {
     body: Record<string, unknown>,
   ): Promise<unknown> {
     const config = this.controlConfig ?? this.loadConfig();
-    if (!config.bearer_token || !config.control_ws_url)
+    if (
+      !config.bearer_token ||
+      (!config.control_ws_url && !config.permission_check_url)
+    )
       throw new Error("missing note lifecycle credential");
-    const url = new URL(this.permissionCheckUrl(config));
-    url.pathname = `/api/v1/agents/${path}`;
+    const url = new URL(path, this.permissionCheckUrl(config));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {

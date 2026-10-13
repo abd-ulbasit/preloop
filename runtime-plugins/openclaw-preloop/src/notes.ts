@@ -44,7 +44,7 @@ export class OperatorNotes {
   private sessions = new Map<string, Session>();
   private calls = new Map<string, Promise<unknown>>();
   constructor(
-    private readonly base: string,
+    private readonly permissionCheckUrl: string,
     private readonly token: string,
     private readonly fetchImpl: NoteFetch,
   ) {}
@@ -65,7 +65,7 @@ export class OperatorNotes {
     body: unknown,
   ): Promise<Record<string, unknown>> {
     const response = await this.fetchImpl(
-      `${this.base}/api/v1/agents/${path}`,
+      new URL(path, this.permissionCheckUrl).toString(),
       {
         method: "POST",
         headers: {
