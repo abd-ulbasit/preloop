@@ -462,11 +462,7 @@ export class AddAIModelModal extends LitElement {
     this._azureClientId = '';
   }
 
-  /**
-   * Mirror the assembled AWS credential blob into `api_key` so submit,
-   * gateway gating, and extra-model creation all keep working unchanged:
-   * for bedrock the stored secret IS this JSON payload.
-   */
+  /** Invalidate in-flight discovery and clear state derived from its listing. */
   private _clearBedrockDiscovery() {
     this._bedrockDiscoveryRevision += 1;
     this._modelSuggestions = [];
@@ -478,6 +474,11 @@ export class AddAIModelModal extends LitElement {
     this._isOtherModel = false;
   }
 
+  /**
+   * Mirror the assembled AWS credential blob into `api_key` so submit,
+   * gateway gating, and extra-model creation all keep working unchanged:
+   * for bedrock the stored secret IS this JSON payload.
+   */
   private _syncBedrockApiKey() {
     if (!this._isBedrock) return;
     this._clearBedrockDiscovery();

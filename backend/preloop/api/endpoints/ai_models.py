@@ -1295,8 +1295,8 @@ def _aws_auth_from_request(
 ) -> Optional[dict]:
     """Collect AWS credential fields into a service-layer mapping, or None.
 
-    Only present fields are forwarded, so boto3's default credential chain
-    stays in play for the bedrock provider when the user supplied nothing.
+    Only present fields are forwarded. A blank region is absent, so editing
+    with stored credentials preserves the saved region until a value is supplied.
     """
     if request_in is None:
         return None
@@ -1311,6 +1311,12 @@ def _aws_auth_from_request(
         )
         if getattr(request_in, key) is not None
     }
+    region = auth.get("aws_region_name")
+    if isinstance(region, str):
+        if region.strip():
+            auth["aws_region_name"] = region.strip()
+        else:
+            auth.pop("aws_region_name")
     return auth or None
 
 

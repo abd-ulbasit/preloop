@@ -1354,8 +1354,10 @@ async def test_fetch_provider_models_exposes_safe_discovery_warnings(
     assert result.warnings == ["bedrock_inference_profiles_unavailable"]
 
 
+@pytest.mark.parametrize("typed_region", ["us-west-2", " us-west-2 ", "", " \t "])
 def test_stored_bedrock_listing_region_override_keeps_credentials(
     mocker: MockerFixture,
+    typed_region: str,
 ) -> None:
     import json
     from types import SimpleNamespace
@@ -1374,7 +1376,7 @@ def test_stored_bedrock_listing_region_override_keeps_credentials(
         return_value=json.dumps({"aws_bearer_token_bedrock": "synthetic-key"}),
     )
     request_in = AvailableModelsRequest(
-        ai_model_id=uuid.uuid4(), aws_region_name="us-west-2"
+        ai_model_id=uuid.uuid4(), aws_region_name=typed_region
     )
     _, _, aws_auth, _, _ = ai_models._resolve_listing_inputs(
         provider="bedrock",
@@ -1384,7 +1386,7 @@ def test_stored_bedrock_listing_region_override_keeps_credentials(
     )
     assert aws_auth == {
         "aws_bearer_token_bedrock": "synthetic-key",
-        "aws_region_name": "us-west-2",
+        "aws_region_name": typed_region.strip() or "us-east-1",
     }
 
 
