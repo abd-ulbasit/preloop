@@ -868,6 +868,62 @@ describe('AuditView', () => {
     document.body.removeChild(element);
   });
 
+  describe('outcome_match from a link', () => {
+    it('reads, forwards, keeps and clears "any of these outcomes"', async () => {
+      const before = window.location.pathname + window.location.search;
+      window.history.replaceState(
+        {},
+        '',
+        '/console/audit?outcome=failed&outcome=deny&outcome_match=any'
+      );
+      const timelineUrls = () =>
+        fetchStub
+          .getCalls()
+          .map((call) => String(call.args[0]))
+          .filter((url) => url.startsWith('/api/v1/audit-logs/grouped'));
+      const element = document.createElement('audit-view') as AuditView;
+      try {
+        document.body.appendChild(element);
+        await waitUntil(() => !(element as any)._loading, 'did not load');
+        await element.updateComplete;
+
+        const first = new URL(timelineUrls().at(-1)!, 'http://x');
+        expect(first.searchParams.getAll('outcome')).to.deep.equal([
+          'failed',
+          'deny',
+        ]);
+        expect(first.searchParams.get('outcome_match')).to.equal('any');
+        const select = element.shadowRoot!.querySelector(
+          'sl-select[label="Outcome"]'
+        );
+        expect(select?.getAttribute('help-text')).to.equal(
+          'Rows with any of these'
+        );
+
+        // A filter change keeps it in the address.
+        (element as any)._syncFilterLocation();
+        expect(
+          new URLSearchParams(window.location.search).get('outcome_match')
+        ).to.equal('any');
+
+        // Clearing the filters drops it, from the address and the request.
+        const calls = timelineUrls().length;
+        (element as any)._clearFilters();
+        await waitUntil(
+          () => timelineUrls().length > calls,
+          'clearing did not reload'
+        );
+        expect(
+          new URLSearchParams(window.location.search).has('outcome_match')
+        ).to.equal(false);
+        expect(timelineUrls().at(-1)).to.not.contain('outcome_match');
+      } finally {
+        element.remove();
+        window.history.replaceState({}, '', before);
+      }
+    });
+  });
+
   describe('the ?event= deep link', () => {
     let restoreUrl: () => void;
 

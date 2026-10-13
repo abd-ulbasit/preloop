@@ -24,6 +24,14 @@ import {
   readStoredUsageRange,
 } from '../../components/usage-card';
 import '../../components/view-header.ts';
+import {
+  EXCEPTION_OUTCOMES,
+  exceptionEventHref,
+  exceptionReasonLabel,
+  exceptionReasonVariant,
+  exceptionRows,
+  exceptionsAuditHref,
+} from '../../utils/audit-exceptions';
 import '../../components/relative-time-label.ts';
 import {
   AuthedElement,
@@ -372,6 +380,8 @@ export class DashboardView extends AuthedElement {
   @state() private budgetAgents: ManagedAgentSummary[] = [];
   @state() private gatewayInteractions: GatewayUsageSearchResultItem[] = [];
   @state() private auditGroups: AuditGroup[] = [];
+  /** Failures and denials in the range, as the server counts them. */
+  @state() private auditExceptionsTotal = 0;
   @state() private trackers: Tracker[] = [];
   @state() private totalIssues = 0;
   @state() private mcpServers: MCPServer[] = [];
@@ -1339,6 +1349,48 @@ export class DashboardView extends AuthedElement {
         overflow-wrap: anywhere;
       }
 
+      .exceptions-card .card-title {
+        display: inline-flex;
+        align-items: baseline;
+        gap: var(--sl-spacing-x-small);
+      }
+      .exceptions-count {
+        color: var(--sl-color-neutral-600);
+        font-weight: 500;
+        font-size: var(--sl-font-size-small);
+      }
+      .exceptions-subtitle {
+        color: var(--sl-color-neutral-600);
+        font-size: var(--sl-font-size-small);
+        margin: var(--sl-spacing-2x-small) 0 var(--sl-spacing-medium);
+      }
+      .exception-badges {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--sl-spacing-x-small);
+        flex-shrink: 0;
+      }
+      .exception-repeat {
+        color: var(--sl-color-neutral-600);
+        font-size: var(--sl-font-size-small);
+        font-weight: 600;
+      }
+      .exception-detail {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      details.exception-detail > summary {
+        cursor: pointer;
+      }
+      .exception-time {
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+      .exceptions-footer {
+        margin-top: var(--sl-spacing-small);
+        font-size: var(--sl-font-size-small);
+      }
+
       .summary-item strong {
         color: var(--sl-color-neutral-900);
         font-weight: 600;
@@ -1602,6 +1654,7 @@ export class DashboardView extends AuthedElement {
       this.managedAgents = data.managedAgents || [];
       this.gatewayInteractions = data.gatewayInteractions || [];
       this.auditGroups = data.auditGroups || [];
+      this.auditExceptionsTotal = data.auditExceptionsTotal || 0;
       this.trackers = data.trackers || [];
       this.totalIssues = data.totalIssues || 0;
       this.mcpServers = data.mcpServers || [];
@@ -1693,6 +1746,7 @@ export class DashboardView extends AuthedElement {
           CACHED_INTERACTIONS
         ),
         auditGroups: this.auditGroups,
+        auditExceptionsTotal: this.auditExceptionsTotal,
         trackers: this.trackers,
         totalIssues: this.totalIssues,
         mcpServers: this.mcpServers,
@@ -2918,6 +2972,7 @@ export class DashboardView extends AuthedElement {
         )
           .then((overview) => {
             this.auditGroups = overview.exceptions.groups || [];
+            this.auditExceptionsTotal = overview.exceptions.total || 0;
             this.auditEventCount = overview.events_total;
             this.toolCallsCount = overview.tool_calls_total || 0;
             this.failedToolCallsCount = overview.tool_calls_failed || 0;
@@ -3089,7 +3144,7 @@ export class DashboardView extends AuthedElement {
     countParams.set('start_date', startDateStr);
     const [exceptions, eventsTotal, toolCalls, failedToolCalls] =
       await Promise.all([
-        this.catchWith403Handling(this.fetchAuditExceptions(), {
+        this.catchWith403Handling(this.fetchAuditExceptions(startDateStr), {
           groups: [],
           total: 0,
         }),
@@ -3107,11 +3162,19 @@ export class DashboardView extends AuthedElement {
     };
   }
 
-  private async fetchAuditExceptions(): Promise<GroupedAuditResponse> {
+  /**
+   * The failures and denials of the range, in one grouped read. The grouped
+   * filter matches every outcome it is given unless asked for any of them,
+   * so `outcome_match=any` is what makes this "failed or denied".
+   */
+  private async fetchAuditExceptions(
+    startDateStr: string
+  ): Promise<GroupedAuditResponse> {
     const params = new URLSearchParams();
     params.set('limit', '12');
-    params.append('outcome', 'failed');
-    params.append('outcome', 'budget_denied');
+    for (const outcome of EXCEPTION_OUTCOMES) params.append('outcome', outcome);
+    params.set('outcome_match', 'any');
+    params.set('start_date', startDateStr);
     const response = await fetchWithAuth(
       `/api/v1/audit-logs/grouped?${params}`
     );
@@ -3384,6 +3447,7 @@ export class DashboardView extends AuthedElement {
     );
     if (!overview) return;
     this.auditGroups = overview.exceptions.groups || [];
+    this.auditExceptionsTotal = overview.exceptions.total || 0;
     this.auditEventCount = overview.events_total;
     this.toolCallsCount = overview.tool_calls_total || 0;
     this.failedToolCallsCount = overview.tool_calls_failed || 0;
@@ -3734,54 +3798,90 @@ export class DashboardView extends AuthedElement {
     `;
   }
 
+  /**
+   * Tool calls and model requests that failed or were blocked in the range.
+   * Each row names the agent, the tool or model, the reason and the error or
+   * rule, folds identical repeats into one row, and opens that event on the
+   * Audit page. The footer opens the Audit page on the same filters.
+   */
   private renderAuditExceptionsCard() {
-    if (this.auditGroups.length === 0) {
+    const rows = exceptionRows(this.auditGroups);
+    if (rows.length === 0) {
       return nothing;
     }
+    const startDate = this.getGatewayStartDate();
+    // The server count, unless it says less than the rows already show.
+    const listed = rows.reduce((sum, row) => sum + row.count, 0);
+    const total = Math.max(this.auditExceptionsTotal, listed);
+    const phrase = this.gatewayRangePhrase;
 
     return html`
-      <sl-card class="content-card">
+      <sl-card class="content-card exceptions-card">
         <div class="card-header">
-          <div class="card-title">Audit exceptions</div>
-          <a class="row-link" href="/console/audit">Open audit timeline</a>
+          <div class="card-title">
+            Failures and denials
+            <span class="exceptions-count">${this.formatNumber(total)}</span>
+          </div>
+        </div>
+        <div class="exceptions-subtitle">
+          Tool calls and model requests that failed or were blocked by a policy
+          or budget. ${phrase}.
         </div>
         <div class="list">
           ${repeat(
-            this.auditGroups.slice(0, 6),
-            (group) => group.primary_event.id,
-            (group) => html`
-              <div class="row">
+            rows.slice(0, 6),
+            (row) => row.group.primary_event.id,
+            (row) => html`
+              <div class="row exception-row">
                 <div class="row-main">
-                  <span class="row-primary">
-                    ${group.primary_event.action.replace(/_/g, ' ')}
-                  </span>
-                  <sl-badge
-                    class="chip"
-                    pill
-                    variant=${
-                      group.outcome === 'budget_denied' ? 'warning' : 'danger'
-                    }
+                  <a
+                    class="row-link row-primary"
+                    href=${exceptionEventHref(row.group, startDate)}
+                    >${row.agent} · ${row.subject}</a
                   >
-                    ${group.outcome}
-                  </sl-badge>
+                  <span class="exception-badges">
+                    ${
+                      row.count > 1
+                        ? html`<span
+                            class="exception-repeat"
+                            title="${row.count} identical"
+                            >×${row.count}</span
+                          >`
+                        : nothing
+                    }
+                    <sl-badge
+                      class="chip"
+                      pill
+                      variant=${exceptionReasonVariant(row.reason)}
+                      >${exceptionReasonLabel(row.reason)}</sl-badge
+                    >
+                  </span>
                 </div>
                 <div class="row-meta">
-                  <span>
-                    ${
-                      (group.primary_event.details?.requested_model as
-                        string | undefined) ||
-                      (group.primary_event.details?.tool_name as
-                        string | undefined) ||
-                      group.primary_event.id
-                    }
-                  </span>
-                  <span>
-                    ${this.formatRelativeTime(group.primary_event.timestamp)}
+                  ${
+                    row.detail
+                      ? row.detail.length > 70
+                        ? html`<details class="exception-detail">
+                            <summary>${row.detail.slice(0, 68)}…</summary>
+                            <span>${row.detail}</span>
+                          </details>`
+                        : html`<span class="exception-detail"
+                            >${row.detail}</span
+                          >`
+                      : html`<span></span>`
+                  }
+                  <span class="exception-time">
+                    ${this.formatRelativeTime(row.group.primary_event.timestamp)}
                   </span>
                 </div>
               </div>
             `
           )}
+        </div>
+        <div class="exceptions-footer">
+          <a class="row-link" href=${exceptionsAuditHref(startDate)}
+            >See all in Audit</a
+          >
         </div>
       </sl-card>
     `;

@@ -32,8 +32,13 @@ export class ConsoleStatus implements ReactiveController {
       this.region.setAttribute('role', 'status');
       this.region.setAttribute('aria-live', 'polite');
       this.region.setAttribute('aria-atomic', 'true');
+      // Fixed, not absolute: the region is appended after the view's content
+      // and no ancestor is positioned, so an absolute box sat at the foot of
+      // the whole content in document coordinates. That escaped the shell's
+      // scroller and made the window scroll too, lifting the console up and
+      // leaving a blank band under it. A fixed box never adds to the page.
       this.region.style.cssText =
-        'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
+        'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
       root.appendChild(this.region);
     }
     const view = this.host as unknown as Record<string, unknown>;

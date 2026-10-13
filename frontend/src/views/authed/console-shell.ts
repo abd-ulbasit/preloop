@@ -200,9 +200,14 @@ export class ConsoleShell extends LitElement {
     consoleDialogStyles,
     unsafeCSS(consoleStyles),
     css`
+      /* One scroller: .main-content. The shell is exactly the window tall
+         (dvh where supported, so mobile browser bars do not clip it) and
+         nothing inside may grow the document. */
       :host {
         display: block;
         height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
       }
 
       a:hover {
@@ -299,8 +304,13 @@ export class ConsoleShell extends LitElement {
          step above it, in both themes (styles/console-surfaces.css). Slotted
          views inherit the console's compact type scale and tabular figures
          from here, so a new page matches its neighbours without opting in. */
+      /* position: relative makes this the containing block of any absolute
+         box a view renders, so such a box is clipped and scrolled here
+         instead of extending the document behind the shell. */
       .main-content {
+        position: relative;
         overflow-y: auto;
+        overscroll-behavior: contain;
         padding: var(--console-page-padding-top) var(--console-page-padding-x)
           var(--console-page-padding-bottom);
         display: flex;

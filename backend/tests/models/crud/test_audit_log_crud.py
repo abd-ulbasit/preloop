@@ -693,6 +693,50 @@ class TestGroupedStandalonePolicyDecisions:
         assert [g["correlation_id"] for g in groups] == ["c-x"]
         assert groups[0]["outcome"] == "deny"
 
+    def test_failed_call_after_allow_shows_failed(
+        self, db_session: Session, test_account
+    ):
+        # A call the policy allowed and that then failed used to read "allow"
+        # while an outcome=failed filter matched it: the Overview listed
+        # "tool call / update_pull_request / allow" as an exception.
+        self._log(db_session, test_account, "tool_call", "update_pr", "c-f", "failed")
+        self._log(db_session, test_account, "policy_allow", "update_pr", "c-f", "allow")
+        for outcome in ("failed", "allow"):
+            groups, _ = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, outcome_filter=[outcome]
+            )
+            assert [g["correlation_id"] for g in groups] == ["c-f"]
+            assert groups[0]["outcome"] == "failed"
+
+    def test_outcome_match_any_is_an_or(
+        self, db_session: Session, test_account, events
+    ):
+        self._log(db_session, test_account, "tool_call", "update_pr", "c-f", "failed")
+        self._log(db_session, test_account, "policy_allow", "update_pr", "c-f", "allow")
+        wanted = ["failed", "deny", "budget_denied"]
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session,
+            account_id=test_account.id,
+            outcome_filter=wanted,
+            outcome_match="any",
+        )
+        assert {g["correlation_id"] for g in groups} == {"c-f", "c-deny", "c-both"}
+        assert total == 3
+        assert all(g["outcome"] in wanted for g in groups)
+        # The default stays AND: no chain carries all three.
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, outcome_filter=wanted
+        )
+        assert (groups, total) == ([], 0)
+
+    def test_outcome_match_rejects_unknown_mode(
+        self, db_session: Session, test_account
+    ):
+        with pytest.raises(ValueError):
+            crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, outcome_match="some"
+            )
+
     def test_outcome_filter_deny_includes_standalone(
         self, db_session: Session, test_account, events
     ):

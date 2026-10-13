@@ -30,6 +30,18 @@ class UnderscoredStatusTestView extends LitElement {
 }
 
 describe('ConsoleStatus', () => {
+  it('never adds to the page height', async () => {
+    // Absolute, the region sat at the foot of the view's content in document
+    // coordinates and made the window scroll behind the console shell.
+    const view = await fixture<StatusTestView>(
+      html`<status-test-view></status-test-view>`
+    );
+    const region = view.shadowRoot!.querySelector(
+      '[data-console-status]'
+    ) as HTMLElement;
+    expect(getComputedStyle(region).position).to.equal('fixed');
+  });
+
   it('tracks underscore-prefixed loading, saving and errors', async () => {
     const view = await fixture<UnderscoredStatusTestView>(
       html`<underscored-status-test-view></underscored-status-test-view>`
