@@ -5781,11 +5781,46 @@ function verdictErrorFromBody(status: number, body: unknown): VerdictError {
   return new VerdictError('failed', status);
 }
 
-export async function checkAIVerdict(issue1_id: string, issue2_id: string) {
+export type VerdictBatchState =
+  'done' | 'pending' | 'failed' | 'no_model' | 'not_found';
+
+export interface VerdictBatchItem {
+  issue1_id: string;
+  issue2_id: string;
+  state: VerdictBatchState;
+  verdict?: {
+    decision?: string;
+    reason?: string;
+    suggestion?: string;
+    resolution?: string;
+  } | null;
+  error_code?: string | null;
+}
+
+export interface VerdictBatchResponse {
+  items: VerdictBatchItem[];
+  pending: number;
+}
+
+/**
+ * Verdicts for a page of pairs in one call (#1588 successor). Stored verdicts
+ * come back at once; new pairs come back `pending` while the server checks
+ * them in the background, so callers ask again for those.
+ */
+export async function getAIVerdicts(
+  pairs: { issue1_id: string; issue2_id: string }[],
+  options: { retry?: boolean } = {}
+): Promise<VerdictBatchResponse> {
   let response: Response;
   try {
     response = await fetchWithTimeout(
-      `/api/v1/issue-duplicates/check?issue1_id=${issue1_id}&issue2_id=${issue2_id}`
+      '/api/v1/issue-duplicates/verdicts',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairs, retry: options.retry ?? false }),
+      },
+      15000
     );
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') {
