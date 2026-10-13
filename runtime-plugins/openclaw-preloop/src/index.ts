@@ -5,6 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+import {
+  OperatorNotes,
+  type NoteContext,
+  type NoteInput,
+  type NoteEnd,
+  type NoteCall,
+  type NoteFetch,
+} from "./notes.js";
+
 import { refreshModels, type GatewayModel } from "./models.js";
 
 type ControlConfig = {
@@ -131,6 +140,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 export class PreloopOpenClawPlugin {
   runtime = "openclaw";
   private controlConfig?: ControlConfig;
+  private notes?: OperatorNotes;
   private socket?: WebSocket;
   private openclawRuntime?: OpenClawRuntime;
   private stopped = false;
@@ -167,6 +177,77 @@ export class PreloopOpenClawPlugin {
 
   configure(config: ControlConfig): void {
     this.controlConfig = config;
+    this.notes = undefined;
+  }
+
+  private noteCarrier(): OperatorNotes | undefined {
+    const config = this.controlConfig ?? this.loadConfig();
+    if (
+      config.enabled === false ||
+      !config.control_ws_url ||
+      !config.bearer_token
+    )
+      return undefined;
+    if (!this.notes) {
+      const url = new URL(config.control_ws_url);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      this.notes = new OperatorNotes(
+        url.origin,
+        config.bearer_token,
+        (this.fetchImpl ?? fetch) as NoteFetch,
+      );
+    }
+    return this.notes;
+  }
+
+  async notePrompt(
+    ctx: NoteContext,
+  ): Promise<{ prependContext: string } | undefined> {
+    try {
+      return await this.noteCarrier()?.build(ctx);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async noteInput(event: NoteInput, ctx: NoteContext): Promise<void> {
+    try {
+      await this.noteCarrier()?.input(event, ctx);
+    } catch {
+      /* fail open */
+    }
+  }
+
+  async noteCallStarted(event: NoteCall, ctx: NoteContext): Promise<void> {
+    try {
+      await this.noteCarrier()?.started(event, ctx);
+    } catch {
+      /* fail open */
+    }
+  }
+
+  async noteCallEnded(event: NoteCall, ctx: NoteContext): Promise<void> {
+    try {
+      await this.noteCarrier()?.completed(event, ctx);
+    } catch {
+      /* fail open */
+    }
+  }
+
+  async noteTurnEnded(ctx: NoteContext): Promise<void> {
+    try {
+      await this.noteCarrier()?.turnEnded(ctx);
+    } catch {
+      /* fail open */
+    }
+  }
+
+  async noteEnded(event: NoteEnd): Promise<void> {
+    try {
+      await this.noteCarrier()?.ended(event);
+    } catch {
+      /* fail open */
+    }
   }
 
   loadConfig(): ControlConfig {
@@ -747,6 +828,29 @@ export function register(api: {
   };
   on?: {
     (
+      hookName: "before_prompt_build",
+      handler: (
+        event: { prompt: string; messages: unknown[] },
+        ctx: NoteContext,
+      ) => Promise<{ prependContext: string } | undefined>,
+    ): void;
+    (
+      hookName: "llm_input",
+      handler: (event: NoteInput, ctx: NoteContext) => Promise<void>,
+    ): void;
+    (
+      hookName: "model_call_started" | "model_call_ended",
+      handler: (event: NoteCall, ctx: NoteContext) => Promise<void>,
+    ): void;
+    (
+      hookName: "agent_end",
+      handler: (
+        event: { runId?: string; messages: unknown[]; success: boolean },
+        ctx: NoteContext,
+      ) => Promise<void>,
+    ): void;
+    (hookName: "session_end", handler: (event: NoteEnd) => Promise<void>): void;
+    (
       hookName: "gateway_start" | "gateway_stop",
       handler: () => void | Promise<void>,
     ): void;
@@ -820,6 +924,27 @@ export function register(api: {
       }
     },
   );
+  // Optional note hooks must not prevent tool governance on an older host.
+  let notesReady = false;
+  try {
+    api.on?.("before_prompt_build", async (_event, ctx) =>
+      notesReady ? instance.notePrompt(ctx) : undefined,
+    );
+    api.on?.("llm_input", async (event, ctx) => instance.noteInput(event, ctx));
+    api.on?.("model_call_started", async (event, ctx) =>
+      instance.noteCallStarted(event, ctx),
+    );
+    api.on?.("model_call_ended", async (event, ctx) =>
+      instance.noteCallEnded(event, ctx),
+    );
+    api.on?.("agent_end", async (_event, ctx) => instance.noteTurnEnded(ctx));
+    api.on?.("session_end", async (event) => instance.noteEnded(event));
+    notesReady = true;
+  } catch {
+    api.logger?.warn?.(
+      "OpenClaw note hooks unavailable; existing native tool governance remains installed.",
+    );
+  }
   if (process.argv.includes("gateway")) {
     start();
   }
@@ -979,8 +1104,7 @@ export function readDesktopCapability(
     const display = document.display;
     return {
       desktop: "vnc",
-      desktop_display:
-        typeof display === "string" && display ? display : null,
+      desktop_display: typeof display === "string" && display ? display : null,
     };
   } catch {
     return { desktop: "none", desktop_display: null };
