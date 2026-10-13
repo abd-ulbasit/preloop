@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ControlConfig } from "./config.js";
 import { selectTurnTimeoutMs } from "./flow-workspace.js";
+import { ClaudeExecutable, resolveClaudeExecutable } from "./claude-binary.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +28,9 @@ export type SdkMessage = {
   subtype?: string;
   session_id?: string;
   result?: string;
+  /** Set on a result message when the turn ended on an error. */
+  is_error?: boolean;
+  errors?: string[];
   message?: { content?: Array<{ type: string; text?: string }> };
 };
 
@@ -111,6 +115,8 @@ class OwnedSession {
   private turnWaiters: TurnWaiter[] = [];
   private turnText: string[] = [];
   private ended = false;
+  /** Aborting it makes the SDK kill the Claude Code child process. */
+  readonly abort = new AbortController();
 
   constructor(readonly key: string, private registrar: SessionRegistrar, private cwd?: string) {}
 
@@ -122,7 +128,8 @@ class OwnedSession {
         this.lastActivity = Date.now();
         if (message.type === "system" && message.subtype === "init") {
           this.sessionId = message.session_id ?? this.sessionId;
-          await this.registrar.register(this.sessionId, this.cwd);
+          // Never block the message stream on the registration request.
+          void this.registrar.register(this.sessionId, this.cwd);
           continue;
         }
         if (message.type === "assistant") {
@@ -137,12 +144,24 @@ class OwnedSession {
           const reply =
             message.result ?? this.turnText.join("\n").trim();
           this.turnText = [];
-          this.settleNextWaiter(reply ?? "");
+          if (resultIsError(message)) {
+            this.failNextWaiter(
+              new Error(`Claude Code turn failed: ${resultErrorText(message)}`),
+            );
+          } else {
+            this.settleNextWaiter(reply ?? "");
+          }
         }
+      }
+    } catch (error) {
+      if (!this.abort.signal.aborted) {
+        this.endError = error instanceof Error ? error : new Error(String(error));
       }
     } finally {
       this.ended = true;
-      const error = new Error("Claude Code session ended");
+      const error = this.endError
+        ? new Error(`Claude Code session ended: ${this.endError.message}`)
+        : new Error("Claude Code session ended");
       for (const waiter of this.turnWaiters.splice(0)) {
         if (!waiter.settled) {
           waiter.settled = true;
@@ -169,6 +188,25 @@ class OwnedSession {
     waiter.resolve(reply);
   }
 
+  private endError?: Error;
+
+  private failNextWaiter(error: Error): void {
+    const waiter = this.turnWaiters.shift();
+    if (!waiter || waiter.settled) {
+      return;
+    }
+    waiter.settled = true;
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+  }
+
+  /** Stop the session for good: the SDK kills the Claude Code child. */
+  terminate(): void {
+    this.ended = true;
+    this.input.close();
+    this.abort.abort();
+  }
+
   isLive(): boolean {
     return !this.ended;
   }
@@ -186,9 +224,11 @@ class OwnedSession {
           reject(
             new Error(
               `Claude Code turn timed out after ${timeoutMs}ms; ` +
-                "the session may still be running",
+                "the session was stopped",
             ),
           );
+          // A hung turn would otherwise keep the Claude Code child alive.
+          this.terminate();
         }
       }, timeoutMs);
       // Deliberately NOT unref'd: an in-flight turn is real pending work and
@@ -214,6 +254,30 @@ class OwnedSession {
   close(): void {
     this.input.close();
   }
+}
+
+export type SessionManagerOptions = {
+  /** Line logger; defaults to stderr. */
+  log?: (line: string) => void;
+  /** Which Claude Code binary to run; tests replace it. */
+  resolveExecutable?: () => Promise<ClaudeExecutable>;
+};
+
+/** A result message that ended its turn on an error. */
+function resultIsError(message: SdkMessage): boolean {
+  return (
+    message.is_error === true ||
+    (typeof message.subtype === "string" && message.subtype.startsWith("error"))
+  );
+}
+
+function resultErrorText(message: SdkMessage): string {
+  const text =
+    (typeof message.result === "string" && message.result.trim()) ||
+    (Array.isArray(message.errors) && message.errors.join("; ")) ||
+    message.subtype ||
+    "unknown error";
+  return text.slice(0, 2000);
 }
 
 export type SendMessageParams = {
@@ -245,10 +309,35 @@ export class SessionManager {
   private sessions = new Map<string, OwnedSession>();
   private registrar: SessionRegistrar;
 
+  private readonly log: (line: string) => void;
+  private readonly resolveExecutable: () => Promise<ClaudeExecutable>;
+  private executable?: Promise<ClaudeExecutable>;
+
   constructor(
     private readonly config: ControlConfig,
     private readonly queryFactory: QueryFactory = sdkQueryFactory,
-  ) { this.registrar = new SessionRegistrar(config, "claude_code"); }
+    options: SessionManagerOptions = {},
+  ) {
+    this.registrar = new SessionRegistrar(config, "claude_code");
+    this.log =
+      options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    this.resolveExecutable =
+      options.resolveExecutable ??
+      (queryFactory === sdkQueryFactory
+        ? () => resolveClaudeExecutable(config)
+        : async () =>
+            config.claude_executable
+              ? { path: config.claude_executable, source: "config" as const }
+              : { source: "bundled" as const });
+  }
+
+  /** The Claude Code binary owned sessions run, resolved once. */
+  claudeExecutable(): Promise<ClaudeExecutable> {
+    this.executable ??= this.resolveExecutable().catch(
+      (): ClaudeExecutable => ({ source: "bundled" }),
+    );
+    return this.executable;
+  }
 
   private findBySessionId(sessionId: string): OwnedSession | undefined {
     for (const session of this.sessions.values()) {
@@ -266,6 +355,8 @@ export class SessionManager {
     resumeSessionId?: string,
     cwd?: string,
     model?: string,
+    executable?: ClaudeExecutable,
+    abortController?: AbortController,
   ): Record<string, unknown> {
     const options: Record<string, unknown> = {
       cwd: cwd ?? this.config.workspace_root ?? os.homedir(),
@@ -284,6 +375,12 @@ export class SessionManager {
     if (model) {
       options.model = model;
     }
+    if (executable?.path) {
+      options.pathToClaudeCodeExecutable = executable.path;
+    }
+    if (abortController) {
+      options.abortController = abortController;
+    }
     return options;
   }
 
@@ -293,9 +390,16 @@ export class SessionManager {
     model?: string,
   ): Promise<OwnedSession> {
     const session = new OwnedSession(resumeSessionId ?? randomUUID(), this.registrar, cwd ?? this.config.workspace_root);
+    const executable = await this.claudeExecutable();
     const handle = await this.queryFactory({
       prompt: session.input,
-      options: this.sdkOptions(resumeSessionId, cwd, model),
+      options: this.sdkOptions(
+        resumeSessionId,
+        cwd,
+        model,
+        executable,
+        session.abort,
+      ),
     });
     void session.run(handle).finally(() => {
       this.sessions.delete(session.key);
@@ -323,10 +427,36 @@ export class SessionManager {
       // (G2 envelope field). Fall back to the Preloop UUID.
       session = await this.open(resume, cwd, params.model);
     }
-    return session.send(
-      params.text,
-      selectTurnTimeoutMs(this.config, params.metadata, DEFAULT_TURN_TIMEOUT_MS),
+    const timeoutMs = selectTurnTimeoutMs(
+      this.config,
+      params.metadata,
+      DEFAULT_TURN_TIMEOUT_MS,
     );
+    const executable = await this.claudeExecutable();
+    const binary = `${executable.path ?? "bundled"} version=${executable.version ?? "unknown"}`;
+    const started = Date.now();
+    const owned = session;
+    const label = () => owned.sessionId ?? owned.key;
+    this.log(
+      `turn start session=${label()} binary=${binary} timeout_ms=${timeoutMs}`,
+    );
+    try {
+      const reply = await session.send(params.text, timeoutMs);
+      this.log(
+        `turn end session=${label()} outcome=completed duration_ms=${Date.now() - started} binary=${binary}`,
+      );
+      return reply;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const outcome = /timed out/.test(message) ? "timeout" : "failed";
+      this.log(
+        `turn error session=${label()} outcome=${outcome} duration_ms=${Date.now() - started} binary=${binary} error=${JSON.stringify(message.slice(0, 500))}`,
+      );
+      if (!owned.isLive()) {
+        this.sessions.delete(owned.key);
+      }
+      throw error;
+    }
   }
 
   /** Close owned SDK sessions so a local `claude --resume` can take the TTY. */

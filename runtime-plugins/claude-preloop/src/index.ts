@@ -172,7 +172,9 @@ export class PreloopClaudeSidecar {
     if (config.enabled === false) {
       throw new Error("preloop-control is disabled (enabled=false)");
     }
-    this.sessions ??= new SessionManager(config, this.queryFactory);
+    this.sessions ??= new SessionManager(config, this.queryFactory, {
+      log: (line) => this.log(`Claude sidecar: ${line}`),
+    });
     this.launcher.setLogger((message) => this.log(message));
     this.launcher.onLauncherReleased(() => {
       void this.sessions?.release();
@@ -403,7 +405,9 @@ export class PreloopClaudeSidecar {
       return undefined;
     }
     if (!this.sessions) {
-      this.sessions = new SessionManager(this.verify(), this.queryFactory);
+      this.sessions = new SessionManager(this.verify(), this.queryFactory, {
+        log: (line) => this.log(`Claude sidecar: ${line}`),
+      });
     }
     const payload = command.payload ?? {};
     const targetSessionId = resolveTargetSessionId(payload);

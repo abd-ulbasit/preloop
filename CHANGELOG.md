@@ -742,6 +742,13 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Fixed
 
+- The Claude sidecar reports a turn that ends on an error result (such as an
+  API error) as a failed command right away, instead of leaving the flow
+  execution running until its timeout. A timed-out turn now stops the session
+  and its Claude Code child. The bundled Agent SDK moves to 0.3.296, a newer
+  `claude` on PATH (or `claude_executable`) is used when present, and each
+  turn logs the binary and version it ran.
+
 - **Console requests (#1590, #1591, #1593, #1586, #1588)**: pages ask each
   question once. The kill switch is one shared poll for the banner and the
   Emergency page, a write from the tab stops later reads from joining an

@@ -43,6 +43,12 @@ export type ControlConfig = {
    * Defaults to ~/.preloop/runner.json (written by `preloop runner dirs add`).
    */
   runner_config_path?: string;
+  /**
+   * Claude Code binary for owned sessions (Agent SDK
+   * pathToClaudeCodeExecutable). Defaults to the `claude` on PATH when it is
+   * newer than the SDK's bundled Claude Code, else the bundled one.
+   */
+  claude_executable?: string;
 };
 
 export const PROTOCOL = "preloop.agent_control.v1";

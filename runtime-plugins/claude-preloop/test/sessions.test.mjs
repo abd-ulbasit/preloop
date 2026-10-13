@@ -139,8 +139,11 @@ test("a hung turn rejects after turn_timeout_ms instead of blocking forever", as
     () => manager.sendMessage({ text: "never answered" }),
     /timed out after 50ms/,
   );
-  // The sidecar can still take new commands afterwards.
-  assert.equal(manager.ownedSessionIds().length, 1);
+  // The timed-out session is stopped (its Claude Code child is aborted), so
+  // the next command starts or resumes a session instead of queueing
+  // behind a turn that never ends.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(manager.ownedSessionIds().length, 0);
   manager.stop();
 });
 
