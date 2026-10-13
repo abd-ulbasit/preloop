@@ -95,6 +95,18 @@ cannot get a connection in 5 seconds has already lost interest; holding it
 grows the queue behind it. A `sqlalchemy.exc.TimeoutError` on a saturated pool
 renders as `503` with `Retry-After` instead of a generic `500`.
 
+Heavy aggregate handlers (cost summary and timeseries, gateway usage summary
+and rate limits, the Models overview and per-model sessions, tool stats, the
+audit chain status, and in EE the audit timeline and Overview figures) are
+marked with `preloop.api.heavy_routes.heavy_route`. They run on their own
+`anyio.CapacityLimiter`, `HEAVY_ROUTE_CONCURRENCY` per process (default 6),
+and hand back the request's connection while they queue. These handlers are
+mostly Python work under the GIL. Before this change, a page that fanned out
+ten of them took every thread and connection, and light shell calls
+(`/auth/users/me`, `/me/memberships`, `/features`) waited seconds behind them
+(#1593). Mark a new endpoint heavy only when it aggregates over history. A
+handler that returns one row stays on the shared pool.
+
 `GET /api/v1/health` reports each engine's checked-out/pool-size numbers and a
 `saturated` flag, plus the usage-writer queue counters (see
 `api_usage_recorder.py`). It deliberately does not fail readiness on
