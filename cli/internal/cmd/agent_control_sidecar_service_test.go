@@ -76,6 +76,9 @@ func TestSidecarSystemdSkipsLogPathWithSpaces(t *testing.T) {
 }
 
 func TestSidecarServicePathPutsNodeFirstAndDedupes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("service files are written on macOS and Linux only")
+	}
 	binDir := t.TempDir()
 	node := filepath.Join(binDir, "node")
 	if err := os.WriteFile(node, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -115,13 +118,13 @@ func TestSidecarServiceExitStatusParsing(t *testing.T) {
 	agentControlSidecarServiceManagerOutput = func(agentControlSidecarSpec) (string, error) {
 		return "{\n\t\"LimitLoadToSessionType\" = \"Aqua\";\n\t\"Label\" = \"ai.preloop.claude-sidecar\";\n\t\"LastExitStatus\" = 256;\n};\n", nil
 	}
-	if got := agentControlSidecarServiceExitStatus(spec); got != "service: last exit status 1" {
+	if got := agentControlSidecarServiceExitStatus(spec); got != "last exit status: 1" {
 		t.Fatalf("launchd status = %q", got)
 	}
 	agentControlSidecarServiceManagerOutput = func(agentControlSidecarSpec) (string, error) {
 		return "ExecMainStatus=1\nActiveState=failed\n", nil
 	}
-	if got := agentControlSidecarServiceExitStatus(spec); got != "service: last exit status 1" {
+	if got := agentControlSidecarServiceExitStatus(spec); got != "last exit status: 1" {
 		t.Fatalf("systemd status = %q", got)
 	}
 }
@@ -144,7 +147,7 @@ func TestSidecarStatusPrintsExitStatusWhenSocketDown(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "socket: down") ||
-		!strings.Contains(text, "service: last exit status 1") ||
+		!strings.Contains(text, "last exit status: 1") ||
 		!strings.Contains(text, filepath.Join(".preloop", "logs", "claude-sidecar.log")) {
 		t.Fatalf("status output = %q", text)
 	}

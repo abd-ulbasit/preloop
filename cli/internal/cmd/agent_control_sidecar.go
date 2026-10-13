@@ -394,11 +394,11 @@ func agentControlSidecarServiceExitStatus(spec agentControlSidecarSpec) string {
 				continue
 			}
 			value = strings.TrimSuffix(strings.TrimSpace(value), ";")
-			return "service: last exit status " + launchdExitStatusText(value)
+			return "last exit status: " + launchdExitStatusText(value)
 		}
 		// systemctl show: ExecMainStatus=1
 		if value, ok := strings.CutPrefix(line, "ExecMainStatus="); ok {
-			return "service: last exit status " + strings.TrimSpace(value)
+			return "last exit status: " + strings.TrimSpace(value)
 		}
 	}
 	return ""
