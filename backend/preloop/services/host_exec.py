@@ -19,14 +19,21 @@ HOST_EXEC_HARNESSES: Mapping[str, str] = {
     "cursor": "cursor_cli",
     "copilot": "copilot_cli",
     "devin": "devin_cli",
+    "claude_code": "claude_code",
 }
 HOST_EXEC_AGENT_TYPES = frozenset(HOST_EXEC_HARNESSES)
-_HOST_EXEC_LABELS = {"cursor": "Cursor", "copilot": "Copilot CLI", "devin": "Devin CLI"}
+_HOST_EXEC_LABELS = {
+    "cursor": "Cursor",
+    "copilot": "Copilot CLI",
+    "devin": "Devin CLI",
+    "claude_code": "Claude Code",
+}
 #: Agent config key holding the per-flow model alias for each host harness.
 HOST_EXEC_MODEL_KEYS: Mapping[str, str] = {
     "cursor": "cursor_model",
     "copilot": "copilot_model",
     "devin": "devin_model",
+    "claude_code": "claude_code_model",
 }
 HOST_EXEC_COMPLETION_PROTOCOL = "host_exec"
 #: Inverse of ``HOST_EXEC_HARNESSES``: harness inventory id -> agent type.
@@ -84,6 +91,7 @@ HOST_EXEC_CAPABILITIES = frozenset(
         "cursor_cli",
         "copilot_cli",
         "devin_cli",
+        "claude_code",
         "stdout",
         "cancel",
         "host_publication",
@@ -107,7 +115,7 @@ def is_host_exec_agent_type(agent_type: Any) -> bool:
         agent_type: Flow or lease agent type.
 
     Returns:
-        True for ``cursor``, ``copilot`` and ``devin``.
+        True for ``cursor``, ``copilot``, ``devin`` and ``claude_code``.
     """
     return _normalized_agent_type(agent_type) in HOST_EXEC_AGENT_TYPES
 
@@ -119,8 +127,8 @@ def host_exec_harness(agent_type: Any) -> Optional[str]:
         agent_type: Flow or lease agent type.
 
     Returns:
-        ``cursor_cli``, ``copilot_cli`` or ``devin_cli``, or None for
-        other agent types.
+        ``cursor_cli``, ``copilot_cli``, ``devin_cli`` or ``claude_code``,
+        or None for other agent types.
     """
     return HOST_EXEC_HARNESSES.get(_normalized_agent_type(agent_type))
 
@@ -177,12 +185,13 @@ def host_exec_harness_selector(agent_type: Any, agent_config: Any) -> Optional[s
     route exactly as before).
 
     Args:
-        agent_type: Flow agent type (``copilot``, ``cursor`` or ``devin``).
+        agent_type: Flow agent type (``copilot``, ``cursor``, ``devin`` or
+            ``claude_code``).
         agent_config: Flow agent configuration.
 
     Returns:
-        ``copilot_cli`` / ``cursor_cli`` / ``devin_cli``, or None for
-        profile-pinned and non-host flows.
+        ``copilot_cli`` / ``cursor_cli`` / ``devin_cli`` / ``claude_code``,
+        or None for profile-pinned and non-host flows.
     """
     config = _unwrapped_config(agent_config)
     raw = config.get("harness")
@@ -201,6 +210,7 @@ HARNESS_GENERATED_PROFILES: Mapping[str, str] = {
     "copilot_cli": "copilot",
     "cursor_cli": "cursor",
     "devin_cli": "devin",
+    "claude_code": "claude",
 }
 
 
@@ -406,8 +416,8 @@ def runner_has_host_exec_profile(
         name: Profile name from the flow.
         model_identifier: Model alias the profile must advertise, if set.
         agent_type: Host-exec agent type. The profile must advertise the
-            matching harness capability (``cursor_cli``, ``copilot_cli``
-            or ``devin_cli``).
+            matching harness capability (``cursor_cli``, ``copilot_cli``,
+            ``devin_cli`` or ``claude_code``).
         require_publication: The lease publishes; the profile must also
             advertise ``host_publication``. Older runners never do.
         require_continuation: The lease resumes a Copilot session; the
@@ -472,7 +482,8 @@ def host_exec_flow_error(
         return "harness routing cannot run on hosted compute"
     if profile and kind and kind not in HOST_EXEC_AGENT_TYPES:
         return (
-            "host_exec_profile requires agent_type cursor, copilot or devin; Docker "
+            "host_exec_profile requires agent_type cursor, copilot, devin or "
+            "claude_code; Docker "
             f"harnesses cannot use a host execution profile (got {kind})"
         )
     if profile and pool == "server":

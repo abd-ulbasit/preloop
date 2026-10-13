@@ -90,7 +90,11 @@ def create_executor_for_execution(
 
     Persistent Agent Control targets are selected first so a saved runner
     pool cannot send them to a container. Private-pool and host-exec
-    resolution follow; everything else uses the hosted harness registry.
+    resolution follow: host agent types (``cursor``, ``copilot``, ``devin``
+    and ``claude_code``, see ``services.host_exec.HOST_EXEC_HARNESSES``) only
+    run on a private runner, and a flow with ``agent_config.harness`` set
+    routes to a runner whose inventory lists that harness and model.
+    Everything else uses the hosted harness registry.
     """
     from preloop.agents.agent_control import AgentControlExecutor
     from preloop.agents.remote_runner import RemoteRunnerExecutor

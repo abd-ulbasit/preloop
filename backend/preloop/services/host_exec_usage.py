@@ -33,6 +33,7 @@ HOST_EXEC_HOOK_SOURCES: Dict[str, Tuple[str, ...]] = {
     "copilot": ("copilot_cli", "copilot"),
     "cursor": ("cursor",),
     "devin": ("devin_cli",),
+    "claude_code": ("claude_code",),
 }
 
 #: Source label of the Copilot premium-request row.

@@ -76,6 +76,10 @@ type harnessInventoryDeps struct {
 	Version     func(executable string) string
 	DevinStatus func(executable string) (string, []string)
 	CursorLogin func(executable string) string
+	// ClaudeLogin returns the `claude auth status` verdict only.
+	ClaudeLogin func(executable string) string
+	// ClaudeHook reports whether the Preloop approval hook is installed.
+	ClaudeHook  func() bool
 	Handwritten []hostExecProfile
 	// HandwrittenErr means the profile file exists but is invalid; no
 	// profile is generated until the operator fixes it.
@@ -172,6 +176,8 @@ func defaultHarnessInventoryDeps() harnessInventoryDeps {
 		},
 		Version:        probeHarnessVersion,
 		CursorLogin:    probeCursorLogin,
+		ClaudeLogin:    probeClaudeLogin,
+		ClaudeHook:     claudeApprovalHookInstalled,
 		DevinStatus:    probeDevinStatus,
 		Handwritten:    handwritten,
 		HandwrittenErr: err != nil,
@@ -382,6 +388,8 @@ func generatedProfileName(harness string) string {
 		return "copilot"
 	case hostExecHarnessCursor:
 		return "cursor"
+	case hostExecHarnessClaude:
+		return "claude"
 	}
 	return ""
 }
@@ -422,6 +430,9 @@ func buildHarnessInventory(d harnessInventoryDeps) harnessInventory {
 		entries[entry.Harness] = entry
 	}
 	if entry, ok := buildCursorEntry(d); ok {
+		entries[entry.Harness] = entry
+	}
+	if entry, ok := buildClaudeEntry(d, discovered); ok {
 		entries[entry.Harness] = entry
 	}
 	for id, agent := range discovered {
@@ -599,16 +610,8 @@ func buildDiscoveredEntry(id string, agent AgentConfig, d harnessInventoryDeps) 
 		entry.LoginState, entry.LoginSource = discoveryLogin(agent)
 	}
 	switch id {
-	case "claude_code", "codex_cli", "opencode":
+	case "codex_cli", "opencode":
 		entry.SupportLevel = harnessSupportFlowsOnly
-	}
-	if id == "claude_code" {
-		switch {
-		case agent.OnboardingState == "fully_onboarded" || agent.OnboardingState == "gateway_only":
-			entry.Billing = "metered"
-		case entry.LoginState == harnessLoginSignedIn:
-			entry.Billing = "seat"
-		}
 	}
 	return entry
 }
@@ -631,6 +634,8 @@ func generatedHostExecProfiles(inv harnessInventory) []hostExecProfile {
 			executable = "copilot"
 		case hostExecHarnessCursor:
 			executable = "cursor-agent"
+		case hostExecHarnessClaude:
+			executable = "claude"
 		default:
 			continue
 		}

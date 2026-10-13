@@ -1011,6 +1011,7 @@ _HARNESS_DISPLAY_NAMES = {
     "copilot_cli": "GitHub Copilot CLI",
     "cursor_cli": "Cursor CLI",
     "devin_cli": "Devin CLI",
+    "claude_code": "Claude Code",
 }
 
 
@@ -1032,7 +1033,7 @@ def harness_options(
 
     Returns:
         ``{"harnesses": [...]}`` for runnable harnesses (``copilot_cli``,
-        ``cursor_cli``) reported by at least one usable runner. A runner is
+        ``cursor_cli``, ``devin_cli``, ``claude_code``) reported by at least one usable runner. A runner is
         counted online when :func:`runner_eligible_for_harness` accepts it
         (pinned to itself, so the owner rule is the caller's, not a flow's).
     """

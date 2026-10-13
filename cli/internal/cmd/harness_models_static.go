@@ -17,6 +17,13 @@ var harnessStaticModels = map[string][]string{
 	"cursor_cli": {
 		"auto",
 	},
+	// Claude Code's own model aliases; each resolves to the latest model
+	// of that family for the logged-in account.
+	"claude_code": {
+		"opus",
+		"sonnet",
+		"haiku",
+	},
 }
 
 // harnessStaticModelsFor returns a copy of the static list for a harness.

@@ -188,7 +188,7 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	harness := hostExecProfileHarness(profile)
 	if harness == "" {
-		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot or devin")
+		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot, devin or claude")
 	}
 	if len(profile.ModelMap) > 64 {
 		return hostExecProfile{}, fmt.Errorf("model_map supports at most 64 entries")
@@ -200,6 +200,12 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	if harness == hostExecHarnessDevin {
 		if err := validateDevinHostExecProfile(profile); err != nil {
+			return hostExecProfile{}, err
+		}
+		return profile, nil
+	}
+	if harness == hostExecHarnessClaude {
+		if err := validateClaudeHostExecProfile(profile); err != nil {
 			return hostExecProfile{}, err
 		}
 		return profile, nil
@@ -294,6 +300,8 @@ func hostExecProfileHarness(profile hostExecProfile) string {
 		return hostExecHarnessCursor
 	case hostExecIsCopilotBinary(profile.Executable):
 		return hostExecHarnessCopilot
+	case hostExecIsClaudeBinary(profile.Executable):
+		return hostExecHarnessClaude
 	default:
 		return ""
 	}
@@ -383,6 +391,17 @@ func lookupHostExecBinary(cleaned string) (string, error) {
 		return "", fmt.Errorf(
 			"copilot_not_installed: Copilot CLI (copilot) was not found on %s; install it with `npm install -g @github/copilot`",
 			runtimeExecutableSearchDescription("copilot"),
+		)
+	}
+	if hostExecIsClaudeBinary(cleaned) && base == cleaned {
+		for _, name := range hostExecCommandCandidates(cleaned, "claude") {
+			if path, err := resolveHostExecRuntimeExecutable(name); err == nil {
+				return path, nil
+			}
+		}
+		return "", fmt.Errorf(
+			"claude_not_installed: Claude Code (claude) was not found on %s; install it from https://docs.claude.com/en/docs/claude-code",
+			runtimeExecutableSearchDescription("claude"),
 		)
 	}
 	if hostExecIsCursorBinary(cleaned) && base == cleaned {
@@ -645,7 +664,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	agentType, _ := job["agent_type"].(string)
 	wantHarness := hostExecHarnessForAgentType(agentType)
 	if wantHarness == "" || job["completion_protocol"] != hostExecCompletionProtocol {
-		return nil, fmt.Errorf("host job requires explicit Cursor or Copilot host_exec protocol")
+		return nil, fmt.Errorf("host job requires an explicit Cursor, Copilot, Devin or Claude Code host_exec protocol")
 	}
 	name := jobHostExecProfileName(job)
 	profile, err := lookupHostExecProfile(name)
@@ -730,6 +749,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	}
 	var args []string
 	var resultPath string
+	var stdin string
 	env := hostExecFlowEnv(
 		hostExecChildEnv(runtime.GOOS, wantHarness, profile, os.Environ()), job,
 	)
@@ -744,6 +764,19 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 			args = append(args, "--resume="+resume.SessionID)
 		}
 		env = copilotHostExecEnv(env)
+	} else if wantHarness == hostExecHarnessClaude {
+		if !claudeApprovalHookInstalled() {
+			err = fmt.Errorf("claude_approval_hook_missing: run `preloop agents onboard \"Claude Code\" --approvals` as the runner user")
+		} else {
+			mcpConfig := ""
+			if len(files) > 0 {
+				mcpConfig = files[0]
+			}
+			args, err = buildClaudeHostExecArgs(profile, job, mcpConfig, "")
+			if err == nil {
+				stdin, err = claudeHostExecPrompt(job)
+			}
+		}
 	} else if wantHarness == hostExecHarnessDevin {
 		if !devinApprovalHooksInstalled() {
 			err = fmt.Errorf("devin_approval_hook_missing: run preloop agents onboard Devin --approvals")
@@ -769,6 +802,9 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = workspace
 	cmd.Env = env
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	cmd.SysProcAttr = hostExecSysProcAttr()
 	cmd.WaitDelay = 250 * time.Millisecond
 	return &hostExecRun{
@@ -949,6 +985,9 @@ func beginHostExecJob(
 		outcome := waitHostExecJob(cmd, executionID, buffer, halted, timeout, profile)
 		if buffer.harness == hostExecHarnessCopilot && outcome.status == "FAILED" {
 			outcome.errMsg = copilotHostExecFailure(buffer, profile, job, outcome.errMsg)
+		}
+		if buffer.harness == hostExecHarnessClaude && outcome.status == "FAILED" {
+			outcome.errMsg = claudeHostExecFailure(buffer, outcome.errMsg)
 		}
 		if outcome.result != nil {
 			if requested := jobModelIdentifier(job); requested != "" {

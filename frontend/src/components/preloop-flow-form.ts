@@ -178,11 +178,12 @@ export function splitApprovalWindow(seconds: number | null | undefined): {
   return { amount: Math.round(total / 60), unit: 'minutes' };
 }
 
-type HostExecAgentType = 'cursor' | 'copilot' | 'devin';
+type HostExecAgentType = 'cursor' | 'copilot' | 'devin' | 'claude_code';
 const HOST_EXEC_LABELS: Record<HostExecAgentType, string> = {
   cursor: 'Cursor',
   copilot: 'Copilot CLI',
   devin: 'Devin CLI',
+  claude_code: 'Claude Code',
 };
 
 /** Agent config key holding each host CLI's per-flow model alias. */
@@ -190,6 +191,7 @@ const HOST_EXEC_MODEL_KEYS: Record<HostExecAgentType, string> = {
   cursor: 'cursor_model',
   copilot: 'copilot_model',
   devin: 'devin_model',
+  claude_code: 'claude_code_model',
 };
 
 /** Runner capability a host profile advertises for each host CLI. */
@@ -197,6 +199,7 @@ const HOST_EXEC_HARNESSES: Record<HostExecAgentType, string> = {
   cursor: 'cursor_cli',
   copilot: 'copilot_cli',
   devin: 'devin_cli',
+  claude_code: 'claude_code',
 };
 
 /** agent_config keys of harness routing (#1481), dropped when unused. */
@@ -2836,6 +2839,26 @@ export class PreloopFlowForm extends LitElement {
     `;
   }
 
+  private renderClaudeHostExecFields() {
+    return html`
+      <p class="notifications-help">
+        Claude Code runs as the claude command on the private runner, using that
+        machine's Claude Code login. Native tools require the Preloop approval
+        hook. Model spend goes to that login and is not metered by the Preloop
+        gateway unless Claude Code is onboarded to it.
+      </p>
+      <sl-input
+        label="Claude Code model"
+        data-claude-code-model
+        placeholder="Claude Code default"
+        help-text="Optional model alias such as opus, sonnet or haiku, mapped in the runner profile model_map. Blank uses the Claude Code default."
+        .value=${String(this.parseAgentConfig(this.flow.agent_config).claude_code_model || '')}
+        @sl-input=${(event: Event) => this.setHarnessRoutingKey('claude_code_model', (event.target as HTMLInputElement).value)}
+      ></sl-input>
+      ${this.renderHostExecCloneNotice('Claude Code')}
+    `;
+  }
+
   private renderCopilotHostExecFields() {
     return html`
       <p class="notifications-help">
@@ -4542,6 +4565,9 @@ export class PreloopFlowForm extends LitElement {
                     <sl-option value="copilot"
                       >Copilot CLI (private runner host profile)</sl-option
                     >
+                    <sl-option value="claude_code"
+                      >Claude Code (private runner host profile)</sl-option
+                    >
                   </sl-select>
                 `
           }
@@ -4570,45 +4596,47 @@ export class PreloopFlowForm extends LitElement {
                 ? this.renderDevinHostExecFields()
                 : this.flow.agent_type === 'copilot'
                   ? this.renderCopilotHostExecFields()
-                  : html`
-                      <div
-                        style="display: flex; flex-direction: column; gap: var(--sl-spacing-2x-small); margin-bottom: var(--sl-spacing-medium);"
-                      >
-                        <sl-select
-                          label="AI model"
-                          placeholder="Select an AI model"
-                          .value=${this.flow.ai_model_id || ''}
-                          @sl-change=${(e: any) => {
-                            this.flow.ai_model_id = e.target.value;
-                          }}
-                          style="margin-bottom: 0;"
+                  : this.flow.agent_type === 'claude_code'
+                    ? this.renderClaudeHostExecFields()
+                    : html`
+                        <div
+                          style="display: flex; flex-direction: column; gap: var(--sl-spacing-2x-small); margin-bottom: var(--sl-spacing-medium);"
                         >
-                          ${selectableModels.map(
-                            (m) =>
-                              html`<sl-option .value=${m.id}
-                                >${m.name}</sl-option
-                              >`
-                          )}
-                        </sl-select>
-                        <sl-button
-                          size="small"
-                          variant="text"
-                          @click=${this.openAddAIModelDialog}
-                          style="align-self: flex-start; margin-top: -0.25rem; height: auto; padding: 0;"
+                          <sl-select
+                            label="AI model"
+                            placeholder="Select an AI model"
+                            .value=${this.flow.ai_model_id || ''}
+                            @sl-change=${(e: any) => {
+                              this.flow.ai_model_id = e.target.value;
+                            }}
+                            style="margin-bottom: 0;"
+                          >
+                            ${selectableModels.map(
+                              (m) =>
+                                html`<sl-option .value=${m.id}
+                                  >${m.name}</sl-option
+                                >`
+                            )}
+                          </sl-select>
+                          <sl-button
+                            size="small"
+                            variant="text"
+                            @click=${this.openAddAIModelDialog}
+                            style="align-self: flex-start; margin-top: -0.25rem; height: auto; padding: 0;"
+                          >
+                            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
+                            AI model
+                          </sl-button>
+                        </div>
+                        <sl-details
+                          data-advanced="routing"
+                          summary=${`Advanced model routing: ${this.routingRules.length} routing rules, ${this.labelRules.length} label rules`}
+                          .open=${this.routingRules.length > 0 || this.labelRules.length > 0}
                         >
-                          <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
-                          AI model
-                        </sl-button>
-                      </div>
-                      <sl-details
-                        data-advanced="routing"
-                        summary=${`Advanced model routing: ${this.routingRules.length} routing rules, ${this.labelRules.length} label rules`}
-                        .open=${this.routingRules.length > 0 || this.labelRules.length > 0}
-                      >
-                        ${this.renderModelRoutingEditor(selectableModels)}
-                        ${this.renderModelByLabelEditor(selectableModels)}
-                      </sl-details>
-                    `
+                          ${this.renderModelRoutingEditor(selectableModels)}
+                          ${this.renderModelByLabelEditor(selectableModels)}
+                        </sl-details>
+                      `
           }
           ${this.renderHarnessPicker()}
           <sl-details
@@ -4639,7 +4667,8 @@ export class PreloopFlowForm extends LitElement {
           ${
             this.flow.agent_type === 'cursor' ||
             this.flow.agent_type === 'copilot' ||
-            this.flow.agent_type === 'devin'
+            this.flow.agent_type === 'devin' ||
+            this.flow.agent_type === 'claude_code'
               ? html`<p data-host-exec-mcp-note>
                   The runner adds these tools to the
                   ${HOST_EXEC_LABELS[this.hostExecAgentType() as HostExecAgentType]}
