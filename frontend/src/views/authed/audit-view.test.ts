@@ -1801,4 +1801,119 @@ describe('AuditView', () => {
     );
     element.remove();
   });
+
+  describe('capped totals and live dedupe (#1592)', () => {
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const row = (id: string) => ({
+      correlation_id: null,
+      outcome: 'created',
+      primary_event: {
+        id,
+        account_id: 'account-1',
+        user_id: 'user-1',
+        action: 'runtime_session_created',
+        resource_type: 'runtime_session',
+        resource_id: id,
+        status: 'created',
+        ip_address: null,
+        user_agent: null,
+        timestamp: '2026-03-10T10:00:00Z',
+        details: {},
+      },
+      sub_events: [],
+    });
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    /** A grouped endpoint with a fixed answer and an optional delay. */
+    const grouped = (body: unknown, latencyMs = 0) => {
+      const urls: string[] = [];
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/audit-logs/grouped?')) {
+          urls.push(url);
+          if (latencyMs) await sleep(latencyMs);
+          return json(body);
+        }
+        return json([]);
+      });
+      return urls;
+    };
+
+    it('asks for a capped total and shows it as a lower bound', async () => {
+      const groups = Array.from({ length: 50 }, (_, i) => row(`row-${i}`));
+      const urls = grouped({
+        groups,
+        total: 10000,
+        skip: 0,
+        limit: 50,
+        total_capped: true,
+      });
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._groups.length === 50);
+      await element.updateComplete;
+
+      expect(
+        new URL(urls[0], location.origin).searchParams.get('count_limit')
+      ).to.equal('10000');
+      const meta = element.shadowRoot!.querySelector('.header-meta')!;
+      expect(meta.textContent!.replace(/\s+/g, ' ')).to.contain('10K+ events');
+      const pager = element.shadowRoot!.querySelector(
+        'table-pagination'
+      ) as any;
+      expect(pager.total).to.equal(null);
+      expect(pager.hasNext).to.equal(true);
+
+      // Past the counted pages the next page is still reachable.
+      const url = location.href;
+      try {
+        (element as any)._page = 199;
+        (element as any)._goToPage(200);
+        expect((element as any)._page).to.equal(200);
+      } finally {
+        history.replaceState(history.state, '', url);
+        element.remove();
+      }
+    });
+
+    it('does not refetch for an event already on screen', async () => {
+      const urls = grouped({ groups: [row('row-1')], total: 1 });
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._groups.length === 1);
+      wsCallback?.({ type: 'audit_event', payload: { audit_log_id: 'row-1' } });
+      await sleep(900);
+      expect(urls).to.have.length(1);
+      element.remove();
+    });
+
+    it('skips the trailing refresh when the answer already has the row', async () => {
+      const urls = grouped({ groups: [row('row-1')], total: 1 }, 500);
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._loading);
+      wsCallback?.({ type: 'audit_event', payload: { audit_log_id: 'row-1' } });
+      await waitUntil(() => !(element as any)._loading);
+      await sleep(900);
+      expect(urls).to.have.length(1);
+      element.remove();
+    });
+
+    it('still refreshes for a row the answer does not have', async function () {
+      this.timeout(6000);
+      const urls = grouped({ groups: [row('row-1')], total: 1 }, 300);
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._loading);
+      wsCallback?.({ type: 'audit_event', payload: { audit_log_id: 'row-2' } });
+      await waitUntil(() => urls.length === 2, 'trailing refresh', {
+        timeout: 4000,
+      });
+      element.remove();
+    });
+  });
 });

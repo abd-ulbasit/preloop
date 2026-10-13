@@ -110,6 +110,20 @@ def _hydrate_groups(db: Session, groups: List[Dict[str, Any]]) -> None:
         group["sub_events"] = [full.get(sub.id, sub) for sub in group["sub_events"]]
 
 
+def _count_rows(db: Session, filters: List[Any], limit: Optional[int]) -> int:
+    """Count audit rows matching ``filters``, stopping at ``limit + 1``.
+
+    With a limit the count runs over a ``LIMIT`` subquery, so Postgres stops
+    reading after ``limit + 1`` rows instead of visiting every match.
+    """
+    if limit is None:
+        return (
+            db.query(func.count()).select_from(AuditLog).filter(*filters).scalar() or 0
+        )
+    capped = db.query(AuditLog.id).filter(*filters).limit(limit + 1).subquery()
+    return db.query(func.count()).select_from(capped).scalar() or 0
+
+
 class CRUDAuditLog(CRUDBase[AuditLog]):
     """CRUD operations for audit logging."""
 
@@ -407,6 +421,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         consent_ref: Optional[str] = None,
         min_cost: Optional[float] = None,
         max_cost: Optional[float] = None,
+        count_limit: Optional[int] = None,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """Get audit logs grouped by correlation_id for the unified timeline.
 
@@ -431,11 +446,19 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             start_date: Filter by start date
             consent_ref: Exact delegated grant consent reference
             end_date: Filter by end date
+            count_limit: Stop counting the total past this many groups. The
+                exact count reads every matching row of the trail, which is
+                most of the cost on a long one (#1592). A returned total
+                greater than ``count_limit`` means "more than count_limit";
+                it is at most ``count_limit + 1``. Totals computed from the
+                outcome or cost window are exact already and not capped.
 
         Returns:
             Tuple of (list of group dicts, total primary event count)
         """
         account_id_str = str(account_id) if isinstance(account_id, UUID) else account_id
+        if count_limit is not None and count_limit < 0:
+            raise ValueError(f"count_limit must not be negative, not {count_limit}")
         if outcome_match not in ("all", "any"):
             raise ValueError(
                 f"outcome_match must be 'all' or 'any', not {outcome_match!r}"
@@ -543,13 +566,11 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             # Count total before pagination. The branches are disjoint
             # (different actions), so their counts add up.
             total = sum(
-                db.query(func.count())
-                .select_from(AuditLog)
-                .filter(*scope_filters, condition)
-                .scalar()
-                or 0
+                _count_rows(db, [*scope_filters, condition], count_limit)
                 for condition in count_conditions
             )
+            if count_limit is not None:
+                total = min(total, count_limit + 1)
 
             # Fetch the page of primary events
             primary_events = _narrow_audit_rows(
