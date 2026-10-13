@@ -4396,6 +4396,9 @@ export const FLOW_LIST_PAGE_SIZE = 100;
 /** Stop paging so a broken skip cannot loop forever. */
 export const FLOW_LIST_MAX_PAGES = 50;
 
+/** Server maximum on `GET /api/v1/flows/summary` (`limit <= 500`). */
+export const FLOW_SUMMARY_PAGE_SIZE = 500;
+
 /**
  * One row per flow id. Offset paging with no ORDER BY can surface the
  * same flow on two pages when a row is inserted or renamed between
@@ -4522,6 +4525,39 @@ export async function getAllFlows(
   for (let page = 0; page < FLOW_LIST_MAX_PAGES; page += 1) {
     const batch = await getFlows({
       statsSince: options.statsSince,
+      skip,
+      limit: pageSize,
+    });
+    if (!Array.isArray(batch)) {
+      throw new Error('Failed to fetch flows');
+    }
+    flows.push(...batch);
+    if (batch.length < pageSize) {
+      return { flows: uniqueFlowsById(flows), truncated: false };
+    }
+    skip += pageSize;
+  }
+  return { flows: uniqueFlowsById(flows), truncated: true };
+}
+
+/**
+ * Every flow in the account as summaries (id, name, agent, model, preset
+ * flag), paging past one request's limit of 500.
+ *
+ * Pickers that only name flows use this instead of `getAllFlows`: the full
+ * `/flows` rows carry every configuration plus execution statistics, which
+ * made Flows > New wait 5.9 s on prod for a list of names (#1584).
+ */
+export async function getAllFlowSummaries(): Promise<{
+  flows: FlowSummary[];
+  truncated: boolean;
+}> {
+  const pageSize = FLOW_SUMMARY_PAGE_SIZE;
+  const flows: FlowSummary[] = [];
+  let skip = 0;
+  for (let page = 0; page < FLOW_LIST_MAX_PAGES; page += 1) {
+    const batch = await getFlowSummaries({
+      includeStats: false,
       skip,
       limit: pageSize,
     });

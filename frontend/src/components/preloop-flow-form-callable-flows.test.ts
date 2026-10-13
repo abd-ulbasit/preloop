@@ -29,7 +29,7 @@ const delegationTool = () => ({
 
 const isAccountFlowsList = (target: string): boolean => {
   const path = target.split('?')[0];
-  return path.endsWith('/api/v1/flows');
+  return path.endsWith('/api/v1/flows/summary');
 };
 
 const sliceAccountFlows = (
@@ -442,10 +442,10 @@ describe('PreloopFlowForm callable flows picker', () => {
     expect(payload.callable_flows).to.deep.equal([]);
   });
 
-  it('pages past the 100-flow default so a later flow is not marked missing', async () => {
-    accountFlows = Array.from({ length: 101 }, (_, index) => ({
+  it('pages past the 500-flow summary limit so a later flow is not marked missing', async () => {
+    accountFlows = Array.from({ length: 501 }, (_, index) => ({
       id: `flow-${index}`,
-      name: index === 100 ? 'Page two flow' : `Flow ${index}`,
+      name: index === 500 ? 'Page two flow' : `Flow ${index}`,
     }));
     const element = await mountParent({
       allowed_mcp_tools: [delegationTool()],
@@ -459,6 +459,20 @@ describe('PreloopFlowForm callable flows picker', () => {
       '[data-callable-flow-toggle="Page two flow"]'
     ) as HTMLInputElement;
     expect(checkbox.checked).to.be.true;
+  });
+
+  it('names flows from the summaries, never the full flows list (#1584)', async () => {
+    await mountParent();
+    const requested = (window.fetch as sinon.SinonStub)
+      .getCalls()
+      .map((call) => String(call.args[0]).split('?')[0]);
+    expect(requested.some((path) => path.endsWith('/api/v1/flows'))).to.be
+      .false;
+    const summary = (window.fetch as sinon.SinonStub)
+      .getCalls()
+      .map((call) => String(call.args[0]))
+      .find((target) => target.includes('/api/v1/flows/summary'));
+    expect(summary).to.include('include_stats=false');
   });
 
   it('does not badge a saved entry missing when the flows list fails', async () => {

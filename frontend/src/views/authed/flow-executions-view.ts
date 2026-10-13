@@ -6,7 +6,7 @@ import { router } from '../../router';
 import {
   getAccountOrganization,
   getFlowExecutionsPage,
-  getFlows,
+  getAllFlowSummaries,
   retryFlowExecution,
   sendCommandToExecution,
 } from '../../api';
@@ -679,7 +679,7 @@ export class FlowExecutionsView extends AuthedElement {
    */
   private async loadFilterSources(): Promise<void> {
     try {
-      const flows = await getFlows();
+      const { flows } = await getAllFlowSummaries();
       const loaded = (Array.isArray(flows) ? flows : []).filter(
         (flow) => flow && flow.id
       );
