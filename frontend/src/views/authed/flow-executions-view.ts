@@ -456,8 +456,9 @@ export class FlowExecutionsView extends AuthedElement {
   private flowOptions: Array<{ id: string; name: string }> = [];
 
   /**
-   * Full flow rows keyed by id, so retry confirm can name the current
-   * harness and model without a second fetch.
+   * Flow summaries (id, name, agent_type, ai_model_name) keyed by id, so
+   * retry confirm can name the current harness and model without a second
+   * fetch.
    */
   private flowMap = new Map<
     string,

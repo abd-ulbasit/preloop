@@ -4519,15 +4519,25 @@ export async function getFlows(
 export async function getAllFlows(
   options: { statsSince?: string; pageSize?: number } = {}
 ): Promise<{ flows: any[]; truncated: boolean }> {
-  const pageSize = options.pageSize ?? FLOW_LIST_PAGE_SIZE;
-  const flows: any[] = [];
+  return pageFlows(
+    (skip, limit) => getFlows({ statsSince: options.statsSince, skip, limit }),
+    options.pageSize ?? FLOW_LIST_PAGE_SIZE
+  );
+}
+
+/**
+ * Page a flows endpoint until a short page, folding duplicate ids. Stops
+ * after FLOW_LIST_MAX_PAGES pages and reports `truncated`, so a broken skip
+ * cannot loop forever. A failed or malformed page throws.
+ */
+async function pageFlows<T extends { id?: unknown }>(
+  fetchPage: (skip: number, limit: number) => Promise<T[]>,
+  pageSize: number
+): Promise<{ flows: T[]; truncated: boolean }> {
+  const flows: T[] = [];
   let skip = 0;
   for (let page = 0; page < FLOW_LIST_MAX_PAGES; page += 1) {
-    const batch = await getFlows({
-      statsSince: options.statsSince,
-      skip,
-      limit: pageSize,
-    });
+    const batch = await fetchPage(skip, pageSize);
     if (!Array.isArray(batch)) {
       throw new Error('Failed to fetch flows');
     }
@@ -4546,31 +4556,15 @@ export async function getAllFlows(
  *
  * Pickers that only name flows use this instead of `getAllFlows`: the full
  * `/flows` rows carry every configuration plus execution statistics, which
- * made Flows > New wait 5.9 s on prod for a list of names (#1584).
+ * made Flows > New wait 5.9 s on prod for a list of names (#1662).
  */
-export async function getAllFlowSummaries(): Promise<{
-  flows: FlowSummary[];
-  truncated: boolean;
-}> {
-  const pageSize = FLOW_SUMMARY_PAGE_SIZE;
-  const flows: FlowSummary[] = [];
-  let skip = 0;
-  for (let page = 0; page < FLOW_LIST_MAX_PAGES; page += 1) {
-    const batch = await getFlowSummaries({
-      includeStats: false,
-      skip,
-      limit: pageSize,
-    });
-    if (!Array.isArray(batch)) {
-      throw new Error('Failed to fetch flows');
-    }
-    flows.push(...batch);
-    if (batch.length < pageSize) {
-      return { flows: uniqueFlowsById(flows), truncated: false };
-    }
-    skip += pageSize;
-  }
-  return { flows: uniqueFlowsById(flows), truncated: true };
+export async function getAllFlowSummaries(
+  options: { pageSize?: number } = {}
+): Promise<{ flows: FlowSummary[]; truncated: boolean }> {
+  return pageFlows(
+    (skip, limit) => getFlowSummaries({ includeStats: false, skip, limit }),
+    options.pageSize ?? FLOW_SUMMARY_PAGE_SIZE
+  );
 }
 
 export async function getFlow(flowId: string): Promise<any> {

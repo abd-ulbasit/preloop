@@ -461,7 +461,7 @@ describe('PreloopFlowForm callable flows picker', () => {
     expect(checkbox.checked).to.be.true;
   });
 
-  it('names flows from the summaries, never the full flows list (#1584)', async () => {
+  it('names flows from the summaries, never the full flows list (#1662)', async () => {
     await mountParent();
     const requested = (window.fetch as sinon.SinonStub)
       .getCalls()
