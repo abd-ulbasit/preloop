@@ -476,6 +476,16 @@ no session keep waiting for the next run. Existing rows keep their state and
 have null values for the new receipt columns. The console shows the state and
 available transition times, with undeliverable distinct from expired.
 
+The API also reconciles notes whose runtime session is already recorded as
+ended, regardless of harness. This catches runner offline/idle termination,
+kill-switch termination, usage-import session-end events, and gateway idle
+session rollover. The background pass runs every minute and handles up to
+100 ended sessions per pass; a backlog or unavailable API can delay receipts.
+A late hook cannot claim notes for a session already recorded as ended.
+Reconciliation does not end a session because it is silent, asleep, or briefly
+disconnected. Without an authoritative termination event, a note keeps waiting
+until delivery or its expiry.
+
 ## What the model sees
 
 ```

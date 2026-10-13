@@ -14,8 +14,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
+from preloop.models import models
 from preloop.models.crud import (
     crud_account,
     crud_agent_control_command,
@@ -839,3 +842,243 @@ def test_empty_gateway_claim_does_not_sweep_expired_notes_elsewhere(
     assert delivered == []
     commit.assert_not_called()
     assert expired.status == "pending"
+
+
+@pytest.mark.parametrize("status", ["pending", "claimed"])
+def test_ended_session_receipts_reconcile_once(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    """Server-owned termination settles notes once, with audit and webhook."""
+    from unittest.mock import Mock
+
+    note = _send(db_session, account, agent, runtime_session)
+    note.status = status
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    emit = Mock()
+    monkeypatch.setattr(
+        "preloop.services.event_webhooks.emitters.emit_agent_note_undeliverable", emit
+    )
+
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 1
+    assert note.status == "undeliverable"
+    assert note.undeliverable_reason == "session_ended"
+    assert note.undeliverable_at is not None
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 0
+    emit.assert_called_once_with(db_session, note)
+    audits = (
+        db_session.query(models.AuditLog)
+        .filter_by(
+            action=operator_notes.AUDIT_NOTE_UNDELIVERABLE,
+            resource_id=str(runtime_session.id),
+        )
+        .all()
+    )
+    assert len(audits) == 1
+
+
+def test_ended_session_reconciliation_preserves_live_and_unbound_notes(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+) -> None:
+    """Long silence cannot prove termination; unbound notes await another run."""
+    runtime_session.last_activity_at = datetime.now(UTC) - timedelta(days=30)
+    live = _send(db_session, account, agent, runtime_session)
+    unbound = _send(db_session, account, agent)
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 0
+    assert live.status == "pending"
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 1
+    assert unbound.status == "pending"
+
+
+@pytest.mark.parametrize(
+    "status", ["delivered", "acked", "cancelled", "expired", "failed"]
+)
+def test_ended_session_reconciliation_preserves_terminal_receipts(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+    status: str,
+) -> None:
+    note = _send(db_session, account, agent, runtime_session)
+    note.status = status
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 0
+    assert note.status == status
+
+
+def test_ended_session_cannot_claim_notes_before_reconciliation(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+) -> None:
+    """A late hook cannot deliver into a terminated session between passes."""
+    session_note = _send(db_session, account, agent, runtime_session)
+    agent_note = _send(db_session, account, agent)
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    claimed = operator_notes.claim_pending_notes(
+        db_session,
+        account_id=str(account.id),
+        managed_agent_id=str(agent.id),
+        runtime_session_id=str(runtime_session.id),
+        channel="hook",
+    )
+    assert claimed == []
+    assert session_note.status == "pending"
+    assert agent_note.status == "pending"
+
+
+def test_ended_session_reconciliation_bounds_each_batch(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+) -> None:
+    first = _send(db_session, account, agent, runtime_session)
+    runtime_session.ended_at = datetime.now(UTC) - timedelta(minutes=1)
+    second_session = models.RuntimeSession(
+        id=uuid4(),
+        account_id=account.id,
+        session_source_type="cursor",
+        session_source_id="second-session",
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+    )
+    db_session.add(second_session)
+    db_session.flush()
+    second = _send(db_session, account, agent, second_session)
+    assert operator_notes.reconcile_ended_session_notes(db_session, limit=1) == 1
+    assert first.status == "undeliverable"
+    assert second.status == "pending"
+    assert operator_notes.reconcile_ended_session_notes(db_session, limit=1) == 1
+    assert second.status == "undeliverable"
+
+
+def test_ended_session_reconciliation_ignores_cross_account_reference(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+) -> None:
+    other_account = crud_account.create(
+        db_session, obj_in={"organization_name": "Other Org", "is_active": True}
+    )
+    other_agent = crud_managed_agent.create_custom_agent(
+        db_session,
+        account_id=other_account.id,
+        display_name="Other worker",
+        commit=True,
+    )
+    malformed = _send(db_session, other_account, other_agent, runtime_session)
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    assert operator_notes.reconcile_ended_session_notes(db_session) == 0
+    assert malformed.status == "pending"
+
+
+def test_deferred_undeliver_does_not_commit_callers_transaction(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import Mock
+
+    note = _send(db_session, account, agent, runtime_session)
+    commit = Mock(wraps=db_session.commit)
+    monkeypatch.setattr(db_session, "commit", commit)
+    assert (
+        operator_notes.undeliver_session_notes(
+            db_session,
+            account_id=str(account.id),
+            runtime_session_id=runtime_session.id,
+            commit=False,
+        )
+        == 1
+    )
+    assert note.status == "undeliverable"
+    commit.assert_not_called()
+
+
+def test_periodic_sweep_reconciles_non_runner_sessions(
+    db_session: Session,
+    account: models.Account,
+    agent: models.ManagedAgent,
+    runtime_session: models.RuntimeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The minute pass settles usage/gateway endings even without runner work."""
+    from unittest.mock import Mock
+    from preloop.services import runner_session_sweeper
+
+    note = _send(db_session, account, agent, runtime_session)
+    runtime_session.ended_at = datetime.now(UTC)
+    db_session.flush()
+    monkeypatch.setattr(
+        runner_session_sweeper, "get_db_session", lambda: iter([db_session])
+    )
+    monkeypatch.setattr(db_session, "close", Mock())
+    assert runner_session_sweeper.run_runner_session_sweep_once() == 0
+    assert note.status == "undeliverable"
+
+
+def test_reconciliation_replicas_skip_locked_session(db_engine: Engine) -> None:
+    """A second replica cannot settle a target reserved by the first replica."""
+    from preloop.models.crud import crud_runtime_session
+
+    with Session(db_engine) as first, Session(db_engine) as second:
+        isolated_account = crud_account.create(
+            first, obj_in={"organization_name": "Replica Test Org", "is_active": True}
+        )
+        isolated_agent = crud_managed_agent.create_custom_agent(
+            first,
+            account_id=isolated_account.id,
+            display_name="Replica worker",
+            commit=True,
+        )
+        target = models.RuntimeSession(
+            id=uuid4(),
+            account_id=isolated_account.id,
+            session_source_type="copilot_cli",
+            session_source_id="replica-session",
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+        )
+        first.add(target)
+        first.flush()
+        note = _send(first, isolated_account, isolated_agent, target)
+        account_id, target_id, note_id = isolated_account.id, target.id, note.id
+        first.commit()
+        try:
+            reserved = crud_runtime_session.lock_ended_sessions_with_pending_notes(
+                first
+            )
+            assert [row.id for row in reserved] == [target_id]
+            assert operator_notes.reconcile_ended_session_notes(second) == 0
+            assert second.get(models.AgentControlCommand, note_id).status == "pending"
+            second.rollback()
+            assert operator_notes.reconcile_ended_session_notes(first) == 1
+            assert operator_notes.reconcile_ended_session_notes(second) == 0
+            second.expire_all()
+            assert (
+                second.get(models.AgentControlCommand, note_id).status
+                == "undeliverable"
+            )
+        finally:
+            first.rollback()
+            second.rollback()
+            crud_account.delete(first, id=account_id)
