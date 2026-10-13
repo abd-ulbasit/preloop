@@ -102,6 +102,9 @@ def _result_is_failure(payload: Optional[Dict[str, Any]]) -> bool:
 
 _ANTHROPIC_PROVIDERS = frozenset({"anthropic", "claude"})
 
+#: Persistent target kinds whose sidecar resolves ``agent_config.workspace``.
+WORKSPACE_TARGET_KINDS = frozenset({"claude_code"})
+
 
 def persistent_model_name(execution_context: Dict[str, Any]) -> Optional[str]:
     """Model name a persistent Claude Code target should run the flow with.
@@ -362,6 +365,23 @@ class AgentControlExecutor(AgentExecutor):
                     **execution_context,
                     "git_clone_config": flow_git,
                 }
+        agent_kind = str(
+            getattr(agent, "agent_kind", None)
+            or getattr(agent, "session_source_type", None)
+            or ""
+        ).lower()
+        if (
+            self.config.get("workspace") is not None
+            and agent_kind not in WORKSPACE_TARGET_KINDS
+        ):
+            # Other sidecars ignore an authorized directory and would run
+            # in their default directory instead of the one the flow names.
+            raise AgentStartError(
+                "agent_config.workspace is supported only on Claude Code "
+                f"targets; {_target_display_name(agent, target_id)} is "
+                f"{agent_kind or 'unknown'}",
+                category="runner_error",
+            )
         metadata = _flow_dispatch_metadata(
             dispatch_context,
             timeout_seconds=self._timeout_seconds(),

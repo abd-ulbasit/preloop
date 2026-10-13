@@ -164,6 +164,35 @@ test("home, root, credential dirs, read_only and other harnesses are refused", a
   );
 });
 
+test("an authorized path replaced by a symlink is refused", async () => {
+  const s = setup();
+  const elsewhere = path.join(s.root, "elsewhere");
+  fs.mkdirSync(elsewhere);
+  fs.rmSync(s.project, { recursive: true });
+  fs.symlinkSync(elsewhere, s.project);
+  await assert.rejects(
+    resolveFlowWorkspace({ kind: "authorized_directory", id: "dir_project" }, s.config, {
+      git: s.git,
+      homeDir: s.home,
+    }),
+    /now resolves to/,
+  );
+  assert.equal(s.calls.length, 0);
+});
+
+test("a duplicated id is refused", async () => {
+  const base = setup();
+  const entry = { id: "dir_project", path: base.project, mode: "write" };
+  const s = setup({ entries: [entry, { ...entry }] });
+  await assert.rejects(
+    resolveFlowWorkspace({ kind: "authorized_directory", id: "dir_project" }, s.config, {
+      git: s.git,
+      homeDir: s.home,
+    }),
+    /more than once/,
+  );
+});
+
 test("turn timeout follows the flow, bounded by turn_timeout_ms", () => {
   const def = 300_000;
   assert.equal(selectTurnTimeoutMs({}, undefined, def), def);

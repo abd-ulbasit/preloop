@@ -199,7 +199,13 @@ export async function resolveFlowWorkspace(
     if (typeof spec.id !== "string" || !DIRECTORY_ID.test(spec.id)) {
       throw new WorkspaceError("authorized directory id is invalid");
     }
-    entry = entries.find((candidate) => candidate.id === spec.id);
+    const matches = entries.filter((candidate) => candidate.id === spec.id);
+    if (matches.length > 1) {
+      throw new WorkspaceError(
+        `authorized directory ${spec.id} is listed more than once; remove the duplicate`,
+      );
+    }
+    entry = matches[0];
     label = spec.id;
   } else if (spec.kind === "path") {
     if (typeof spec.path !== "string" || !path.isAbsolute(spec.path)) {
@@ -241,6 +247,15 @@ export async function resolveFlowWorkspace(
   const dir = await realDirectory(entry.path);
   if (!dir) {
     throw new WorkspaceError(`authorized directory ${label} does not exist`);
+  }
+  // `preloop runner dirs add` stores the realpath. A stored path that now
+  // resolves elsewhere was replaced by a link or moved after it was
+  // authorized, so the authorization no longer applies (same rule as the
+  // runner).
+  if (dir !== path.resolve(entry.path)) {
+    throw new WorkspaceError(
+      `authorized directory ${label} now resolves to ${dir} (a symlink or moved directory); remove the entry and add that path`,
+    );
   }
   await refuseUnsafeDirectory(dir, options.homeDir ?? os.homedir());
   const dirty = await isDirty(dir, options.git ?? defaultGitRunner);

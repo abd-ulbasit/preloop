@@ -802,8 +802,9 @@ async def _dispatch_metadata(
     *,
     config: dict[str, Any],
     context: dict[str, Any],
+    agent_kind: str = "claude_code",
 ) -> dict[str, Any]:
-    agent = _agent()
+    agent = _agent(agent_kind=agent_kind, session_source_type=agent_kind)
     executor = _executor(agent_id=agent.id, account_id=agent.account_id, **config)
     captured: dict[str, Any] = {}
 
@@ -845,6 +846,19 @@ async def test_start_sends_authorized_directory_workspace(
         "allow_dirty": False,
     }
     assert "cwd" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_workspace_on_non_claude_target(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    with pytest.raises(AgentStartError, match="only on Claude Code"):
+        await _dispatch_metadata(
+            monkeypatch,
+            config={"workspace": {"kind": "authorized_directory", "id": "dir_a"}},
+            context={},
+            agent_kind="codex",
+        )
 
 
 @pytest.mark.asyncio

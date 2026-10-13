@@ -71,8 +71,10 @@ assume an ephemeral checkout, do not.
 
 ## Run in a directory on the agent host
 
-A flow can name the directory the session runs in with
-`agent_config.workspace`:
+On a Claude Code target, a flow can name the directory the session runs in
+with `agent_config.workspace`. Other targets (for example Codex) do not
+support it yet, and start fails instead of running in their default
+directory.
 
 ```json
 {
