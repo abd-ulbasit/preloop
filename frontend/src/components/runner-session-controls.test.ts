@@ -182,6 +182,57 @@ describe('runner-session-controls', () => {
     expect(composer(el).runnerSessionId).to.equal(null);
   });
 
+  it('re-reads the mode once per burst of revisions', async () => {
+    const el = await mount();
+    const hint = () =>
+      el.shadowRoot!.querySelector('[data-testid="control-mode-hint"]')!
+        .textContent!;
+    expect(hint()).to.contain('Runner online');
+    const controlCalls = () =>
+      fetchStub.getCalls().filter((c) => String(c.args[0]).endsWith('/control'))
+        .length;
+    const before = controlCalls();
+    controlBody = control({
+      mode: 'note',
+      reason_code: 'control_offline',
+      send_path: null,
+    });
+    for (const revision of ['a', 'b', 'c']) {
+      el.revision = revision;
+      await el.updateComplete;
+    }
+    await waitUntil(() => hint().includes('Runner offline'), 'offline hint');
+    expect(controlCalls() - before).to.equal(1);
+    expect(composer(el).runnerSessionId).to.equal(null);
+  });
+
+  it('re-reads the mode after a failed command send', async () => {
+    turnResponse = () => json({ detail: { code: 'runner_offline' } }, 409);
+    const el = await mount();
+    const before = fetchStub
+      .getCalls()
+      .filter((c) => String(c.args[0]).endsWith('/control')).length;
+    controlBody = control({
+      mode: 'note',
+      reason_code: 'control_offline',
+      send_path: null,
+    });
+    const box = await type(el, 'Hello');
+    box.shadowRoot.querySelector('[data-testid="note-send"]').click();
+    await waitUntil(
+      () =>
+        el
+          .shadowRoot!.querySelector('[data-testid="control-mode-hint"]')!
+          .textContent!.includes('Runner offline'),
+      'refreshed after failure'
+    );
+    expect(
+      fetchStub.getCalls().filter((c) => String(c.args[0]).endsWith('/control'))
+        .length - before
+    ).to.equal(1);
+    expect(box.text).to.equal('Hello');
+  });
+
   it('shows the attach command as copyable text', async () => {
     const el = await mount();
     const hint = el.shadowRoot!.querySelector('[data-testid="attach-hint"]')!;

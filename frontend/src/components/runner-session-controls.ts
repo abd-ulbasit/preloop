@@ -24,8 +24,20 @@ export class RunnerSessionControls extends LitElement {
   @property({ type: String, attribute: 'session-id' })
   sessionId = '';
 
+  /**
+   * Changes whenever the host saw the session change (activity, status, end).
+   * A change re-reads the control mode, debounced.
+   */
+  @property({ type: String })
+  revision = '';
+
   @state()
   private control: RuntimeSessionControl | null = null;
+
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Debounce window for re-reading the control mode. */
+  static refreshDelayMs = 300;
 
   @state()
   private controlError = false;
@@ -78,18 +90,56 @@ export class RunnerSessionControls extends LitElement {
   `;
 
   updated(changed: Map<string, unknown>): void {
-    if (changed.has('sessionId')) void this.loadControl();
+    if (changed.has('sessionId')) {
+      this.cancelRefresh();
+      void this.loadControl(true);
+    } else if (
+      changed.has('revision') &&
+      changed.get('revision') !== undefined
+    ) {
+      this.refreshControl();
+    }
   }
 
-  /** Re-read the mode, e.g. after the session or its runner changed state. */
-  async loadControl(): Promise<void> {
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.cancelRefresh();
+  }
+
+  /**
+   * Re-read the mode soon: the runner may have gone offline or come back.
+   * A burst of calls inside the debounce window costs one request.
+   */
+  refreshControl(): void {
+    this.cancelRefresh();
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      void this.loadControl(false);
+    }, RunnerSessionControls.refreshDelayMs);
+  }
+
+  private cancelRefresh(): void {
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+
+  /**
+   * Read the mode. A fresh session starts from "checking"; a refresh keeps
+   * the current hint until the answer arrives.
+   */
+  async loadControl(reset = true): Promise<void> {
     const seq = ++this.loadSeq;
-    this.control = null;
-    this.controlError = false;
+    if (reset) {
+      this.control = null;
+      this.controlError = false;
+    }
     if (!this.sessionId) return;
     try {
       const control = await getRuntimeSessionControl(this.sessionId);
-      if (seq === this.loadSeq) this.control = control;
+      if (seq === this.loadSeq) {
+        this.control = control;
+        this.controlError = false;
+      }
     } catch {
       if (seq === this.loadSeq) this.controlError = true;
     }
@@ -131,6 +181,7 @@ export class RunnerSessionControls extends LitElement {
       <operator-note-composer
         session-id=${this.sessionId}
         .runnerSessionId=${this.commandTarget}
+        @runner-turn-failed=${() => this.refreshControl()}
       ></operator-note-composer>
       <div class="attach" data-testid="attach-hint">
         <p class="attach-label">Or attach from a terminal:</p>

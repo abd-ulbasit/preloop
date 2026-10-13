@@ -84,6 +84,7 @@ import { confirmDialog } from './confirm-dialog';
 import { reducedMotionStyles } from '../styles/reduced-motion';
 import './session-chat-view';
 import './runner-session-controls';
+import type { RunnerSessionControls } from './runner-session-controls';
 import './talk-button';
 import './session-list-panel';
 import './session-replay-panel';
@@ -673,9 +674,9 @@ export class PreloopSessionObserver extends LitElement {
         margin-left: 0;
       }
 
-      /* Phone: 44px tap target for Stop (DESIGN.md D24). */
+      /* Phone: 44px tap targets for Stop and End session (DESIGN.md D24). */
       @media (max-width: 720px) {
-        sl-button.runner-stop {
+        .mode-row sl-button.destructive {
           --sl-input-height-small: 44px;
         }
       }
@@ -981,6 +982,16 @@ export class PreloopSessionObserver extends LitElement {
     const payload = message?.payload ?? {};
     if (!this.matchesScope(payload)) return;
     this.pulseLive();
+    // The runner may have gone offline or come back: re-read the control
+    // mode of the open runner session (debounced in the element).
+    if (
+      payload.runtime_session_id &&
+      payload.runtime_session_id === this.activeSessionId
+    ) {
+      this.renderRoot
+        .querySelector<RunnerSessionControls>('runner-session-controls')
+        ?.refreshControl();
+    }
     // An operator message (a note, or a command that starts a new turn) is a
     // timeline row with no gateway twin, so nothing else would put it on the
     // open session until the agent's next call. Re-read that session's
@@ -1917,10 +1928,14 @@ export class PreloopSessionObserver extends LitElement {
       message: `End session "${this.activeSession.title}"?`,
       // What the backend `end` action does (api/endpoints/account.py,
       // update_account_runtime_session): stamp ended_at, deactivate the
-      // session's runtime keys, unbind the managed agent. It does not stop an
-      // agent process, so the dialog does not promise that.
+      // session's runtime keys, unbind the managed agent, and for a
+      // runner-hosted session ask the runner to stop the harness (#1483).
+      // Other agent processes are not stopped, so the dialog only promises
+      // that for runner sessions.
       detail:
-        'Its runtime keys are revoked and nothing more is recorded. What it did so far stays.',
+        this.activeSession.sourceType === 'runner_session'
+          ? 'The agent on your runner is asked to stop and the session ends. Its runtime keys are revoked. What it did so far stays.'
+          : 'Its runtime keys are revoked and nothing more is recorded. What it did so far stays.',
       confirmLabel: 'End session',
       variant: 'danger',
     });
@@ -2482,6 +2497,7 @@ export class PreloopSessionObserver extends LitElement {
     }
     return html`<runner-session-controls
       session-id=${session.id}
+      revision=${[session.status, session.lastActivityAt, session.endedAt].join('|')}
       @runner-turn-sent=${() => this.refreshAfterSend()}
       @operator-note-sent=${() => this.refreshAfterSend()}
     ></runner-session-controls>`;

@@ -407,6 +407,12 @@ for (const phone of PHONES) {
           window.innerWidth
         );
         expectTappable(stop, 'Stop');
+        const end = Array.from(
+          observer.shadowRoot!.querySelectorAll(
+            '.mode-row sl-button.destructive'
+          )
+        ).find((button) => (button.textContent || '').includes('End session'));
+        expectTappable(end, 'End session');
       } finally {
         (unifiedWebSocketManager.connect as sinon.SinonStub).restore();
         subscribe.restore();

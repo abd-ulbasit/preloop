@@ -40,6 +40,12 @@ export const OPERATOR_NOTE_SENT_EVENT = 'operator-note-sent';
  */
 export const RUNNER_TURN_SENT_EVENT = 'runner-turn-sent';
 
+/**
+ * Emitted when a command-mode send failed for a reason other than a turn in
+ * progress, so the host can re-read whether command mode still applies.
+ */
+export const RUNNER_TURN_FAILED_EVENT = 'runner-turn-failed';
+
 /** Mirrors MAX_NOTE_BODY_CHARS on the server, which is the real bound. */
 const MAX_NOTE_CHARS = 4096;
 
@@ -326,6 +332,12 @@ export class OperatorNoteComposer extends LitElement {
       } else {
         this.error =
           error instanceof Error ? error.message : 'Failed to send the message';
+        this.dispatchEvent(
+          new CustomEvent(RUNNER_TURN_FAILED_EVENT, {
+            bubbles: true,
+            composed: true,
+          })
+        );
       }
     } finally {
       this.sending = false;

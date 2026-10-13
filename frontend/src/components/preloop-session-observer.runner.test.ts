@@ -154,6 +154,27 @@ describe('PreloopSessionObserver runner sessions', () => {
     expect(stopBodies()[1]).to.deep.equal({ mode: 'kill' });
   });
 
+  it('says End session stops the agent on the runner', async () => {
+    const el = await mount();
+    const end = Array.from(
+      el.shadowRoot!.querySelectorAll('.toolbar sl-button')
+    ).find((button) => (button.textContent || '').includes('End session'));
+    (end as HTMLElement).click();
+    await waitUntil(
+      () =>
+        document.body
+          .querySelector('confirm-dialog')
+          ?.shadowRoot?.textContent?.includes('asked to stop'),
+      'runner wording'
+    );
+    const text =
+      document.body.querySelector('confirm-dialog')!.shadowRoot!.textContent!;
+    expect(text).to.include(
+      'The agent on your runner is asked to stop and the session ends.'
+    );
+    expect(text).to.not.include('nothing more is recorded');
+  });
+
   it('offers no Stop or composer on an ended runner session', async () => {
     const el = await mount(
       row({ ended_at: '2026-10-13T10:10:00Z', activity_status: 'ended' })
