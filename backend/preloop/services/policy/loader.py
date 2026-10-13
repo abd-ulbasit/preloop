@@ -1384,7 +1384,9 @@ class PolicyApplier:
                 missing MCP servers (they were validated in pre-check).
         """
         from preloop.models.crud import crud_tool_configuration
-        from preloop.models.models.tool_configuration import ToolConfiguration
+        from preloop.models.crud.tool_configuration import (
+            get_or_create_tool_configuration_sync,
+        )
 
         for tool_def in tools:
             # Skip tools that were marked for skipping during validation
@@ -1483,19 +1485,26 @@ class PolicyApplier:
             else:
                 # Create new config
                 if not dry_run:
-                    new_config = ToolConfiguration(
-                        account_id=self.account_id,
-                        tool_name=tool_def.name,
-                        tool_source=tool_source,
-                        mcp_server_id=mcp_server_id,
-                        is_enabled=tool_def.enabled,
-                        approval_workflow_id=approval_workflow_id,
-                        tool_description=tool_def.description,
-                        custom_config=tool_def.custom_config,
-                        justification_mode=tool_def.justification,
+                    values = {
+                        "account_id": self.account_id,
+                        "tool_name": tool_def.name,
+                        "tool_source": tool_source,
+                        "mcp_server_id": mcp_server_id,
+                        "is_enabled": tool_def.enabled,
+                        "approval_workflow_id": approval_workflow_id,
+                        "tool_description": tool_def.description,
+                        "custom_config": tool_def.custom_config,
+                        "justification_mode": tool_def.justification,
+                    }
+                    # A concurrent writer may create the same row between the
+                    # lookup and here; adopt it and apply this policy's values.
+                    new_config, created = get_or_create_tool_configuration_sync(
+                        self.db, values=values
                     )
-                    self.db.add(new_config)
-                    self.db.flush()
+                    if not created:
+                        for key, value in values.items():
+                            setattr(new_config, key, value)
+                        self.db.flush()
 
                     # Handle conditions
                     if tool_def.conditions:

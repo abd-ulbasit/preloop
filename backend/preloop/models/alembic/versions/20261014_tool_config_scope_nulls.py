@@ -72,6 +72,9 @@ def _drop_existing() -> None:
 def upgrade() -> None:
     """Fold duplicate scope rows into the oldest, then tighten the constraint."""
     bind = op.get_bind()
+    # Block writers (old pods during a rolling deploy) until the constraint
+    # is in place, so no duplicate can land between the fold and the ADD.
+    op.execute("LOCK TABLE tool_configuration IN SHARE ROW EXCLUSIVE MODE")
     bind.execute(sa.text(DEDUPE_SQL))
     _drop_existing()
     version = bind.execute(sa.text("SHOW server_version_num")).scalar()

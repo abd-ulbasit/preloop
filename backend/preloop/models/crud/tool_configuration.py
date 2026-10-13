@@ -2,6 +2,7 @@
 
 from typing import Any, List, Optional
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.future import select
 
@@ -389,6 +390,81 @@ def _account_wide_first_order() -> tuple:
         models.ToolConfiguration.created_at,
         models.ToolConfiguration.id,
     )
+
+
+def _insert_if_absent_stmt(values: dict[str, Any]) -> Any:
+    """``INSERT ... ON CONFLICT DO NOTHING RETURNING id`` for one config row.
+
+    ``uq_account_tool_source`` treats NULL scopes as equal, so a concurrent
+    get-or-create loser inserts nothing instead of raising ``IntegrityError``
+    and the caller re-selects the winner. No rollback is needed, so objects
+    the caller already loaded in the session stay usable.
+    """
+    return (
+        pg_insert(models.ToolConfiguration)
+        .values(**values)
+        .on_conflict_do_nothing(constraint="uq_account_tool_source")
+        .returning(models.ToolConfiguration.id)
+    )
+
+
+def _same_scope_stmt(values: dict[str, Any]) -> Any:
+    """Select the row occupying the scope that ``values`` would insert into."""
+    cfg = models.ToolConfiguration
+    return select(cfg).where(
+        cfg.account_id == values["account_id"],
+        cfg.tool_name == values["tool_name"],
+        cfg.tool_source == values.get("tool_source", "builtin"),
+        cfg.mcp_server_id.is_not_distinct_from(values.get("mcp_server_id")),
+        cfg.managed_agent_id.is_not_distinct_from(values.get("managed_agent_id")),
+    )
+
+
+def get_or_create_tool_configuration_sync(
+    db: Session, *, values: dict[str, Any]
+) -> tuple[models.ToolConfiguration, bool]:
+    """Insert a tool configuration unless its scope is taken; flush only.
+
+    Args:
+        db: The sync database session (the caller owns the transaction).
+        values: Column values for the new row, including ``account_id``.
+
+    Returns:
+        ``(row, created)``; ``created`` is False when a concurrent writer or
+        an existing row already held the scope.
+    """
+    new_id = db.execute(_insert_if_absent_stmt(values)).scalar()
+    if new_id is not None:
+        return db.get(models.ToolConfiguration, new_id), True
+    return db.execute(_same_scope_stmt(values)).scalars().one(), False
+
+
+async def get_or_create_tool_configuration_async(
+    db: Session,
+    *,
+    obj_in: schemas.ToolConfigurationCreate,
+    account_id: str,
+) -> models.ToolConfiguration:
+    """Async: create a tool configuration, or return the row holding its scope.
+
+    Safe under concurrent first inserts: the loser adopts the winner's row
+    without rolling back the caller's session.
+
+    Args:
+        db: The async database session.
+        obj_in: The data for the new tool configuration.
+        account_id: The ID of the account.
+
+    Returns:
+        The created or already existing tool configuration.
+    """
+    values = obj_in.model_dump()
+    values["account_id"] = account_id
+    new_id = (await db.execute(_insert_if_absent_stmt(values))).scalar()
+    await db.commit()
+    if new_id is not None:
+        return await db.get(models.ToolConfiguration, new_id)
+    return (await db.execute(_same_scope_stmt(values))).scalars().one()
 
 
 # Async helper functions

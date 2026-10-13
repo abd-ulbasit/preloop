@@ -128,3 +128,29 @@ async def test_name_and_source_lookup_returns_none_when_absent():
         )
 
         assert found is None
+
+
+def test_sync_get_or_create_adopts_an_existing_account_wide_row(db_session):
+    """The flush-only helper used by policy apply and maintenance."""
+    from preloop.models.crud.tool_configuration import (
+        get_or_create_tool_configuration_sync,
+    )
+
+    account = models.Account(organization_name="Sync get-or-create tenant")
+    db_session.add(account)
+    db_session.flush()
+    values = {
+        "account_id": account.id,
+        "tool_name": "WebFetch",
+        "tool_source": "builtin",
+    }
+
+    first, created = get_or_create_tool_configuration_sync(db_session, values=values)
+    second, created_again = get_or_create_tool_configuration_sync(
+        db_session, values=values
+    )
+
+    assert created is True
+    assert created_again is False
+    assert second.id == first.id
+    assert first.managed_agent_id is None and first.mcp_server_id is None

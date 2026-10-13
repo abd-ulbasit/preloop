@@ -79,6 +79,33 @@ def _insert_rule(db_session, account_id, config_id) -> uuid.UUID:
     return rule_id
 
 
+def _insert_request(db_session, account_id, config_id) -> uuid.UUID:
+    from preloop.models import models
+
+    workflow = models.ApprovalWorkflow(account_id=account_id, name=str(uuid.uuid4()))
+    db_session.add(workflow)
+    db_session.flush()
+    workflow_id = workflow.id
+    request_id = uuid.uuid4()
+    db_session.execute(
+        sa.text(
+            "INSERT INTO approval_request (id, account_id, tool_configuration_id, "
+            "approval_workflow_id, tool_name, tool_args, status, requested_at, "
+            "approval_token, created_at, updated_at) VALUES (:id, :account_id, "
+            ":config_id, :workflow_id, 'WebFetch', '{}'::jsonb, 'approved', now(), "
+            ":token, now(), now())"
+        ),
+        {
+            "id": request_id,
+            "account_id": account_id,
+            "config_id": config_id,
+            "workflow_id": workflow_id,
+            "token": uuid.uuid4().hex,
+        },
+    )
+    return request_id
+
+
 def _config_ids(db_session, account_id) -> list[uuid.UUID]:
     rows = db_session.execute(
         sa.text(
@@ -124,6 +151,7 @@ def test_upgrade_folds_duplicates_into_the_oldest_row(
         db_session, account_id, created_at=base + timedelta(milliseconds=1)
     )
     rule_id = _insert_rule(db_session, account_id, loser)
+    request_id = _insert_request(db_session, account_id, loser)
     assert _config_ids(db_session, account_id) == [keeper, loser]
 
     _run_upgrade(db_session)
@@ -134,6 +162,11 @@ def test_upgrade_folds_duplicates_into_the_oldest_row(
         {"id": rule_id},
     ).scalar()
     assert moved_to == keeper
+    request_moved_to = db_session.execute(
+        sa.text("SELECT tool_configuration_id FROM approval_request WHERE id = :id"),
+        {"id": request_id},
+    ).scalar()
+    assert request_moved_to == keeper
 
 
 def test_upgrade_keeps_scoped_rows_and_rejects_new_account_wide_duplicates(

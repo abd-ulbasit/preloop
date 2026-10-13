@@ -353,8 +353,8 @@ async def resolve_tool_config(
 ) -> Any:
     """Get or create a ToolConfiguration row for this native tool."""
     from preloop.models.crud.tool_configuration import (
+        get_or_create_tool_configuration_async,
         get_tool_config_by_name_and_source_async,
-        create_tool_configuration_async,
     )
     from preloop.models.schemas.tool_configuration import ToolConfigurationCreate
 
@@ -367,32 +367,21 @@ async def resolve_tool_config(
     if config is not None:
         return config
 
-    try:
-        return await create_tool_configuration_async(
-            db,
-            obj_in=ToolConfigurationCreate(
-                tool_name=tool_name,
-                tool_source=AGENT_TOOL_SOURCE,
-                account_id=account_id,
-                approval_workflow_id=workflow_id,
-                is_enabled=True,
-                custom_config={},
-            ),
-            account_id=account_id,
-        )
-    except IntegrityError:
-        # Two permission checks for a new tool raced on the insert; the
-        # unique constraint rejected the loser. Use the winner's row.
-        await db.rollback()
-        existing = await get_tool_config_by_name_and_source_async(
-            db,
-            account_id=account_id,
+    # Insert-if-absent: a concurrent first permission check for the same
+    # tool adopts the winner's row without rolling back the session, so the
+    # caller's already loaded objects (the workflow) stay usable.
+    return await get_or_create_tool_configuration_async(
+        db,
+        obj_in=ToolConfigurationCreate(
             tool_name=tool_name,
             tool_source=AGENT_TOOL_SOURCE,
-        )
-        if existing is None:
-            raise
-        return existing
+            account_id=account_id,
+            approval_workflow_id=workflow_id,
+            is_enabled=True,
+            custom_config={},
+        ),
+        account_id=account_id,
+    )
 
 
 def _native_decision_source(decision: Any) -> Optional[str]:
