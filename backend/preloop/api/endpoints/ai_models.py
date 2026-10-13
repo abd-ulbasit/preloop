@@ -1146,7 +1146,7 @@ def _aws_auth_from_stored_bedrock_secret(
     runtime_raw = meta.get("provider_runtime")
     runtime = runtime_raw if isinstance(runtime_raw, dict) else {}
     region = runtime.get("region") if isinstance(runtime, dict) else None
-    if isinstance(region, str) and region.strip() and "aws_region_name" not in auth:
+    if isinstance(region, str) and region.strip():
         auth["aws_region_name"] = region.strip()
     if not auth.get("aws_bearer_token_bedrock") and (
         not auth.get("aws_access_key_id") or not auth.get("aws_secret_access_key")
@@ -1253,7 +1253,11 @@ def _resolve_listing_inputs(
 
     api_key = typed_key or stored_key
     api_endpoint = typed_endpoint or stored_endpoint
-    aws_auth = typed_aws or stored_aws
+    if typed_aws and set(typed_aws) <= {"aws_region_name"} and stored_aws:
+        # Editing the discovery region must not discard the stored credentials.
+        aws_auth = {**stored_aws, **typed_aws}
+    else:
+        aws_auth = typed_aws or stored_aws
     return api_key, api_endpoint, aws_auth, model_kind, stored_subscription_oauth
 
 
@@ -1331,6 +1335,7 @@ async def _fetch_provider_models(
             models=result.models,
             source=result.source,
             error=result.error,
+            warnings=result.warnings,
         )
     except ProviderAuthError as e:
         # The provider rejected the caller's API key. The message is our own

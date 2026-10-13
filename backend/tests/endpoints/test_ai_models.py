@@ -248,7 +248,12 @@ def test_available_models_post_route_declares_provenance_response_model():
 def test_available_models_response_defaults_and_shape():
     response = AvailableModelsResponse(models=["kimi-k3"], source="live")
     dumped = response.model_dump()
-    assert dumped == {"models": ["kimi-k3"], "source": "live", "error": None}
+    assert dumped == {
+        "models": ["kimi-k3"],
+        "source": "live",
+        "error": None,
+        "warnings": [],
+    }
 
 
 def test_available_models_response_rejects_unknown_source():
@@ -1327,3 +1332,89 @@ async def test_unpriced_builtin_catalog_is_safe(
     if is_admin:
         assert result[0].is_built_in and result[0].unpriced
         assert "private" not in str(result[0].model_dump())
+
+
+@pytest.mark.asyncio
+async def test_fetch_provider_models_exposes_safe_discovery_warnings(
+    mocker: MockerFixture,
+) -> None:
+    from preloop.services.ai_model_provider import ModelDiscoveryResult
+
+    mocker.patch(
+        "preloop.api.endpoints.ai_models.get_available_models_for_provider",
+        return_value=ModelDiscoveryResult(
+            models=["actual.profile"],
+            source="live",
+            warnings=["bedrock_inference_profiles_unavailable"],
+        ),
+    )
+    result = await ai_models._fetch_provider_models(
+        provider="bedrock", api_key=None, model_kind="llm", api_endpoint=None
+    )
+    assert result.warnings == ["bedrock_inference_profiles_unavailable"]
+
+
+def test_stored_bedrock_listing_region_override_keeps_credentials(
+    mocker: MockerFixture,
+) -> None:
+    import json
+    from types import SimpleNamespace
+    from preloop.schemas.ai_model import AvailableModelsRequest
+
+    model = SimpleNamespace(
+        provider_name="bedrock",
+        api_endpoint=None,
+        is_principal_bound_oauth=False,
+        meta_data={"provider_runtime": {"region": "us-east-1"}},
+    )
+    mocker.patch.object(ai_models.crud_ai_model, "get_for_account", return_value=model)
+    mocker.patch.object(
+        ai_models.crud_ai_model,
+        "resolve_listing_secret",
+        return_value=json.dumps({"aws_bearer_token_bedrock": "synthetic-key"}),
+    )
+    request_in = AvailableModelsRequest(
+        ai_model_id=uuid.uuid4(), aws_region_name="us-west-2"
+    )
+    _, _, aws_auth, _, _ = ai_models._resolve_listing_inputs(
+        provider="bedrock",
+        request_in=request_in,
+        db=MagicMock(),
+        current_user=SimpleNamespace(account_id=uuid.uuid4()),
+    )
+    assert aws_auth == {
+        "aws_bearer_token_bedrock": "synthetic-key",
+        "aws_region_name": "us-west-2",
+    }
+
+
+def test_ai_model_update_preserves_omitted_metadata_and_explicit_null() -> None:
+    assert AIModelUpdate(model_identifier="actual.profile").model_dump(
+        exclude_unset=True
+    ) == {"model_identifier": "actual.profile"}
+    assert AIModelUpdate(meta_data=None).model_dump(exclude_unset=True) == {
+        "meta_data": None
+    }
+
+
+@pytest.mark.parametrize("metadata_region", [" us-west-2 ", None, ""])
+def test_stored_bedrock_metadata_region_overrides_imported_secret(
+    metadata_region: str | None,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    model = SimpleNamespace(meta_data={"provider_runtime": {"region": metadata_region}})
+    auth = ai_models._aws_auth_from_stored_bedrock_secret(
+        json.dumps(
+            {
+                "aws_bearer_token_bedrock": "synthetic-key",
+                "aws_region_name": "us-east-1",
+            }
+        ),
+        model,
+    )
+    assert auth == {
+        "aws_bearer_token_bedrock": "synthetic-key",
+        "aws_region_name": "us-west-2" if metadata_region else "us-east-1",
+    }

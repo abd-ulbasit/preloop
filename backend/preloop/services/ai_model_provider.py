@@ -115,11 +115,13 @@ class ModelDiscoveryResult:
             or was impossible.
         error: Short safe reason from FALLBACK_ERROR_REASONS when a live
             attempt failed or was impossible; None for a clean live result.
+        warnings: Safe codes for a partial listing that needs user guidance.
     """
 
     models: List[str] = field(default_factory=list)
     source: DiscoverySource = "fallback"
     error: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.error is not None and self.error not in FALLBACK_ERROR_REASONS:
@@ -1372,7 +1374,7 @@ def _is_bedrock_chat_model(summary: Any) -> bool:
 
 
 def _is_bedrock_inference_profile(summary: Any) -> bool:
-    """Keep ACTIVE system inference profiles that can serve chat.
+    """Keep ACTIVE inference profiles that can serve chat.
 
     Geo ids such as ``us.anthropic.claude-sonnet-4-5-20250929-v1:0`` are what
     Claude Code stores. Foundation-model listing does not include them.
@@ -1397,35 +1399,84 @@ def _list_attr_or_key(obj: Any, name: str) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _collect_bedrock_model_ids(client: Any) -> list[str]:
-    """Foundation models plus system inference profiles from one client."""
-    response = client.list_foundation_models()
-    model_ids: list[str] = []
-    for summary in _list_attr_or_key(response, "modelSummaries"):
-        model_id = _attr_or_key_str(summary, "modelId")
-        if model_id and _is_bedrock_chat_model(summary):
-            model_ids.append(model_id)
+def _collect_bedrock_model_ids(
+    client: Any, warnings: Optional[list[str]] = None
+) -> list[str]:
+    """List runtime targets, preferring actual profiles over their foundations.
 
+    Use profile model ARNs to replace raw foundation IDs with an explicit
+    invocation target whenever a profile is available. Omitting the
+    profile type filter includes both SYSTEM_DEFINED and APPLICATION profiles; opaque
+    application profiles use their returned ARN as the invocation identifier.
+    Older summaries without inference-type metadata remain compatible.
+    """
+    warnings = warnings if warnings is not None else []
+    response = client.list_foundation_models()
+    foundations = {
+        _attr_or_key_str(summary, "modelId"): summary
+        for summary in _list_attr_or_key(response, "modelSummaries")
+        if _attr_or_key_str(summary, "modelId")
+    }
+    model_ids: set[str] = set()
+    covered: set[str] = set()
+    next_token = ""
+    seen_tokens: set[str] = set()
     try:
-        profiles = client.list_inference_profiles(maxResults=1000, typeEquals="SYSTEM")
+        while True:
+            kwargs: dict[str, Any] = {"maxResults": 1000}
+            if next_token:
+                kwargs["nextToken"] = next_token
+            profiles = client.list_inference_profiles(**kwargs)
+            for summary in _list_attr_or_key(profiles, "inferenceProfileSummaries"):
+                if not _is_bedrock_inference_profile(summary):
+                    continue
+                targets = {
+                    arn.split(":foundation-model/", 1)[1]
+                    for model in _list_attr_or_key(summary, "models")
+                    if ":foundation-model/"
+                    in (arn := _attr_or_key_str(model, "modelArn"))
+                }
+                # Match modalities via ARNs, since APPLICATION ids are opaque.
+                known = [
+                    foundations[target] for target in targets if target in foundations
+                ]
+                if known and not any(_is_bedrock_chat_model(model) for model in known):
+                    continue
+                profile_id = _attr_or_key_str(summary, "inferenceProfileId")
+                if _attr_or_key_str(summary, "type").upper() == "APPLICATION":
+                    profile_id = (
+                        _attr_or_key_str(summary, "inferenceProfileArn") or profile_id
+                    )
+                model_ids.add(profile_id)
+                covered.update(targets)
+            token = _attr_or_key(profiles, "nextToken")
+            next_token = token.strip() if isinstance(token, str) else ""
+            if not next_token:
+                break
+            if next_token in seen_tokens or len(seen_tokens) >= 100:
+                raise ValueError("Invalid or excessive Bedrock pagination")
+            seen_tokens.add(next_token)
     except Exception as exc:
         logger.warning(
-            "Bedrock inference-profile listing failed (%s); "
-            "returning foundation models only. Grant "
-            "bedrock:ListInferenceProfiles to include geo ids such as "
-            "us.anthropic.claude-sonnet-4-5-...",
+            "Bedrock inference-profile listing failed (%s); grant "
+            "bedrock:ListInferenceProfiles to discover invocation targets.",
             type(exc).__name__,
         )
-        profiles = None
+        warnings.append("bedrock_inference_profiles_unavailable")
 
-    for summary in _list_attr_or_key(profiles, "inferenceProfileSummaries"):
-        if not _is_bedrock_inference_profile(summary):
+    for model_id, summary in foundations.items():
+        if model_id in covered or not _is_bedrock_chat_model(summary):
             continue
-        profile_id = _attr_or_key_str(summary, "inferenceProfileId")
-        if profile_id:
-            model_ids.append(profile_id)
-
-    return sorted(set(model_ids))
+        inference_types = _attr_or_key(summary, "inferenceTypesSupported")
+        if isinstance(inference_types, list) and "ON_DEMAND" not in inference_types:
+            if (
+                "INFERENCE_PROFILE" in inference_types
+                and "bedrock_inference_profile_required" not in warnings
+            ):
+                warnings.append("bedrock_inference_profile_required")
+            continue
+        model_ids.add(model_id)
+    return sorted(model_ids)
 
 
 async def _get_bedrock_models(
@@ -1440,7 +1491,7 @@ async def _get_bedrock_models(
     are required for the picker; ambient instance-profile listing is not
     used. A bad key fails the call with an auth error, which raises
     ProviderAuthError. Inference-profile listing is best-effort: a
-    permission miss still returns foundation model ids and logs a warning.
+    permission miss returns eligible foundation ids with a safe warning code.
     The caller also needs ``bedrock:ListInferenceProfiles`` to surface geo
     ids such as ``us.anthropic.claude-sonnet-4-5-...``.
 
@@ -1505,7 +1556,10 @@ async def _get_bedrock_models(
 
             client.meta.events.register("before-send.bedrock.*", authorize)
         # Control-plane listing is synchronous; keep it off the event loop.
-        model_ids = await asyncio.to_thread(_collect_bedrock_model_ids, client)
+        warnings: list[str] = []
+        model_ids = await asyncio.to_thread(
+            _collect_bedrock_model_ids, client, warnings
+        )
     except ProviderValidationError:
         raise
     except Exception as e:
@@ -1529,7 +1583,7 @@ async def _get_bedrock_models(
     model_ids = model_ids[:MAX_DISCOVERED_MODELS]
     if not model_ids:
         logger.info("Bedrock returned no chat models")
-        return _fallback([], ERROR_EMPTY_RESPONSE)
+        return ModelDiscoveryResult(error=ERROR_EMPTY_RESPONSE, warnings=warnings)
 
     logger.info("Listed %d Bedrock models", len(model_ids))
-    return _live(model_ids)
+    return ModelDiscoveryResult(models=model_ids, source="live", warnings=warnings)

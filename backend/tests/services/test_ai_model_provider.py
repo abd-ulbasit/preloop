@@ -3,7 +3,7 @@
 import logging
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from preloop.services.ai_model_provider import (
     get_available_models_for_provider,
@@ -2487,3 +2487,172 @@ async def test_bedrock_bearer_is_attached_to_real_sdk_request_without_iam_lookup
         request.headers["Authorization"] == "Bearer synthetic-bedrock-key"
         for request in requests
     )
+
+
+class TestBedrockInvocableDiscovery:
+    """Profiles are runtime targets, not merely extra catalog entries."""
+
+    @pytest.mark.parametrize("inference_type", ["ON_DEMAND", "INFERENCE_PROFILE"])
+    def test_profile_replaces_matching_foundation_and_pages_all_profile_types(
+        self,
+        inference_type: str,
+    ) -> None:
+        from preloop.services.ai_model_provider import _collect_bedrock_model_ids
+
+        client = MagicMock()
+        client.list_foundation_models.return_value = {
+            "modelSummaries": [
+                {
+                    "modelId": "moonshotai.kimi-k3",
+                    "outputModalities": ["TEXT"],
+                    "inferenceTypesSupported": [inference_type],
+                },
+                {"modelId": "direct.chat", "inferenceTypesSupported": ["ON_DEMAND"]},
+                {
+                    "modelId": "provisioned.chat",
+                    "inferenceTypesSupported": ["PROVISIONED"],
+                },
+                {"modelId": "amazon.embedding", "outputModalities": ["EMBEDDING"]},
+            ]
+        }
+        client.list_inference_profiles.side_effect = [
+            {
+                "inferenceProfileSummaries": [
+                    {
+                        "inferenceProfileId": "actual.kimi-profile",
+                        "status": "ACTIVE",
+                        "models": [
+                            {
+                                "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/moonshotai.kimi-k3"
+                            }
+                        ],
+                    }
+                ],
+                "nextToken": "page-two",
+            },
+            {
+                "inferenceProfileSummaries": [
+                    {
+                        "inferenceProfileId": "opaque-application-id",
+                        "type": "APPLICATION",
+                        "inferenceProfileArn": "arn:aws:bedrock:us-east-1:123:application-inference-profile/opaque-application-id",
+                        "models": [
+                            {
+                                "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/moonshotai.kimi-k3"
+                            }
+                        ],
+                    },
+                    {
+                        "inferenceProfileId": "opaque-embedding-profile",
+                        "models": [
+                            {
+                                "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/amazon.embedding"
+                            }
+                        ],
+                    },
+                ]
+            },
+        ]
+        assert _collect_bedrock_model_ids(client) == [
+            "actual.kimi-profile",
+            "arn:aws:bedrock:us-east-1:123:application-inference-profile/opaque-application-id",
+            "direct.chat",
+        ]
+        assert client.list_inference_profiles.call_args_list == [
+            call(maxResults=1000),
+            call(maxResults=1000, nextToken="page-two"),
+        ]
+
+    def test_unknown_inference_metadata_remains_compatible(self) -> None:
+        from preloop.services.ai_model_provider import _collect_bedrock_model_ids
+
+        client = MagicMock()
+        client.list_foundation_models.return_value = {
+            "modelSummaries": [
+                {"modelId": "legacy.chat"},
+                {"modelId": "explicitly.unsupported", "inferenceTypesSupported": []},
+            ]
+        }
+        client.list_inference_profiles.return_value = {}
+        assert _collect_bedrock_model_ids(client) == ["legacy.chat"]
+
+    def test_profile_permission_failure_warns_and_omits_unsupported_models(
+        self,
+    ) -> None:
+        from preloop.services.ai_model_provider import _collect_bedrock_model_ids
+        from botocore.exceptions import ClientError
+
+        client = MagicMock()
+        client.list_foundation_models.return_value = {
+            "modelSummaries": [
+                {"modelId": "direct.chat", "inferenceTypesSupported": ["ON_DEMAND"]},
+                {
+                    "modelId": "profile.only",
+                    "inferenceTypesSupported": ["INFERENCE_PROFILE"],
+                },
+            ]
+        }
+        client.list_inference_profiles.side_effect = ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "secret-token"}},
+            "ListInferenceProfiles",
+        )
+        warnings: list[str] = []
+        assert _collect_bedrock_model_ids(client, warnings) == ["direct.chat"]
+        assert warnings == [
+            "bedrock_inference_profiles_unavailable",
+            "bedrock_inference_profile_required",
+        ]
+        assert "secret-token" not in str(warnings)
+
+    def test_second_page_failure_keeps_already_discovered_profiles(self) -> None:
+        from preloop.services.ai_model_provider import _collect_bedrock_model_ids
+
+        client = MagicMock()
+        client.list_foundation_models.return_value = {
+            "modelSummaries": [
+                {"modelId": "example.chat", "inferenceTypesSupported": ["ON_DEMAND"]}
+            ]
+        }
+        client.list_inference_profiles.side_effect = [
+            {
+                "inferenceProfileSummaries": [
+                    {
+                        "inferenceProfileId": "real.profile",
+                        "models": [
+                            {
+                                "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/example.chat"
+                            }
+                        ],
+                    }
+                ],
+                "nextToken": "another-page",
+            },
+            TimeoutError("private-endpoint"),
+        ]
+        warnings: list[str] = []
+        assert _collect_bedrock_model_ids(client, warnings) == ["real.profile"]
+        assert warnings == ["bedrock_inference_profiles_unavailable"]
+
+    def test_inactive_profiles_do_not_hide_direct_models(self) -> None:
+        from preloop.services.ai_model_provider import _collect_bedrock_model_ids
+
+        client = MagicMock()
+        client.list_foundation_models.return_value = {
+            "modelSummaries": [
+                {"modelId": "example.chat", "inferenceTypesSupported": ["ON_DEMAND"]}
+            ]
+        }
+        client.list_inference_profiles.return_value = {
+            "inferenceProfileSummaries": [
+                {
+                    "inferenceProfileId": "old.profile",
+                    "status": "INACTIVE",
+                    "models": [
+                        {
+                            "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/example.chat"
+                        }
+                    ],
+                }
+            ]
+        }
+        assert _collect_bedrock_model_ids(client) == ["example.chat"]

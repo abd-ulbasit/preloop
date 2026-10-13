@@ -2224,6 +2224,31 @@ func parseOpenCodeManagedGatewayUpstreamWithHints(
 	}
 
 	providerName := normalizeOpenCodeProviderName(providerID, providerConfig, apiEndpoint)
+	if openClawProviderUsesAmbientCredentials(providerID, providerName) {
+		// Adapt OpenCode's native AWS options to the shared credential resolver.
+		options, _ := asObjectMap(providerConfig["options"])
+		awsDocument := map[string]interface{}{
+			"models": map[string]interface{}{"providers": map[string]interface{}{providerID: options}},
+			"env":    document["env"],
+		}
+		region := resolveBedrockOnboardingRegion(awsDocument, providerID, lookupString(options, "region"))
+		if apiKey != "" {
+			apiKey = bedrockOnboardingBearerSecret(apiKey, region)
+		} else if accessKey := resolveConfigSecret(options["accessKeyId"]); accessKey != "" && resolveConfigSecret(options["secretAccessKey"]) != "" {
+			apiKey = marshalOpenClawBedrockPayload(bedrockCredentialPayload{
+				AWSAccessKeyID:     accessKey,
+				AWSSecretAccessKey: resolveConfigSecret(options["secretAccessKey"]),
+				AWSSessionToken:    resolveConfigSecret(options["sessionToken"]),
+				AWSRegionName:      region,
+			})
+		} else {
+			var note string
+			apiKey, _, note = resolveOpenClawProviderCredentials(awsDocument, providerID, providerName, region)
+			if note != "" {
+				notes = append(notes, strings.ReplaceAll(note, "OpenClaw", "OpenCode"))
+			}
+		}
+	}
 	managedAlias := strings.TrimSpace(modelRef)
 	if managedAlias == "" {
 		managedAlias = strings.TrimSpace(providerID + "/" + modelID)
@@ -2435,6 +2460,7 @@ func parseClaudeManagedGatewayUpstream(agent AgentConfig) (*managedGatewayUpstre
 		apiKey := strings.TrimSpace(resolveOpenClawEnvVar(document, "AWS_BEARER_TOKEN_BEDROCK"))
 		if apiKey != "" {
 			notes = append(notes, claudeShellExportNote("AWS_BEARER_TOKEN_BEDROCK"))
+			apiKey = bedrockOnboardingBearerSecret(apiKey, resolveBedrockOnboardingRegion(document, providerID, ""))
 		} else if payload, note := resolveOpenClawBedrockCredentialPayload(
 			document,
 			providerID,
@@ -6726,7 +6752,7 @@ func mergeManagedGatewayUpstreamMeta(
 		upstreamMeta["fingerprint"] = fingerprint
 	}
 	meta["upstream_config"] = upstreamMeta
-	return meta
+	return mergeBedrockOnboardingRuntime(meta, upstream.ProviderName, upstream.APIKey)
 }
 
 func mergeOpenClawUpstreamMeta(
@@ -6748,7 +6774,7 @@ func mergeOpenClawUpstreamMeta(
 		upstream["fingerprint"] = fingerprint
 	}
 	meta["upstream_config"] = upstream
-	return meta
+	return mergeBedrockOnboardingRuntime(meta, parsed.ProviderName, parsed.ProviderAPIKey)
 }
 
 func chooseReusableAIModel(
@@ -7907,6 +7933,9 @@ func resolveOpenClawProviderCredentials(
 ) (string, bool, string) {
 	value, note := resolveOpenClawProviderAPIKey(document, providerID)
 	if value != "" {
+		if openClawProviderUsesAmbientCredentials(providerID, providerName) {
+			value = bedrockOnboardingBearerSecret(value, resolveBedrockOnboardingRegion(document, providerID, providerRegion))
+		}
 		return value, false, note
 	}
 	if openClawProviderUsesAmbientCredentials(providerID, providerName) {
@@ -8210,15 +8239,7 @@ func resolveOpenClawBedrockCredentialPayload(
 	providerID string,
 	providerRegion string,
 ) (string, string) {
-	region := strings.TrimSpace(providerRegion)
-	if region == "" {
-		for _, key := range []string{"AWS_REGION", "AWS_DEFAULT_REGION"} {
-			if value := resolveOpenClawEnvVar(document, key); value != "" {
-				region = value
-				break
-			}
-		}
-	}
+	region := resolveBedrockOnboardingRegion(document, providerID, providerRegion)
 
 	if payload, note := resolveOpenClawBedrockEnvCredentials(document, region); payload != "" {
 		return payload, note
