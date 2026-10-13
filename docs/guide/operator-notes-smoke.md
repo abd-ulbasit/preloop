@@ -47,12 +47,13 @@ Use the current adapter registry and onboarding output to identify the chosen
 rail for each supported harness instead of assuming every harness has the
 same lifecycle hooks.
 
-## Installed Claude with a simulated provider
+## Installed harnesses with simulated providers
 
 ```bash
 python scripts/smoke_operator_notes_claude.py
 # Or test an already built integration branch CLI:
 python scripts/smoke_operator_notes_claude.py --preloop /path/to/preloop
+python scripts/smoke_operator_notes_codex.py --preloop /path/to/preloop
 ```
 
 This runs the installed Claude executable with a fresh home, settings and
@@ -74,6 +75,15 @@ none of the provider credential environment variables were present, and a
 fresh isolated Claude config reported `loggedIn=false`, `authMethod=none`.
 The normal config reported API-key authentication via stored settings; that
 configuration and key were not copied into the smoke home.
+
+The Codex script uses an isolated `CODEX_HOME`, `hooks.json` and a local OpenAI
+Responses provider. It applies the same five assertions and invokes the real
+CLI with an ephemeral read-only session and hook-trust bypass for the synthetic
+commands. Verified on 2026-10-13 with Codex CLI 0.162.1: all five checks passed,
+two outbound model requests contained the corresponding startup and stop
+markers, and the CLI emitted SessionEnd. This establishes installed Codex
+lifecycle/config acceptance with simulated provider/API; it does not reuse the
+normal Codex login or claim real provider validation.
 
 ## Installed-harness smoke
 
