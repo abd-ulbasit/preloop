@@ -543,6 +543,9 @@ def end_session(
     """Make a session terminal on the server and close its runtime session."""
     if not row.is_live:
         return
+    # Sweeper, kill switch and stop end sessions without a frame; a hook
+    # sibling registered since the last frame must not outlive the session.
+    _link_hook_sessions(db, row)
     now = _now()
     row.state = state
     row.end_reason = end_reason[:128]
@@ -772,11 +775,11 @@ def _apply_state(
     _touch(row, now)
     if message.harness_session_id:
         row.harness_session_id = message.harness_session_id
-        if state not in ("ended", "failed"):
-            # Every frame, not only the first: a hook that registered while
-            # an earlier frame was being applied left a sibling to fold. In
-            # the steady state the lookup finds nothing.
-            _link_hook_sessions(db, row)
+        # Every frame, terminal ones included (folded before the session
+        # ends, so the folded rows end with it): a hook that registered
+        # after an earlier frame left a sibling to fold. In the steady state
+        # the lookup finds nothing.
+        _link_hook_sessions(db, row)
     if state == "failed":
         code = message.error_code or "unknown"
         detail = str(raw.get("detail") or "")[:512] or None

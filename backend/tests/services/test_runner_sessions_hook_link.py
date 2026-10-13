@@ -458,3 +458,58 @@ def test_both_orders_leave_the_same_runner_session_fields(
 
     assert _row_fields(db_session, state_first) == _row_fields(db_session, hook_first)
     assert _row_fields(db_session, state_first)[0] is True
+
+
+def _late_sibling(db: Session, account_id: Any, hs: str) -> None:
+    db.add(
+        models.RuntimeSession(
+            account_id=account_id,
+            session_source_type=PRINCIPAL_TYPE,
+            session_source_id=f"agent-1:{hs}",
+            runtime_principal_type=PRINCIPAL_TYPE,
+            runtime_principal_id=f"agent-1:{hs}",
+            started_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+
+def _only_session_ended(db: Session, row: models.RunnerRemoteSession) -> None:
+    sessions = _account_sessions(db, row.account_id)
+    assert [s.id for s in sessions] == [row.runtime_session_id]
+    db.refresh(sessions[0])
+    assert sessions[0].ended_at is not None
+
+
+def test_ended_frame_folds_a_late_sibling_first(db_session, runner, test_user):
+    row = _start(db_session, runner, test_user)
+    hs = str(uuid.uuid4())
+    _go_idle(db_session, runner, row, hs)
+    _late_sibling(db_session, test_user.account_id, hs)
+
+    svc.apply_runner_session_message(
+        db_session,
+        runner,
+        _state(row, "ended", harness_session_id=hs, end_reason="stopped_by_actor"),
+    )
+
+    _only_session_ended(db_session, row)
+
+
+def test_sweeper_end_folds_a_late_sibling(db_session, runner, test_user):
+    from datetime import timedelta
+
+    row = _start(db_session, runner, test_user)
+    hs = str(uuid.uuid4())
+    _go_idle(db_session, runner, row, hs)
+    _late_sibling(db_session, test_user.account_id, hs)
+    runner.last_heartbeat = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.add(runner)
+    db_session.commit()
+    later = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=2)
+
+    assert svc.sweep_runner_sessions(db_session, now=later) == 1
+
+    db_session.refresh(row)
+    assert row.end_reason == "runner_offline"
+    _only_session_ended(db_session, row)
