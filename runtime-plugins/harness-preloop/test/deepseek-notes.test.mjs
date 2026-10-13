@@ -2,18 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DeepSeekNotes } from "../deepseek-notes.mjs";
 
-function setup({ failAck = false, failRegister = false } = {}) {
+function setup({
+  failAck = false,
+  failRegister = false,
+  controlWsUrl = "https://example.com/api/v1/agents/control/ws",
+} = {}) {
   const calls = [];
   const claimed = new Set();
   let ackAttempts = 0;
   const notes = new DeepSeekNotes(
     {
       bearer_token: "synthetic-token",
-      control_ws_url: "https://example.com/api/v1/agents/control/ws",
+      control_ws_url: controlWsUrl,
     },
     async (url, options) => {
       const body = JSON.parse(options.body);
-      calls.push({ path: new URL(url).pathname, body });
+      calls.push({ path: new URL(url).pathname, url, body });
       if (url.endsWith("session-start") && failRegister)
         throw new Error("offline");
       if (url.endsWith("notes/ack") && failAck && ++ackAttempts === 1)
@@ -51,6 +55,28 @@ const enter = () => ({
 const event = (id) => ({ agent: { id }, signal: new AbortController().signal });
 const modelRequest = (id, messages) =>
   Object.freeze({ sessionId: id, messages: Object.freeze(messages) });
+
+test("DeepSeek preserves reverse-proxy prefixes for every note route", async () => {
+  for (const [controlProtocol, httpProtocol] of [
+    ["wss", "https"],
+    ["ws", "http"],
+    ["https", "https"],
+    ["http", "http"],
+  ]) {
+    const { notes, calls } = setup({
+      controlWsUrl: `${controlProtocol}://example.com/preloop/api/v1/agents/control/ws`,
+    });
+    const decision = await notes.preStep(event("session_a"), async () => enter());
+    await notes.observeModelRequest(modelRequest("session_a", decision.messages));
+    await notes.endSession("session_a");
+    assert.deepEqual(
+      calls.map((call) => call.url),
+      ["session-start", "notes/pending", "notes/ack", "session-end"].map(
+        (path) => `${httpProtocol}://example.com/preloop/api/v1/agents/${path}`,
+      ),
+    );
+  }
+});
 
 test("DeepSeek logs a replacement user message and acknowledges only model admission", async () => {
   const { notes, calls } = setup();

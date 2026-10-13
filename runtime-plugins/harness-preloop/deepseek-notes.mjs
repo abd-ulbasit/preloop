@@ -40,7 +40,7 @@ export class DeepSeekNotes {
         : url.protocol === "ws:"
           ? "http:"
           : url.protocol;
-    url.pathname = `/api/v1/agents/${path}`;
+    url.pathname = url.pathname.replace(/\/control\/ws$/, `/${path}`);
     const timeout = AbortSignal.timeout(3000);
     const response = await this.fetch(url.toString(), {
       method: "POST",
