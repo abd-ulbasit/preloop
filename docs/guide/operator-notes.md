@@ -134,7 +134,10 @@ curl -X POST https://your-preloop/api/v1/operator-notes \
 
 Name exactly one target: `agent_id`, `runtime_session_id` or `execution_id`. A
 note addressed to an agent with no live session waits for the next session that
-agent opens, which is how you brief a run before it starts. `expires_in_seconds`
+agent opens, which is how you brief a run before it starts. A durable enrollment
+identity is not a live harness conversation: notes sent with `agent_id` stay
+agent-scoped until an actual conversation claims them. Use `runtime_session_id`
+(or `notes send --session`) to pin a note to one particular run. `expires_in_seconds`
 overrides the 24 hour default; a note nobody delivered in a day is stale advice,
 and expiring visibly beats rotting silently.
 

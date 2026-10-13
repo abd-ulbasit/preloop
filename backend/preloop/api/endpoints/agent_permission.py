@@ -400,14 +400,12 @@ def _claim_operator_note(
         # A runner-hosted session has no managed agent; its notes are
         # addressed to the session and still reach the hook (#1482).
         return None
+    # A known native conversation owns its claims. The bearer binding may be
+    # a separate enrollment identity, or another session the token outlived.
     session_ids: list[Optional[str]] = [
-        str(identity.runtime_session_id) if identity.runtime_session_id else None
+        origin_session_id
+        or (str(identity.runtime_session_id) if identity.runtime_session_id else None)
     ]
-    if origin_session_id and origin_session_id not in session_ids:
-        if defer_delivery:
-            session_ids = [origin_session_id]
-        else:
-            session_ids.append(origin_session_id)
     # Each session is claimed in its own transaction and its own try: a claim
     # commits the notes as delivered, so a failure on the second session must
     # not discard notes the first one already took.

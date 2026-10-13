@@ -906,7 +906,11 @@ def resolve_note_target(
     Raises:
         NoteTargetError: when the target does not exist in this account.
     """
-    from preloop.models.crud import crud_managed_agent, crud_runtime_session
+    from preloop.models.crud import (
+        crud_managed_agent,
+        crud_managed_agent_enrollment,
+        crud_runtime_session,
+    )
 
     if runtime_session_id is not None:
         session = crud_runtime_session.get_account_session(
@@ -944,7 +948,27 @@ def resolve_note_target(
             db, account_id=account_id, runtime_session_id=agent.runtime_session_id
         )
         if session is not None and session.ended_at is None:
-            session_id = session.id
+            # Enrollment credentials name an identity row, not a harness run.
+            # Keep agent-addressed notes unbound until an actual carrying
+            # conversation claims them. An explicit session target above is
+            # always preserved, as are custom/live execution pointers.
+            enrollment = crud_managed_agent_enrollment.get_latest_for_agent_by_type(
+                db,
+                account_id=account_id,
+                agent_id=str(agent.id),
+                enrollment_type="runtime_session_bootstrap",
+            )
+            identity_pointer = (
+                session.session_source_type != "flow_execution"
+                and session.session_source_type == agent.session_source_type
+                and session.session_source_id == agent.session_source_id
+                and session.runtime_principal_id == agent.session_source_id
+                and enrollment is not None
+                and enrollment.managed_config.get("runtime_session_id")
+                == str(session.id)
+            )
+            if not identity_pointer:
+                session_id = session.id
     return (agent.id, session_id)
 
 
