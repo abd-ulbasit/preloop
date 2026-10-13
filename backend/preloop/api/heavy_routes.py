@@ -72,7 +72,10 @@ def heavy_route_concurrency() -> int:
     return max(1, value)
 
 
-_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, anyio.CapacityLimiter]" = weakref.WeakKeyDictionary()
+_LimiterMap = weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, anyio.CapacityLimiter
+]
+_limiters: _LimiterMap = weakref.WeakKeyDictionary()
 
 
 def heavy_route_limiter() -> anyio.CapacityLimiter:
@@ -125,6 +128,10 @@ def heavy_route(func: F) -> F:
             # session, so it holds a pooled connection. Hand it back before
             # queueing for a heavy slot; the handler checks one out again
             # when it runs. Off the loop, because COMMIT is a round trip.
+            # The commit expires the rows the dependencies loaded
+            # (expire_on_commit), so the handler's first attribute access
+            # reloads them: one primary-key SELECT each, which is cheap next
+            # to holding a pooled connection for the whole queue wait.
             await anyio.to_thread.run_sync(_release_all, sessions)
         return await anyio.to_thread.run_sync(
             functools.partial(func, *args, **kwargs),
