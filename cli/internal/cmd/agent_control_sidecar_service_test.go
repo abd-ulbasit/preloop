@@ -15,11 +15,12 @@ func TestSidecarLaunchdCarriesPathAndLogs(t *testing.T) {
 	env := agentControlSidecarServiceEnv{
 		Path:    "/opt/homebrew/bin:/usr/bin",
 		LogPath: "/Users/example/.preloop/logs/claude-sidecar.log",
+		Home:    "/Users/example",
 	}
 	for _, spec := range []agentControlSidecarSpec{claudeAgentControlSidecarSpec(), codexAgentControlSidecarSpec()} {
 		body := renderAgentControlSidecarLaunchd(spec, "/usr/local/bin/preloop", env)
 		for _, want := range []string{
-			"<key>EnvironmentVariables</key>\n  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin</string></dict>",
+			"<key>EnvironmentVariables</key>\n  <dict><key>HOME</key><string>/Users/example</string><key>PATH</key><string>/opt/homebrew/bin:/usr/bin</string></dict>",
 			"<key>StandardOutPath</key><string>/Users/example/.preloop/logs/claude-sidecar.log</string>",
 			"<key>StandardErrorPath</key><string>/Users/example/.preloop/logs/claude-sidecar.log</string>",
 			"<string>" + spec.Command + "</string><string>sidecar</string><string>run</string>",
@@ -50,9 +51,11 @@ func TestSidecarSystemdCarriesPathAndLogs(t *testing.T) {
 		agentControlSidecarServiceEnv{
 			Path:    "/home/example/.nvm/versions/node/v22/bin:/usr/bin",
 			LogPath: "/home/example/.preloop/logs/claude-sidecar.log",
+			Home:    "/home/example",
 		},
 	)
 	for _, want := range []string{
+		`Environment="HOME=/home/example"`,
 		`Environment="PATH=/home/example/.nvm/versions/node/v22/bin:/usr/bin"`,
 		"StandardOutput=append:/home/example/.preloop/logs/claude-sidecar.log",
 		"StandardError=append:/home/example/.preloop/logs/claude-sidecar.log",
@@ -85,6 +88,9 @@ func TestSidecarServicePathPutsNodeFirstAndDedupes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
+	// Pin HOME so the plugin fallback locations under ~ cannot match.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NPM_CONFIG_PREFIX", t.TempDir())
 	got := agentControlSidecarServicePath(
 		claudeAgentControlSidecarSpec(),
 		"/usr/bin"+string(os.PathListSeparator)+binDir+string(os.PathListSeparator)+"relative",
@@ -121,6 +127,18 @@ func TestSidecarServiceExitStatusParsing(t *testing.T) {
 	if got := agentControlSidecarServiceExitStatus(spec); got != "last exit status: 1" {
 		t.Fatalf("launchd status = %q", got)
 	}
+	for raw, want := range map[string]string{
+		"0":   "0",
+		"9":   "terminated by signal 9",
+		"11":  "terminated by signal 11",
+		"512": "2",
+		"-1":  "-1",
+		"x":   "x",
+	} {
+		if got := launchdExitStatusText(raw); got != want {
+			t.Fatalf("launchdExitStatusText(%q) = %q, want %q", raw, got, want)
+		}
+	}
 	agentControlSidecarServiceManagerOutput = func(agentControlSidecarSpec) (string, error) {
 		return "ExecMainStatus=1\nActiveState=failed\n", nil
 	}
@@ -150,5 +168,21 @@ func TestSidecarStatusPrintsExitStatusWhenSocketDown(t *testing.T) {
 		!strings.Contains(text, "last exit status: 1") ||
 		!strings.Contains(text, filepath.Join(".preloop", "logs", "claude-sidecar.log")) {
 		t.Fatalf("status output = %q", text)
+	}
+}
+
+func TestSystemdQuoteEscapesSpecialCharacters(t *testing.T) {
+	cases := map[string]string{
+		"PATH=/usr/bin":      `"PATH=/usr/bin"`,
+		`PATH=/a%b`:          `"PATH=/a%%b"`,
+		`PATH=/a"b`:          `"PATH=/a\"b"`,
+		`PATH=/a\b`:          `"PATH=/a\\b"`,
+		"PATH=/a\nb":         `"PATH=/a b"`,
+		`HOME=/home/x y%"\z`: `"HOME=/home/x y%%\"\\z"`,
+	}
+	for in, want := range cases {
+		if got := systemdQuote(in); got != want {
+			t.Fatalf("systemdQuote(%q) = %s, want %s", in, got, want)
+		}
 	}
 }

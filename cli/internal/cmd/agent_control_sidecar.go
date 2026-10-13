@@ -98,6 +98,15 @@ type agentControlSidecarServiceEnv struct {
 	Path string
 	// LogPath receives stdout and stderr. Empty leaves output unredirected.
 	LogPath string
+	// Home pins HOME to the enabling user's home, so the job reads the same
+	// control config and socket the enabling shell does (#1531).
+	Home string
+}
+
+// systemdLogPathUsable reports whether path can be written as a systemd
+// "append:" target, which takes no quoting.
+func systemdLogPathUsable(path string) bool {
+	return path != "" && !strings.ContainsAny(path, " \t\n\"\\%")
 }
 
 // agentControlSidecarServicePath returns the PATH to write into the service
@@ -130,17 +139,26 @@ func agentControlSidecarServicePath(spec agentControlSidecarSpec, shellPath stri
 }
 
 func agentControlSidecarServiceEnvFor(spec agentControlSidecarSpec) agentControlSidecarServiceEnv {
+	home, _ := os.UserHomeDir()
 	return agentControlSidecarServiceEnv{
 		Path:    agentControlSidecarServicePath(spec, os.Getenv("PATH")),
 		LogPath: spec.logPath(),
+		Home:    home,
 	}
 }
 
 func renderAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string, env agentControlSidecarServiceEnv) string {
 	escaped := xmlEscapeAttr(bin)
 	var extra strings.Builder
-	if env.Path != "" {
-		fmt.Fprintf(&extra, "  <key>EnvironmentVariables</key>\n  <dict><key>PATH</key><string>%s</string></dict>\n", xmlEscapeAttr(env.Path))
+	if env.Path != "" || env.Home != "" {
+		extra.WriteString("  <key>EnvironmentVariables</key>\n  <dict>")
+		if env.Home != "" {
+			fmt.Fprintf(&extra, "<key>HOME</key><string>%s</string>", xmlEscapeAttr(env.Home))
+		}
+		if env.Path != "" {
+			fmt.Fprintf(&extra, "<key>PATH</key><string>%s</string>", xmlEscapeAttr(env.Path))
+		}
+		extra.WriteString("</dict>\n")
 	}
 	if env.LogPath != "" {
 		logPath := xmlEscapeAttr(env.LogPath)
@@ -170,10 +188,13 @@ func systemdQuote(value string) string {
 func renderAgentControlSidecarSystemd(spec agentControlSidecarSpec, bin string, env agentControlSidecarServiceEnv) string {
 	quoted, _ := json.Marshal(bin)
 	var extra strings.Builder
+	if env.Home != "" {
+		fmt.Fprintf(&extra, "Environment=%s\n", systemdQuote("HOME="+env.Home))
+	}
 	if env.Path != "" {
 		fmt.Fprintf(&extra, "Environment=%s\n", systemdQuote("PATH="+env.Path))
 	}
-	if env.LogPath != "" && !strings.ContainsAny(env.LogPath, " \n\"%") {
+	if systemdLogPathUsable(env.LogPath) {
 		fmt.Fprintf(&extra, "StandardOutput=append:%s\nStandardError=append:%s\n", env.LogPath, env.LogPath)
 	}
 	return fmt.Sprintf(`[Unit]
@@ -404,17 +425,21 @@ func agentControlSidecarServiceExitStatus(spec agentControlSidecarSpec) string {
 	return ""
 }
 
-// launchdExitStatusText turns launchd's wait status (exit code << 8) into
-// the exit code, keeping the raw value when it is not a number.
+// launchdExitStatusText turns launchd's wait(2) status into text: a
+// non-zero low byte is the terminating signal, otherwise the high byte is
+// the exit code. A non-numeric value is returned as is.
 func launchdExitStatusText(raw string) string {
 	var status int
 	if _, err := fmt.Sscanf(raw, "%d", &status); err != nil {
 		return raw
 	}
-	if status > 255 && status%256 == 0 {
-		return fmt.Sprintf("%d", status/256)
+	if status < 0 {
+		return fmt.Sprintf("%d", status)
 	}
-	return fmt.Sprintf("%d", status)
+	if signal := status & 0x7f; signal != 0 {
+		return fmt.Sprintf("terminated by signal %d", signal)
+	}
+	return fmt.Sprintf("%d", status>>8)
 }
 
 func runAgentControlSidecarForeground(spec agentControlSidecarSpec, cmd *cobra.Command, _ []string) error {
@@ -434,7 +459,9 @@ func writeAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string, o
 		return err
 	}
 	env := agentControlSidecarServiceEnvFor(spec)
-	_ = os.MkdirAll(filepath.Dir(env.LogPath), 0o700)
+	if err := os.MkdirAll(filepath.Dir(env.LogPath), 0o700); err != nil {
+		return err
+	}
 	body := renderAgentControlSidecarLaunchd(spec, bin, env)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err
@@ -450,7 +477,12 @@ func writeAgentControlSidecarSystemd(spec agentControlSidecarSpec, bin string, o
 		return err
 	}
 	env := agentControlSidecarServiceEnvFor(spec)
-	_ = os.MkdirAll(filepath.Dir(env.LogPath), 0o700)
+	if err := os.MkdirAll(filepath.Dir(env.LogPath), 0o700); err != nil {
+		return err
+	}
+	if !systemdLogPathUsable(env.LogPath) {
+		fmt.Fprintf(out, "Warning: %s cannot be a systemd log target (it has a space, quote or %%); read logs with: journalctl --user -u %s\n", env.LogPath, spec.systemdUnit())
+	}
 	body := renderAgentControlSidecarSystemd(spec, bin, env)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err
