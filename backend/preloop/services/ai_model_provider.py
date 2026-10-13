@@ -1402,10 +1402,11 @@ def _list_attr_or_key(obj: Any, name: str) -> list[Any]:
 def _collect_bedrock_model_ids(
     client: Any, warnings: Optional[list[str]] = None
 ) -> list[str]:
-    """List runtime targets, preferring actual profiles over their foundations.
+    """List actual profiles and foundations explicitly supporting direct calls.
 
-    Use profile model ARNs to replace raw foundation IDs with an explicit
-    invocation target whenever a profile is available. Omitting the
+    Use profile model ARNs to replace profile-only or ambiguous foundation IDs.
+    Explicit ON_DEMAND models remain selectable alongside profiles, so users
+    can keep direct regional invocation when AWS supports it. Omitting the
     profile type filter includes both SYSTEM_DEFINED and APPLICATION profiles; opaque
     application profiles use their returned ARN as the invocation identifier.
     Older summaries without inference-type metadata remain compatible.
@@ -1465,9 +1466,14 @@ def _collect_bedrock_model_ids(
         warnings.append("bedrock_inference_profiles_unavailable")
 
     for model_id, summary in foundations.items():
-        if model_id in covered or not _is_bedrock_chat_model(summary):
+        if not _is_bedrock_chat_model(summary):
             continue
         inference_types = _attr_or_key(summary, "inferenceTypesSupported")
+        direct_supported = (
+            isinstance(inference_types, list) and "ON_DEMAND" in inference_types
+        )
+        if model_id in covered and not direct_supported:
+            continue
         if isinstance(inference_types, list) and "ON_DEMAND" not in inference_types:
             if (
                 "INFERENCE_PROFILE" in inference_types

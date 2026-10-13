@@ -2493,7 +2493,7 @@ class TestBedrockInvocableDiscovery:
     """Profiles are runtime targets, not merely extra catalog entries."""
 
     @pytest.mark.parametrize("inference_type", ["ON_DEMAND", "INFERENCE_PROFILE"])
-    def test_profile_replaces_matching_foundation_and_pages_all_profile_types(
+    def test_profiles_preserve_direct_models_and_replace_profile_only_models(
         self,
         inference_type: str,
     ) -> None:
@@ -2553,11 +2553,14 @@ class TestBedrockInvocableDiscovery:
                 ]
             },
         ]
-        assert _collect_bedrock_model_ids(client) == [
+        expected = [
             "actual.kimi-profile",
             "arn:aws:bedrock:us-east-1:123:application-inference-profile/opaque-application-id",
             "direct.chat",
         ]
+        if inference_type == "ON_DEMAND":
+            expected.append("moonshotai.kimi-k3")
+        assert _collect_bedrock_model_ids(client) == expected
         assert client.list_inference_profiles.call_args_list == [
             call(maxResults=1000),
             call(maxResults=1000, nextToken="page-two"),
@@ -2630,7 +2633,10 @@ class TestBedrockInvocableDiscovery:
             TimeoutError("private-endpoint"),
         ]
         warnings: list[str] = []
-        assert _collect_bedrock_model_ids(client, warnings) == ["real.profile"]
+        assert _collect_bedrock_model_ids(client, warnings) == [
+            "example.chat",
+            "real.profile",
+        ]
         assert warnings == ["bedrock_inference_profiles_unavailable"]
 
     def test_inactive_profiles_do_not_hide_direct_models(self) -> None:
