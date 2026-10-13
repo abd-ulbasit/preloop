@@ -374,6 +374,23 @@ class CRUDToolConfiguration(CRUDBase[models.ToolConfiguration]):
 crud_tool_configuration = CRUDToolConfiguration()
 
 
+def _account_wide_first_order() -> tuple:
+    """Order clauses that put the account-wide row first, then the oldest.
+
+    ``uq_account_tool_source`` lets an account-wide row coexist with rows
+    scoped to one MCP server or one managed agent for the same tool, and
+    databases migrated before the constraint treated NULL scopes as distinct
+    may still hold exact duplicates. Lookups keyed only by name and source
+    therefore pick deterministically instead of asserting a single row.
+    """
+    return (
+        models.ToolConfiguration.managed_agent_id.is_not(None),
+        models.ToolConfiguration.mcp_server_id.is_not(None),
+        models.ToolConfiguration.created_at,
+        models.ToolConfiguration.id,
+    )
+
+
 # Async helper functions
 async def get_tool_config_by_name_and_source_async(
     db: Session,
@@ -390,16 +407,22 @@ async def get_tool_config_by_name_and_source_async(
         tool_source: The source of the tool (e.g., "mcp", "builtin").
 
     Returns:
-        The tool configuration object if found, otherwise None.
+        The tool configuration object if found, otherwise None. An
+        account-wide row (no MCP server, no managed-agent scope) wins over a
+        scoped row for the same tool; among equals the oldest row wins, so
+        legacy duplicates never raise ``MultipleResultsFound``.
     """
     result = await db.execute(
-        select(models.ToolConfiguration).where(
+        select(models.ToolConfiguration)
+        .where(
             models.ToolConfiguration.account_id == account_id,
             models.ToolConfiguration.tool_name == tool_name,
             models.ToolConfiguration.tool_source == tool_source,
         )
+        .order_by(*_account_wide_first_order())
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def get_tool_config_by_id_async(
@@ -424,12 +447,15 @@ async def get_tool_config_by_tool_name_async(
 ) -> Optional[models.ToolConfiguration]:
     """Async: Retrieve a tool configuration by tool name and account."""
     result = await db.execute(
-        select(models.ToolConfiguration).where(
+        select(models.ToolConfiguration)
+        .where(
             models.ToolConfiguration.account_id == account_id,
             models.ToolConfiguration.tool_name == tool_name,
         )
+        .order_by(*_account_wide_first_order())
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def create_tool_configuration_async(

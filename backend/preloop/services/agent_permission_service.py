@@ -367,18 +367,32 @@ async def resolve_tool_config(
     if config is not None:
         return config
 
-    return await create_tool_configuration_async(
-        db,
-        obj_in=ToolConfigurationCreate(
+    try:
+        return await create_tool_configuration_async(
+            db,
+            obj_in=ToolConfigurationCreate(
+                tool_name=tool_name,
+                tool_source=AGENT_TOOL_SOURCE,
+                account_id=account_id,
+                approval_workflow_id=workflow_id,
+                is_enabled=True,
+                custom_config={},
+            ),
+            account_id=account_id,
+        )
+    except IntegrityError:
+        # Two permission checks for a new tool raced on the insert; the
+        # unique constraint rejected the loser. Use the winner's row.
+        await db.rollback()
+        existing = await get_tool_config_by_name_and_source_async(
+            db,
+            account_id=account_id,
             tool_name=tool_name,
             tool_source=AGENT_TOOL_SOURCE,
-            account_id=account_id,
-            approval_workflow_id=workflow_id,
-            is_enabled=True,
-            custom_config={},
-        ),
-        account_id=account_id,
-    )
+        )
+        if existing is None:
+            raise
+        return existing
 
 
 def _native_decision_source(decision: Any) -> Optional[str]:
