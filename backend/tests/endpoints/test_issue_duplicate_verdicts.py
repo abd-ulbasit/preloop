@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -23,25 +24,32 @@ def _clean_state():
 
 
 class _Db:
-    """Session stand-in answering the ownership query with ``owned`` ids."""
+    """Session stand-in; ``owned`` is what the ownership lookup answers."""
 
     def __init__(self, owned):
         self.owned = owned
 
-    def query(self, *_args):
-        db = self
 
-        class _Q:
-            def join(self, *_a, **_k):
-                return self
+@pytest.fixture(autouse=True)
+def _owned_lookup(monkeypatch):
+    monkeypatch.setattr(
+        mod.crud_issue,
+        "get_owned_ids",
+        lambda db, ids, account_id: {i for i in db.owned if i in {str(x) for x in ids}},
+    )
 
-            def filter(self, *_a, **_k):
-                return self
 
-            def all(self):
-                return [(i,) for i in db.owned]
+@pytest.fixture
+def claim(monkeypatch):
+    """Replace the cross-replica advisory lock; ``state['free']`` decides it."""
+    state = {"free": True}
 
-        return _Q()
+    @contextmanager
+    def _claim(key):
+        yield state["free"]
+
+    monkeypatch.setattr(mod, "_pair_check_claim", _claim)
+    return state
 
 
 def _row(a, b, decision="duplicate"):
@@ -202,7 +210,7 @@ def test_schedule_runs_each_pair_once_at_a_time(monkeypatch):
     assert submitted == [key]
 
 
-def test_background_check_stores_a_verdict(monkeypatch):
+def test_background_check_stores_a_verdict(monkeypatch, claim):
     db = MagicMock()
     monkeypatch.setattr(mod, "_open_verdict_session", lambda: db)
     monkeypatch.setattr(
@@ -228,7 +236,7 @@ def test_background_check_stores_a_verdict(monkeypatch):
     db.close.assert_called_once()
 
 
-def test_background_check_skips_a_pair_stored_meanwhile(monkeypatch):
+def test_background_check_skips_a_pair_stored_meanwhile(monkeypatch, claim):
     db = MagicMock()
     monkeypatch.setattr(mod, "_open_verdict_session", lambda: db)
     monkeypatch.setattr(
@@ -252,7 +260,7 @@ def test_background_check_skips_a_pair_stored_meanwhile(monkeypatch):
         (RuntimeError("boom"), "ai_model_error"),
     ],
 )
-def test_background_failure_is_remembered(monkeypatch, exc, code):
+def test_background_failure_is_remembered(monkeypatch, claim, exc, code):
     db = MagicMock()
     monkeypatch.setattr(mod, "_open_verdict_session", lambda: db)
     monkeypatch.setattr(
@@ -273,3 +281,83 @@ def test_batch_size_is_bounded():
         IssueDuplicateVerdictBatchRequest(
             pairs=[{"issue1_id": uuid4(), "issue2_id": uuid4()} for _ in range(51)]
         )
+
+
+def test_pair_claimed_by_another_replica_is_not_checked_here(monkeypatch, claim):
+    claim["free"] = False
+    classify = MagicMock()
+    monkeypatch.setattr(mod, "_classify_and_store", classify)
+    opened = MagicMock()
+    monkeypatch.setattr(mod, "_open_verdict_session", opened)
+    key = ("acc", "a", "b")
+    mod._verdict_inflight[key] = mod.Future()
+    mod._run_verdict_check(key, "acc", "a", "b", None)
+    classify.assert_not_called()
+    opened.assert_not_called()
+    assert key not in mod._verdict_inflight
+    assert mod._recent_failure(key) is None
+
+
+def test_claim_failure_is_reported_not_raised(monkeypatch):
+    @contextmanager
+    def _broken(key):
+        raise RuntimeError("database unavailable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mod, "_pair_check_claim", _broken)
+    key = ("acc", "a", "b")
+    mod._verdict_inflight[key] = mod.Future()
+    mod._run_verdict_check(key, "acc", "a", "b", None)
+    assert mod._recent_failure(key) == "ai_model_error"
+    assert key not in mod._verdict_inflight
+
+
+def test_one_account_cannot_queue_past_its_cap(monkeypatch):
+    submitted = []
+
+    class _Executor:
+        def submit(self, fn, *args):
+            submitted.append(args[0])
+            return mod.Future()
+
+    monkeypatch.setattr(mod, "_get_verdict_executor", lambda: _Executor())
+    monkeypatch.setattr(mod, "_VERDICT_MAX_INFLIGHT_PER_ACCOUNT", 3)
+    for i in range(5):
+        mod._schedule_verdict_check(("acc", f"a{i}", "b"), "acc", "a", "b", None)
+    mod._schedule_verdict_check(("other", "a", "b"), "other", "a", "b", None)
+    assert [k[0] for k in submitted] == ["acc", "acc", "acc", "other"]
+
+
+def test_process_cap_bounds_the_queue(monkeypatch):
+    submitted = []
+
+    class _Executor:
+        def submit(self, fn, *args):
+            submitted.append(args[0])
+            return mod.Future()
+
+    monkeypatch.setattr(mod, "_get_verdict_executor", lambda: _Executor())
+    monkeypatch.setattr(mod, "_VERDICT_MAX_INFLIGHT", 2)
+    for i in range(4):
+        mod._schedule_verdict_check((f"acc{i}", "a", "b"), f"acc{i}", "a", "b", None)
+    assert len(submitted) == 2
+
+
+def test_failure_map_is_swept_when_large(monkeypatch):
+    monkeypatch.setattr(mod, "_VERDICT_FAILURES_MAX", 3)
+    old = mod.time.monotonic() - 1000
+    for i in range(3):
+        mod._verdict_failures[("acc", str(i), "x")] = ("ai_model_error", old)
+    mod._remember_failure(("acc", "new", "x"), "rate_limited")
+    assert list(mod._verdict_failures) == [("acc", "new", "x")]
+
+
+def test_advisory_claim_is_exclusive_across_connections(db_engine):
+    """Two processes cannot check the same pair at once (real Postgres lock)."""
+    key = ("acc", str(uuid4()), str(uuid4()))
+    with mod._pair_check_claim(key) as first:
+        assert first is True
+        with mod._pair_check_claim(key) as second:
+            assert second is False
+    with mod._pair_check_claim(key) as again:
+        assert again is True

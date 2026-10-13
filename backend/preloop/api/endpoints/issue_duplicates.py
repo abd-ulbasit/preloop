@@ -3,9 +3,14 @@ from sqlalchemy.orm import Session
 from typing import Any, Dict, List, Literal, Optional, Tuple
 import gc
 import logging
+import hashlib
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from typing import Iterator
+
+from sqlalchemy import text as sa_text
 import openai
 import os
 import json
@@ -58,7 +63,6 @@ from preloop.models.models.account import Account
 from preloop.models.models.user import User  # Import Account model
 from preloop.models.models.project import Project
 from preloop.models.models.issue import Issue
-from preloop.models.models.tracker import Tracker
 
 from .issues import update_issue
 
@@ -366,6 +370,16 @@ def _classify_and_store(
 # asks again for the pending ones until they are done.
 
 _VERDICT_FAILURE_TTL_SECONDS = 300.0
+# Checks queued or running, per account and per process. Past either cap a
+# pair stays ``pending`` and is not queued; the console asks again, and the
+# pair is queued once a slot frees. This bounds the model spend one client
+# can start, which the old two-request client pool bounded by itself.
+_VERDICT_MAX_INFLIGHT_PER_ACCOUNT = 20
+_VERDICT_MAX_INFLIGHT = 200
+_VERDICT_FAILURES_MAX = 2000
+# Advisory-lock namespace for "this pair is being checked". The in-process
+# bookkeeping covers one API process; the lock covers every replica.
+_VERDICT_LOCK_NAMESPACE = 0x1D0B
 _verdict_lock = threading.Lock()
 _verdict_inflight: Dict[Tuple[str, str, str], Future] = {}
 _verdict_failures: Dict[Tuple[str, str, str], Tuple[str, float]] = {}
@@ -422,7 +436,62 @@ def _run_verdict_check(
     issue2_id: Any,
     settings: Settings,
 ) -> None:
-    """Background body: check one pair unless someone stored it meanwhile."""
+    """Background body: claim the pair across replicas, then check it."""
+    try:
+        with _pair_check_claim(key) as claimed:
+            if claimed:
+                _check_claimed_pair(key, account_id, issue1_id, issue2_id, settings)
+            # Not claimed: another API process is checking this pair. Its
+            # verdict is stored and returned on a later poll.
+    except Exception as exc:  # the claim itself failed (database unavailable)
+        logger.warning("Could not claim duplicate verdict %s: %s", key, exc)
+        _remember_failure(key, "ai_model_error")
+    finally:
+        with _verdict_lock:
+            _verdict_inflight.pop(key, None)
+
+
+def _lock_ids(key: Tuple[str, str, str]) -> Tuple[int, int]:
+    digest = hashlib.blake2b("|".join(key).encode(), digest_size=4).digest()
+    return _VERDICT_LOCK_NAMESPACE, int.from_bytes(digest, "big", signed=True)
+
+
+@contextmanager
+def _pair_check_claim(key: Tuple[str, str, str]) -> Iterator[bool]:
+    """Hold a Postgres advisory lock on ``key`` for the length of a check.
+
+    The lock lives on a dedicated autocommit connection. It is never left on
+    a pooled request connection, and no transaction stays open while the
+    model answers. Yields False when another process holds it.
+    """
+    from preloop.models.db.session import get_engine
+
+    namespace, pair = _lock_ids(key)
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        claimed = bool(
+            conn.execute(
+                sa_text("SELECT pg_try_advisory_lock(:ns, :pair)"),
+                {"ns": namespace, "pair": pair},
+            ).scalar()
+        )
+        try:
+            yield claimed
+        finally:
+            if claimed:
+                conn.execute(
+                    sa_text("SELECT pg_advisory_unlock(:ns, :pair)"),
+                    {"ns": namespace, "pair": pair},
+                )
+
+
+def _check_claimed_pair(
+    key: Tuple[str, str, str],
+    account_id: Any,
+    issue1_id: Any,
+    issue2_id: Any,
+    settings: Settings,
+) -> None:
+    """Check one pair unless someone stored it meanwhile; never raises."""
     db = _open_verdict_session()
     try:
         if crud_issue_duplicate.get_by_issue_ids(
@@ -439,11 +508,8 @@ def _run_verdict_check(
         )
     except Exception as exc:  # recorded for the next poll, never raised
         logger.warning("Background duplicate verdict for %s failed: %s", key, exc)
-        with _verdict_lock:
-            _verdict_failures[key] = (_failure_code(exc), time.monotonic())
+        _remember_failure(key, _failure_code(exc))
     finally:
-        with _verdict_lock:
-            _verdict_inflight.pop(key, None)
         try:
             db.close()
         except Exception:  # pragma: no cover - close must not mask the result
@@ -457,9 +523,16 @@ def _schedule_verdict_check(
     issue2_id: Any,
     settings: Settings,
 ) -> None:
-    """Start a background check for ``key`` unless one is already running."""
+    """Queue a background check for ``key`` unless one is queued or capped."""
     with _verdict_lock:
         if key in _verdict_inflight:
+            return
+        if len(_verdict_inflight) >= _VERDICT_MAX_INFLIGHT:
+            return
+        if (
+            sum(1 for other in _verdict_inflight if other[0] == key[0])
+            >= _VERDICT_MAX_INFLIGHT_PER_ACCOUNT
+        ):
             return
         # Reserve the slot before submitting so a fast worker's cleanup
         # cannot run ahead of the bookkeeping.
@@ -475,6 +548,22 @@ def _schedule_verdict_check(
     with _verdict_lock:
         if key in _verdict_inflight:
             _verdict_inflight[key] = future
+
+
+def _remember_failure(key: Tuple[str, str, str], code: str) -> None:
+    """Record a failed check, sweeping expired entries once the map is large."""
+    now = time.monotonic()
+    with _verdict_lock:
+        if len(_verdict_failures) >= _VERDICT_FAILURES_MAX:
+            for stale in [
+                k
+                for k, (_, at) in _verdict_failures.items()
+                if now - at > _VERDICT_FAILURE_TTL_SECONDS
+            ]:
+                del _verdict_failures[stale]
+            if len(_verdict_failures) >= _VERDICT_FAILURES_MAX:
+                _verdict_failures.clear()
+        _verdict_failures[key] = (code, now)
 
 
 def _recent_failure(key: Tuple[str, str, str]) -> Optional[str]:
@@ -529,14 +618,9 @@ def get_issue_duplicate_verdicts(
     owned: set[str] = set()
     default_model = None
     if missing:
-        ids = {i for pair in missing for i in pair}
-        owned = {
-            str(issue_id)
-            for (issue_id,) in db.query(Issue.id)
-            .join(Tracker, Issue.tracker_id == Tracker.id)
-            .filter(Issue.id.in_(ids), Tracker.account_id == account_id)
-            .all()
-        }
+        owned = crud_issue.get_owned_ids(
+            db, ids=list({i for pair in missing for i in pair}), account_id=account_id
+        )
         default_model = crud_ai_model.get_default_active_model(
             db, account_id=account_id
         )

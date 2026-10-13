@@ -5781,30 +5781,6 @@ function verdictErrorFromBody(status: number, body: unknown): VerdictError {
   return new VerdictError('failed', status);
 }
 
-export async function checkAIVerdict(issue1_id: string, issue2_id: string) {
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(
-      `/api/v1/issue-duplicates/check?issue1_id=${issue1_id}&issue2_id=${issue2_id}`
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new VerdictError('timeout', 0);
-    }
-    throw error;
-  }
-  if (!response.ok) {
-    let body: unknown = null;
-    try {
-      body = await response.json();
-    } catch {
-      body = null;
-    }
-    throw verdictErrorFromBody(response.status, body);
-  }
-  return response.json();
-}
-
 export type VerdictBatchState =
   'done' | 'pending' | 'failed' | 'no_model' | 'not_found';
 

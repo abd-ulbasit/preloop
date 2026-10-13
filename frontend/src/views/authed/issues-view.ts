@@ -64,15 +64,24 @@ function issueStatusLabel(status: string | null | undefined): string {
 /**
  * One verdict call per page: stored verdicts come back at once, new pairs
  * come back `pending` while the server checks them, and the view asks again
- * for those every VERDICT_POLL_MS, up to VERDICT_MAX_POLLS times.
+ * for those every VERDICT_POLL_MS. The server checks a few pairs at a time,
+ * so a page of 50 new pairs takes minutes: the view keeps asking while
+ * verdicts keep arriving, and gives up only after VERDICT_STALL_POLLS polls
+ * in a row with no new verdict, or after VERDICT_MAX_POLLS in total.
  */
 const VERDICT_POLL_MS = 2000;
-const VERDICT_MAX_POLLS = 30;
+const VERDICT_STALL_POLLS = 45;
+const VERDICT_MAX_POLLS = 600;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 @customElement('issues-view')
 export class IssuesView extends LitElement {
+  /** Verdict polling cadence; tests shorten these. */
+  static verdictPollMs = VERDICT_POLL_MS;
+  static verdictStallPolls = VERDICT_STALL_POLLS;
+  static verdictMaxPolls = VERDICT_MAX_POLLS;
+
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state()
   private _duplicates: DuplicatePair[] = [];
@@ -405,12 +414,15 @@ export class IssuesView extends LitElement {
       this._setVerdict(this._pairKey(pair), { state: 'checking' });
     }
     let remaining = pairs;
+    let stalled = 0;
     for (
       let attempt = 0;
-      remaining.length > 0 && attempt < VERDICT_MAX_POLLS;
+      remaining.length > 0 &&
+      attempt < IssuesView.verdictMaxPolls &&
+      stalled < IssuesView.verdictStallPolls;
       attempt++
     ) {
-      if (attempt > 0) await sleep(VERDICT_POLL_MS);
+      if (attempt > 0) await sleep(IssuesView.verdictPollMs);
       if (round !== this._verdictRound) return;
       let response;
       try {
@@ -446,6 +458,7 @@ export class IssuesView extends LitElement {
         }
       });
       this._verdicts = { ...this._verdicts, ...updates };
+      stalled = stillPending.length < remaining.length ? 0 : stalled + 1;
       remaining = stillPending;
     }
     for (const pair of remaining) {

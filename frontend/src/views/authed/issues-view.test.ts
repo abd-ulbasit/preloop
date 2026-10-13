@@ -263,6 +263,56 @@ describe('IssuesView', () => {
     expect(el.shadowRoot?.textContent).to.contain('No AI model');
   });
 
+  it('keeps polling while verdicts arrive, then gives up after a stall', async () => {
+    const saved = {
+      ms: IssuesView.verdictPollMs,
+      stall: IssuesView.verdictStallPolls,
+    };
+    IssuesView.verdictPollMs = 5;
+    IssuesView.verdictStallPolls = 4;
+    try {
+      // Pair 1 settles on poll 3 and pair 2 on poll 6, so the view polls
+      // past the stall limit while verdicts keep arriving. Pair 3 never
+      // settles...
+      let polls = 0;
+      fetchStub = stubFetch({
+        projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
+        duplicates: [1, 2, 3].map(makePair),
+        verdictHandler: (pairs) => {
+          polls += 1;
+          const items = pairs.map((p) => {
+            const n = Number(p.issue1_id.slice(1, -1));
+            const settles = n === 3 ? Infinity : n * 3;
+            return polls >= settles
+              ? { ...p, state: 'done', verdict: { decision: 'duplicate' } }
+              : { ...p, state: 'pending' };
+          });
+          return new Response(JSON.stringify({ items, pending: 0 }), {
+            status: 200,
+          });
+        },
+      });
+      const el = (await fixture(
+        html`<issues-view></issues-view>`
+      )) as IssuesView;
+      const v = () =>
+        (el as unknown as { _verdicts: Record<string, { state: string }> })
+          ._verdicts;
+      await waitUntil(
+        () => v()['i3a-i3b']?.state === 'timeout',
+        'the pair that never settles times out after the stall',
+        { timeout: 4000 }
+      );
+      expect(v()['i1a-i1b']?.state).to.equal('done');
+      expect(v()['i2a-i2b']?.state).to.equal('done');
+      // ...and polling stopped: 6 polls to settle pair 2, then 4 stalled.
+      expect(polls).to.equal(10);
+    } finally {
+      IssuesView.verdictPollMs = saved.ms;
+      IssuesView.verdictStallPolls = saved.stall;
+    }
+  });
+
   it('marks every row failed after one failed call (no 503 storm)', async () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
