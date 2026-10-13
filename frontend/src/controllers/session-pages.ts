@@ -38,6 +38,8 @@ export class SessionPages implements ReactiveController {
   /** True once a page has landed for the current filter. */
   loaded = false;
   private generation = 0;
+  /** The page size the host asked for, always offered in the size select. */
+  readonly defaultPageSize: number;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -47,6 +49,7 @@ export class SessionPages implements ReactiveController {
     pageSize = SESSION_PAGE_SIZE
   ) {
     this.pageSize = pageSize;
+    this.defaultPageSize = pageSize;
     host.addController(this);
   }
 
@@ -137,7 +140,11 @@ export class SessionPages implements ReactiveController {
       class="session-pager"
       page-index=${this.pageIndex}
       page-size=${this.pageSize}
-      .pageSizes=${[10, 25, 50]}
+      .pageSizes=${
+        // The host's default is always offered, so the select names the
+        // size the page is actually using (Gateway traffic pages at 5).
+        [...new Set([this.defaultPageSize, 10, 25, 50])].sort((a, b) => a - b)
+      }
       .total=${this.total}
       page-rows=${this.sessionsOnPage}
       ?has-next=${hasNext}
