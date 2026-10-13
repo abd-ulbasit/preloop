@@ -170,7 +170,8 @@ export class ApiKeysView extends LitElement {
   readonly table = new ListTable<ApiKey>(this, {
     listId: 'api-keys',
     getRowId: (key) => key.id,
-    pageSize: 50,
+    // 25 a page keeps the list within three viewports at 1440x900 (#1585).
+    pageSize: 25,
     url: true,
     columns: this.keyColumns(),
   });

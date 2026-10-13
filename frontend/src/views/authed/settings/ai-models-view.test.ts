@@ -119,6 +119,16 @@ describe('AIModelsView', () => {
     localStorage.clear();
   });
 
+  it('pages the model list at ten by default (#1585)', async () => {
+    const element = (await fixture(
+      html`<ai-models-view></ai-models-view>`
+    )) as AIModelsView;
+    await waitUntil(() => !(element as any).isLoading);
+    expect(element.modelTable.paginated).to.equal(true);
+    expect(element.modelTable.pageSize).to.equal(10);
+    expect(element.modelTable.pageSizes).to.deep.equal([10, 25, 50]);
+  });
+
   it('lists the built-in alongside account models and excludes it from mutations', async () => {
     const element = (await fixture(
       html`<ai-models-view></ai-models-view>`

@@ -142,8 +142,11 @@ export class AIModelsView extends LitElement {
   readonly modelTable = new ListTable<AIModel>(this, {
     listId: 'ai-models',
     getRowId: (model) => model.id,
-    pageSize: 0,
-    persist: ['columnVisibility', 'columnSizing', 'density'],
+    // Paged: a model row is about 110 px, so the whole catalog made the page
+    // 4.6 viewports on prod (#1585). The reader's page size is kept.
+    pageSize: 10,
+    pageSizes: [10, 25, 50],
+    persist: ['columnVisibility', 'columnSizing', 'density', 'pageSize'],
     columns: this.modelColumns(),
   });
 
