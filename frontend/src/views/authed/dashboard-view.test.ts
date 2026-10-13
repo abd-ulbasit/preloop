@@ -1,5 +1,6 @@
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
+import { setViewport } from '@web/test-runner-commands';
 
 import '../../components/view-header.ts';
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
@@ -2775,29 +2776,97 @@ describe('DashboardView', () => {
     });
 
     it('makes the side column a sticky rail on a wide viewport', async () => {
-      const element = await mountLoaded();
-      const side = element.shadowRoot?.querySelector(
-        '.side-column'
-      ) as HTMLElement;
-      const feed = element.shadowRoot?.querySelector(
-        'activity-feed'
-      ) as HTMLElement;
-
-      // The rule is a media query, so it only holds on a wide test window.
-      if (window.innerWidth < 1200) return;
-      const column = getComputedStyle(side);
-      expect(column.position).to.equal('sticky');
-      // Exactly as tall as the viewport minus the shell header and the gap,
-      // never taller: the column is the page's floor for its cards.
-      expect(parseFloat(column.maxHeight)).to.be.at.most(window.innerHeight);
-      expect(parseFloat(column.maxHeight)).to.be.greaterThan(0);
-      const card = getComputedStyle(feed);
-      expect(card.flexGrow).to.equal('1');
-      expect(parseFloat(card.minHeight)).to.equal(240);
-      expect(side.getBoundingClientRect().height).to.be.at.most(
-        window.innerHeight
+      await setViewport({ width: 1440, height: 900 });
+      // The shell defines the header height the rail subtracts.
+      document.documentElement.style.setProperty(
+        '--console-header-height',
+        '60px'
       );
+      document.documentElement.style.setProperty('--sl-spacing-medium', '1rem');
+      try {
+        const element = await mountLoaded();
+        const side = element.shadowRoot?.querySelector(
+          '.side-column'
+        ) as HTMLElement;
+        const feed = element.shadowRoot?.querySelector(
+          'activity-feed'
+        ) as HTMLElement;
+        const column = getComputedStyle(side);
+        expect(column.position).to.equal('sticky');
+        // Never taller than the viewport minus the shell header and the gap.
+        expect(parseFloat(column.maxHeight)).to.be.at.most(window.innerHeight);
+        expect(parseFloat(column.maxHeight)).to.be.greaterThan(0);
+        const card = getComputedStyle(feed);
+        expect(card.flexGrow).to.equal('1');
+        expect(card.flexShrink).to.equal('1');
+        expect(parseFloat(card.minHeight)).to.equal(160);
+      } finally {
+        await setViewport({ width: 800, height: 600 });
+        document.documentElement.style.removeProperty('--console-header-height');
+        document.documentElement.style.removeProperty('--sl-spacing-medium');
+      }
     });
+
+    // #1645: Usage plus a fixed feed floor overflowed the rail at 1440x900,
+    // so the feed's foot ("View audit") sat below the window. Zoom is
+    // emulated as the CSS viewport a zoomed window has (size / zoom).
+    for (const [w, h] of [
+      [1440, 900],
+      [1280, 720],
+      [1920, 1080],
+    ]) {
+      for (const zoom of [0.9, 1, 1.1]) {
+        it(`keeps the Activity foot inside the rail at ${w}x${h} ${Math.round(zoom * 100)}%`, async () => {
+          await setViewport({
+            width: Math.round(w / zoom),
+            height: Math.round(h / zoom),
+          });
+          document.documentElement.style.setProperty(
+            '--console-header-height',
+            '60px'
+          );
+          document.documentElement.style.setProperty(
+            '--sl-spacing-medium',
+            '1rem'
+          );
+          try {
+            const element = await mountLoaded();
+            const side = element.shadowRoot?.querySelector(
+              '.side-column'
+            ) as HTMLElement;
+            const feed = element.shadowRoot?.querySelector(
+              'activity-feed'
+            ) as HTMLElement & { updateComplete: Promise<unknown> };
+            await feed.updateComplete;
+            const footer = feed.shadowRoot?.querySelector(
+              '.footer'
+            ) as HTMLElement | null;
+            const sideBox = side.getBoundingClientRect();
+            const feedBox = feed.getBoundingClientRect();
+            // The column never overflows its own max-height.
+            const max = parseFloat(getComputedStyle(side).maxHeight);
+            if (window.innerWidth >= 1200 && window.innerHeight > 700) {
+              expect(max).to.be.greaterThan(0);
+            }
+            if (!Number.isNaN(max)) {
+              expect(sideBox.height).to.be.at.most(max + 1);
+            }
+            expect(feedBox.bottom).to.be.at.most(sideBox.bottom + 1);
+            if (footer) {
+              expect(footer.getBoundingClientRect().bottom).to.be.at.most(
+                feedBox.bottom + 1
+              );
+            }
+          } finally {
+            await setViewport({ width: 800, height: 600 });
+            document.documentElement.style.removeProperty(
+              '--console-header-height'
+            );
+            document.documentElement.style.removeProperty('--sl-spacing-medium');
+          }
+        });
+      }
+    }
 
     it('ages the Updated label instead of freezing it at "just now"', async () => {
       const element = await mountLoaded();
