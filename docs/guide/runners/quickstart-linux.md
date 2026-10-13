@@ -412,7 +412,12 @@ argument is runner-owned, so a hand-written Claude profile may set
 or the job fails with `claude_approval_hook_missing` before Claude starts.
 The flow's Preloop tools are passed with `--mcp-config` from a per-job file
 and allowed as `mcp__preloop-flow`. The runner never writes under
-`~/.claude` and never reads Claude credentials. Claude Code also runs
+`~/.claude`, and the job and its login probe never open a Claude credential
+file. (Agent discovery, which the inventory shares with `preloop agents discover`,
+still checks whether a Claude credential file or keychain entry exists; that
+check alone never makes Claude Code runnable.) The approval hook is found in `~/.claude/settings.json`,
+`~/.claude/settings.local.json` (or the same files under
+`$CLAUDE_CONFIG_DIR`) or the managed settings file. Claude Code also runs
 [remote sessions](remote-sessions.md).
 
 What the runner checks, and what it never reads:

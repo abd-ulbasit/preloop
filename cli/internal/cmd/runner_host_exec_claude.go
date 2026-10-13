@@ -122,12 +122,13 @@ func claudeConfigDir() (string, error) {
 
 // claudeApprovalHookInstalled reports whether the Preloop PreToolUse
 // approval hook is in the user settings (or the managed settings) Claude
-// Code loads. Only the hooks block of settings files is read; credential
-// files are never opened.
+// Code loads (settings.json, settings.local.json, managed settings). Only
+// the hooks block of settings files is read; credential files are never
+// opened.
 func claudeApprovalHookInstalled() bool {
 	paths := []string{claudeManagedSettingsPath()}
 	if dir, err := claudeConfigDir(); err == nil {
-		paths = append([]string{filepath.Join(dir, "settings.json")}, paths...)
+		paths = append([]string{filepath.Join(dir, "settings.json"), filepath.Join(dir, "settings.local.json")}, paths...)
 	}
 	for _, path := range paths {
 		doc, err := loadJSONDocumentOrEmpty(path)
@@ -373,12 +374,15 @@ func buildClaudeEntry(d harnessInventoryDeps, discovered map[string]AgentConfig)
 			}
 		}
 	}
+	// Only a credential variable or `claude auth status` verifies the
+	// login. Decide before the discovery fallback below, whose source is
+	// also reported as cli_status.
+	verified := entry.LoginState == harnessLoginSignedIn && (entry.LoginSource == "env" || entry.LoginSource == "cli_status")
 	if entry.LoginState == harnessLoginUnknown && wasDiscovered {
 		// Reported for display only; discovery is not a verified login, so
 		// it never makes the harness runnable.
 		entry.LoginState, entry.LoginSource = discoveryLogin(agent)
 	}
-	verified := entry.LoginState == harnessLoginSignedIn && (entry.LoginSource == "env" || entry.LoginSource == "cli_status")
 	signedOut, observed := d.Hints.snapshot(id)
 	if signedOut {
 		entry.LoginState = harnessLoginSignedOut

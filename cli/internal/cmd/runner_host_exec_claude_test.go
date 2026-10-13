@@ -426,3 +426,30 @@ func TestBuildHarnessInventoryClaudeUnverifiedIsPresenceOnly(t *testing.T) {
 		t.Fatalf("signed-out hint: entry = %+v", entry)
 	}
 }
+
+func TestBuildHarnessInventoryClaudeDiscoveryLoginIsNotVerified(t *testing.T) {
+	deps := claudeInventoryHost(t, harnessLoginUnknown, map[string]string{}, true)
+	deps.Discover = func() []AgentConfig {
+		return []AgentConfig{{Name: "Claude Code", RuntimeState: "present", AuthState: "ready", IsOnboarded: true, OnboardingState: "fully_onboarded"}}
+	}
+	entry := entryFor(t, buildHarnessInventory(deps), "claude_code")
+	if entry.LoginState != harnessLoginSignedIn {
+		t.Fatalf("discovery login should still be reported: %+v", entry)
+	}
+	if entry.SupportLevel != harnessSupportPresenceOnly || entry.GeneratedProfile != nil || len(entry.Capabilities) != 0 {
+		t.Fatalf("an unprobed discovery login must not make Claude Code runnable: %+v", entry)
+	}
+}
+
+func TestClaudeApprovalHookInSettingsLocal(t *testing.T) {
+	configDir := setupClaudeHost(t, false, `cat >/dev/null`)
+	if claudeApprovalHookInstalled() {
+		t.Fatal("no hook installed yet")
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "settings.local.json"), []byte(claudeHookSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !claudeApprovalHookInstalled() {
+		t.Fatal("hook in settings.local.json not recognised")
+	}
+}
