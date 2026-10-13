@@ -82,6 +82,13 @@ const SEARCH_DEBOUNCE_MS = 400;
 const SNIPPETS_PER_SESSION = 3;
 
 /** Matching sessions requested per search. */
+/**
+ * Sessions per list page. 50 tall cards made the page 30 viewports long on
+ * prod (#1585); 20 compact rows fit in about two, and "Load more sessions"
+ * pages the rest.
+ */
+export const SESSION_PAGE_SIZE = 20;
+
 const SEARCH_RESULT_LIMIT = 25;
 
 /**
@@ -1015,7 +1022,7 @@ export class RuntimeSessionsView extends LitElement {
 
   private buildListParams(): RuntimeSessionListParams {
     const params: RuntimeSessionListParams = {
-      limit: 50,
+      limit: SESSION_PAGE_SIZE,
       status: this.status as 'all' | 'active' | 'ended',
     };
 

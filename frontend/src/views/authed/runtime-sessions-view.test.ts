@@ -6,7 +6,7 @@ import { loadShoelaceTokens } from '../../utils/test-shoelace-theme';
 
 import './runtime-sessions-view';
 import type { RuntimeSessionsView } from './runtime-sessions-view';
-import { formatCueStart } from './runtime-sessions-view';
+import { SESSION_PAGE_SIZE, formatCueStart } from './runtime-sessions-view';
 
 const SESSION_OPTIONS = {
   runner_id: 'r',
@@ -2230,7 +2230,7 @@ describe('RuntimeSessionsView', () => {
     }
 
     it('pages the list with Load more and keeps the count label honest', async () => {
-      stubPagedSessions(120);
+      stubPagedSessions(50);
       const element = (await fixture(
         html`<runtime-sessions-view></runtime-sessions-view>`
       )) as RuntimeSessionsView;
@@ -2241,24 +2241,31 @@ describe('RuntimeSessionsView', () => {
       );
       await element.updateComplete;
 
-      expect(countLabel(element)).to.equal('Showing 50 of 120');
+      // 20 per page (#1585), so the default list fits in about two viewports.
+      const firstUrl = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .find((url) => url.startsWith('/api/v1/runtime-sessions?'));
+      expect(firstUrl).to.contain(`limit=${SESSION_PAGE_SIZE}`);
+      expect(SESSION_PAGE_SIZE).to.equal(20);
+      expect(countLabel(element)).to.equal('Showing 20 of 50');
       expect(loadMoreButton(element)).to.not.equal(null);
 
       loadMoreButton(element)!.click();
       await waitUntil(
-        () => (element as any).sessions.items.length === 100,
+        () => (element as any).sessions.items.length === 40,
         'Second page did not append'
       );
       await element.updateComplete;
-      expect(countLabel(element)).to.equal('Showing 100 of 120');
+      expect(countLabel(element)).to.equal('Showing 40 of 50');
 
       loadMoreButton(element)!.click();
       await waitUntil(
-        () => (element as any).sessions.items.length === 120,
+        () => (element as any).sessions.items.length === 50,
         'Final page did not append'
       );
       await element.updateComplete;
-      expect(countLabel(element)).to.equal('120 sessions');
+      expect(countLabel(element)).to.equal('50 sessions');
       expect(loadMoreButton(element)).to.equal(null);
     });
 

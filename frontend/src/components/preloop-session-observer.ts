@@ -113,6 +113,10 @@ type EventPageState = {
   hasMore: boolean;
 };
 
+/** Smallest height of the full-layout panel (the Sessions page). */
+const FULL_LAYOUT_MIN_HEIGHT_PX = 560;
+/** App header plus the page padding above and below the panel. */
+const FULL_LAYOUT_CHROME_PX = 120;
 const EVENT_PAGE_SIZE = 25;
 const REPLAY_METADATA_LIMIT = 5000;
 
@@ -3154,7 +3158,12 @@ export class PreloopSessionObserver extends LitElement {
       <div
         class=${observerClass}
         style=${
-          this.layout === 'full' ? 'min-height: 720px;' : 'min-height: 520px;'
+          this.layout === 'full'
+            ? // A window-high master/detail panel: the list and the session
+              // scroll inside it, so a long transcript no longer makes the
+              // page 15+ viewports long (#1585).
+              `height: max(${FULL_LAYOUT_MIN_HEIGHT_PX}px, calc(100dvh - ${FULL_LAYOUT_CHROME_PX}px));`
+            : 'min-height: 520px;'
         }
       >
         ${
