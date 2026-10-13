@@ -412,8 +412,8 @@ argument is runner-owned, so a hand-written Claude profile may set
 or the job fails with `claude_approval_hook_missing` before Claude starts.
 The flow's Preloop tools are passed with `--mcp-config` from a per-job file
 and allowed as `mcp__preloop-flow`. The runner never writes under
-`~/.claude` and never reads Claude credentials. Runner sessions for Claude
-Code are not available yet.
+`~/.claude` and never reads Claude credentials. Claude Code also runs
+[remote sessions](remote-sessions.md).
 
 What the runner checks, and what it never reads:
 

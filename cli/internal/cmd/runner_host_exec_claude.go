@@ -403,8 +403,8 @@ func buildClaudeEntry(d harnessInventoryDeps, discovered map[string]AgentConfig)
 	return entry, true
 }
 
-// Runner flows run Claude Code; runner sessions do not yet (#1670).
+// Runner flows and runner sessions (#1670) both run Claude Code.
 const (
-	claudeSupportLevel = harnessSupportFlowsOnly
-	claudeSessionMode  = "none"
+	claudeSupportLevel = harnessSupportFlowsSessions
+	claudeSessionMode  = "resume"
 )

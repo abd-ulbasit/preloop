@@ -33,6 +33,7 @@ var runnerSessionConsentNames = map[string][3]string{
 	hostExecHarnessCopilot: {"Copilot CLI", "GitHub Copilot\nCLI", "Copilot"},
 	hostExecHarnessCursor:  {"Cursor CLI", "Cursor CLI", "Cursor"},
 	hostExecHarnessDevin:   {"Devin CLI", "Devin CLI", "Devin"},
+	hostExecHarnessClaude:  {"Claude Code", "Claude Code", "Claude"},
 }
 
 var runnerSessionsCmd = &cobra.Command{
@@ -87,6 +88,9 @@ func runnerSessionHarnessArg(arg string) (string, error) {
 	if harness == "copilot" {
 		harness = hostExecHarnessCopilot
 	}
+	if harness == "claude" {
+		harness = hostExecHarnessClaude
+	}
 	if _, ok := runnerSessionHarnesses[harness]; !ok {
 		supported := make([]string, 0, len(runnerSessionHarnesses))
 		for id := range runnerSessionHarnesses {
@@ -129,6 +133,9 @@ func enableRunnerSessions(out io.Writer, in io.Reader, harness string, yes bool)
 		return err
 	}
 	fmt.Fprintf(out, "Remote %s sessions are enabled on this machine.\n", harness)
+	if harness == hostExecHarnessClaude && !claudeApprovalHookInstalled() {
+		fmt.Fprintln(out, "Sessions start only once the Preloop approval hook is installed: preloop agents onboard \"Claude Code\" --approvals")
+	}
 	if harness == hostExecHarnessCopilot {
 		if installed, err := copilotApprovalHookInstalled(); err == nil && !installed {
 			fmt.Fprintln(out, "Sessions start only once the Preloop approval hook is installed: preloop agents onboard \"Copilot CLI\" --approvals")

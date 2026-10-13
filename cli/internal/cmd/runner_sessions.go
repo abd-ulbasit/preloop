@@ -79,6 +79,7 @@ var runnerSessionHarnesses = map[string]string{
 	hostExecHarnessCopilot: "GitHub Copilot CLI",
 	hostExecHarnessCursor:  "Cursor CLI",
 	hostExecHarnessDevin:   "Devin CLI",
+	hostExecHarnessClaude:  "Claude Code",
 }
 
 // runnerSessionActor is who started the session, as the server names them.
@@ -479,7 +480,7 @@ func newRunnerSessionManager(out io.Writer) *runnerSessionManager {
 	m := &runnerSessionManager{
 		sessions:   map[string]*runnerRemoteSession{},
 		notify:     make(chan struct{}, 1),
-		adapters:   map[string]sessionHarnessAdapter{hostExecHarnessCopilot: newCopilotSessionAdapter(), hostExecHarnessCursor: &cursorSessionAdapter{}, hostExecHarnessDevin: &devinSessionAdapter{}},
+		adapters:   map[string]sessionHarnessAdapter{hostExecHarnessCopilot: newCopilotSessionAdapter(), hostExecHarnessCursor: &cursorSessionAdapter{}, hostExecHarnessDevin: &devinSessionAdapter{}, hostExecHarnessClaude: newClaudeSessionAdapter()},
 		now:        time.Now,
 		stateDir:   dir,
 		loadConfig: loadRunnerConfigDoc,
