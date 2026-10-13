@@ -390,8 +390,9 @@ def _claim_operator_note(
 
     The hook's own conversation can be recorded as a session of its own (the
     origin session, from the hook's ``session_id``), and that is the session
-    an operator finds in ``preloop sessions list`` and attaches to. Notes
-    addressed to it are claimed too, after the credential's session.
+    an operator finds in ``preloop sessions list`` and attaches to. A resolved
+    origin owns the claim; only an unresolved origin uses the credential's
+    session binding. A native conversation never claims another session's notes.
 
     Never raises: a note is a bonus on this route, and a store problem must
     not turn a permission check into a denied tool call.
@@ -406,9 +407,8 @@ def _claim_operator_note(
         origin_session_id
         or (str(identity.runtime_session_id) if identity.runtime_session_id else None)
     ]
-    # Each session is claimed in its own transaction and its own try: a claim
-    # commits the notes as delivered, so a failure on the second session must
-    # not discard notes the first one already took.
+    # Claim only the authoritative scope. A storage failure leaves the
+    # permission decision intact and must not trigger a broader-scope fallback.
     notes: list[Any] = []
     for session_id in session_ids:
         try:
