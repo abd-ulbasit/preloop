@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -35,10 +37,14 @@ def _upgrade_completion_index(module: ModuleType, connection: Connection) -> Non
         module.upgrade()
 
 
-def test_migration_repairs_invalid_interrupted_index(db_engine: Engine) -> None:
+@pytest.mark.parametrize(
+    "name", ["ix_flow_execution_status_completion", "ix_flow_execution_start_time_id"]
+)
+def test_migration_repairs_invalid_interrupted_index(
+    db_engine: Engine, name: str
+) -> None:
     """A retried concurrent build must rebuild rather than skip an invalid index."""
     migration = _completion_migration()
-    name = "ix_flow_execution_status_completion"
     with db_engine.connect().execution_options(
         isolation_level="AUTOCOMMIT"
     ) as connection:
@@ -65,9 +71,13 @@ def test_migration_repairs_invalid_interrupted_index(db_engine: Engine) -> None:
             _upgrade_completion_index(migration, connection)
 
 
-def test_completion_index_remains_in_model_metadata(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    "name", ["ix_flow_execution_status_completion", "ix_flow_execution_start_time_id"]
+)
+def test_completion_index_remains_in_model_metadata(
+    db_session: Session, name: str
+) -> None:
     """Autogenerate must not drop the index after a model declaration is lost."""
-    name = "ix_flow_execution_status_completion"
     assert name in {index.name for index in models.FlowExecution.__table__.indexes}
     context = MigrationContext.configure(db_session.connection())
     changes: dict[str, set[str]] = {"add_index": set(), "remove_index": set()}
@@ -80,7 +90,16 @@ def test_completion_index_remains_in_model_metadata(db_session: Session) -> None
     assert name not in changes["remove_index"] - changes["add_index"]
 
 
-def test_failure_completion_page_uses_index_without_sort(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    ("sort_by", "index"),
+    [
+        ("end_time", "ix_flow_execution_status_completion"),
+        ("start_time", "ix_flow_execution_start_time_id"),
+    ],
+)
+def test_execution_page_uses_index_without_sort(
+    db_session: Session, sort_by: str, index: str
+) -> None:
     statements: list[tuple[str, object]] = []
 
     def capture(
@@ -98,8 +117,8 @@ def test_failure_completion_page_uses_index_without_sort(db_session: Session) ->
     try:
         crud_flow_execution.get_multi(
             db_session,
-            statuses=["FAILED"],
-            sort_by="end_time",
+            statuses=["FAILED"] if sort_by == "end_time" else None,
+            sort_by=sort_by,
             limit=20,
             lightweight=True,
             eager_load=False,
@@ -116,5 +135,5 @@ def test_failure_completion_page_uses_index_without_sort(db_session: Session) ->
             "EXPLAIN " + statement, parameters
         )
     )
-    assert "ix_flow_execution_status_completion" in plan
+    assert index in plan
     assert "Sort" not in plan

@@ -151,6 +151,8 @@ def resolve_execution_agent_selection(
 class FlowExecution(Base):
     __tablename__ = "flow_execution"
     __table_args__ = (
+        # Backward scans satisfy default start_time DESC, id DESC pagination.
+        Index("ix_flow_execution_start_time_id", "start_time", "id"),
         # Failure monitoring orders by completion and counts recent endings.
         # PostgreSQL needs the explicit NULLS LAST order to avoid a sort.
         Index(
