@@ -50,7 +50,7 @@ brands:
         # Unset by default: self-hosted landing pages serve their own users
         # and should not embed third-party content.
         # video_playlist_url: "https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
-        og_image: "/assets/mcp-firewall.svg"
+        og_image: "/assets/og/preloop-social.png"
 
       get_started:
         title: "Onboard or connect your AI agent in minutes"
