@@ -2811,13 +2811,16 @@ describe('DashboardView', () => {
 
     // #1645: Usage plus a fixed feed floor overflowed the rail at 1440x900,
     // so the feed's foot ("View audit") sat below the window. Zoom is
-    // emulated as the CSS viewport a zoomed window has (size / zoom).
-    for (const [w, h] of [
-      [1440, 900],
-      [1280, 720],
-      [1920, 1080],
-    ]) {
-      for (const zoom of [0.9, 1, 1.1]) {
+    // emulated as the CSS viewport a zoomed window has (size / zoom). The
+    // last case is a wide but short window (1920x1080 at 160%, or a laptop
+    // with the devtools docked below), where the rail stops being sticky.
+    const cases: Array<[number, number, number[]]> = [
+      [1440, 900, [0.9, 1, 1.1]],
+      [1280, 720, [0.9, 1, 1.1]],
+      [1920, 1080, [0.9, 1, 1.1, 1.6]],
+    ];
+    for (const [w, h, zooms] of cases) {
+      for (const zoom of zooms) {
         it(`keeps the Activity foot inside the rail at ${w}x${h} ${Math.round(zoom * 100)}%`, async () => {
           await setViewport({
             width: Math.round(w / zoom),
@@ -2840,6 +2843,15 @@ describe('DashboardView', () => {
               'activity-feed'
             ) as HTMLElement & { updateComplete: Promise<unknown> };
             await feed.updateComplete;
+            // Production's Usage card (headline, chart, budget) is about
+            // 450px tall; the test data renders a shorter one, which would
+            // hide an overflow that the real card causes.
+            const usage = side.querySelector('usage-card') as HTMLElement;
+            usage.style.minHeight = '450px';
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            if (window.innerWidth >= 1200 && window.innerHeight <= 700) {
+              expect(getComputedStyle(side).position).to.equal('static');
+            }
             const footer = feed.shadowRoot?.querySelector(
               '.footer'
             ) as HTMLElement | null;
