@@ -1,6 +1,8 @@
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
 import { fixture, html, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
+import { setViewport } from '@web/test-runner-commands';
+import { loadShoelaceTokens } from '../../utils/test-shoelace-theme';
 
 import './runtime-sessions-view';
 import type { RuntimeSessionsView } from './runtime-sessions-view';
@@ -978,6 +980,43 @@ describe('RuntimeSessionsView', () => {
     expect(
       urls.filter((url) => url.startsWith('/api/v1/runtime-sessions?'))
     ).to.have.length(1);
+  });
+
+  describe('phone browser (#1483 wave 1)', () => {
+    for (const [width, height] of [
+      [390, 844],
+      [360, 780],
+    ]) {
+      it(`fits ${width}x${height} with a tappable New session button`, async () => {
+        await loadShoelaceTokens();
+        await setViewport({ width, height });
+        try {
+          const element = (await fixture(
+            html`<runtime-sessions-view></runtime-sessions-view>`
+          )) as RuntimeSessionsView;
+          await waitUntil(
+            () => !(element as any).loading,
+            'Runtime sessions view did not finish loading'
+          );
+          await element.updateComplete;
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          expect(document.documentElement.scrollWidth).to.be.at.most(
+            window.innerWidth
+          );
+          const host = element.getBoundingClientRect();
+          expect(host.right).to.be.at.most(window.innerWidth);
+          const button = element.shadowRoot!.querySelector(
+            'sl-button.new-runner-session'
+          )!;
+          const rect = button.getBoundingClientRect();
+          expect(rect.right).to.be.at.most(window.innerWidth);
+          expect(rect.height).to.be.at.least(44);
+          expect(rect.width).to.be.at.least(44);
+        } finally {
+          await setViewport({ width: 1280, height: 800 });
+        }
+      });
+    }
   });
 
   describe('artifact counts on the list (#1084)', () => {

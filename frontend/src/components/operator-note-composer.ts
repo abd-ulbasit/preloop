@@ -17,9 +17,11 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/textarea/textarea.js';
 
 import {
+  RunnerSessionApiError,
   cancelOperatorNote,
   listOperatorNotes,
   sendOperatorNote,
+  sendRunnerSessionTurn,
 } from '../api';
 import {
   noteAuthorIcon,
@@ -31,6 +33,18 @@ import type { OperatorNote } from '../types';
 
 /** Emitted after a note is accepted, so a page can refresh its timeline. */
 export const OPERATOR_NOTE_SENT_EVENT = 'operator-note-sent';
+
+/**
+ * Emitted after a runner session accepted a typed line as a new turn
+ * (command mode), so a page can refresh its timeline.
+ */
+export const RUNNER_TURN_SENT_EVENT = 'runner-turn-sent';
+
+/**
+ * Emitted when a command-mode send failed for a reason other than a turn in
+ * progress, so the host can re-read whether command mode still applies.
+ */
+export const RUNNER_TURN_FAILED_EVENT = 'runner-turn-failed';
 
 /** Mirrors MAX_NOTE_BODY_CHARS on the server, which is the real bound. */
 const MAX_NOTE_CHARS = 4096;
@@ -48,6 +62,15 @@ export class OperatorNoteComposer extends LitElement {
   /** Target one runtime session, and only that session. */
   @property({ type: String, attribute: 'session-id' })
   sessionId: string | null = null;
+
+  /**
+   * Command mode: the runner session a typed line starts a turn on.
+   *
+   * Set only from a validated control ``send_path``. When null the box sends
+   * an operator note, exactly as before.
+   */
+  @property({ type: String, attribute: 'runner-session-id' })
+  runnerSessionId: string | null = null;
 
   @state()
   private text = '';
@@ -82,6 +105,14 @@ export class OperatorNoteComposer extends LitElement {
     .row sl-textarea {
       flex: 1;
       min-width: 0;
+    }
+
+    /* Phone: 44px tap target for Send (DESIGN.md D24). */
+    @media (max-width: 720px) {
+      .row sl-button {
+        --sl-input-height-medium: 44px;
+        min-width: 44px;
+      }
     }
 
     sl-textarea::part(form-control-label) {
@@ -254,6 +285,10 @@ export class OperatorNoteComposer extends LitElement {
     if (!text || this.sending) return;
     this.sending = true;
     this.error = null;
+    if (this.runnerSessionId) {
+      await this.sendTurn(this.runnerSessionId, text);
+      return;
+    }
     try {
       const note = await sendOperatorNote({ text, ...this.targetPayload() });
       this.loadSeq += 1;
@@ -269,6 +304,41 @@ export class OperatorNoteComposer extends LitElement {
     } catch (error) {
       this.error =
         error instanceof Error ? error.message : 'Failed to send the note';
+    } finally {
+      this.sending = false;
+    }
+  }
+
+  /** Command mode: the line becomes the agent's next turn. */
+  private async sendTurn(runnerSessionId: string, text: string): Promise<void> {
+    try {
+      const turn = await sendRunnerSessionTurn(runnerSessionId, text);
+      this.text = '';
+      this.dispatchEvent(
+        new CustomEvent(RUNNER_TURN_SENT_EVENT, {
+          detail: turn,
+          bubbles: true,
+          composed: true,
+        })
+      );
+    } catch (error) {
+      // The text stays in the box either way, so nothing typed is lost.
+      if (
+        error instanceof RunnerSessionApiError &&
+        error.code === 'turn_in_progress'
+      ) {
+        this.error =
+          'The agent is still working on the last message. Send this again when it finishes.';
+      } else {
+        this.error =
+          error instanceof Error ? error.message : 'Failed to send the message';
+        this.dispatchEvent(
+          new CustomEvent(RUNNER_TURN_FAILED_EVENT, {
+            bubbles: true,
+            composed: true,
+          })
+        );
+      }
     } finally {
       this.sending = false;
     }
@@ -380,8 +450,12 @@ export class OperatorNoteComposer extends LitElement {
           resize="auto"
           rows="2"
           maxlength=${MAX_NOTE_CHARS}
-          label="Note to this agent"
-          placeholder="Tell the agent something before its next turn"
+          label=${this.runnerSessionId ? 'Message to this agent' : 'Note to this agent'}
+          placeholder=${
+            this.runnerSessionId
+              ? 'Tell the agent what to do next'
+              : 'Tell the agent something before its next turn'
+          }
           .value=${this.text}
           ?disabled=${disabled}
           @sl-input=${(event: Event) => {
@@ -400,8 +474,12 @@ export class OperatorNoteComposer extends LitElement {
         </sl-button>
       </div>
       <div class="hint">
-        Delivered at the agent's next turn, with your name attached. Enter
-        sends, Shift+Enter adds a line.
+        ${
+          this.runnerSessionId
+            ? "Starts the agent's next turn, with your name attached."
+            : "Delivered at the agent's next turn, with your name attached."
+        }
+        Enter sends, Shift+Enter adds a line.
       </div>
       ${
         this.error

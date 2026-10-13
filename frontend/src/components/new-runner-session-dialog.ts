@@ -123,6 +123,12 @@ export class NewRunnerSessionDialog extends LitElement {
       sl-dialog::part(panel) {
         width: min(36rem, 96vw);
       }
+      /* Phone: 44px tap targets on the footer (DESIGN.md D24). */
+      @media (max-width: 720px) {
+        sl-button[slot='footer'] {
+          --sl-input-height-medium: 44px;
+        }
+      }
     `,
   ];
 
