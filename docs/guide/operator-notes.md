@@ -18,11 +18,15 @@ have.
 
 ## What it costs
 
-Nothing when there is no note. The agent never polls, never decides to check an
-inbox, never spends a token asking. Delivery is a piece of work Preloop is
-doing anyway: the gateway is already assembling the outbound request body, and
+No extra model input tokens when there is no note. The agent never polls, never
+decides to check an inbox, never spends a token asking. Delivery is a piece of
+work Preloop is doing anyway: the gateway is already assembling the outbound request body, and
 the permission hook is already making a round trip for the tool call. A session
 with no pending note reads one indexed row and appends nothing.
+
+Native model-input plugins also use bounded note API requests at the model
+boundary. These add a network round trip even when the inbox is empty, but no
+extra model input tokens. Session registration is cached for the current run.
 
 The turn that carries a note is a cache miss. Providers serve cached input only
 for a prefix that is byte-identical to a previous request, and a note is
@@ -416,13 +420,16 @@ unclaimed and already finished ids are silently ignored.
 | Copilot CLI | `sessionStart`, `sessionEnd`; native `preToolUse` is non-carrying | Session lifecycle commands register native `sessionId` and report its end alongside usage hooks. Native tool checks leave notes pending; no verified model-visible context or continuation field is installed |
 | Devin CLI | `SessionStart`, `UserPromptSubmit`, native permission hooks | Session registration only. Permission hooks have no verified note carrier; notes stay pending. Managed runner termination supplies end receipts |
 | Pi, Nanobot | Gateway model request; native lifecycle plugins | Native tool gates leave notes pending. Notes can arrive on the next model request routed through Preloop; the plugins supply native session identity on model requests |
-| DeepSeek Harness | Native model-input middleware; gateway route where session identity is available | Native tool gates leave notes pending. Model-input middleware can register the native session, claim notes, append a valid user message and acknowledge after insertion; gateway routing alone does not supply per-request native session headers |
-| OpenClaw, Hermes | Gateway model request | Native tool gates leave notes pending. Agent-targeted notes can ride routed model requests; native session-targeted delivery requires verified mapping between model requests and the registered session |
+| DeepSeek Harness | Native pre-step middleware and `llm/stream` observer | The plugin registers the native session and appends notes as SDK-supported logged user messages. It acknowledges only when the exact note appears in the frozen history admitted to a model call. Its awaited teardown effect reports session end. Native tool gates leave notes pending; gateway routing alone does not supply per-request native session headers |
+| Hermes | `pre_llm_call`, `pre_api_request`, optional `on_session_finalize` | Turn-prologue context carries notes; an exact witness in the sanitized API request confirms admission. Notes arriving mid-turn wait for the next turn. Per-turn `on_session_end` releases unadmitted claims without ending the session; only supported `on_session_finalize` reports a hard close |
+| OpenClaw | `before_prompt_build`, `llm_input`, diagnostic model-call events, `session_end` | Notes enter `prependContext`; exact input and matching actual-call diagnostics confirm admission. Preflight rejection cannot acknowledge delivery. Native notes require SDK prompt-injection and conversation-access permissions and diagnostic hooks; hosts without them keep notes pending. Only authoritative new/reset/deleted ends terminalize receipts; idle, compaction and shutdown remain resumable |
 
 The native capabilities above are checked against Codex CLI 0.162.1 embedded
 hook schemas, Cursor's [hook reference](https://cursor.com/docs/agent/hooks)
 (Cursor Agent version `2026.10.01-e373342` observed), and OpenCode 1.18.32's
-plugin SDK. Fixture and loopback harness tests establish protocol behavior;
+plugin SDK, DeepSeek Harness SDK 0.1.5-rc.2, Hermes revision
+`8f817911723e3ec13e7f47fc022fdcc9e2149354`, and OpenClaw v2026.6.11.
+Fixture and loopback harness tests establish protocol behavior;
 real provider smoke results are tracked in #1637. Re-onboard after updating the
 CLI or runtime plugin to install the lifecycle commands. Usage-hook removal
 preserves the independently installed lifecycle commands; offboarding removes
@@ -499,8 +506,8 @@ not asking Preloop anything.
 | State | Meaning | Receipt time |
 | --- | --- | --- |
 | `pending` | Waiting for a carrying call or hook | `created_at` |
-| `claimed` | A non-carrying hook has spooled the block for this session | `claimed_at` |
-| `delivered` | Included in the gateway request or written into carrying hook output | `claimed_at`, `delivered_at`, `delivery_channel` |
+| `claimed` | A hook has spooled the block or a native carrier is awaiting model-input confirmation | `claimed_at` |
+| `delivered` | Included in the gateway request, carrying hook output, or admitted native model input | `claimed_at`, `delivered_at`, `delivery_channel` |
 | `acknowledged` | The harness recorded the model's acknowledgment | `delivered_at`, `acknowledged_turn_id` |
 | `expired` | An uncarried note passed its TTL | `expired_at` |
 | `cancelled` | The operator withdrew a pending note | `cancelled_at` |
@@ -521,6 +528,10 @@ A late hook cannot claim notes for a session already recorded as ended.
 Reconciliation does not end a session because it is silent, asleep, or briefly
 disconnected. Without an authoritative termination event, a note keeps waiting
 until delivery or its expiry.
+
+See [Operator note verification](operator-notes-smoke.md) for isolated API,
+receipt and installed-harness checks, including which evidence uses simulated
+providers and which requires a real provider account.
 
 ## What the model sees
 

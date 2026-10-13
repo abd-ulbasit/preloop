@@ -235,6 +235,16 @@ live (`agent_session_lineage.runner_session_for_external`); a session a hook
 opened before the id arrived is folded into it. See
 [Remote sessions](docs/guide/runners/remote-sessions.md).
 
+Operator-note receipts distinguish a deferred claim from delivery at a supported
+model or hook boundary. Native session-end signals settle pending and claimed
+notes targeted at that session. The minute runner sweeper also reconciles notes
+against authoritatively ended `RuntimeSession` rows in bounded batches, with
+guarded transitions and once-only audit/webhook emission. It does not infer
+termination from inactivity alone, and standing agent-targeted notes remain
+available for a later session. The [operator-note guide](docs/guide/operator-notes.md)
+lists harness capabilities; the [verification guide](docs/guide/operator-notes-smoke.md)
+provides isolated receipt and lifecycle checks.
+
 Runner registration and heartbeats report `docker_available` from a five-second `docker ps` probe. Container leases require that capability, including explicitly pinned runners. The CRUD layer excludes paused runners from selection and slot claims; leasing rechecks scheduling preferences after locking the row. Capability tags are derived from the current daemon result and enabled, signed-in harness inventory alongside custom labels. `accept_untagged` defaults to false and `paused` defaults to false; console scheduling edits persist independently of the process's registration and heartbeat. Automatic routing uses hosted compute when no private runner accepts the job.
 
 Cursor remote sessions require host consent and the Preloop approval hooks. The host creates a chat with `cursor-agent create-chat` and uses `--resume` for each turn, with the same authorized workspace policy and process cancellation as Copilot sessions.

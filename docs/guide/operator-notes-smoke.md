@@ -2,8 +2,9 @@
 
 Operator-note receipts need two kinds of evidence: local protocol tests and an
 installed harness consuming the carrying output. A `delivered` receipt means
-Preloop wrote the carrying response; it does not prove the model read or obeyed
-it. Keep those claims separate when reporting a smoke run.
+Preloop wrote the carrying response or confirmed native model-input admission;
+it does not prove the model read or obeyed it. Keep those claims separate when
+reporting a smoke run.
 
 ## Local conformance without provider credentials
 
@@ -42,7 +43,8 @@ Messages. They verify note insertion into outbound request bodies, account
 isolation, expiry, retry behavior and recorded delivery. A harness supported
 through a managed gateway receives notes at its next routed model request.
 Native permission support alone does not imply a model-visible note carrier;
-a hook without one must keep its receipt claimed until a carrying boundary.
+a hook without one leaves notes pending. A deferred carrier holds a claimed
+receipt until its verified carrying boundary confirms admission.
 Use the current adapter registry and onboarding output to identify the chosen
 rail for each supported harness instead of assuming every harness has the
 same lifecycle hooks.
@@ -84,6 +86,24 @@ two outbound model requests contained the corresponding startup and stop
 markers, and the CLI emitted SessionEnd. This establishes installed Codex
 lifecycle/config acceptance with simulated provider/API; it does not reuse the
 normal Codex login or claim real provider validation.
+
+DeepSeek Harness also has a keyless native-runtime smoke. Install the pinned
+runtime dependencies, then run from the repository root:
+
+```bash
+npm ci --ignore-scripts --prefix runtime-plugins/harness-preloop/agents/deepseek
+PRELOOP_DISABLE_TELEMETRY=true DSH_TELEMETRY_DISABLED=true \
+  PRELOOP_TEST_RUNTIME=deepseek \
+  PRELOOP_TEST_RUNTIME_BIN="$PWD/runtime-plugins/harness-preloop/agents/deepseek/node_modules/.bin" \
+  npm run test:runtime --prefix runtime-plugins/harness-preloop
+```
+
+Verified on 2026-10-13 with `@deepseek-ai/dsh` 0.1.5-rc.2: the native SDK admitted
+the logged note once, the adapter acknowledged it, a denied tool did not execute,
+and orderly teardown reported session end. This uses a loopback model and note
+API; it does not establish paid-provider behavior. Hermes and OpenClaw carrier
+tests use source-audited SDK fixtures, including canceled-turn and acknowledgment
+retry cases; installed-host/provider smoke remains a separate validation step.
 
 ## Installed-harness smoke
 
