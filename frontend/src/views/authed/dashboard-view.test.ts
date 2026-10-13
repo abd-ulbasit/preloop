@@ -2802,7 +2802,9 @@ describe('DashboardView', () => {
         expect(parseFloat(card.minHeight)).to.equal(160);
       } finally {
         await setViewport({ width: 800, height: 600 });
-        document.documentElement.style.removeProperty('--console-header-height');
+        document.documentElement.style.removeProperty(
+          '--console-header-height'
+        );
         document.documentElement.style.removeProperty('--sl-spacing-medium');
       }
     });
@@ -2862,7 +2864,9 @@ describe('DashboardView', () => {
             document.documentElement.style.removeProperty(
               '--console-header-height'
             );
-            document.documentElement.style.removeProperty('--sl-spacing-medium');
+            document.documentElement.style.removeProperty(
+              '--sl-spacing-medium'
+            );
           }
         });
       }
