@@ -242,6 +242,11 @@ def fold_hook_sessions_into_runner(
     external = normalize_session_id(external_session_id)
     if external is None:
         return 0
+    if not target.session_reference:
+        # Set here so it does not depend on whether the hook or the runner's
+        # state frame arrived first.
+        target.session_reference = external[:255]
+        db.add(target)
     folded = 0
     for session in _sessions_carrying(db, account_id=account_id, external=external):
         if session.id == target.id:

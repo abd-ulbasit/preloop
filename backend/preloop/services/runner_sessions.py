@@ -771,9 +771,11 @@ def _apply_state(
     now = _now()
     _touch(row, now)
     if message.harness_session_id:
-        learned = row.harness_session_id != message.harness_session_id
         row.harness_session_id = message.harness_session_id
-        if learned and state not in ("ended", "failed"):
+        if state not in ("ended", "failed"):
+            # Every frame, not only the first: a hook that registered while
+            # an earlier frame was being applied left a sibling to fold. In
+            # the steady state the lookup finds nothing.
             _link_hook_sessions(db, row)
     if state == "failed":
         code = message.error_code or "unknown"
@@ -918,6 +920,8 @@ def _apply_turn_done(
         row.pending_turn_sent_at = None
     if row.active_turn_id == message.turn_id:
         row.active_turn_id = None
+    if row.is_live:
+        _link_hook_sessions(db, row)
     _touch(row)
     db.add(row)
     error_code = raw.get("error_code")

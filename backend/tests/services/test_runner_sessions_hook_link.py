@@ -405,3 +405,56 @@ def test_admin_started_session_links_runner_owner_hook_only(
     assert refused is None
     start = _hook_start(db_session, test_user.account_id, hs, actor_user_id=owner.id)
     assert start.runtime_session_id == str(row.runtime_session_id)
+
+
+def _row_fields(db: Session, row: models.RunnerRemoteSession) -> tuple:
+    runtime = db.get(models.RuntimeSession, row.runtime_session_id)
+    db.refresh(runtime)
+    return (
+        runtime.session_reference == row.harness_session_id,
+        runtime.cwd,
+        runtime.runtime_principal_name,
+        runtime.title,
+    )
+
+
+def test_late_hook_row_is_folded_by_a_later_frame(db_session, runner, test_user):
+    """A sibling made after the first frame is folded by the next one."""
+    row = _start(db_session, runner, test_user)
+    hs = str(uuid.uuid4())
+    _go_idle(db_session, runner, row, hs)
+    late = models.RuntimeSession(
+        account_id=test_user.account_id,
+        session_source_type=PRINCIPAL_TYPE,
+        session_source_id=f"agent-1:{hs}",
+        runtime_principal_type=PRINCIPAL_TYPE,
+        runtime_principal_id=f"agent-1:{hs}",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(late)
+    db_session.commit()
+
+    svc.apply_runner_session_message(
+        db_session, runner, _state(row, "running", harness_session_id=hs)
+    )
+
+    assert [s.id for s in _account_sessions(db_session, test_user.account_id)] == [
+        row.runtime_session_id
+    ]
+
+
+def test_both_orders_leave_the_same_runner_session_fields(
+    db_session, runner, test_user
+):
+    state_first = _start(db_session, runner, test_user)
+    hs1 = str(uuid.uuid4())
+    _go_idle(db_session, runner, state_first, hs1)
+    _hook_start(db_session, test_user.account_id, hs1)
+
+    hook_first = _start(db_session, runner, test_user)
+    hs2 = str(uuid.uuid4())
+    _hook_start(db_session, test_user.account_id, hs2)
+    _go_idle(db_session, runner, hook_first, hs2)
+
+    assert _row_fields(db_session, state_first) == _row_fields(db_session, hook_first)
+    assert _row_fields(db_session, state_first)[0] is True
