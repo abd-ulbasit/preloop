@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+
+import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
@@ -93,14 +97,145 @@ def test_finalize_uses_external_session_identity_not_per_turn_end() -> None:
     notes.prepare("session-1", "turn-1")
     notes.turn_ended("session-1", "turn-1")
     assert not any(path == "session-end" for path, _ in calls)
-    notes.finalized("foreign", "shutdown")
-    assert len(calls) == 2
     notes.finalized("session-1", "shutdown")
     assert calls[-1] == (
         "session-end",
         {"external_session_id": "session-1", "reason": "shutdown"},
     )
     assert not notes.sessions
+
+
+def test_inactive_cache_eviction_preserves_terminal_authority() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def request(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        calls.append((path, body))
+        if path == "session-start":
+            return {"runtime_session_id": "runtime"}
+        return {"text": None, "notes": []}
+
+    notes = OperatorNotes("https://example.com", "agt_synthetic", request)
+    for i in range(300):
+        notes.prepare(f"session-{i}", "turn")
+    assert sum(path == "session-start" for path, _ in calls) == 300
+    assert len(notes.sessions) == 256
+    assert "session-0" not in notes.sessions
+    notes.finalized("session-0", "shutdown")
+    assert calls[-1] == (
+        "session-end",
+        {"external_session_id": "session-0", "reason": "shutdown"},
+    )
+
+
+@pytest.mark.parametrize("held_path", ["session-start", "notes/pending"])
+def test_active_callbacks_are_not_evicted(held_path: str) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def request(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        calls.append((path, body))
+        if body.get("session_id") == "active" and path == held_path:
+            entered.set()
+            assert release.wait(5)
+        if path == "session-start":
+            return {"runtime_session_id": "runtime"}
+        if path == "notes/pending" and body["session_id"] == "active":
+            return {"text": TEXT, "notes": [{"note_id": "note-1"}]}
+        return {"text": None, "notes": []}
+
+    notes = OperatorNotes("https://example.com", "agt_synthetic", request)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        build = pool.submit(notes.prepare, "active", "turn")
+        try:
+            assert entered.wait(5)
+            for i in range(256):
+                notes.prepare(f"idle-{i}", "turn")
+            assert "active" in notes.sessions
+            assert len(notes.sessions) == 256
+        finally:
+            release.set()
+        assert build.result() == {"context": TEXT}
+    notes.admitted("active", "turn", TEXT)
+    assert calls[-1] == ("notes/ack", {"session_id": "active", "note_ids": ["note-1"]})
+
+
+def test_outstanding_claims_fill_cache_without_eviction() -> None:
+    notes, calls, _ = fixture()
+    for i in range(256):
+        assert notes.prepare(f"session-{i}", "turn") == {"context": TEXT}
+    assert notes.prepare("overflow", "turn") is None
+    assert len(notes.sessions) == 256
+    assert len(calls) == 512
+    notes.admitted("session-0", "turn", TEXT)
+    assert notes.prepare("overflow", "turn") == {"context": TEXT}
+    assert len(notes.sessions) == 256
+
+
+def test_active_state_cannot_be_evicted_when_other_entries_have_claims() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    notes, calls, _ = fixture()
+    transport = notes.transport
+
+    def request(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        if body.get("session_id") == "active":
+            if path == "session-start":
+                entered.set()
+                assert release.wait(5)
+                return {"runtime_session_id": "runtime"}
+            return {"text": None, "notes": []}
+        return transport(path, body)
+
+    notes.transport = request
+    for i in range(255):
+        notes.prepare(f"claimed-{i}", "turn")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        build = pool.submit(notes.prepare, "active", "turn")
+        try:
+            assert entered.wait(5)
+            assert notes.prepare("overflow", "turn") is None
+            assert len(notes.sessions) == 256
+            assert len(calls) == 510
+        finally:
+            release.set()
+        assert build.result() is None
+    assert notes.prepare("overflow", "turn") == {"context": TEXT}
+
+
+def test_finalize_keeps_queued_callback_pinned_until_it_observes_closure() -> None:
+    notes, calls, _ = fixture()
+    notes.prepare("session", "turn")
+    entered = threading.Event()
+    release = threading.Event()
+    transport = notes.transport
+
+    def request(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        if path == "session-end":
+            entered.set()
+            assert release.wait(5)
+        return transport(path, body)
+
+    notes.transport = request
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        end = pool.submit(notes.finalized, "session", "shutdown")
+        try:
+            assert entered.wait(5)
+            build = pool.submit(notes.prepare, "session", "next-turn")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with notes.lock:
+                    if notes.sessions["session"].active == 2:
+                        break
+                time.sleep(0.001)
+            else:
+                pytest.fail("queued callback did not pin session state")
+        finally:
+            release.set()
+        end.result()
+        assert build.result() is None
+    assert "session" not in notes.sessions
+    assert sum(path == "session-start" for path, _ in calls) == 1
 
 
 def test_concurrent_session_callbacks_claim_once() -> None:

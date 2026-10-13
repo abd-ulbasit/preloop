@@ -372,6 +372,9 @@ server-authoritative end.
 
 Callbacks serialize per session. Confirmed delivery with a failed ACK retries
 without injecting a second copy, including before finalization. Unconfirmed
-batches are held in bounded process memory; a process restart or a missing
+batches are held in a cache of at most 256 sessions. Inactive entries without
+claims can be evicted so older hosts without finalization continue registering
+new conversations; running and queued callbacks pin their entries. Native
+finalization remains authoritative after eviction. A process restart or a missing
 matching end event can leave them claimed until expiry. Session finalization
 that cannot reach Preloop likewise does not imply the server observed the end.

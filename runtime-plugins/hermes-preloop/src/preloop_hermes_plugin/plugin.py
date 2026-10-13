@@ -936,7 +936,10 @@ def _permission_check_url(control_ws_url: str) -> str:
     if parsed.scheme not in {"ws", "wss", "http", "https"} or not parsed.netloc:
         raise ValueError("Control endpoint must be an absolute HTTP(S) or WS(S) URL")
     scheme = "https" if parsed.scheme in {"wss", "https"} else "http"
-    return f"{scheme}://{parsed.netloc}{PERMISSION_CHECK_PATH}"
+    control_path = "/api/v1/agents/control/ws"
+    path = parsed.path.rstrip("/")
+    prefix = path.removesuffix(control_path) if path.endswith(control_path) else ""
+    return f"{scheme}://{parsed.netloc}{prefix}{PERMISSION_CHECK_PATH}"
 
 
 def _block(reason: str) -> dict[str, Any]:

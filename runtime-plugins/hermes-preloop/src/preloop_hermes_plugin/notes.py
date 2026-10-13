@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import threading
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -39,6 +41,8 @@ class Session:
     lock: threading.Lock = field(default_factory=threading.Lock)
     registered: bool = False
     claim: Claim | None = None
+    active: int = 0
+    closed: bool = False
 
 
 class OperatorNotes:
@@ -69,13 +73,45 @@ class OperatorNotes:
             raise ValueError("Invalid note response")
         return result
 
-    def _state(self, session_id: str) -> Session | None:
+    @contextmanager
+    def _state(
+        self, session_id: str, *, create: bool = False
+    ) -> Iterator[Session | None]:
+        """Pin callback state before waiting on its lock, then release atomically."""
         with self.lock:
-            if session_id not in self.sessions:
+            state = self.sessions.get(session_id)
+            if state is None and create:
                 if len(self.sessions) >= 256:
-                    return None  # Preserve outstanding claims; bounded process state.
-                self.sessions[session_id] = Session()
-            return self.sessions[session_id]
+                    idle = next(
+                        (
+                            key
+                            for key, item in self.sessions.items()
+                            if not item.active and item.claim is None
+                        ),
+                        None,
+                    )
+                    if idle is not None:
+                        del self.sessions[idle]
+                if len(self.sessions) < 256:
+                    state = Session()
+                    self.sessions[session_id] = state
+            if state is not None:
+                state.active += 1
+        if state is None:
+            yield None
+            return
+        try:
+            with state.lock:
+                yield None if state.closed else state
+        finally:
+            with self.lock:
+                state.active -= 1
+                if (
+                    state.closed
+                    and not state.active
+                    and self.sessions.get(session_id) is state
+                ):
+                    del self.sessions[session_id]
 
     def _ack(self, session_id: str, state: Session) -> None:
         claim = state.claim
@@ -88,10 +124,9 @@ class OperatorNotes:
         """Return supported context output without advancing its receipt."""
         if not session_id or len(session_id) > 200 or not turn_id:
             return None
-        state = self._state(session_id)
-        if state is None:
-            return None
-        with state.lock:
+        with self._state(session_id, create=True) as state:
+            if state is None:
+                return None
             try:
                 if not state.registered:
                     result = self.transport(
@@ -138,11 +173,9 @@ class OperatorNotes:
 
     def admitted(self, session_id: str, turn_id: str, messages: Any) -> None:
         """ACK only the batch confirmed in this turn's effective request body."""
-        with self.lock:
-            state = self.sessions.get(session_id)
-        if state is None:
-            return
-        with state.lock:
+        with self._state(session_id) as state:
+            if state is None:
+                return
             claim = state.claim
             if (
                 claim is None
@@ -158,11 +191,9 @@ class OperatorNotes:
 
     def turn_ended(self, session_id: str, turn_id: str) -> None:
         """Release unadmitted context after its own turn; never end a session."""
-        with self.lock:
-            state = self.sessions.get(session_id)
-        if state is None:
-            return
-        with state.lock:
+        with self._state(session_id) as state:
+            if state is None:
+                return
             if (
                 state.claim
                 and state.claim.turn == turn_id
@@ -172,20 +203,16 @@ class OperatorNotes:
 
     def finalized(self, session_id: str, reason: str) -> None:
         """Only Hermes' authoritative on_session_finalize closes the run."""
-        with self.lock:
-            state = self.sessions.get(session_id)
-        if state is None:
+        if not session_id or len(session_id) > 200:
             return
-        with state.lock:
-            if not state.registered:
-                return
+        with self._state(session_id, create=True) as state:
             try:
-                self._ack(session_id, state)
+                if state is not None:
+                    self._ack(session_id, state)
                 self.transport(
                     "session-end", {"external_session_id": session_id, "reason": reason}
                 )
             except Exception:
                 return  # TTL or another authority may terminalize an unreachable run.
-            with self.lock:
-                if self.sessions.get(session_id) is state:
-                    del self.sessions[session_id]
+            if state is not None:
+                state.closed = True
