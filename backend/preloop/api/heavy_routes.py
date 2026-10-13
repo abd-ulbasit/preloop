@@ -12,7 +12,7 @@ switch status) wait for the GIL and for a database connection behind them.
 That is how a 10 ms membership lookup took 3.1 s on prod.
 
 :func:`heavy_route` moves a handler onto its own ``CapacityLimiter``: at most
-``HEAVY_ROUTE_CONCURRENCY`` (default 6) heavy handlers run at once per
+``HEAVY_ROUTE_CONCURRENCY`` (default 8) heavy handlers run at once per
 process, the rest queue on the limiter without holding a thread, a database
 connection or the GIL. Light calls keep the shared pool to themselves.
 
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-DEFAULT_HEAVY_ROUTE_CONCURRENCY = 6
+DEFAULT_HEAVY_ROUTE_CONCURRENCY = 8
 
 __all__ = [
     "DEFAULT_HEAVY_ROUTE_CONCURRENCY",

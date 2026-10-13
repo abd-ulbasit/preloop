@@ -27,13 +27,13 @@ def _fresh_limiter(monkeypatch: pytest.MonkeyPatch):
 
 def test_concurrency_defaults_and_rejects_garbage(monkeypatch):
     monkeypatch.delenv("HEAVY_ROUTE_CONCURRENCY", raising=False)
-    assert heavy_routes.heavy_route_concurrency() == 6
+    assert heavy_routes.heavy_route_concurrency() == 8
     monkeypatch.setenv("HEAVY_ROUTE_CONCURRENCY", "3")
     assert heavy_routes.heavy_route_concurrency() == 3
     monkeypatch.setenv("HEAVY_ROUTE_CONCURRENCY", "0")
     assert heavy_routes.heavy_route_concurrency() == 1
     monkeypatch.setenv("HEAVY_ROUTE_CONCURRENCY", "many")
-    assert heavy_routes.heavy_route_concurrency() == 6
+    assert heavy_routes.heavy_route_concurrency() == 8
 
 
 def test_rejects_async_handlers():
