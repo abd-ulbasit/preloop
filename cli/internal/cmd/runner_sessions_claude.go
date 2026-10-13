@@ -23,7 +23,9 @@ import (
 // The uuid is minted by the runner, never by the server, so a server cannot
 // point a session at an unrelated Claude conversation on this host. The
 // binary is the user's own installed claude, the environment is the
-// host-exec allowlist, nothing under ~/.claude is written, and the Preloop
+// host-exec allowlist, the runner changes no Claude settings or credentials
+// (Claude Code itself keeps the transcript under ~/.claude/projects, which is
+// what --resume reads), and the Preloop
 // PreToolUse approval hook must be installed: every tool call goes through
 // Preloop approvals. Token usage is reported from each turn's result event.
 type claudeSessionAdapter struct {

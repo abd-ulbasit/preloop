@@ -17,7 +17,6 @@ sidecar, and Codex uses its sidecar only (`preloop agents install-plugin`).
 |---|---|---|---|
 | `copilot_cli` | resume | One `copilot -p` process per turn. Turn 1 creates the session with `--session-id=<uuid>`; every later turn continues it with `--resume=<uuid>`. | Copilot CLI 1.0.95: resume mode, verified 2026-10-11 |
 | `cursor_cli` | resume | The host runs `cursor-agent create-chat`, then `cursor-agent --print --output-format stream-json --resume <chat-id>` for each turn. | Adapter tests with a fake CLI; live session behavior unverified |
-
 | `claude_code` | resume | One `claude -p --output-format stream-json --verbose` process per turn, with the turn text on standard input. Turn 1 creates the session with `--session-id <uuid>`; every later turn continues it with `--resume <uuid>`. | Claude Code 2.1.296 command reference and fake CLI tests; live model turns unverified |
 | `devin_cli` | resume | One `devin -p --export <file>` process per turn. The first ATIF export supplies the session id; subsequent turns use `--resume <id>`. | Devin CLI 3000.11.3 command reference and fake CLI tests; live model turns unverified |
 
@@ -33,8 +32,11 @@ Devin native flows use the generated `devin` profile or a local named profile wh
 
 Claude Code sessions require the Preloop `PreToolUse` approval hook in the
 user (or managed) settings; the runner checks for it before every turn and
-never writes under `~/.claude`. The runner mints the session uuid, reports
-the turn's token counts and model from Claude's `result` event, and runs
+does not change Claude's settings or credentials under `~/.claude`. Claude
+Code itself keeps the session transcript under `~/.claude/projects`, which
+is what lets the next turn resume it. The runner mints the session uuid,
+reports the turn's token counts from Claude's `result` event and the model
+from its `init` event, and runs
 with the host-exec environment allowlist (`ANTHROPIC_*`, `CLAUDE_CODE_*` and
 `CLAUDE_CONFIG_DIR` pass; the runner's own Preloop credentials do not). A
 host profile named `claude` may map model aliases but cannot add arguments
