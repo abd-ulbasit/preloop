@@ -55,7 +55,7 @@ const test_config: BrandConfig = {
       extended_description:
         'Preloop is an AI safety and control platform for teams deploying AI agents into real workflows.',
       keywords: 'Preloop, AI agent governance, AI Act readiness',
-      og_image: '/assets/mcp-firewall.svg',
+      og_image: '/assets/og/preloop-social.png',
       og_title:
         'Preloop: Govern AI agents without slowing engineering teams down',
       og_description:
@@ -279,6 +279,24 @@ function social_image_tags(og_image: string): {
   };
 }
 
+describe('social preview images', () => {
+  // LinkedIn, Facebook and X do not render SVG previews; they show a
+  // placeholder instead. Every route must advertise a raster image.
+  const routes = [
+    '/',
+    '/pricing',
+    '/about',
+    '/resources/ai-agent-control-plane-2026',
+  ];
+
+  for (const route of routes) {
+    it(`uses a raster og_image on ${route}`, () => {
+      const meta = get_meta_for_route(route, test_config);
+      expect(meta.og_image).to.match(/\.(png|jpe?g|webp)$/i);
+    });
+  }
+});
+
 describe('absolute og:image and twitter:image URLs', () => {
   const release_post: BlogPost = {
     slug: 'preloop-0-16-0',
@@ -293,13 +311,13 @@ describe('absolute og:image and twitter:image URLs', () => {
     const tags = social_image_tags(meta.og_image);
 
     expect(meta.og_image).to.equal(
-      'https://preloop.ai/assets/mcp-firewall.svg'
+      'https://preloop.ai/assets/og/preloop-social.png'
     );
     expect(tags.og).to.equal(
-      '<meta property="og:image" content="https://preloop.ai/assets/mcp-firewall.svg">'
+      '<meta property="og:image" content="https://preloop.ai/assets/og/preloop-social.png">'
     );
     expect(tags.twitter).to.equal(
-      '<meta name="twitter:image" content="https://preloop.ai/assets/mcp-firewall.svg">'
+      '<meta name="twitter:image" content="https://preloop.ai/assets/og/preloop-social.png">'
     );
   });
 
@@ -354,7 +372,7 @@ describe('absolute og:image and twitter:image URLs', () => {
     ]);
 
     expect(brand_meta.og_image).to.equal(
-      'https://acme.example/assets/mcp-firewall.svg'
+      'https://acme.example/assets/og/preloop-social.png'
     );
     expect(post_meta.og_image).to.equal(
       'https://acme.example/assets/blog/preloop-0-16-0.jpg'

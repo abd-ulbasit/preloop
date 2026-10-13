@@ -412,7 +412,7 @@ function get_route_meta(
         title: `The AI Agent Control Plane in 2026 — MCP Gateways, Model Gateways, and Human Approvals | ${config.name}`,
         description: `The definitive 2026 guide to AI agent control planes: the five layers (MCP firewall, AI gateway, approvals, observability, audit), key vendors (AWS AgentCore, Portkey, MintMCP, Zenity, LiteLLM, ${config.name}), and how to pick the right architecture.`,
         keywords: `AI agent control plane, MCP gateway vs AI gateway, AWS Bedrock AgentCore alternative, best MCP firewall, AI agent governance 2026, LLM gateway comparison, human in the loop AI agent, AI Act readiness, MCP firewall, AI model gateway, AgentOps, ${config.name}`,
-        og_image: '/assets/mcp-firewall.svg',
+        og_image: '/assets/og/preloop-social.png',
         og_title: `The AI Agent Control Plane in 2026: MCP Gateways, Model Gateways, and Human Approvals Explained`,
         og_description: `A neutral reference on AI agent control planes — the five layers, the vendors shaping them (AWS AgentCore, MintMCP, Lunar.dev MCPX, Portkey, Helicone, LiteLLM, Zenity, Lakera, ${config.name}, and more), and how platform and security teams pick an approach.`,
       };

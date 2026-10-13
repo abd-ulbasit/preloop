@@ -5,7 +5,10 @@ import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BrandConfig } from './src/brand-config';
-import { collectLandingPublicAssetPaths } from './src/brand-landing-assets';
+import {
+  collectLandingPublicAssetPaths,
+  socialImageProblems,
+} from './src/brand-landing-assets';
 import {
   get_canonical_url,
   get_meta_for_route,
@@ -402,6 +405,11 @@ export function brandPlugin(
         brandConfig.landing.pricing!.plans || [];
       brandConfig.landing.pricing!.faqs =
         brandConfig.landing.pricing!.faqs || [];
+
+      const socialProblems = socialImageProblems(brandConfig);
+      if (socialProblems.length) {
+        throw new Error(socialProblems.join(' '));
+      }
 
       const publicDir = config.publicDir;
       if (publicDir) {
