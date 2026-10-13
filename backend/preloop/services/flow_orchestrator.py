@@ -3275,6 +3275,7 @@ class FlowExecutionOrchestrator:
                 agent_type=effective_agent_type,
                 agent_config=self.flow.agent_config,
                 runner_pool=self.flow.runner_pool,
+                git_clone_config=clone_config,
             ) or host_exec_unavailable_reason(
                 git_clone_config=clone_config,
                 custom_commands=self.flow.custom_commands,

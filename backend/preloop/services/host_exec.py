@@ -99,6 +99,12 @@ HOST_EXEC_CAPABILITIES = frozenset(
     }
 )
 HOST_EXEC_MAX_RESULT_BYTES = 256 * 1024
+#: Lease key naming the authorized directory a host run works in (#1669).
+HOST_EXEC_WORKSPACE_KEY = "host_exec_workspace"
+#: ``agent_config.workspace.kind`` a host-exec flow may select. The shape is
+#: shared with persistent flows; host runs accept only authorized directories.
+WORKSPACE_KIND_AUTHORIZED_DIRECTORY = "authorized_directory"
+_AUTHORIZED_DIR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _HOST_EXEC_TERMINAL = frozenset(
     {"SUCCEEDED", "FAILED", "STOPPED", "TIMEOUT", "CANCELLED"}
 )
@@ -224,6 +230,91 @@ def host_exec_effective_profile(agent_type: Any, agent_config: Any) -> Optional[
         return pinned
     harness = host_exec_harness_selector(agent_type, agent_config)
     return HARNESS_GENERATED_PROFILES.get(harness) if harness else None
+
+
+def host_exec_workspace(agent_config: Any) -> Optional[Dict[str, Any]]:
+    """Return the validated authorized directory a host run works in.
+
+    ``agent_config.workspace`` uses the same shape as persistent flows:
+    ``{"kind": "authorized_directory", "id": ..., "allow_dirty": bool}``.
+    The runner resolves the id against its own ``preloop runner dirs`` list
+    and keeps refusing the filesystem root, the home directory, a
+    ``read_only`` entry, a harness the entry does not allow, and a git tree
+    with uncommitted changes unless ``allow_dirty`` is true.
+
+    Args:
+        agent_config: Flow agent configuration (wrapped or not).
+
+    Returns:
+        ``{"kind": "authorized_directory", "id": ..., "allow_dirty": bool}``,
+        or None when the flow names no workspace.
+
+    Raises:
+        ValueError: When ``agent_config.workspace`` is not that shape.
+    """
+    raw = _unwrapped_config(agent_config).get("workspace")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("agent_config.workspace must be an object")
+    unknown = sorted(
+        str(key) for key in raw if key not in {"kind", "id", "allow_dirty"}
+    )
+    if unknown:
+        raise ValueError(
+            "agent_config.workspace has unsupported keys for host execution: "
+            + ", ".join(unknown)
+        )
+    if raw.get("kind") != WORKSPACE_KIND_AUTHORIZED_DIRECTORY:
+        raise ValueError(
+            'host execution runs in an authorized directory: agent_config.workspace.kind must be "authorized_directory"'
+        )
+    directory_id = raw.get("id")
+    if not isinstance(directory_id, str) or not _AUTHORIZED_DIR_ID_RE.fullmatch(
+        directory_id
+    ):
+        raise ValueError(
+            "agent_config.workspace.id must be an authorized directory id "
+            "(see `preloop runner dirs list`)"
+        )
+    allow_dirty = raw.get("allow_dirty", False)
+    if not isinstance(allow_dirty, bool):
+        raise ValueError("agent_config.workspace.allow_dirty must be a boolean")
+    return {
+        "kind": WORKSPACE_KIND_AUTHORIZED_DIRECTORY,
+        "id": directory_id,
+        "allow_dirty": allow_dirty,
+    }
+
+
+def runner_offers_authorized_directory(
+    runner: Any, directory_id: str, harness: Optional[str]
+) -> bool:
+    """True when the runner advertises the directory for this harness.
+
+    Args:
+        runner: Runner row with ``capabilities``.
+        directory_id: ``agent_config.workspace.id``.
+        harness: Harness id of the lease (``claude_code``, ``copilot_cli``...).
+
+    Returns:
+        True when the directory is advertised, writable and allows the
+        harness. The runner re-checks everything locally.
+    """
+    from preloop.services.runner_workspace_credentials import (
+        runner_authorized_directories,
+    )
+
+    for item in runner_authorized_directories(runner):
+        if item.get("id") != directory_id:
+            continue
+        if item.get("mode") != "write":
+            return False
+        harnesses = item.get("harnesses")
+        return harnesses == "all" or (
+            harness is not None and isinstance(harnesses, list) and harness in harnesses
+        )
+    return False
 
 
 def harness_fallback_mode(agent_config: Any) -> str:
@@ -460,6 +551,7 @@ def host_exec_flow_error(
     agent_type: Any = None,
     agent_config: Any = None,
     runner_pool: Any = None,
+    git_clone_config: Any = None,
 ) -> Optional[str]:
     """Return a validation error for invalid host-exec / hosted combinations."""
     profile = host_exec_profile_name(agent_config)
@@ -488,7 +580,29 @@ def host_exec_flow_error(
         )
     if profile and pool == "server":
         return "host execution profiles cannot run on hosted compute"
+    if profile or harness or kind in HOST_EXEC_AGENT_TYPES:
+        try:
+            workspace = host_exec_workspace(agent_config)
+        except ValueError as exc:
+            return str(exc)
+        if workspace is not None and _clone_enabled(git_clone_config):
+            return (
+                "a host flow that runs in an authorized directory cannot also "
+                "clone repositories; disable git_clone_config or remove "
+                "agent_config.workspace"
+            )
     return None
+
+
+def _clone_enabled(git_clone_config: Any) -> bool:
+    """Whether a flow's checkout config is turned on (mapping or model)."""
+    if git_clone_config is None:
+        return False
+    if hasattr(git_clone_config, "model_dump"):
+        git_clone_config = git_clone_config.model_dump()
+    if isinstance(git_clone_config, Mapping):
+        return bool(git_clone_config.get("enabled"))
+    return bool(getattr(git_clone_config, "enabled", False))
 
 
 PULL_REQUEST_UNAVAILABLE = (

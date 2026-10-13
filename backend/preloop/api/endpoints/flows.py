@@ -181,6 +181,7 @@ def _reject_host_exec_flow(
         agent_type=agent_type,
         agent_config=agent_config,
         runner_pool=runner_pool,
+        git_clone_config=git_clone_config,
     )
     if error:
         raise HTTPException(status_code=400, detail=error)
