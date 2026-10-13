@@ -154,3 +154,37 @@ def test_sync_get_or_create_adopts_an_existing_account_wide_row(db_session):
     assert created_again is False
     assert second.id == first.id
     assert first.managed_agent_id is None and first.mcp_server_id is None
+
+
+def test_sync_get_or_create_works_with_the_pre_pg15_unique_index(db_session):
+    """Servers older than PG 15 get an expression index, not a constraint."""
+    import sqlalchemy as sa
+
+    from preloop.models.crud.tool_configuration import (
+        get_or_create_tool_configuration_sync,
+    )
+
+    nil = "00000000-0000-0000-0000-000000000000"
+    db_session.execute(
+        sa.text("ALTER TABLE tool_configuration DROP CONSTRAINT uq_account_tool_source")
+    )
+    db_session.execute(
+        sa.text(
+            "CREATE UNIQUE INDEX uq_account_tool_source ON tool_configuration ("
+            "account_id, tool_name, tool_source, "
+            f"COALESCE(mcp_server_id, '{nil}'::uuid), "
+            f"COALESCE(managed_agent_id, '{nil}'::uuid))"
+        )
+    )
+    account = models.Account(organization_name="Pre-15 index tenant")
+    db_session.add(account)
+    db_session.flush()
+    values = {"account_id": account.id, "tool_name": "WebFetch"}
+
+    first, created = get_or_create_tool_configuration_sync(db_session, values=values)
+    second, created_again = get_or_create_tool_configuration_sync(
+        db_session, values=values
+    )
+
+    assert (created, created_again) == (True, False)
+    assert second.id == first.id

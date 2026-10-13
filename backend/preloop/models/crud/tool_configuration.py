@@ -403,7 +403,10 @@ def _insert_if_absent_stmt(values: dict[str, Any]) -> Any:
     return (
         pg_insert(models.ToolConfiguration)
         .values(**values)
-        .on_conflict_do_nothing(constraint="uq_account_tool_source")
+        # No arbiter: matches both the NULLS NOT DISTINCT constraint (PG 15+)
+        # and the expression unique index the migration creates on older
+        # servers. The only other unique key is the generated primary key.
+        .on_conflict_do_nothing()
         .returning(models.ToolConfiguration.id)
     )
 
