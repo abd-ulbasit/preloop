@@ -1769,6 +1769,9 @@ export class ApprovalView extends AuthedElement {
   private decider(): string | null {
     const request = this.approvalRequest;
     if (!request) return null;
+    if (request.auto_approved_reason === 'flow_approval_policy') {
+      return "the flow's approval policy";
+    }
     if (request.auto_approved_reason) return 'a time-boxed bypass';
     if (request.decided_by_ai) return 'an AI reviewer';
     const vote = [...this.history]

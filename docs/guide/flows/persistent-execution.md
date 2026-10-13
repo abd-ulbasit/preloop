@@ -127,27 +127,58 @@ bound. With neither, the default stays 5 minutes.
 
 A scheduled persistent run has nobody at the terminal. Every tool call still
 goes through the Preloop PreToolUse hook installed by
-`preloop agents onboard "Claude Code" --approvals`, so a call that needs an
-approval waits for an approver and fails the run when the approval times out.
-Recommended setup for a run that edits and commits in one directory:
+`preloop agents onboard "Claude Code" --approvals`, so a call that escalates
+to a human waits for an approver and fails when the approval expires.
+
+Give the flow an approval policy so the calls it needs are approved for that
+run only:
+
+```json
+{
+  "execution_path": "persistent",
+  "target_agent_id": "<managed agent id>",
+  "workspace": {"kind": "authorized_directory", "id": "dir_..."},
+  "approval_policy": {
+    "mode": "auto_allow",
+    "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
+    "paths": ["<workspace>"]
+  }
+}
+```
+
+* `mode` is `ask` (the default: nothing changes) or `auto_allow`.
+* `tools` may list `Bash`, `Read`, `Edit`, `MultiEdit`, `Write`, `Glob`,
+  `Grep`, `LS`, `NotebookEdit` and `TodoWrite`. Network tools and MCP tools
+  are not eligible.
+* `paths` are absolute directories on the agent host. `<workspace>` is the
+  flow's `workspace.path` when it names one, else the directory the session
+  runs in.
+
+How the grant is scoped:
+
+* The sidecar starts the flow's Claude Code session with
+  `PRELOOP_FLOW_EXECUTION_ID`, and the hook sends it with each permission
+  check. The grant only exists while that execution is active, only for the
+  managed agent the execution was dispatched to, and only for the first
+  native session that presents the execution id. Interactive sessions are
+  not affected.
+* A covered call is still recorded as an approval request, resolved as
+  auto-approved by the flow's approval policy, so the audit trail shows it.
+* Not covered, so it takes the normal approval path: file paths outside
+  `paths`, a Bash call whose working directory is outside `paths`, a Bash
+  command that names a path outside them (or `~`, or `..`), `git push`,
+  `fetch`, `pull`, `clone` or remote changes, network tools such as `curl`,
+  `wget`, `ssh` and `gh`, publishing commands, and `sudo`. Deny rules and
+  require-approval rules in your approval policies still win.
+
+Also recommended:
 
 * Set `"permission_mode": "acceptEdits"` in the sidecar control config, so
-  file edits inside the session directory do not wait on Claude Code's own
-  prompt, which nobody can answer in an owned session. Do not use
-  `bypassPermissions`.
-* In Preloop, add an approval policy rule that allows the Bash commands the
-  run needs (for example `git add` and `git commit`) without approval, scoped
-  as narrowly as your policy allows. Keep `git push` and anything outside the
-  directory on approval.
+  file edits do not wait on Claude Code's own prompt, which nobody can answer
+  in an owned session. Do not use `bypassPermissions`.
 * Point the flow at an authorized directory (above) and keep the tree clean,
   or set `allow_dirty` deliberately.
-* Set the flow timeout to cover the whole run, and allow time for any approval
-  that is expected to wait.
-
-What still blocks: any tool call that a policy sends to approval, edits outside
-the session directory, and Claude Code permission prompts the chosen
-`permission_mode` does not cover. The approval policy is per host today; a
-per-flow approval policy is not implemented.
+* Set the flow timeout to cover the whole run.
 
 ## What this does not do yet
 

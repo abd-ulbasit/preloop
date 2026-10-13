@@ -293,6 +293,24 @@ export type SendMessageParams = {
   model?: string;
 };
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Flow execution a new session runs for. Exported to the Claude Code child
+ * as PRELOOP_FLOW_EXECUTION_ID so the Preloop permission hook can apply that
+ * flow's approval policy to this session only.
+ */
+export function flowExecutionId(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  if (metadata?.["source"] !== "flow_execution") {
+    return undefined;
+  }
+  const value = metadata["flow_execution_id"];
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+}
+
 /**
  * Registry of sidecar-owned Claude Code sessions.
  *
@@ -357,6 +375,7 @@ export class SessionManager {
     model?: string,
     executable?: ClaudeExecutable,
     abortController?: AbortController,
+    executionId?: string,
   ): Record<string, unknown> {
     const options: Record<string, unknown> = {
       cwd: cwd ?? this.config.workspace_root ?? os.homedir(),
@@ -381,6 +400,12 @@ export class SessionManager {
     if (abortController) {
       options.abortController = abortController;
     }
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.PRELOOP_FLOW_EXECUTION_ID;
+    if (executionId) {
+      env.PRELOOP_FLOW_EXECUTION_ID = executionId;
+    }
+    options.env = env;
     return options;
   }
 
@@ -388,6 +413,7 @@ export class SessionManager {
     resumeSessionId?: string,
     cwd?: string,
     model?: string,
+    executionId?: string,
   ): Promise<OwnedSession> {
     const session = new OwnedSession(resumeSessionId ?? randomUUID(), this.registrar, cwd ?? this.config.workspace_root);
     const executable = await this.claudeExecutable();
@@ -399,6 +425,7 @@ export class SessionManager {
         model,
         executable,
         session.abort,
+        executionId,
       ),
     });
     void session.run(handle).finally(() => {
@@ -425,7 +452,12 @@ export class SessionManager {
       }
       // Prefer the native Claude session id for SDK resume when present
       // (G2 envelope field). Fall back to the Preloop UUID.
-      session = await this.open(resume, cwd, params.model);
+      session = await this.open(
+        resume,
+        cwd,
+        params.model,
+        flowExecutionId(params.metadata),
+      );
     }
     const timeoutMs = selectTurnTimeoutMs(
       this.config,

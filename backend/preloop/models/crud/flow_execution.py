@@ -638,6 +638,71 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
             db.flush()
         return execution
 
+    def bind_approval_session(
+        self,
+        db: Session,
+        *,
+        execution_id: Any,
+        account_id: str,
+        managed_agent_id: str,
+        session_id: str,
+        cwd: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Bind a persistent execution's approval policy to one native session.
+
+        The first hook call that presents this execution id records its
+        native session id (and cwd) under ``AGENT_CONTROL_BINDING_KEY``.
+        Later calls read the stored binding, so a second session cannot use
+        the grant. Only the managed agent the execution was dispatched to
+        can bind.
+
+        Args:
+            db: Database session.
+            execution_id: Flow execution id.
+            account_id: Caller's account.
+            managed_agent_id: Managed agent the caller authenticated as.
+            session_id: Native session id from the hook.
+            cwd: Session working directory from the hook.
+
+        Returns:
+            The stored binding, or None when the execution is not a
+            persistent dispatch to that agent in that account.
+        """
+        execution = (
+            db.query(FlowExecution)
+            .join(Flow, Flow.id == FlowExecution.flow_id)
+            .filter(
+                FlowExecution.id == execution_id,
+                Flow.account_id == account_id,
+            )
+            .with_for_update(of=FlowExecution)
+            .first()
+        )
+        if execution is None:
+            return None
+        details = dict(execution.trigger_event_details or {})
+        binding = details.get(AGENT_CONTROL_BINDING_KEY)
+        if not isinstance(binding, dict):
+            db.commit()  # releases the row lock
+            return None
+        if str(binding.get("managed_agent_id")) != str(managed_agent_id):
+            db.commit()  # releases the row lock
+            return None
+        if not binding.get("approval_session_id"):
+            binding = {
+                **binding,
+                "approval_session_id": session_id,
+                "approval_cwd": cwd if cwd and cwd.startswith("/") else None,
+            }
+            details[AGENT_CONTROL_BINDING_KEY] = binding
+            execution.trigger_event_details = details
+            flag_modified(execution, "trigger_event_details")
+            db.add(execution)
+            db.commit()
+        else:
+            db.commit()  # releases the row lock
+        return dict(binding)
+
     def set_evidence_archive(
         self, db: Session, *, db_obj: FlowExecution, archive: bytes
     ) -> FlowExecution:

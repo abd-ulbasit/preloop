@@ -315,3 +315,47 @@ test("dispatch refuses an unauthorized flow directory", async () => {
   assert.equal(opened.length, 0);
   sidecar.stop();
 });
+
+test("a flow session exports PRELOOP_FLOW_EXECUTION_ID; others do not", async () => {
+  const { sidecar, opened } = makeSidecar({});
+  const executionId = "8a1f2c3d-1111-4222-8333-944455556666";
+  await sidecar.dispatch({
+    type: "command",
+    name: "send_message",
+    payload: {
+      text: "nightly",
+      metadata: { source: "flow_execution", flow_execution_id: executionId },
+    },
+  });
+  assert.equal(opened[0].env.PRELOOP_FLOW_EXECUTION_ID, executionId);
+  sidecar.stop();
+
+  const other = makeSidecar({});
+  process.env.PRELOOP_FLOW_EXECUTION_ID = executionId;
+  try {
+    await other.sidecar.dispatch({
+      type: "command",
+      name: "send_message",
+      payload: {
+        text: "hi",
+        metadata: { source: "operator", flow_execution_id: executionId },
+      },
+    });
+  } finally {
+    delete process.env.PRELOOP_FLOW_EXECUTION_ID;
+  }
+  assert.equal("PRELOOP_FLOW_EXECUTION_ID" in other.opened[0].env, false);
+  other.sidecar.stop();
+
+  const bad = makeSidecar({});
+  await bad.sidecar.dispatch({
+    type: "command",
+    name: "send_message",
+    payload: {
+      text: "hi",
+      metadata: { source: "flow_execution", flow_execution_id: "x; rm -rf /" },
+    },
+  });
+  assert.equal("PRELOOP_FLOW_EXECUTION_ID" in bad.opened[0].env, false);
+  bad.sidecar.stop();
+});

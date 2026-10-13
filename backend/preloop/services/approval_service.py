@@ -674,6 +674,8 @@ class ApprovalService:
                 ``managed_agent_id`` when the caller only had the id, so no
                 surface has to fall back to a generic "AI agent" label.
             api_key_id: API key the caller authenticated with, when known.
+            standing_bypass_text: Operator-facing reason for a standing
+                bypass. Defaults to the native-approvals-off wording.
             rule_context: Snapshot of the policy rule that required this
                 approval (see services/approval_rule_context.py). Stored as
                 given so a later edit to the rule cannot rewrite the reason a
@@ -2122,6 +2124,7 @@ class ApprovalService:
         rule_context: Optional[Dict[str, Any]] = None,
         timeout_seconds: Optional[int] = None,
         server_name: Optional[str] = None,
+        standing_bypass_text: Optional[str] = None,
     ) -> ApprovalRequest:
         """Create approval request and send notifications through configured channels.
 
@@ -2254,7 +2257,8 @@ class ApprovalService:
             return await self._auto_approve_without_review(
                 approval_request,
                 reason_code=standing_bypass_reason,
-                reason=(
+                reason=standing_bypass_text
+                or (
                     "Auto-approved without review: native tool approvals are "
                     "switched off for this agent in Preloop's governance settings"
                 ),

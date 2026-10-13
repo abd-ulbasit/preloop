@@ -59,6 +59,11 @@ class AutoApprovedReason(str):
     #: so the audit trail still shows what ran unsupervised.
     NATIVE_TOOL_APPROVALS_OFF = "native_tool_approvals_off"
 
+    #: A persistent flow's ``agent_config.approval_policy`` covered the call
+    #: (#1671). Bound to one execution and one native session; the flow is
+    #: the approver of record and ``auto_approval_bypass_id`` is NULL.
+    FLOW_APPROVAL_POLICY = "flow_approval_policy"
+
 
 class ApprovalRequest(Base):
     """Approval request for tool execution.

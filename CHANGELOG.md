@@ -105,7 +105,9 @@ machine. The runner never reads, copies or forwards harness credentials. See
 - Persistent flows on Claude Code can run in an authorized host directory
   (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
   flow's Claude model, and wait for the flow timeout instead of a fixed 5
-  minute turn. Docs cover unattended scheduled runs.
+  minute turn. `agent_config.approval_policy` auto-approves the tool calls a
+  scheduled persistent run needs, for that execution's session only, and
+  records each one as approved by the flow's policy.
 
 - **Install a personal runner at login.** After an interactive
   `preloop login`, the CLI offers to install a runner as a background service

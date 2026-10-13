@@ -539,6 +539,7 @@ async def request_agent_permission(
     client_decision: Optional[str],
     evaluation_phase: str = "permission_request",
     flow_id: Optional[uuid.UUID] = None,
+    flow_policy_label: Optional[str] = None,
 ) -> Tuple[str, str, Optional[str], bool]:
     """Decide whether an agent's native tool call may proceed.
 
@@ -578,6 +579,12 @@ async def request_agent_permission(
         agent_reasoning: Optional explanation shown to the approver.
         client_decision: Client policy outcome: ``allow``, ``deny``, or absent/
             ``ask`` to escalate to human approval.
+        flow_policy_label: Name of the flow whose approval policy covers
+            this call (#1671). When set and no rule requires approval, the
+            call is recorded as an approval request auto-approved with
+            ``auto_approved_reason='flow_approval_policy'`` instead of
+            waiting for a human. Deny rules and require-approval rules still
+            win.
         evaluation_phase: ``pre_tool_use`` checks central native rules before
             the host permission decision, skipping no-rule automatic escalation.
             The default ``permission_request`` preserves remote host prompts.
@@ -705,6 +712,15 @@ async def request_agent_permission(
                 standing_bypass_reason=(
                     models.AutoApprovedReason.NATIVE_TOOL_APPROVALS_OFF
                     if approvals_off and matched_require is None
+                    else models.AutoApprovedReason.FLOW_APPROVAL_POLICY
+                    if flow_policy_label and matched_require is None
+                    else None
+                ),
+                standing_bypass_text=(
+                    f"Auto-approved by the approval policy of flow {flow_policy_label}"
+                    if flow_policy_label
+                    and matched_require is None
+                    and not approvals_off
                     else None
                 ),
                 # A matching require_approval rule carries its own context.

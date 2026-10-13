@@ -22346,6 +22346,14 @@ components:
           - type: 'null'
           title: Cwd
           description: Working directory
+        flow_execution_id:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          title: Flow Execution Id
+          description: Persistent flow execution the session runs for, from PRELOOP_FLOW_EXECUTION_ID.
+            Lets that flow's approval policy apply to this session only.
         repository:
           anyOf:
           - $ref: '#/components/schemas/AgentPermissionRepository'

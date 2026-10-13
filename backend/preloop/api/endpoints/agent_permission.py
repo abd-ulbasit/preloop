@@ -32,6 +32,11 @@ from preloop.models.crud import (
 from preloop.models.db.session import get_session_factory
 from preloop.services import operator_notes
 from preloop.services.agent_permission_service import request_agent_permission
+from preloop.services.flow_approval_policy import (
+    FlowApprovalGrant,
+    resolve_flow_grant,
+    tool_call_within_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -525,6 +530,15 @@ class AgentPermissionCheckRequest(BaseModel):
         None, max_length=255, description="Originating turn model observed by the hook"
     )
     cwd: Optional[str] = Field(None, description="Working directory")
+    flow_execution_id: Optional[str] = Field(
+        None,
+        max_length=64,
+        description=(
+            "Persistent flow execution the session runs for, from "
+            "PRELOOP_FLOW_EXECUTION_ID. Lets that flow's approval policy "
+            "apply to this session only."
+        ),
+    )
     repository: Optional[AgentPermissionRepository] = Field(
         None,
         description=(
@@ -661,6 +675,31 @@ async def agent_permission_check(
             exclude_unset=True, exclude_none=True
         )
 
+    flow_policy_label: Optional[str] = None
+    if (
+        payload.flow_execution_id
+        and identity.managed_agent_id is not None
+        and payload.session_id
+        and payload.session_id.strip()
+    ):
+        grant = await run_db_off_loop(lambda: _flow_approval_grant(identity, payload))
+        if grant is not None:
+            # The flow's own governance applies to its session.
+            identity = replace(identity, flow_id=grant.flow_id)
+            if tool_call_within_policy(
+                grant,
+                tool_name=payload.tool_name,
+                tool_input=payload.tool_input or {},
+                cwd=payload.cwd,
+            ):
+                flow_policy_label = grant.flow_name
+                logger.info(
+                    "Flow %s approval policy covers %s for execution %s",
+                    grant.flow_id,
+                    payload.tool_name,
+                    grant.execution_id,
+                )
+
     decision, reason, request_id, timed_out = await request_agent_permission(
         base_url=_permission_check_base_url(),
         account_id=identity.account_id,
@@ -682,6 +721,7 @@ async def agent_permission_check(
         client_decision=payload.client_decision,
         evaluation_phase=payload.evaluation_phase,
         flow_id=identity.flow_id,
+        flow_policy_label=flow_policy_label,
     )
     # Claim after the decision, so a Cursor ask response is never called delivered.
     # Copilot has no note carrier. Codex PermissionRequest and Cursor before*
@@ -729,6 +769,25 @@ async def agent_permission_check(
         timed_out=timed_out,
         operator_note=operator_note,
     )
+
+
+def _flow_approval_grant(
+    identity: PermissionIdentity, payload: AgentPermissionCheckRequest
+) -> Optional[FlowApprovalGrant]:
+    """Resolve the flow approval grant for this hook call; never raises."""
+    try:
+        with get_session_factory()() as db:
+            return resolve_flow_grant(
+                db,
+                account_id=identity.account_id,
+                managed_agent_id=identity.managed_agent_id,
+                execution_id=str(payload.flow_execution_id),
+                session_id=(payload.session_id or "").strip(),
+                cwd=payload.cwd,
+            )
+    except Exception:
+        logger.warning("Flow approval grant lookup failed", exc_info=True)
+        return None
 
 
 class AgentSessionStartRequest(BaseModel):

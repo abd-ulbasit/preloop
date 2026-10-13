@@ -174,6 +174,16 @@ metadata. It passes `metadata.model` to the Agent SDK as `options.model` and
 uses `run_limits.max_duration_seconds` (else `timeout_seconds`) as the turn
 timeout, bounded above by `turn_timeout_ms` when that is set.
 
+A flow's `agent_config.approval_policy` (`mode: auto_allow`, `tools`,
+`paths`) auto-approves covered native tool calls for one execution. The
+sidecar exports `PRELOOP_FLOW_EXECUTION_ID` to the session it starts for a
+flow message; the permission hook sends it as `flow_execution_id`. The
+permission-check endpoint resolves the grant only for the managed agent
+bound to that active execution, binds it to the first native session id
+that presents it (stored in the execution's `_agent_control` binding), and
+records covered calls as approval requests with
+`auto_approved_reason = "flow_approval_policy"`. Rules still decide first.
+
 The Claude sidecar (`runtime-plugins/claude-preloop`) and the Codex
 sidecar (`runtime-plugins/codex-preloop`) both handle `persistent_checkout`
 as follows.
