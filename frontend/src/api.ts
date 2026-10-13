@@ -3320,6 +3320,11 @@ export async function getRuntimeSessionGatewayEvents(
         limit?: number;
         offset?: number;
         metadataOnly?: boolean;
+        /**
+         * `delta` leaves out history an older event on the same page already
+         * carried; kept messages carry their original `position` (#1586).
+         */
+        history?: 'full' | 'delta';
       } = {}
 ): Promise<FlowGatewayEventsResponse> {
   const searchParams = new URLSearchParams();
@@ -3333,6 +3338,7 @@ export async function getRuntimeSessionGatewayEvents(
     if (options.offset !== undefined)
       searchParams.set('offset', String(options.offset));
     if (options.metadataOnly) searchParams.set('metadata_only', 'true');
+    if (options.history === 'delta') searchParams.set('history', 'delta');
   }
   const params = searchParams.toString() ? `?${searchParams.toString()}` : '';
   const response = await fetchWithAuth(

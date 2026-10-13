@@ -3846,6 +3846,24 @@ paths:
           type: boolean
           default: false
           title: Metadata Only
+      - name: history
+        in: query
+        required: false
+        schema:
+          enum:
+          - full
+          - delta
+          type: string
+          description: '`delta` elides conversation messages and tool entries that
+            an older event on the same page already carried. Positions are kept: each
+            returned message carries its original `position`. The event detail endpoint
+            still returns the full payload.'
+          default: full
+          title: History
+        description: '`delta` elides conversation messages and tool entries that an
+          older event on the same page already carried. Positions are kept: each returned
+          message carries its original `position`. The event detail endpoint still
+          returns the full payload.'
       responses:
         '200':
           description: Successful Response

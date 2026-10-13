@@ -2033,7 +2033,7 @@ export class SessionReplayPanel extends LitElement {
           ...message,
           key: `${event.id}:replay:${index}`,
           event,
-          eventMessageIndex: index,
+          eventMessageIndex: message.position ?? index,
           timestamp: event.timestamp,
           title: this.getEventTitle(event),
         }));

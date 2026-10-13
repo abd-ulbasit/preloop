@@ -1290,6 +1290,9 @@ export class PreloopSessionObserver extends LitElement {
         getRuntimeSessionGatewayEvents(sessionId, {
           limit: EVENT_PAGE_SIZE,
           offset: 0,
+          // Every call replays the whole conversation; the page carries each
+          // message once (1.7 MB -> about 150 KB on a long session, #1586).
+          history: 'delta',
         }),
         getAccountRuntimeSessionActivityTimeline(sessionId).catch(
           (error: unknown) =>
@@ -1369,6 +1372,7 @@ export class PreloopSessionObserver extends LitElement {
       const events = await getRuntimeSessionGatewayEvents(sessionId, {
         limit: EVENT_PAGE_SIZE,
         offset: page.nextOffset,
+        history: 'delta',
       });
       this.loadedEvents = {
         ...this.loadedEvents,

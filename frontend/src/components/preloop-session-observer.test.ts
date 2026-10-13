@@ -356,6 +356,25 @@ describe('PreloopSessionObserver', () => {
     ).to.be.false;
   });
 
+  it('reads the event page with history=delta (#1586)', async () => {
+    const el = (await fixture(
+      html`<preloop-session-observer
+        .sessions=${[session]}
+      ></preloop-session-observer>`
+    )) as PreloopSessionObserver;
+    await waitUntil(
+      () => deepText(el.shadowRoot).includes('Build a widget'),
+      '',
+      { timeout: 3000 }
+    );
+    const pageCalls = fetchStub
+      .getCalls()
+      .map((call) => call.args[0].toString())
+      .filter((url) => /\/gateway-events\?/.test(url));
+    expect(pageCalls.length).to.be.greaterThan(0);
+    for (const url of pageCalls) expect(url).to.contain('history=delta');
+  });
+
   it('switches replay layout to chat transcript', async () => {
     const el = (await fixture(
       html`<preloop-session-observer

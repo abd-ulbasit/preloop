@@ -439,7 +439,11 @@ export function buildConversation(
       // request replays as history at that same position. (An event-id
       // component would defeat the dedup outright: every request replays
       // the whole history.)
-      const signature = `${messageIndex}::${role}::${text}`;
+      // A delta page (history=delta) leaves replayed messages out, so the
+      // array index is not the position; the server sends it explicitly.
+      const position =
+        typeof message.position === 'number' ? message.position : messageIndex;
+      const signature = `${position}::${role}::${text}`;
       if (text && seenSignatures.has(signature)) return;
       if (text) seenSignatures.add(signature);
 
