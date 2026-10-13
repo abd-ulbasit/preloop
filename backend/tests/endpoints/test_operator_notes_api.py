@@ -946,7 +946,19 @@ def test_receipt_spool_dropped_records_reason(client, db_session, test_user):
     "source,phase,event,decision,expected",
     [
         ("codex_cli", "pre_tool_use", "PreToolUse", "allow", "delivered"),
-        ("copilot_cli", "permission_request", None, "allow", "claimed"),
+        ("copilot_cli", "permission_request", None, "allow", "pending"),
+        *[
+            (source, "permission_request", None, "allow", "pending")
+            for source in (
+                "opencode",
+                "pi",
+                "deepseek",
+                "hermes",
+                "openclaw",
+                "nanobot",
+                "devin_cli",
+            )
+        ],
         ("cursor", "permission_request", "beforeShellExecution", "allow", "claimed"),
         ("cursor", "pre_tool_use", "preToolUse", "allow", "delivered"),
         ("cursor", "pre_tool_use", "preToolUse", "ask", "claimed"),
@@ -979,7 +991,7 @@ def test_receipt_permission_carrier_controls_delivery(
     assert response.status_code == 200, response.text
     receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
     assert receipt["state"] == expected
-    assert receipt["claimed_at"]
+    assert bool(receipt["claimed_at"]) == (expected != "pending")
     if expected == "delivered":
         assert receipt["claimed_at"] == receipt["delivered_at"]
     else:

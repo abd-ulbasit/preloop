@@ -699,14 +699,28 @@ async def agent_permission_check(
             )
         )
     )
-    operator_note = await run_db_off_loop(
-        lambda: _claim_operator_note(
-            identity,
-            origin_session_id=origin_id,
-            defer_delivery=defer_note_delivery,
-            hosted_origin=hosted_origin,
+    # These native tool gates have no model-visible note field. Keep notes
+    # pending for a carrying model transport instead of claiming or spooling
+    # a block that the adapter cannot deliver.
+    operator_note = None
+    if payload.source not in {
+        "opencode",
+        "pi",
+        "deepseek",
+        "hermes",
+        "openclaw",
+        "nanobot",
+        "devin_cli",
+        "copilot_cli",
+    }:
+        operator_note = await run_db_off_loop(
+            lambda: _claim_operator_note(
+                identity,
+                origin_session_id=origin_id,
+                defer_delivery=defer_note_delivery,
+                hosted_origin=hosted_origin,
+            )
         )
-    )
     activity_session_id = origin_id or identity.runtime_session_id
     if activity_session_id is not None and _records_native_tool_call(payload):
         elapsed_ms = int((time.monotonic() - started) * 1000)

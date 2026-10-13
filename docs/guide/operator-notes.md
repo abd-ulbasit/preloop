@@ -407,10 +407,43 @@ unclaimed and already finished ids are silently ignored.
 | Claude Code (session start / stop) | `SessionStart`, `Stop` and `SessionEnd`, installed by `preloop agents onboard --approvals` | `SessionStart` (and the first `UserPromptSubmit`) pulls `/agents/notes/pending` with `event=session_start` and returns `hookSpecificOutput.additionalContext`, so a note sent before the run starts lands before the first tool call. `Stop` pulls with `event=stop` and, when something is pending, blocks the stop once with the rendered block as the continuation reason, so the model reads it and may act. `SessionEnd` posts `/agents/session-end`, which marks a note whose only session ended `undeliverable` instead of letting it expire |
 | Claude Code (channels) | An MCP channel server you run | `POST /agents/notes/pending`, then push `channel_event` as `notifications/claude/channel`. The harness wraps our block in its own `<channel source= severity=>` tag |
 | Claude Code (cross-session messaging) | A bridge process holding `CLAUDE_CODE_MESSAGING_TOKEN`, with `crossSessionInbound: accept` on headless `-p` workers | `POST /agents/notes/pending`, then post `text` to the session inbox socket. The harness delivers it between tool calls |
-| Codex CLI | `PreToolUse` and `PermissionRequest` | `operator_note` on the permission-check response, written into the `PreToolUse` `hookSpecificOutput.additionalContext`. `PermissionRequest` has no field for it, so a note claimed there rides the next `PreToolUse` |
-| Cursor CLI | `beforeShellExecution`, `beforeMCPExecution`, `preToolUse` | `operator_note` on the permission-check response, written into the `preToolUse` `additional_context` on allow and deny. The two `before*` hooks have no field for it, and on this build `preToolUse` collects `additional_context` only on allow and deny, so a note claimed on `ask` also rides the next carrying call |
-| OpenCode | `tool.execute.before`, via `@preloop-ai/opencode-plugin` | `operator_note` on the permission-check response |
-| OpenClaw, Hermes | Gateway path only, no hook needed | Trailing message in the model request |
+| Codex CLI | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `Stop`, `SessionEnd` | `operator_note` on the permission-check response, written into the `PreToolUse` `hookSpecificOutput.additionalContext`. `PermissionRequest` has no field for it, so a note claimed there rides the next `PreToolUse`. Codex 0.162.1 supports the same startup context, bounded Stop continuation and SessionEnd receipt shapes as Claude Code |
+| Cursor CLI | `sessionStart`, `beforeSubmitPrompt`, `beforeShellExecution`, `beforeMCPExecution`, `preToolUse`, `stop`, `sessionEnd` | `operator_note` on the permission-check response, written into the `preToolUse` `additional_context` on allow and deny. The two `before*` hooks have no field for it, and on this build `preToolUse` collects `additional_context` only on allow and deny, so a note claimed on `ask` also rides the next carrying call. Startup uses `additional_context`; stop uses `followup_message` on completed turns with a maximum of three continuations, respecting `loop_count`. `beforeSubmitPrompt` registers the session without claiming notes; `sessionEnd` reports the native session id |
+| OpenCode | `experimental.chat.system.transform`, `session.deleted`, via `@preloop-ai/opencode-plugin` | OpenCode 1.18.32 supplies a session id and mutable `system` array before each model request. The plugin registers the session, claims with `defer_delivery=true`, appends the rendered block and acknowledges its `note_id` values only after append succeeds. Failed acknowledgments are retried before another pull. `session.deleted` reports an end; `session.idle` remains resumable |
+| Copilot CLI | `sessionStart`, `sessionEnd`; native `preToolUse` is non-carrying | Session lifecycle commands register native `sessionId` and report its end alongside usage hooks. Native tool checks leave notes pending; no verified model-visible context or continuation field is installed |
+| Devin CLI | `SessionStart`, `UserPromptSubmit`, native permission hooks | Session registration only. Permission hooks have no verified note carrier; notes stay pending. Managed runner termination supplies end receipts |
+| Pi, Nanobot | Gateway model request; native lifecycle plugins | Native tool gates leave notes pending. Notes can arrive on the next model request routed through Preloop; the plugins supply native session identity on model requests |
+| DeepSeek Harness | Native model-input middleware; gateway route where session identity is available | Native tool gates leave notes pending. Model-input middleware can register the native session, claim notes, append a valid user message and acknowledge after insertion; gateway routing alone does not supply per-request native session headers |
+| OpenClaw, Hermes | Gateway model request | Native tool gates leave notes pending. Agent-targeted notes can ride routed model requests; native session-targeted delivery requires verified mapping between model requests and the registered session |
+
+The native capabilities above are checked against Codex CLI 0.162.1 embedded
+hook schemas, Cursor's [hook reference](https://cursor.com/docs/agent/hooks)
+(Cursor Agent version `2026.10.01-e373342` observed), and OpenCode 1.18.32's
+plugin SDK. Fixture and loopback harness tests establish protocol behavior;
+real provider smoke results are tracked in #1637. Re-onboard after updating the
+CLI or runtime plugin to install the lifecycle commands. Usage-hook removal
+preserves the independently installed lifecycle commands; offboarding removes
+both.
+
+Other supported onboarding targets have narrower transport capabilities:
+
+| Target | Operator-note boundary |
+| --- | --- |
+| Gemini CLI | Next model request routed through the managed gateway; no native lifecycle note hook is installed |
+| VSCode / Copilot | A manually configured BYOK gateway route can carry notes; MCP onboarding alone does not inject context |
+| Claude Desktop | An explicitly configured supported gateway route can carry notes; MCP onboarding alone does not inject context |
+| Cursor/Windsurf IDE | Cursor native hooks are covered above where emitted; Windsurf has no installed note carrier |
+| Antigravity | MCP firewall integration only; no model route or native note carrier |
+| Browser-use, Skyvern | Import/observation adapters; importing activity does not inject instructions into a running vendor session |
+
+A gateway route must be used by the actual model request to deliver a note.
+MCP tool access, an approval decision, and a usage event alone do not place text
+in the model context. A managed runner's authoritative termination and the
+server's reconciliation of ended sessions supply terminal receipts independently
+of native hook support (#1636). A silent or idle live session is never treated
+as ended solely to produce a receipt. Remaining native carriers and gateway
+session-identity limitations are tracked in #1638 and the adapter work
+#1489/#1494.
 
 For the Claude Code transports, Preloop supplies the text, the identity and the
 record; the harness supplies the last hop.
