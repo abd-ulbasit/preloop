@@ -233,6 +233,29 @@ describe('runner-session-controls', () => {
     expect(box.text).to.equal('Hello');
   });
 
+  it('falls back to notes when a refresh fails after a good read', async () => {
+    const el = await mount();
+    const hint = () =>
+      el.shadowRoot!.querySelector('[data-testid="control-mode-hint"]')!
+        .textContent!;
+    expect(hint()).to.contain('Runner online');
+    controlBody = undefined;
+    fetchStub
+      .withArgs(sinon.match((u: unknown) => String(u).endsWith('/control')))
+      .resolves(json({ detail: 'boom' }, 500));
+    el.revision = 'changed';
+    await waitUntil(
+      () => hint().includes('Could not read the session controls'),
+      'error line'
+    );
+    expect(hint()).to.contain('your message is sent as a note');
+    const box = await type(el, 'Still there?');
+    expect(box.runnerSessionId).to.equal(null);
+    box.shadowRoot.querySelector('[data-testid="note-send"]').click();
+    await waitUntil(() => posts('/operator-notes').length === 1, 'note sent');
+    expect(posts('/turns')).to.have.length(0);
+  });
+
   it('shows the attach command as copyable text', async () => {
     const el = await mount();
     const hint = el.shadowRoot!.querySelector('[data-testid="attach-hint"]')!;

@@ -148,6 +148,9 @@ export class RunnerSessionControls extends LitElement {
   /** The validated runner session to send turns to, or null for notes. */
   get commandTarget(): string | null {
     const control = this.control;
+    // A failed refresh outranks the cached answer: until a read succeeds the
+    // box sends notes, which always arrive.
+    if (this.controlError) return null;
     if (!control || control.mode !== 'command') return null;
     if (control.agent_kind !== 'runner_session') return null;
     return runnerTurnSessionId(control.send_path);
