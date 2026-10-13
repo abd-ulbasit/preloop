@@ -6,7 +6,7 @@ This chapter records technical choices: FastAPI for the REST API, Python, Postgr
 
 Decisions that need a recorded status (Proposed, Accepted, Superseded) live as numbered records under `decisions/`:
 
-- [ADR 0001: API versioning before 1.0](decisions/0001-api-versioning.md) (Proposed)
+- [ADR 0001: API versioning before 1.0](decisions/0001-api-versioning.md) (Accepted)
 
 ## REST API Implementation
 Preloop implements a RESTful HTTP API using FastAPI, which provides:
