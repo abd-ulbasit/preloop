@@ -185,6 +185,105 @@ test("authoritative end is posted even after registered-session cache eviction",
   });
 });
 
+for (const heldRoute of ["session-start", "notes/pending"]) {
+  test(`cache overflow preserves a build awaiting ${heldRoute}`, async () => {
+    const calls = [];
+    const text = "<operator-notes>Concurrent steer.</operator-notes>";
+    let release;
+    let entered;
+    const hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const notes = new OperatorNotes(
+      "https://example.com",
+      "agt_synthetic",
+      async (url, init) => {
+        const route = url.split("/agents/")[1];
+        const body = JSON.parse(init.body);
+        calls.push({ route, body });
+        if (body.session_id === "active" && route === heldRoute) {
+          entered();
+          await hold;
+        }
+        return {
+          ok: true,
+          json: async () =>
+            route === "session-start"
+              ? { runtime_session_id: "runtime" }
+              : route === "notes/pending" && body.session_id === "active"
+                ? { text, notes: [{ note_id: "active-note" }] }
+                : { text: null, notes: [] },
+        };
+      },
+    );
+    const ctx = { sessionId: "active", runId: "run" };
+    const build = notes.build(ctx);
+    await started;
+    for (let i = 0; i < 256; i++)
+      await notes.build({ sessionId: `idle-${i}`, runId: "run" });
+    release();
+    assert.deepEqual(await build, { prependContext: text });
+    await notes.input({ ...ctx, prompt: text, historyMessages: [] }, ctx);
+    const call = { ...ctx, callId: "active-call" };
+    await notes.started(call, ctx);
+    await notes.completed({ ...call, outcome: "completed" }, ctx);
+    assert.deepEqual(calls.at(-1), {
+      route: "notes/ack",
+      body: { session_id: "active", note_ids: ["active-note"] },
+    });
+  });
+}
+
+test("cache stays bounded when every registered build is active", async () => {
+  let release;
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let registrations = 0;
+  let filled;
+  const ready = new Promise((resolve) => {
+    filled = resolve;
+  });
+  const notes = new OperatorNotes(
+    "https://example.com",
+    "agt_synthetic",
+    async (url) => {
+      if (url.endsWith("/session-start")) {
+        if (++registrations === 256) filled();
+        await hold;
+      }
+      return {
+        ok: true,
+        json: async () =>
+          url.endsWith("/session-start")
+            ? { runtime_session_id: "runtime" }
+            : { text: null, notes: [] },
+      };
+    },
+  );
+  const builds = Array.from({ length: 256 }, (_, i) =>
+    notes.build({ sessionId: `active-${i}`, runId: "run" }),
+  );
+  await ready;
+  try {
+    const overflow = notes.build({ sessionId: "overflow", runId: "run" });
+    const result = await Promise.race([
+      overflow,
+      new Promise((resolve) =>
+        setImmediate(() => resolve("unexpected pending registration")),
+      ),
+    ]);
+    assert.equal(result, undefined);
+    assert.equal(registrations, 256);
+  } finally {
+    release();
+    await Promise.all(builds);
+  }
+});
+
 test("preflight rejection and changed subsequent input never ACK a tentative witness", async () => {
   const f = fixture();
   await f.notes.build(f.ctx);

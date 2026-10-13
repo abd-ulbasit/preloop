@@ -87,7 +87,11 @@ export class OperatorNotes {
     let session = this.sessions.get(id);
     if (!session) {
       if (this.sessions.size >= 256) {
-        const empty = [...this.sessions].find(([, item]) => !item.claim);
+        // An in-flight registration/pull may acquire a claim after yielding.
+        // Keep its state reachable for the later model-call receipt hooks.
+        const empty = [...this.sessions].find(
+          ([key, item]) => !item.claim && !this.calls.has(key),
+        );
         if (!empty) return undefined;
         this.sessions.delete(empty[0]);
       }
