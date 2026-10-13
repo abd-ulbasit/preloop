@@ -4412,6 +4412,15 @@ func applyAgentControlConfigToDocument(
 		)
 		existing, _ := asObjectMap(pluginEntry["config"])
 		pluginEntry["config"] = preserveRuntimeApprovalConfig("openclaw", existing, control)
+		// Native operator-note context and admission observers require explicit
+		// OpenClaw SDK capabilities, owned only by this onboarded plugin entry.
+		// Keep an operator's existing restriction authoritative on refresh.
+		hooks := ensureObjectPath(pluginEntry, "hooks")
+		for _, capability := range []string{"allowPromptInjection", "allowConversationAccess"} {
+			if _, exists := hooks[capability]; !exists {
+				hooks[capability] = true
+			}
+		}
 		ensureOpenClawPluginAllowlisted(doc)
 		return
 	}

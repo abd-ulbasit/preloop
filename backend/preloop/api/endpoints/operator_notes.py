@@ -524,10 +524,10 @@ def _claim_for_hook(
         ) or _hook_origin_session_id(db, context, payload.session_id)
         if origin:
             session_ids.append(origin)
-        if context.runtime_session is not None:
-            bound = str(context.runtime_session.id)
-            if bound not in session_ids:
-                session_ids.append(bound)
+        if not origin and context.runtime_session is not None:
+            # A positively identified conversation must not claim notes pinned
+            # to the credential's separate enrollment or previous session.
+            session_ids.append(str(context.runtime_session.id))
         if not session_ids:
             session_ids.append(None)
 

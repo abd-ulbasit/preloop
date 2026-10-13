@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Bridge, loadConfig } from "./bridge.mjs";
+import { DeepSeekNotes } from "./deepseek-notes.mjs";
 
 export const name = "preloop";
 export const inject = ["tools", "agents"];
@@ -32,6 +33,12 @@ export function apply(ctx, options = {}) {
   if (config.preloop?.model?.apiKey)
     process.env.PRELOOP_DSH_MODEL_TOKEN = config.preloop.model.apiKey;
   const bridge = new Bridge(config);
+  const notes = new DeepSeekNotes(config.preloop?.control || {});
+  ctx.on("agent/pre-step", (event, next) => notes.preStep(event, next));
+  ctx.on("llm/stream", async function* (request, next) {
+    await notes.observeModelRequest(request);
+    yield* next();
+  });
   const denials = new Map();
   ctx.tools.guard((exec) => denials.get(exec.token));
   ctx.on("tools/pre-execute", async (exec, next) => {
@@ -54,6 +61,12 @@ export function apply(ctx, options = {}) {
     denials.delete(exec.token);
   });
   ctx.on("agent/created", ({ agent }) => {
+    // Agent-owned effects drain on native agent disposal, including launcher
+    // shutdown. Plugin reload or an idle turn must not end a live session.
+    agent.ctx?.effect(
+      () => () => notes.endSession(agent.id),
+      "preloop-operator-notes",
+    );
     bridge.sessions.set(agent.id, {
       send: async (text) =>
         agent.steer({
@@ -68,6 +81,7 @@ export function apply(ctx, options = {}) {
     bridge.presence();
   });
   ctx.on("agent/disposed", ({ agent }) => {
+    void notes.endSession(agent.id);
     void bridge.lifecycle("session_end", agent.id);
     bridge.sessions.delete(agent.id);
     bridge.presence();

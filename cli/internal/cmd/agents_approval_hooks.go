@@ -352,6 +352,14 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 			return err
 		}
 	case permissionSourceCodexCLI:
+		for _, hook := range []struct{ event, command string }{
+			{"Stop", stopHookCommand(source)},
+			{"SessionEnd", sessionEndHookCommand(source)},
+		} {
+			if err := upsertNestedCommandHook(configPath, hook.event, "", hook.command, sessionHookTimeoutSeconds); err != nil {
+				return err
+			}
+		}
 		for _, event := range sessionHookEvents {
 			if err := upsertNestedCommandHook(configPath, event, "", sessionHookCommand(source), sessionHookTimeoutSeconds); err != nil {
 				return err
@@ -366,6 +374,14 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 			return err
 		}
 	case permissionSourceCursor:
+		for _, hook := range []struct{ event, command string }{
+			{"stop", stopHookCommand(source)},
+			{"sessionEnd", sessionEndHookCommand(source)},
+		} {
+			if err := upsertFlatCommandHook(configPath, []string{hook.event}, hook.command, sessionHookTimeoutSeconds); err != nil {
+				return err
+			}
+		}
 		if err := upsertFlatCommandHook(configPath, []string{"sessionStart", "beforeSubmitPrompt"}, sessionHookCommand(source), sessionHookTimeoutSeconds); err != nil {
 			return err
 		}
@@ -382,6 +398,13 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 			return err
 		}
 	case permissionSourceCopilotCLI:
+		for _, hook := range []struct{ event, command string }{
+			{"sessionStart", "session"}, {"sessionEnd", "session-end"},
+		} {
+			if err := upsertCopilotHookEvent(hook.event, copilotHookInvocationFor(runtime.GOOS, "agents permission-hook "+hook.command+" --source "+source), sessionHookTimeoutSeconds); err != nil {
+				return err
+			}
+		}
 		// One Preloop-owned file under ~/.copilot/hooks/; re-onboard replaces
 		// only our preToolUse entry and leaves any usage lifecycle entries.
 		// The invocation is per OS (PowerShell quoting on Windows).
@@ -529,7 +552,7 @@ func removeApprovalHooks(agent AgentConfig, out io.Writer) error {
 			}
 		}
 	case permissionSourceCodexCLI:
-		for _, event := range sessionHookEvents {
+		for _, event := range append(append([]string{}, sessionHookEvents...), noteLifecycleHookEvents...) {
 			if err := removeNestedCommandHook(configPath, event, false); err != nil {
 				return err
 			}
@@ -543,7 +566,7 @@ func removeApprovalHooks(agent AgentConfig, out io.Writer) error {
 	case permissionSourceCursor:
 		if err := removeFlatCommandHook(
 			configPath,
-			[]string{"beforeShellExecution", "beforeMCPExecution", "preToolUse", "sessionStart", "beforeSubmitPrompt"},
+			[]string{"beforeShellExecution", "beforeMCPExecution", "preToolUse", "sessionStart", "beforeSubmitPrompt", "stop", "sessionEnd"},
 			true,
 		); err != nil {
 			return err
@@ -733,7 +756,24 @@ func upsertCopilotHookEvent(eventKey, bash string, timeoutSec int) error {
 	}
 	doc["version"] = 1
 	hooks := ensureObjectChild(doc, "hooks")
-	hooks[eventKey] = []interface{}{copilotCommandHookEntry(bash, timeoutSec)}
+	// Lifecycle events also carry usage hooks. Replace only this command family.
+	marker := "usage hook"
+	if strings.Contains(bash, "permission-hook") {
+		marker = "permission-hook"
+	}
+	entries, _ := hooks[eventKey].([]interface{})
+	kept := make([]interface{}, 0, len(entries)+1)
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]interface{})
+		command, _ := entry["bash"].(string)
+		if command == "" {
+			command, _ = entry["powershell"].(string)
+		}
+		if !strings.Contains(command, marker) {
+			kept = append(kept, raw)
+		}
+	}
+	hooks[eventKey] = append(kept, copilotCommandHookEntry(bash, timeoutSec))
 	return writeJSONDocument(path, doc)
 }
 
