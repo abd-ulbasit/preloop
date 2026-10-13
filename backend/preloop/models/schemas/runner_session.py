@@ -124,6 +124,9 @@ class SessionStateMessage(_Message):
     end_reason: Optional[str] = None
     harness_session_id: Optional[str] = Field(None, max_length=256)
     error_code: Optional[RunnerSessionRejectionCode] = None
+    #: The host's effective idle limit. The server only ever lowers its own
+    #: to match, so its ``runner_offline`` sweep agrees with the host.
+    idle_timeout_seconds: Optional[int] = Field(None, ge=1)
 
     @field_validator("end_reason")
     @classmethod

@@ -41,7 +41,11 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from preloop.models.crud import crud_runtime_session
+from preloop.models.crud import (
+    crud_flow_runner,
+    crud_runner_remote_session,
+    crud_runtime_session,
+)
 from preloop.models.models.runtime_session import RuntimeSession
 from preloop.services.agent_session_headers import normalize_session_id
 
@@ -136,6 +140,11 @@ def resolve_external_session(
     normalized = normalize_session_id(external_session_id)
     if normalized is None:
         return []
+    hosted = runner_session_for_external(
+        db, account_id=account_id, external_session_id=normalized
+    )
+    if hosted is not None:
+        return [hosted]
     if principal_type and principal_id:
         exact = crud_runtime_session.get_by_source(
             db,
@@ -145,6 +154,14 @@ def resolve_external_session(
         )
         if exact is not None:
             return [exact]
+    return _sessions_carrying(db, account_id=account_id, external=normalized)
+
+
+def _sessions_carrying(
+    db: Session, *, account_id: Any, external: str
+) -> List[RuntimeSession]:
+    """Sessions keyed by this harness id, bare or principal-prefixed."""
+    normalized = external
     escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return (
         db.query(RuntimeSession)
@@ -159,6 +176,89 @@ def resolve_external_session(
         .limit(5)
         .all()
     )
+
+
+def runner_session_for_external(
+    db: Session,
+    *,
+    account_id: Any,
+    external_session_id: Any,
+    actor_user_id: Any = None,
+) -> Optional[RuntimeSession]:
+    """The runner session's runtime session when a live one hosts this id.
+
+    A runner-hosted harness (#1482) runs under a session id the runner
+    minted and reported as ``harness_session_id``. The harness's own hooks
+    know only that id, so their registrations, approvals and notes are
+    redirected here instead of opening a second session. Account scoped,
+    and ended runner sessions never match. When the caller's user is known
+    (``actor_user_id``) it must be the user who started the runner session or
+    the user who registered the hosting runner: an admin may start a session
+    on a member's runner (#1483), and the hooks there run as the member.
+    """
+    external = normalize_session_id(external_session_id)
+    if external is None:
+        return None
+    runner = crud_runner_remote_session.get_live_by_harness_session(
+        db, account_id=account_id, harness_session_id=external
+    )
+    if runner is None:
+        return None
+    if actor_user_id is not None and not _may_join_runner_session(
+        db, account_id=account_id, runner=runner, user_id=actor_user_id
+    ):
+        return None
+    return crud_runtime_session.get_account_session(
+        db, account_id=account_id, runtime_session_id=str(runner.runtime_session_id)
+    )
+
+
+def _may_join_runner_session(
+    db: Session, *, account_id: Any, runner: Any, user_id: Any
+) -> bool:
+    """Whether this user's hook may attach to the runner session."""
+    if str(runner.actor_user_id) == str(user_id):
+        return True
+    host = crud_flow_runner.get(db, id=runner.runner_id)
+    return (
+        host is not None
+        and str(host.account_id) == str(account_id)
+        and str(host.registered_by_user_id) == str(user_id)
+    )
+
+
+def fold_hook_sessions_into_runner(
+    db: Session, *, account_id: Any, external_session_id: Any, target: RuntimeSession
+) -> int:
+    """Fold sessions a hook opened under this harness id into ``target``.
+
+    The hook can register before the runner's ``harness_session_id`` reaches
+    the server. Whatever it recorded meanwhile moves to the runner session
+    and the duplicate row is removed. Flushes; the caller commits.
+
+    Returns:
+        How many sessions were folded.
+    """
+    external = normalize_session_id(external_session_id)
+    if external is None:
+        return 0
+    if not target.session_reference:
+        # Set here so it does not depend on whether the hook or the runner's
+        # state frame arrived first.
+        target.session_reference = external[:255]
+        db.add(target)
+    folded = 0
+    for session in _sessions_carrying(db, account_id=account_id, external=external):
+        if session.id == target.id:
+            continue
+        if crud_runtime_session.fold_into(
+            db,
+            account_id=account_id,
+            source_session_id=session.id,
+            target_session_id=target.id,
+        ):
+            folded += 1
+    return folded
 
 
 def session_ancestor_chain(
@@ -230,7 +330,9 @@ def caller_session_ids(
             external = normalize_session_id(lowered.get(name))
             if external is None:
                 continue
-            session = crud_runtime_session.get_by_source(
+            session = runner_session_for_external(
+                db, account_id=account_id, external_session_id=external
+            ) or crud_runtime_session.get_by_source(
                 db,
                 account_id=account_id,
                 session_source_type=principal_type,
@@ -279,6 +381,7 @@ def register_session_start(
     parent_session_id: Any = None,
     first_prompt: Optional[str] = None,
     alias: Optional[str] = None,
+    actor_user_id: Any = None,
 ) -> Optional[SessionStartResult]:
     """Create or find the run's session and record what the hook knows.
 
@@ -289,6 +392,10 @@ def register_session_start(
     lineage write. ``title`` and ``runtime_principal_name`` are filled only
     while empty, so a title a person or the summariser set is kept.
 
+    When a live runner session in the account hosts this harness id (#1482),
+    the registration resolves to that runner session instead; ``actor_user_id``
+    (the hook credential's user) must then match the user who started it.
+
     Returns:
         The registered session, or None when the external id is unusable.
     """
@@ -296,6 +403,22 @@ def register_session_start(
     if external is None:
         return None
     alias = re.sub(r"[^A-Za-z0-9._-]", "-", alias or "")[:64] or None
+    hosted = runner_session_for_external(
+        db,
+        account_id=account_id,
+        external_session_id=external,
+        actor_user_id=actor_user_id,
+    )
+    if hosted is not None:
+        return _register_runner_hosted_start(
+            db,
+            account_id=account_id,
+            session=hosted,
+            external=external,
+            agent_kind=agent_kind,
+            principal_name=principal_name,
+            cwd=cwd,
+        )
     crud_runtime_session.lock_alias_account(db, account_id=account_id)
     source_id = session_source_id_for(principal_id, external)
     parent_id: Optional[uuid.UUID] = None
@@ -375,5 +498,47 @@ def register_session_start(
         ),
         started_at=session.started_at,
         created=existing is None and not raced,
+        alias=session.alias,
+    )
+
+
+def _register_runner_hosted_start(
+    db: Session,
+    *,
+    account_id: Any,
+    session: RuntimeSession,
+    external: str,
+    agent_kind: Optional[str],
+    principal_name: Optional[str],
+    cwd: Optional[str],
+) -> SessionStartResult:
+    """Attach a hook's session start to the runner session hosting it.
+
+    The runner session keeps its title, principal and lineage. The hook adds
+    what it alone knows: the harness id as ``session_reference`` and, when
+    the row has none, a working directory and principal label. Any row the
+    hook path opened earlier under this id is folded in.
+    """
+    fold_hook_sessions_into_runner(
+        db, account_id=account_id, external_session_id=external, target=session
+    )
+    if not session.session_reference:
+        session.session_reference = external[:255]
+    if cwd and not session.cwd:
+        session.cwd = cwd[:1024]
+    if not session.runtime_principal_name:
+        label = principal_label(agent_kind, cwd or session.cwd)
+        session.runtime_principal_name = label or principal_name
+    session.last_activity_at = datetime.now(UTC)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return SessionStartResult(
+        runtime_session_id=str(session.id),
+        parent_session_id=(
+            str(session.parent_session_id) if session.parent_session_id else None
+        ),
+        started_at=session.started_at,
+        created=False,
         alias=session.alias,
     )

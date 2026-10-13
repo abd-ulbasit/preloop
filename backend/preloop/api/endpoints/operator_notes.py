@@ -431,6 +431,33 @@ def cancel_operator_note(
     return _to_response(_cancel())
 
 
+def _hosted_runner_session_id(
+    db: Session, context: Any, external_session_id: Optional[str]
+) -> Optional[str]:
+    """The runner session hosting this harness id, when the caller may use it.
+
+    A runner-hosted harness (#1482) reports the id the runner minted. Its
+    hooks run as the session's actor or as the runner's owner; the same rule
+    as the permission hook decides (``runner_session_for_external``).
+    """
+    external = (external_session_id or "").strip()
+    if not external:
+        return None
+    from preloop.services.agent_session_lineage import runner_session_for_external
+
+    try:
+        hosted = runner_session_for_external(
+            db,
+            account_id=str(context.api_key.account_id),
+            external_session_id=external,
+            actor_user_id=context.api_key.user_id,
+        )
+    except Exception:
+        logger.warning("Resolving the hosted runner session failed", exc_info=True)
+        return None
+    return str(hosted.id) if hosted is not None else None
+
+
 def _hook_origin_session_id(
     db: Session, context: Any, external_session_id: Optional[str]
 ) -> Optional[str]:
@@ -492,7 +519,9 @@ def _claim_for_hook(
         # bound to the conversation that claimed it, and that must be the run
         # the hook is serving, not the agent's identity session.
         session_ids: list[Optional[str]] = []
-        origin = _hook_origin_session_id(db, context, payload.session_id)
+        origin = _hosted_runner_session_id(
+            db, context, payload.session_id
+        ) or _hook_origin_session_id(db, context, payload.session_id)
         if origin:
             session_ids.append(origin)
         if context.runtime_session is not None:
@@ -544,6 +573,15 @@ def _end_session(
         )
         account_id = str(context.api_key.account_id)
         session = None
+        hosted_id = _hosted_runner_session_id(db, context, payload.external_session_id)
+        if hosted_id:
+            # Copilot runs one process per turn on a runner, so its SessionEnd
+            # hook fires after every turn. The runner's session_state frames
+            # alone end a runner session; its notes stay pending for the
+            # next turn (#1482).
+            return OperatorSessionEndResponse(
+                runtime_session_id=UUID(hosted_id), marked=0
+            )
         origin_id = _hook_origin_session_id(db, context, payload.external_session_id)
         if origin_id:
             session = crud_runtime_session.get_account_session(

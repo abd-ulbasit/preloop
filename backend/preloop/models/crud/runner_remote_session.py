@@ -66,6 +66,28 @@ class CRUDRunnerRemoteSession(CRUDBase[RunnerRemoteSession]):
             .first()
         )
 
+    def get_live_by_harness_session(
+        self, db: Session, *, account_id: Any, harness_session_id: str
+    ) -> Optional[RunnerRemoteSession]:
+        """The live session in this account whose harness carries this id.
+
+        Ended sessions never match, so a stale harness id cannot capture a
+        later hook registration.
+        """
+        if not harness_session_id:
+            return None
+        return (
+            db.query(self.model)
+            .filter(
+                self.model.account_id == account_id,
+                self.model.harness_session_id == harness_session_id,
+                self.model.state.in_(LIVE_STATES),
+                self.model.runtime_session_id.isnot(None),
+            )
+            .order_by(self.model.requested_at.desc())
+            .first()
+        )
+
     def lock_runner(self, db: Session, *, runner_id: Any) -> None:
         """Lock the runner row until commit: serializes session starts."""
         (

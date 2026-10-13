@@ -358,6 +358,45 @@ def test_sweeper_offline_runner_after_idle_timeout(db_session, runner, test_user
     assert _actions(db_session, row)[-1] == "runner_session.ended"
 
 
+def test_state_frame_lowers_idle_timeout_only(db_session, runner, test_user):
+    """The host's lower idle limit is adopted; a higher one never raises it."""
+    row = _start(db_session, runner, test_user)
+    assert row.idle_timeout_seconds == svc.DEFAULT_IDLE_TIMEOUT_SECONDS
+    svc.apply_runner_session_message(db_session, runner, _state(row, "starting"))
+    db_session.refresh(row)
+    assert row.idle_timeout_seconds == svc.DEFAULT_IDLE_TIMEOUT_SECONDS
+    svc.apply_runner_session_message(
+        db_session, runner, _state(row, "idle", idle_timeout_seconds=60)
+    )
+    db_session.refresh(row)
+    assert row.idle_timeout_seconds == 60
+    svc.apply_runner_session_message(
+        db_session, runner, _state(row, "running", idle_timeout_seconds=3600)
+    )
+    db_session.refresh(row)
+    assert row.idle_timeout_seconds == 60
+    svc.apply_runner_session_message(
+        db_session, runner, _state(row, "idle", idle_timeout_seconds=10)
+    )
+    db_session.refresh(row)
+    assert row.idle_timeout_seconds == 60
+
+
+def test_sweeper_uses_host_lowered_idle_timeout(db_session, runner, test_user):
+    row = _start(db_session, runner, test_user)
+    svc.apply_runner_session_message(
+        db_session, runner, _state(row, "idle", idle_timeout_seconds=60)
+    )
+    runner.last_heartbeat = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.add(runner)
+    db_session.commit()
+    now = _naive_now()
+    assert svc.sweep_runner_sessions(db_session, now=now + timedelta(seconds=30)) == 0
+    assert svc.sweep_runner_sessions(db_session, now=now + timedelta(seconds=90)) == 1
+    db_session.refresh(row)
+    assert row.state == "ended" and row.end_reason == "runner_offline"
+
+
 def test_sweeper_online_runner_gets_grace(db_session, runner, test_user):
     row = _start(db_session, runner, test_user)
     svc.apply_runner_session_message(db_session, runner, _state(row, "idle"))

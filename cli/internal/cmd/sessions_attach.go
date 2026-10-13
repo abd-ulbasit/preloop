@@ -108,8 +108,11 @@ Command mode: when the session belongs to a managed agent with a live Agent
 Control connection (Hermes, a Claude workspace, the Codex sidecar), a typed
 line starts a new turn instead, through the console's command path, and its
 delivery (queued, delivered, started, finished) is shown inline. /note <text>
-sends a note anyway and /mode prints the current mode. Any other session
-stays in note mode and the attach says why.
+sends a note anyway and /mode prints the current mode. A session hosted on
+a personal runner (Copilot CLI, Cursor CLI, Devin CLI) is in command mode
+too: a line is its next turn, shown as queued, started, then finished or
+failed, with the agent's messages and tool calls in between. Any other
+session stays in note mode and the attach says why.
 
 --read-only turns all of this off. Detach with Ctrl-C; the session keeps running. A
 dropped connection is retried with backoff, and the events missed while it

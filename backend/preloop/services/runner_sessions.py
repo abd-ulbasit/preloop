@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from pydantic import ValidationError
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import Session
 
 from preloop.models import models
@@ -100,6 +101,13 @@ class RunnerSessionError(Exception):
 def _now() -> datetime:
     """Naive UTC, the convention of the timestamp columns."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _iso(when: datetime) -> str:
+    """ISO 8601 with an explicit UTC offset, for live events."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.isoformat()
 
 
 def _actor_name(user: Any) -> str:
@@ -208,6 +216,98 @@ def _activity(
     if runtime is not None:
         runtime.last_activity_at = timestamp
         db.add(runtime)
+    _queue_live_event(
+        db,
+        account_id=row.account_id,
+        runtime_session_id=row.runtime_session_id,
+        event_type="runtime_session_updated",
+        payload={
+            "runtime_session_id": str(row.runtime_session_id),
+            "session_source_type": RUNNER_SESSION_SOURCE_TYPE,
+            "last_activity_at": _iso(timestamp),
+            "activity_type": activity_type[:50],
+            "server_name": row.harness,
+            "tool_name": (tool_name or None) and str(tool_name)[:255],
+            "status": status,
+            "summary": (summary or "")[:LIVE_SUMMARY_LIMIT] or None,
+            "metadata": _live_metadata(metadata),
+        },
+    )
+
+
+#: Longest summary carried on a live event; the timeline row has all of it.
+LIVE_SUMMARY_LIMIT = 500
+_LIVE_EVENTS_KEY = "runner_session_live_events"
+
+
+def _live_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The small, scrubbed part of an activity's metadata a watcher needs."""
+    if not metadata:
+        return {}
+    kept: Dict[str, Any] = {}
+    for key in ("turn_id", "seq", "actor_user_id", "usage"):
+        if metadata.get(key) is not None:
+            kept[key] = metadata[key]
+    return dict(scrub_structure(kept))
+
+
+def _queue_live_event(
+    db: Session,
+    *,
+    account_id: Any,
+    runtime_session_id: Any,
+    event_type: str,
+    payload: Dict[str, Any],
+) -> None:
+    """Publish a realtime event once the transaction that wrote it commits.
+
+    Attach and the console follow runner sessions on the same
+    ``runtime_sessions`` events other session activity uses. The event is
+    held on the database session and sent after the commit, so a watcher
+    never sees a row that rolled back.
+
+    Args:
+        db: The session the activity was written on.
+        account_id: Account the event is scoped to.
+        runtime_session_id: The paired runtime session.
+        event_type: ``runtime_session_updated`` or ``runtime_session_ended``.
+        payload: The event payload.
+    """
+    from preloop.services.account_realtime import (
+        ACCOUNT_TOPIC_RUNTIME_SESSIONS,
+        build_account_event,
+    )
+
+    queued: List[Dict[str, Any]] = db.info.setdefault(_LIVE_EVENTS_KEY, [])
+    queued.append(
+        build_account_event(
+            account_id=str(account_id),
+            topic=ACCOUNT_TOPIC_RUNTIME_SESSIONS,
+            event_type=event_type,
+            payload=payload,
+            runtime_session_id=str(runtime_session_id),
+        )
+    )
+    if not sa_event.contains(db, "after_commit", _publish_live_events):
+        sa_event.listen(db, "after_commit", _publish_live_events)
+        sa_event.listen(db, "after_rollback", _drop_live_events)
+
+
+def _publish_live_events(db: Session) -> None:
+    """Send the events queued by :func:`_queue_live_event`. Never raises."""
+    events: List[Dict[str, Any]] = db.info.pop(_LIVE_EVENTS_KEY, [])
+    from preloop.services import account_realtime
+
+    for item in events:
+        try:
+            account_realtime.emit_account_event(item)
+        except Exception:  # pragma: no cover - live delivery is best effort
+            logger.debug("Runner session live event failed", exc_info=True)
+
+
+def _drop_live_events(db: Session) -> None:
+    """Forget queued events whose rows rolled back."""
+    db.info.pop(_LIVE_EVENTS_KEY, None)
 
 
 def _touch(row: models.RunnerRemoteSession, when: Optional[datetime] = None) -> None:
@@ -443,6 +543,9 @@ def end_session(
     """Make a session terminal on the server and close its runtime session."""
     if not row.is_live:
         return
+    # Sweeper, kill switch and stop end sessions without a frame; a hook
+    # sibling registered since the last frame must not outlive the session.
+    _link_hook_sessions(db, row)
     now = _now()
     row.state = state
     row.end_reason = end_reason[:128]
@@ -465,6 +568,21 @@ def end_session(
         end_reason=end_reason,
     )
     _activity(db, row, "session_state", status=state, summary=f"Ended: {end_reason}")
+    if row.runtime_session_id is not None:
+        _queue_live_event(
+            db,
+            account_id=row.account_id,
+            runtime_session_id=row.runtime_session_id,
+            event_type="runtime_session_ended",
+            payload={
+                "id": str(row.runtime_session_id),
+                "runtime_session_id": str(row.runtime_session_id),
+                "session_source_type": RUNNER_SESSION_SOURCE_TYPE,
+                "ended_at": _iso(now),
+                "end_reason": row.end_reason,
+                "state": state,
+            },
+        )
     if commit:
         db.commit()
 
@@ -648,6 +766,8 @@ def _apply_state(
                 }
             ]
         return []
+    # Before the transition check: a reconnect re-reports the same state.
+    _adopt_host_idle_timeout(row, message.idle_timeout_seconds)
     if state not in _TRANSITIONS.get(row.state, frozenset()):
         logger.info("Ignoring session %s transition %s -> %s", row.id, row.state, state)
         return []
@@ -655,6 +775,11 @@ def _apply_state(
     _touch(row, now)
     if message.harness_session_id:
         row.harness_session_id = message.harness_session_id
+        # Every frame, terminal ones included (folded before the session
+        # ends, so the folded rows end with it): a hook that registered
+        # after an earlier frame left a sibling to fold. In the steady state
+        # the lookup finds nothing.
+        _link_hook_sessions(db, row)
     if state == "failed":
         code = message.error_code or "unknown"
         detail = str(raw.get("detail") or "")[:512] or None
@@ -677,6 +802,7 @@ def _apply_state(
         end_session(db, row, reason, commit=False)
         return []
     first_start = row.started_at is None and state in ("idle", "running")
+    turn_before = row.active_turn_id
     if row.state in ("requested", "starting") and state != "starting":
         if row.first_prompt:
             # The runner runs the first prompt as turn "first".
@@ -689,8 +815,63 @@ def _apply_state(
         _activity(db, row, "session_state", status="started", summary="Session started")
     if state == "running" and row.pending_turn and row.pending_turn_sent_at:
         row.active_turn_id = row.pending_turn.get("turn_id")
+    if state == "running" and row.active_turn_id and row.active_turn_id != turn_before:
+        _activity(
+            db,
+            row,
+            "operator_turn",
+            status="started",
+            summary="Turn started",
+            metadata={"turn_id": row.active_turn_id},
+        )
     db.add(row)
     return []
+
+
+def _adopt_host_idle_timeout(
+    row: models.RunnerRemoteSession, reported: Optional[int]
+) -> None:
+    """Lower the session's idle timeout to the host's effective one.
+
+    The host may lower the requested limit in runner.json; the offline sweep
+    must then end the session at the same point. Never raises the limit.
+
+    Args:
+        row: The session.
+        reported: ``idle_timeout_seconds`` from the state frame, if any.
+    """
+    if reported is None or reported < MIN_IDLE_TIMEOUT_SECONDS:
+        return
+    current = row.idle_timeout_seconds or DEFAULT_IDLE_TIMEOUT_SECONDS
+    row.idle_timeout_seconds = min(current, reported)
+
+
+def _link_hook_sessions(db: Session, row: models.RunnerRemoteSession) -> None:
+    """Fold sessions the harness hooks opened before the id arrived.
+
+    The harness's approval and session-start hooks key their calls by the
+    harness session id. When they reached the server first they opened a
+    session of their own; its timeline moves onto the runner session so
+    approvals and notes show up there (#1482).
+    """
+    from preloop.services.agent_session_lineage import (
+        fold_hook_sessions_into_runner,
+    )
+
+    if row.runtime_session_id is None or not row.harness_session_id:
+        return
+    target = db.get(models.RuntimeSession, row.runtime_session_id)
+    if target is None:
+        return
+    db.flush()
+    folded = fold_hook_sessions_into_runner(
+        db,
+        account_id=row.account_id,
+        external_session_id=row.harness_session_id,
+        target=target,
+    )
+    if folded:
+        logger.info("Folded %d hook session(s) into runner session %s", folded, row.id)
 
 
 def _apply_event(
@@ -742,6 +923,8 @@ def _apply_turn_done(
         row.pending_turn_sent_at = None
     if row.active_turn_id == message.turn_id:
         row.active_turn_id = None
+    if row.is_live:
+        _link_hook_sessions(db, row)
     _touch(row)
     db.add(row)
     error_code = raw.get("error_code")

@@ -124,6 +124,9 @@ func attachEventFromActivity(raw json.RawMessage) (attachEvent, bool) {
 		event.kind = attachKindOther
 		event.hidden = true
 	default:
+		if describeRunnerActivity(&event, item.ActivityType, item.Status, item.Summary, item.ToolName, item.Metadata) {
+			return event, true
+		}
 		event.kind = attachKindOther
 		event.key = fmt.Sprintf("%s|%s|%s", item.ActivityType, at.UTC().Format(time.RFC3339Nano), item.Title)
 		event.text = firstNonEmpty(item.Title, item.ActivityType)
@@ -257,6 +260,10 @@ func attachEventFromLive(message map[string]interface{}, raw json.RawMessage) (a
 			describeControlMessage(&event, metadata, stringField(payload, "summary"), stringField(payload, "status"))
 			return event, true
 		}
+		if describeRunnerActivity(&event, stringField(payload, "activity_type"), stringField(payload, "status"),
+			stringField(payload, "summary"), stringField(payload, "tool_name"), metadata) {
+			return event, true
+		}
 		tool := stringField(payload, "tool_name")
 		if tool == "" {
 			event.kind = attachKindOther
@@ -274,6 +281,76 @@ func attachEventFromLive(message map[string]interface{}, raw json.RawMessage) (a
 	event.kind = attachKindOther
 	event.hidden = true
 	return event, true
+}
+
+// describeRunnerActivity renders the timeline rows of a runner-hosted
+// session (#1482): the turn's progress (queued, started, finished or
+// failed), the agent's messages and session state changes. Tool calls and
+// results that name a tool are left to the tool rendering. It reports
+// whether it handled the row.
+func describeRunnerActivity(event *attachEvent, activityType, status, summary, tool string, metadata map[string]interface{}) bool {
+	turnID := stringField(metadata, "turn_id")
+	turn := "turn"
+	if turnID != "" {
+		turn += " " + shortSessionID(turnID)
+	}
+	switch activityType {
+	case "operator_turn":
+		event.kind = attachKindCommand
+		event.key = "runner-turn|" + turnID + "|" + status
+		line := turn + " " + firstNonEmpty(status, "queued")
+		if status != "started" && summary != "" {
+			line += ": " + truncateAttach(summary, 160)
+		}
+		event.text = line
+	case "turn_done":
+		event.kind = attachKindCommand
+		event.key = "runner-turn|" + turnID + "|done"
+		if status == "" || status == "ok" {
+			event.text = turn + " finished"
+		} else {
+			event.text = turn + " failed"
+			if summary != "" {
+				event.text += " (" + truncateAttach(summary, 80) + ")"
+			}
+		}
+	case "agent_message":
+		event.kind = attachKindReply
+		event.key = runnerEventKey(turnID, metadata)
+		event.text = "from the agent: " + truncateAttach(summary, 160)
+		event.hidden = summary == ""
+	case "tool_result", "tool_call":
+		if tool != "" {
+			return false
+		}
+		event.kind = attachKindOther
+		event.hidden = true
+	case "usage", "stderr":
+		event.kind = attachKindOther
+		event.hidden = true
+	case "session_state":
+		event.kind = attachKindOther
+		event.key = "runner-state|" + status
+		switch status {
+		case "started":
+			event.text = "session started"
+		case "requested":
+			event.text = "session requested"
+		default:
+			// The end is printed once, from the session_ended event.
+			event.hidden = true
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func runnerEventKey(turnID string, metadata map[string]interface{}) string {
+	if seq := numberField(metadata, "seq"); seq != nil {
+		return fmt.Sprintf("runner-event|%s|%d", turnID, int64(*seq))
+	}
+	return ""
 }
 
 func toolEventKey(at time.Time, tool, status string) string {

@@ -576,6 +576,9 @@ func (m *runnerSessionManager) stateMessage(s *runnerRemoteSession) map[string]a
 		"type":              "session_state",
 		"remote_session_id": s.RemoteSessionID,
 		"state":             s.state,
+		// The effective idle limit, so the server's runner_offline sweep
+		// uses the host's lower value too.
+		"idle_timeout_seconds": int(s.idleTimeout() / time.Second),
 	}
 	if s.HarnessSessionID != "" {
 		msg["harness_session_id"] = s.HarnessSessionID
@@ -659,6 +662,16 @@ func (m *runnerSessionManager) handle(msg runnerWSMessage) bool {
 	return true
 }
 
+// sessionIdleTimeout is the session's effective idle limit: the host's,
+// lowered by the server's request, never raised.
+func sessionIdleTimeout(hostIdle time.Duration, msg runnerWSMessage) time.Duration {
+	idle := hostIdle
+	if requested := limitSeconds(msg.Limits, "idle_timeout_seconds"); requested >= runnerSessionMinTimeout && requested < idle {
+		idle = requested
+	}
+	return idle
+}
+
 func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 	id := strings.ToLower(strings.TrimSpace(msg.RemoteSessionID))
 	if !uuidRe.MatchString(id) {
@@ -702,7 +715,13 @@ func (m *runnerSessionManager) handleStart(msg runnerWSMessage) {
 		m.starting = map[string]bool{}
 	}
 	m.starting[id] = true
-	m.enqueue(map[string]any{"type": "session_state", "remote_session_id": id, "state": runnerSessionStateStarting})
+	idle := sessionIdleTimeout(settings.IdleTimeout, msg)
+	m.enqueue(map[string]any{
+		"type":                 "session_state",
+		"remote_session_id":    id,
+		"state":                runnerSessionStateStarting,
+		"idle_timeout_seconds": int(idle / time.Second),
+	})
 	run := m.runAsync
 	if run == nil {
 		run = func(f func()) { f() }
@@ -745,10 +764,7 @@ func (m *runnerSessionManager) finishStart(msg runnerWSMessage, id string, adapt
 		m.enqueue(map[string]any{"type": "session_state", "remote_session_id": id, "state": runnerSessionStateEnded, "end_reason": runnerSessionEndStoppedByActor})
 		return
 	}
-	idle := settings.IdleTimeout
-	if requested := limitSeconds(msg.Limits, "idle_timeout_seconds"); requested >= runnerSessionMinTimeout && requested < idle {
-		idle = requested
-	}
+	idle := sessionIdleTimeout(settings.IdleTimeout, msg)
 	now := m.now()
 	session := &runnerRemoteSession{
 		RemoteSessionID: id,

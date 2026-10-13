@@ -1168,3 +1168,98 @@ def test_operator_ending_a_session_fails_its_session_only_notes(
         db_session, account_id=test_user.account_id, note_id=note_id
     )
     assert stored.status == "undeliverable"
+
+
+def _hosted_runner_session(db_session, test_user) -> tuple:
+    """A live Copilot session on the user's runner with a known harness id."""
+    from preloop.models import models
+    from preloop.services import runner_sessions
+
+    runner = models.FlowRunner(
+        account_id=test_user.account_id,
+        registered_by_user_id=test_user.id,
+        name="Jane laptop",
+        hostname="jane-laptop.example.com",
+        token_hash=f"hash-{uuid4().hex}",
+        status="online",
+        last_heartbeat=datetime.now(UTC),
+    )
+    db_session.add(runner)
+    db_session.flush()
+    row = runner_sessions.request_session(
+        db_session,
+        runner=runner,
+        actor=test_user,
+        harness="copilot_cli",
+        model="auto",
+        workspace={"kind": "authorized_directory", "id": "dir_1"},
+        workspace_label="ims",
+    )
+    harness_id = str(uuid4())
+    for state in ("starting", "idle"):
+        runner_sessions.apply_runner_session_message(
+            db_session,
+            runner,
+            {
+                "type": "session_state",
+                "remote_session_id": str(row.id),
+                "state": state,
+                "harness_session_id": harness_id,
+            },
+        )
+    db_session.refresh(row)
+    return row, harness_id
+
+
+def test_hook_pull_and_session_end_for_a_hosted_runner_session(
+    client, db_session, test_user
+):
+    """A runner-hosted harness id reaches the runner session's notes (#1482).
+
+    Copilot's SessionEnd hook fires after every per-turn process, so it must
+    leave the runner session and its pending notes alone.
+    """
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    row, harness_id = _hosted_runner_session(db_session, test_user)
+    queued = []
+    for body in ("First note.", "Second note."):
+        note_id = operator_notes.new_note_id()
+        crud_agent_control_command.create_note(
+            db_session,
+            account_id=test_user.account_id,
+            managed_agent_id=agent.id,
+            runtime_session_id=row.runtime_session_id,
+            note_id=note_id,
+            body=body,
+            envelope={"kind": "message"},
+            author_display="Test User",
+            author_auth_method="jwt",
+            created_by_user_id=None,
+            expires_at=None,
+        )
+        queued.append(note_id)
+
+    ended = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": harness_id, "reason": "exit"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert ended.status_code == 200, ended.text
+    assert ended.json() == {
+        "runtime_session_id": str(row.runtime_session_id),
+        "marked": 0,
+    }
+    runtime = db_session.get(RuntimeSession, row.runtime_session_id)
+    db_session.refresh(runtime)
+    assert runtime.ended_at is None
+
+    pulled = client.post(
+        PENDING_URL,
+        json={"channel": "hook", "session_id": harness_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert pulled.status_code == 200, pulled.text
+    assert sorted(n["note_id"] for n in pulled.json()["notes"]) == sorted(queued)

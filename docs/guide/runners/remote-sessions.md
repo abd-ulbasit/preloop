@@ -62,7 +62,12 @@ The following tool-grant and environment details describe Copilot sessions.
 - A session is shown in **Sessions** like any other governed session: turns,
   agent messages, tool calls, approvals and usage. `preloop sessions attach`
   opens it in command mode: a typed line is the next turn, `/note <text>` sends
-  a note.
+  a note. The turn's progress (queued, started, finished or failed), the
+  agent's messages and tool calls stream live, and attach exits when the
+  session ends. The approval hook's calls are attached to the runner session itself,
+  so its approvals and notes appear on that session's timeline rather than as
+  a second session, even when the hook reaches Preloop before the runner
+  reports the Copilot session id.
 
 ## Enable sessions on the host
 
@@ -373,7 +378,9 @@ Set in `~/.preloop/runner.json`:
 | Maximum duration | 8 hours | The session ends with `max_duration` |
 
 The server may ask for a shorter idle timeout for one session, never a longer
-one.
+one. The runner reports each session's effective idle timeout, and the server
+adopts the host's lower value for its offline sweep, so a session whose runner
+disappears ends with `runner_offline` after the same limit the host applies.
 
 ## What the host user sees
 
