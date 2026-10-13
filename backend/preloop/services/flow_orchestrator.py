@@ -3521,6 +3521,8 @@ class FlowExecutionOrchestrator:
                 )
             )
             self._apply_routed_reasoning_effort(execution_context)
+            # Persistent Claude Code targets only take a Claude model.
+            execution_context["model_provider_name"] = self.ai_model.provider_name
 
             # Populate the authorized gateway model list so agent config
             # generators (e.g. OpenCode) can include every model the

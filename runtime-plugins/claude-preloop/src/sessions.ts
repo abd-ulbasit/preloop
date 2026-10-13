@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 
 import type { ControlConfig } from "./config.js";
+import { selectTurnTimeoutMs } from "./flow-workspace.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,6 +225,8 @@ export type SendMessageParams = {
   /** Create a git worktree for a phone-started parallel session (G9). */
   spawnWorktree?: boolean;
   cwd?: string;
+  /** Model for a new session. The host default applies when absent. */
+  model?: string;
 };
 
 /**
@@ -262,6 +265,7 @@ export class SessionManager {
   private sdkOptions(
     resumeSessionId?: string,
     cwd?: string,
+    model?: string,
   ): Record<string, unknown> {
     const options: Record<string, unknown> = {
       cwd: cwd ?? this.config.workspace_root ?? os.homedir(),
@@ -277,17 +281,21 @@ export class SessionManager {
     if (resumeSessionId) {
       options.resume = resumeSessionId;
     }
+    if (model) {
+      options.model = model;
+    }
     return options;
   }
 
   private async open(
     resumeSessionId?: string,
     cwd?: string,
+    model?: string,
   ): Promise<OwnedSession> {
     const session = new OwnedSession(resumeSessionId ?? randomUUID(), this.registrar, cwd ?? this.config.workspace_root);
     const handle = await this.queryFactory({
       prompt: session.input,
-      options: this.sdkOptions(resumeSessionId, cwd),
+      options: this.sdkOptions(resumeSessionId, cwd, model),
     });
     void session.run(handle).finally(() => {
       this.sessions.delete(session.key);
@@ -313,11 +321,11 @@ export class SessionManager {
       }
       // Prefer the native Claude session id for SDK resume when present
       // (G2 envelope field). Fall back to the Preloop UUID.
-      session = await this.open(resume, cwd);
+      session = await this.open(resume, cwd, params.model);
     }
     return session.send(
       params.text,
-      this.config.turn_timeout_ms ?? DEFAULT_TURN_TIMEOUT_MS,
+      selectTurnTimeoutMs(this.config, params.metadata, DEFAULT_TURN_TIMEOUT_MS),
     );
   }
 

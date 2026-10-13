@@ -124,7 +124,9 @@ string as one audited `send_message` with `start_new_session=true`,
 | `trigger_event_source` | trigger payload |
 | `repository`, `ref` | trigger payload when present |
 | `timeout_seconds` | the flow's timeout budget |
-| `workspace` | checkout contract below. No credentials. |
+| `run_limits` | flow limits, including `max_duration_seconds`, when the flow sets limits |
+| `model` | the flow's Claude model (gateway alias or identifier), only for Claude models |
+| `workspace` | checkout contract below, or an authorized host directory. No credentials. |
 
 `workspace.mode` is also a prompt placeholder (`{{workspace.mode}}`).
 Ephemeral container runs render `ephemeral`. Persistent runs render
@@ -159,6 +161,18 @@ stays `clone_less`: a persistent checkout is a directory named by the slug.
 
 When clone is disabled, or no repository can be resolved, `workspace` is
 `{mode: "clone_less"}`. The review reads the diff from the tracker.
+
+When the flow sets `agent_config.workspace`, `workspace` is
+`{mode: "authorized_directory", kind, id | path, allow_dirty}` and takes
+precedence over the checkout. The Claude sidecar resolves it against the
+host's `~/.preloop/runner.json` `authorized_directories` (written by
+`preloop runner dirs add`) and refuses unlisted paths, `read_only` entries,
+entries limited to other harnesses, the filesystem root, the home directory
+or a directory containing it, credential directories, and a dirty tree unless
+`allow_dirty` is true. The sidecar no longer reads `cwd` from the payload or
+metadata. It passes `metadata.model` to the Agent SDK as `options.model` and
+uses `run_limits.max_duration_seconds` (else `timeout_seconds`) as the turn
+timeout, bounded above by `turn_timeout_ms` when that is set.
 
 The Claude sidecar (`runtime-plugins/claude-preloop`) and the Codex
 sidecar (`runtime-plugins/codex-preloop`) both handle `persistent_checkout`
@@ -199,8 +213,8 @@ as follows.
 * `workspace_fetch_timeout_ms` (default 120000) bounds fetch and clone.
 
 The envelope shape is the same one runtime plugins already accept (`text`,
-`metadata`, `input_mode`, `session_mode`, `start_new_session`, optional
-`cwd`). Persist-before-deliver is unchanged: the command row is written, then
+`metadata`, `input_mode`, `session_mode`, `start_new_session`). The Claude
+sidecar ignores a raw `cwd`; the directory comes from `workspace`. Persist-before-deliver is unchanged: the command row is written, then
 local WebSocket or NATS delivery runs.
 
 ### Binding

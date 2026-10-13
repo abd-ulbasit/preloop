@@ -784,3 +784,155 @@ def test_missing_target_does_not_repeat_owned_lookup(
         executor._resolve_target({"account_id": executor.account_id})
     owned.assert_called_once()
     shared.assert_called_once()
+
+
+def _start_context(executor: AgentControlExecutor, agent: Any, **extra: Any):
+    return {
+        "prompt": "Nightly maintenance",
+        "execution_id": str(executor.execution.id),
+        "flow_id": str(uuid4()),
+        "flow_name": "Nightly",
+        "account_id": agent.account_id,
+        **extra,
+    }
+
+
+async def _dispatch_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    config: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    agent = _agent()
+    executor = _executor(agent_id=agent.id, account_id=agent.account_id, **config)
+    captured: dict[str, Any] = {}
+
+    async def fake_dispatch(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            command_id="cmd-example-2", local_delivery=True, subject=None
+        )
+
+    monkeypatch.setattr(
+        "preloop.agents.agent_control.crud_managed_agent.get_visible_target",
+        lambda *args, **kwargs: agent,
+    )
+    monkeypatch.setattr(
+        "preloop.agents.agent_control.dispatch_operator_message", fake_dispatch
+    )
+    await executor.start(_start_context(executor, agent, **context))
+    return captured["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_start_sends_authorized_directory_workspace(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(
+        monkeypatch,
+        config={"workspace": {"kind": "authorized_directory", "id": "dir_example"}},
+        context={
+            "git_clone_config": {
+                "enabled": True,
+                "repository_url": "https://github.com/example/repo.git",
+            }
+        },
+    )
+    assert metadata["workspace"] == {
+        "mode": "authorized_directory",
+        "kind": "authorized_directory",
+        "id": "dir_example",
+        "allow_dirty": False,
+    }
+    assert "cwd" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_start_without_workspace_keeps_clone_less(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(monkeypatch, config={}, context={})
+    assert metadata["workspace"] == {"mode": "clone_less"}
+    assert "model" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_malformed_workspace(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    with pytest.raises(AgentStartError, match="workspace"):
+        await _dispatch_metadata(
+            monkeypatch,
+            config={"workspace": {"kind": "path", "path": "relative/dir"}},
+            context={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_sends_claude_gateway_alias_as_model(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(
+        monkeypatch,
+        config={},
+        context={
+            "model_gateway_enabled": True,
+            "model_gateway_model_alias": "opus-nightly",
+            "model_identifier": "opus-nightly",
+            "model_provider_name": "anthropic",
+        },
+    )
+    assert metadata["model"] == "opus-nightly"
+
+
+@pytest.mark.asyncio
+async def test_start_skips_non_claude_model(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(
+        monkeypatch,
+        config={},
+        context={
+            "model_identifier": "gpt-5.4",
+            "model_provider_name": "openai",
+        },
+    )
+    assert "model" not in metadata
+
+
+def test_persistent_model_name_prefers_direct_claude_identifier() -> None:
+    from preloop.agents.agent_control import persistent_model_name
+
+    assert (
+        persistent_model_name(
+            {
+                "model_identifier": "us.anthropic.claude-opus-5-5",
+                "model_provider_name": "bedrock",
+            }
+        )
+        == "us.anthropic.claude-opus-5-5"
+    )
+    assert persistent_model_name({"model_identifier": "  "}) is None
+    assert (
+        persistent_model_name(
+            {
+                "model_gateway_enabled": False,
+                "model_gateway_model_alias": "ignored",
+                "model_identifier": "claude-opus-5-5",
+            }
+        )
+        == "claude-opus-5-5"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_run_limits_carry_flow_timeout(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(
+        monkeypatch,
+        config={"limits": {"max_turns": 40}},
+        context={"timeout_seconds": 1800},
+    )
+    assert metadata["timeout_seconds"] == 1800
+    assert metadata["run_limits"]["max_duration_seconds"] == 1800

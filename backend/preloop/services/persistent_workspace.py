@@ -324,3 +324,99 @@ def workspace_metadata(
     if identity is None:
         return {"mode": MODE_CLONE_LESS}
     return {**identity, "mode": MODE_PERSISTENT_CHECKOUT}
+
+
+# ---------------------------------------------------------------------------
+# Per-flow working directory on the agent host (agent_config.workspace)
+
+#: ``workspace.mode`` for a run in a directory the host owner authorized.
+MODE_AUTHORIZED_DIRECTORY = "authorized_directory"
+WORKSPACE_KIND_AUTHORIZED_DIRECTORY = "authorized_directory"
+WORKSPACE_KIND_PATH = "path"
+_AUTHORIZED_DIR_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_MAX_WORKSPACE_PATH = 4096
+
+
+def validate_flow_workspace(value: Any) -> Dict[str, Any]:
+    """Validate ``agent_config.workspace`` and return its normalized form.
+
+    The control plane only checks the shape. The agent host resolves the
+    directory against its own authorized-directories list and refuses
+    anything that is not listed there.
+
+    Args:
+        value: The raw ``agent_config.workspace`` value.
+
+    Returns:
+        ``{"kind": "authorized_directory", "id": ..., "allow_dirty": bool}``
+        or ``{"kind": "path", "path": ..., "allow_dirty": bool}``.
+
+    Raises:
+        ValueError: When the value is not one of the two supported shapes.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError("agent_config.workspace must be an object")
+    allowed = {"kind", "id", "path", "allow_dirty"}
+    unknown = sorted(str(key) for key in value if key not in allowed)
+    if unknown:
+        raise ValueError(
+            "agent_config.workspace has unsupported keys: " + ", ".join(unknown)
+        )
+    allow_dirty = value.get("allow_dirty", False)
+    if not isinstance(allow_dirty, bool):
+        raise ValueError("agent_config.workspace.allow_dirty must be a boolean")
+    kind = value.get("kind")
+    if kind == WORKSPACE_KIND_AUTHORIZED_DIRECTORY:
+        directory_id = value.get("id")
+        if value.get("path") is not None:
+            raise ValueError(
+                "agent_config.workspace.path is not allowed with kind "
+                "authorized_directory"
+            )
+        if not isinstance(directory_id, str) or not _AUTHORIZED_DIR_ID.fullmatch(
+            directory_id
+        ):
+            raise ValueError(
+                "agent_config.workspace.id must be an authorized directory id "
+                "(see `preloop runner dirs list`)"
+            )
+        return {"kind": kind, "id": directory_id, "allow_dirty": allow_dirty}
+    if kind == WORKSPACE_KIND_PATH:
+        path = value.get("path")
+        if value.get("id") is not None:
+            raise ValueError("agent_config.workspace.id is not allowed with kind path")
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or len(path) > _MAX_WORKSPACE_PATH
+            or any(char in path for char in ("\x00", "\n", "\r"))
+        ):
+            raise ValueError(
+                "agent_config.workspace.path must be an absolute path on the agent host"
+            )
+        return {"kind": kind, "path": path, "allow_dirty": allow_dirty}
+    raise ValueError(
+        'agent_config.workspace.kind must be "authorized_directory" or "path"'
+    )
+
+
+def flow_workspace_metadata(agent_config: Any) -> Optional[Dict[str, Any]]:
+    """``workspace`` metadata for a flow that names a host directory.
+
+    Args:
+        agent_config: The flow's agent configuration (wrapped or not).
+
+    Returns:
+        ``{"mode": "authorized_directory", **workspace}`` when the flow sets
+        ``agent_config.workspace``, else None.
+
+    Raises:
+        ValueError: When ``agent_config.workspace`` is malformed.
+    """
+    config = unwrap_agent_config(agent_config)
+    if not isinstance(config, dict):
+        config = agent_config if isinstance(agent_config, dict) else {}
+    raw = config.get("workspace")
+    if raw is None:
+        return None
+    return {"mode": MODE_AUTHORIZED_DIRECTORY, **validate_flow_workspace(raw)}

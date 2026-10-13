@@ -87,7 +87,10 @@ sidecar logs a loud warning instead of idling silently.
 
 Optional keys: `permission_mode`, `transcript_dir`, `observer_enabled`,
 `observer_poll_ms`, `turn_timeout_ms` (per-turn reply timeout, default 5
-minutes; a hung turn is rejected so the sidecar keeps serving commands),
+minutes; a hung turn is rejected so the sidecar keeps serving commands; a
+flow's `run_limits.max_duration_seconds` or `timeout_seconds` replaces the
+default and this key, when set, is the upper bound), `runner_config_path`
+(authorized directories file, default `~/.preloop/runner.json`),
 `workspace_repositories_max` (how many persistent checkouts to keep,
 default 20; only clean directories are evicted), and
 `workspace_fetch_timeout_ms` (git fetch and clone timeout, default
@@ -102,6 +105,13 @@ uncommitted edits with `spawn_worktree: false` fails the next run on that
 repository; use a worktree or commit/clean before the next turn. The sidecar records
 `preloop.managedcheckout` in git config so a later process still knows
 the tree is its own.
+
+A flow with `metadata.workspace.mode` of `authorized_directory` runs in a
+directory the host owner listed with `preloop runner dirs add` (by `id`, or
+by a `path` that matches a listed entry). Unlisted, `read_only`, home, root,
+credential directories, and dirty trees (unless `allow_dirty`) are refused.
+A raw `cwd` in the message is ignored. `metadata.model`, when present, sets
+the session model.
 
 ## Usage
 

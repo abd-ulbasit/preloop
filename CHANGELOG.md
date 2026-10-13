@@ -68,6 +68,10 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Security
 
+- The Claude sidecar no longer takes a session directory from a raw `cwd` in
+  a `send_message`. Persistent flows name an authorized host directory
+  instead, which the sidecar checks against `preloop runner dirs`.
+
 - Personal runners have a threat model with numbered controls T1 to T12:
   per-harness opt-in on the host, who may start a session, the host notice,
   workspace containment, short-lived clone credentials, harness credentials
@@ -97,6 +101,11 @@ machine. The runner never reads, copies or forwards harness credentials. See
   the commitment is no longer a draft.
 
 ### Added
+
+- Persistent flows on Claude Code can run in an authorized host directory
+  (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
+  flow's Claude model, and wait for the flow timeout instead of a fixed 5
+  minute turn. Docs cover unattended scheduled runs.
 
 - **Install a personal runner at login.** After an interactive
   `preloop login`, the CLI offers to install a runner as a background service

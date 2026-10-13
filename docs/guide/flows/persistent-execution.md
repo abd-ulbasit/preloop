@@ -69,6 +69,84 @@ disables presets that do not support it. The pull request reviewer
 supports it. Presets that write a container result path, or that still
 assume an ephemeral checkout, do not.
 
+## Run in a directory on the agent host
+
+A flow can name the directory the session runs in with
+`agent_config.workspace`:
+
+```json
+{
+  "execution_path": "persistent",
+  "target_agent_id": "<managed agent id>",
+  "workspace": {"kind": "authorized_directory", "id": "dir_..."}
+}
+```
+
+The host owner authorizes the directory first:
+
+```bash
+preloop runner dirs add ~/code/project --mode write --harness claude_code
+preloop runner dirs list   # shows the dir_... id
+```
+
+`{"kind": "path", "path": "/abs/path"}` is also accepted, but only when that
+path is an authorized directory on the host. Preloop validates the shape when
+the flow is saved; the Claude sidecar resolves it at run time against
+`~/.preloop/runner.json` and fails the execution when:
+
+* the id or path is not in the authorized list, or the entry is `read_only`
+  or limited to other harnesses
+* the directory is the filesystem root, the home directory (or contains it),
+  or a credential directory such as `~/.ssh`, `~/.claude` or `~/.preloop`
+* the directory has uncommitted changes, unless the flow sets
+  `"allow_dirty": true`
+
+A named directory replaces the checkout for that run: git clone settings are
+not used. Without `workspace`, the session runs in `workspace_root` from the
+sidecar config, as before. The sidecar ignores a raw `cwd` in the message, so
+a message cannot point a session at a directory the host owner did not list.
+
+## Model
+
+When the flow's model is a Claude model (Anthropic provider, or an identifier
+containing `claude`), Preloop sends its name as `metadata.model`: the gateway
+alias for gateway-routed models, else the model identifier. The Claude sidecar
+starts the session with that model. Other models are not sent, and the host's
+own Claude Code setting applies.
+
+## Turn timeout
+
+The sidecar waits for one turn as long as the flow timeout
+(`run_limits.max_duration_seconds`, else `timeout_seconds`), up to 24 hours.
+`turn_timeout_ms` in `~/.claude/preloop-control.json`, when set, is an upper
+bound. With neither, the default stays 5 minutes.
+
+## Unattended scheduled runs
+
+A scheduled persistent run has nobody at the terminal. Every tool call still
+goes through the Preloop PreToolUse hook installed by
+`preloop agents onboard "Claude Code" --approvals`, so a call that needs an
+approval waits for an approver and fails the run when the approval times out.
+Recommended setup for a run that edits and commits in one directory:
+
+* Set `"permission_mode": "acceptEdits"` in the sidecar control config, so
+  file edits inside the session directory do not wait on Claude Code's own
+  prompt, which nobody can answer in an owned session. Do not use
+  `bypassPermissions`.
+* In Preloop, add an approval policy rule that allows the Bash commands the
+  run needs (for example `git add` and `git commit`) without approval, scoped
+  as narrowly as your policy allows. Keep `git push` and anything outside the
+  directory on approval.
+* Point the flow at an authorized directory (above) and keep the tree clean,
+  or set `allow_dirty` deliberately.
+* Set the flow timeout to cover the whole run, and allow time for any approval
+  that is expected to wait.
+
+What still blocks: any tool call that a policy sends to approval, edits outside
+the session directory, and Claude Code permission prompts the chosen
+`permission_mode` does not cover. The approval policy is per host today; a
+per-flow approval policy is not implemented.
+
 ## What this does not do yet
 
 Persistent mode does not forward git credentials. The Claude sidecar and

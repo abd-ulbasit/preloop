@@ -366,3 +366,83 @@ def test_create_flow_rejects_persistent_opt_out_preset(db_session, test_user) ->
     )
     assert response.status_code == 422, response.text
     assert "does not support persistent execution" in response.text
+
+
+class TestFlowWorkspace:
+    """agent_config.workspace validation for persistent flows."""
+
+    def test_authorized_directory(self) -> None:
+        from preloop.services.persistent_workspace import validate_flow_workspace
+
+        assert validate_flow_workspace(
+            {"kind": "authorized_directory", "id": "dir_a1", "allow_dirty": True}
+        ) == {"kind": "authorized_directory", "id": "dir_a1", "allow_dirty": True}
+
+    def test_path(self) -> None:
+        from preloop.services.persistent_workspace import validate_flow_workspace
+
+        assert validate_flow_workspace({"kind": "path", "path": "/srv/repo"}) == {
+            "kind": "path",
+            "path": "/srv/repo",
+            "allow_dirty": False,
+        }
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "dir_a1",
+            {"kind": "authorized_directory"},
+            {"kind": "authorized_directory", "id": "../etc"},
+            {"kind": "authorized_directory", "id": "dir_a1", "path": "/x"},
+            {"kind": "path", "path": "relative"},
+            {"kind": "path", "path": "/x\n/y"},
+            {"kind": "path", "path": "/x", "id": "dir_a1"},
+            {"kind": "path", "path": "/x", "allow_dirty": "yes"},
+            {"kind": "path", "path": "/x", "cwd": "/y"},
+            {"kind": "docker"},
+        ],
+    )
+    def test_rejects_malformed(self, value: object) -> None:
+        from preloop.services.persistent_workspace import validate_flow_workspace
+
+        with pytest.raises(ValueError):
+            validate_flow_workspace(value)
+
+    def test_metadata_unwraps_agent_config(self) -> None:
+        from preloop.services.persistent_workspace import flow_workspace_metadata
+
+        assert flow_workspace_metadata({}) is None
+        assert flow_workspace_metadata(
+            {"agent_config": {"workspace": {"kind": "authorized_directory", "id": "d"}}}
+        ) == {
+            "mode": "authorized_directory",
+            "kind": "authorized_directory",
+            "id": "d",
+            "allow_dirty": False,
+        }
+
+    def test_flow_schema_validates_workspace(self) -> None:
+        from pydantic import ValidationError
+
+        from preloop.models.schemas.flow import FlowCreate
+
+        base = {
+            "name": "Nightly",
+            "trigger_event_source": "schedule",
+            "prompt_template": "Nightly maintenance",
+            "agent_type": "codex",
+        }
+        flow = FlowCreate(
+            **base,
+            agent_config={
+                "execution_path": "persistent",
+                "target_agent_id": str(uuid4()),
+                "workspace": {"kind": "authorized_directory", "id": "dir_a1"},
+            },
+        )
+        assert flow.agent_config["workspace"]["id"] == "dir_a1"
+        with pytest.raises(ValidationError, match="workspace"):
+            FlowCreate(
+                **base,
+                agent_config={"workspace": {"kind": "path", "path": "relative"}},
+            )
