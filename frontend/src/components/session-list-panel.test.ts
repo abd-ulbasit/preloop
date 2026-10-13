@@ -135,8 +135,10 @@ describe('session-list-panel figures', () => {
     ).to.contain('68% hit');
 
     // Cost follows the tokens in the same line, not the other way round.
-    const rowText = (metric?.textContent || '').replace(/\s+/g, ' ');
+    const row = el.shadowRoot?.querySelector('.metric-row') as HTMLElement;
+    const rowText = (row.textContent || '').replace(/\s+/g, ' ');
     expect(rowText.trim().endsWith('$0.42')).to.be.true;
+    expect(getComputedStyle(row).flexWrap).to.equal('nowrap');
   });
 });
 

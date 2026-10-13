@@ -148,13 +148,25 @@ export class SessionListPanel extends LitElement {
         font-size: var(--sl-font-size-small);
       }
 
-      /* Requests, tokens and cost wrap as units when the column is narrow,
-         instead of being cut at the card edge. */
+      /* One line, never wrapped, so no separator is left dangling at a line
+         end. In a narrow column the token figures give way (their tooltip
+         has the full sentence); the request count and the cost do not. */
       .metric-row {
         column-gap: var(--sl-spacing-2x-small);
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         justify-content: flex-start;
-        row-gap: 0;
+        min-width: 0;
+      }
+
+      .metric {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .metric.tokens {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
       }
 
       .metric {
@@ -485,11 +497,13 @@ export class SessionListPanel extends LitElement {
                      expensive because it reads a lot or writes a lot. The
                      cache rate is in the figures' tooltip, so the row stays
                      one line in the list column. -->
-                  <div class="metric">
+                  <div class="metric tokens">
                     <token-figures
                       hide-cache
                       .usage=${session.tokenUsage}
                     ></token-figures>
+                  </div>
+                  <div class="metric cost">
                     · ${formatCost(session.estimatedCost)}
                   </div>
                 </div>

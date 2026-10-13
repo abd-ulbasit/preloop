@@ -2269,6 +2269,74 @@ describe('RuntimeSessionsView', () => {
       expect(loadMoreButton(element)).to.equal(null);
     });
 
+    it('keeps a linked session that is not on the first page (#1585)', async () => {
+      const linked = 'runtime-session-35';
+      window.history.replaceState(
+        {},
+        '',
+        `/console/runtime-sessions?sessionId=${linked}`
+      );
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/runtime-sessions?')) {
+          const params = new URL(url, window.location.origin).searchParams;
+          return listPage(
+            50,
+            Number(params.get('offset') ?? 0),
+            Number(params.get('limit') ?? 50)
+          );
+        }
+        if (url === `/api/v1/runtime-sessions/${linked}`) {
+          return new Response(
+            JSON.stringify({ session: sessionItem(linked) }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const element = (await fixture(
+        html`<runtime-sessions-view></runtime-sessions-view>`
+      )) as RuntimeSessionsView;
+      await waitUntil(
+        () => !(element as any).loading,
+        'Runtime sessions view did not finish loading'
+      );
+      await element.updateComplete;
+
+      expect((element as any).selectedSessionId).to.equal(linked);
+      expect(
+        new URLSearchParams(window.location.search).get('sessionId')
+      ).to.equal(linked);
+      const observer = element.shadowRoot!.querySelector(
+        'preloop-session-observer'
+      ) as HTMLElement & { sessions: Array<{ id: string }> };
+      expect(observer.sessions[0].id).to.equal(linked);
+      // The page and its count stay what the server said.
+      expect((element as any).sessions.items).to.have.length(SESSION_PAGE_SIZE);
+      expect(countLabel(element)).to.equal('Showing 20 of 50');
+    });
+
+    it('falls back to the newest session when a linked one cannot be read', async () => {
+      window.history.replaceState(
+        {},
+        '',
+        '/console/runtime-sessions?sessionId=gone'
+      );
+      stubPagedSessions(50);
+      const element = (await fixture(
+        html`<runtime-sessions-view></runtime-sessions-view>`
+      )) as RuntimeSessionsView;
+      await waitUntil(
+        () => !(element as any).loading,
+        'Runtime sessions view did not finish loading'
+      );
+      expect((element as any).selectedSessionId).to.equal('runtime-session-0');
+    });
+
     it('keeps the loaded rows when loading more fails', async () => {
       let failMore = false;
       fetchStub.callsFake(async (input: RequestInfo | URL) => {
