@@ -3,6 +3,7 @@ import { BrandConfig } from './brand-config';
 import {
   collectLandingPublicAssetPaths,
   landingImageSources,
+  socialImageProblems,
 } from './brand-landing-assets';
 
 function brandWithImages(partial: {
@@ -95,5 +96,31 @@ describe('landingImageSources', () => {
       '/assets/screenshots/quickstart/dark/agent_bubble-800.webp',
       '/assets/screenshots/quickstart/dark/agent_bubble-1600.webp',
     ]);
+  });
+});
+
+describe('social preview image', () => {
+  function brandWithSocialImage(og_image: string): BrandConfig {
+    return { landing: { meta: { og_image } } } as BrandConfig;
+  }
+
+  it('is validated for existence at build time', () => {
+    expect(
+      collectLandingPublicAssetPaths(
+        brandWithSocialImage('/assets/og/preloop-social.png')
+      )
+    ).to.deep.equal(['/assets/og/preloop-social.png']);
+  });
+
+  it('rejects SVG, which social networks render as a placeholder', () => {
+    expect(
+      socialImageProblems(brandWithSocialImage('/assets/mcp-firewall.svg'))
+    ).to.have.length(1);
+  });
+
+  it('accepts raster images', () => {
+    expect(
+      socialImageProblems(brandWithSocialImage('/assets/og/preloop-social.png'))
+    ).to.deep.equal([]);
   });
 });

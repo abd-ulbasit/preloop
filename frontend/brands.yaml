@@ -34,6 +34,7 @@ brands:
         description: "Preloop is the open-source AI agent control plane. One command onboards OpenClaw, Hermes, Claude Code, Codex CLI, Cursor, Gemini CLI, and any MCP-compatible agent, then routes their tool calls through the Preloop MCP Firewall and their model traffic through the Preloop Gateway — with human approvals, budgets, runtime observability, and audit trails across your whole fleet."
         og_description: "Onboard existing agents with `preloop agents discover`. Govern tool access with the MCP Firewall, route model traffic with budgets and attribution, approve sensitive actions from mobile or Slack, and keep searchable runtime evidence. Open source. Self-hostable."
         extended_description: "Preloop is the open-source AI agent control plane. It combines an MCP firewall for tool access, an AI model gateway for cost and attribution, policy-as-code with CEL, human-in-the-loop approvals (mobile, watch, Slack, Mattermost), runtime session observability, and audit trails — in a single self-hostable platform. The `preloop agents discover` command imports compatible local agent configs and transparently rewrites Claude Code, Codex CLI, Cursor, Gemini CLI, Hermes, OpenClaw, and OpenCode to route through Preloop without SDK changes."
+        og_image: "/assets/og/preloop-social.png"
         keywords: "AI agent control plane, open source AI agent control plane, MCP firewall, MCP gateway, AI agent governance, AI agent security, AI model gateway, LLM gateway self-hosted, AI agent observability, AI agent guardrails, human in the loop AI, AI agent approval workflow, Claude Code governance, Codex CLI governance, Cursor agent security, Gemini CLI governance, Hermes Agent governance, OpenClaw governance, OpenCode governance, AI agent audit trail, Preloop, MCP, Model Context Protocol"
 
       hero:
@@ -50,7 +51,6 @@ brands:
         # Unset by default: self-hosted landing pages serve their own users
         # and should not embed third-party content.
         # video_playlist_url: "https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID"
-        og_image: "/assets/og/preloop-social.png"
 
       get_started:
         title: "Onboard or connect your AI agent in minutes"
