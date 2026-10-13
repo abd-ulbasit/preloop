@@ -30,6 +30,24 @@ The installer discovers local agents, walks you through login/signup, and offers
 
 <!-- TODO screenshot: `claude-cli-version.png` -->
 
+## MCP servers missing in Claude
+
+If `claude mcp list` connects to Preloop but `/mcp` inside Claude reports no
+servers, check for `CLAUDE_CODE_SIMPLE` enabled (`1`, `true`, `yes`, or `on`) in
+`~/.claude/settings.json`, the project's `.claude/settings.json` or
+`.claude/settings.local.json`, or your shell environment. Simple mode disables
+automatic MCP discovery and hooks.
+Older Preloop CLI versions set this during model onboarding.
+
+With a CLI version containing the simple-mode fix, re-onboard Claude Code to
+remove the setting, then restart Claude. With an older CLI, remove
+`CLAUDE_CODE_SIMPLE` from the settings manually and unset it in your shell;
+re-onboarding with that CLI can reintroduce it. Verify `/mcp` shows Preloop and
+its tools inside the restarted application. A successful gateway probe or
+`claude mcp list` alone does not verify that the application loaded its tools.
+Re-onboarding repairs the managed settings file; remove any overrides in other
+settings files or your shell manually.
+
 ## Subscription credential recovery
 
 Preloop refreshes an onboarded Claude subscription automatically. Re-onboarding

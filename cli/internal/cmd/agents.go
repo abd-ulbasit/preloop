@@ -4140,6 +4140,12 @@ func buildManagedMCPEnrollmentPlan(agent AgentConfig, baseURL, token string) (ma
 	if err != nil {
 		return managedMCPEnrollmentPlan{}, err
 	}
+	if isClaudeCodeAgent(agent) {
+		if env, ok := asObjectMap(managedDoc["env"]); ok {
+			// Repair older enrollments even when model routing is skipped.
+			delete(env, "CLAUDE_CODE_SIMPLE")
+		}
+	}
 	container, err := adapter.EnsureServerContainer(managedDoc)
 	if err != nil {
 		return managedMCPEnrollmentPlan{}, err
@@ -4488,7 +4494,9 @@ func applyClaudeManagedGateway(
 	delete(env, "ANTHROPIC_AUTH_TOKEN")
 	env["ANTHROPIC_API_KEY"] = token
 	env["CLAUDE_CODE_USE_BEDROCK"] = "0"
-	env["CLAUDE_CODE_SIMPLE"] = "1"
+	// Simple mode skips automatic MCP discovery and hooks. Remove the value
+	// written by older onboarding versions so managed tools and approvals load.
+	delete(env, "CLAUDE_CODE_SIMPLE")
 	env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "0"
 	env["DISABLE_TELEMETRY"] = "1"
 	env["OTEL_METRICS_EXPORTER"] = "none"
@@ -6401,6 +6409,15 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		"validation_passed":       false,
 		"transport_ok":            false,
 		"authorization_header_ok": false,
+	}
+	// Simple mode prevents MCP discovery regardless of whether the server is
+	// registered. Report recovery before the missing-server early return.
+	if isClaudeCodeAgent(a.agent) {
+		env, _ := asObjectMap(doc["env"])
+		if envTruthy(fmt.Sprint(env["CLAUDE_CODE_SIMPLE"])) {
+			result["error"] = "CLAUDE_CODE_SIMPLE disables automatic MCP loading and hooks; re-onboard Claude Code and restart it."
+			return mergeNpmSidecarControlValidation(a.agent, doc, baseURL, result)
+		}
 	}
 	if !ok {
 		return mergeNpmSidecarControlValidation(a.agent, doc, baseURL, result)
