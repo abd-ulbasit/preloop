@@ -30,3 +30,18 @@ def test_thresholds_trigger_well_before_the_server_default():
     """The point of the migration: about 1% new rows, not 20%."""
     assert float(migration.SETTINGS["autovacuum_vacuum_insert_scale_factor"]) <= 0.02
     assert float(migration.SETTINGS["autovacuum_vacuum_scale_factor"]) <= 0.05
+
+
+def test_downgrade_clears_the_thresholds(db_session):
+    """Rolling back returns api_usage to the server-wide thresholds."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    with Operations.context(MigrationContext.configure(db_session.connection())):
+        migration.downgrade()
+    options = _reloptions(db_session)
+    for name in migration.SETTINGS:
+        assert options.get(name) is None, name
+    with Operations.context(MigrationContext.configure(db_session.connection())):
+        migration.upgrade()
+    assert _reloptions(db_session).keys() >= migration.SETTINGS.keys()
