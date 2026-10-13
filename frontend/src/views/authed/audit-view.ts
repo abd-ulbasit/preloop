@@ -325,19 +325,33 @@ export class AuditView extends AuthedElement {
     this._armLiveRefresh();
   }
 
-  /** The audit row a realtime message announces, when it says. */
+  /**
+   * The audit row a realtime message announces, when it says.
+   *
+   * The audit writer sends the row id (`audit_log_id`). The gateway's own
+   * event for a model request sends the usage id instead, which the audit
+   * row of that request carries in `details.api_usage_id`. Other events
+   * (agent lifecycle) carry neither and always refresh.
+   */
   private _liveEventId(message: unknown): string | null {
-    const payload = (message as { payload?: { audit_log_id?: unknown } })
-      ?.payload;
+    const payload = (
+      message as {
+        payload?: { audit_log_id?: unknown; api_usage_id?: unknown };
+      }
+    )?.payload;
     const id = payload?.audit_log_id;
-    return typeof id === 'string' && id ? id : null;
+    if (typeof id === 'string' && id) return id;
+    const usage = payload?.api_usage_id;
+    return typeof usage === 'string' && usage ? `usage:${usage}` : null;
   }
 
-  /** Every audit row id on screen: primary events and their sub-events. */
+  /** Every audit row id on screen, primary and sub-events, and usage ids. */
   private _shownEventIds(): Set<string> {
     const ids = new Set<string>();
     for (const group of this._groups) {
       ids.add(group.primary_event.id);
+      const usage = group.primary_event.details?.api_usage_id;
+      if (typeof usage === 'string' && usage) ids.add(`usage:${usage}`);
       for (const sub of group.sub_events) ids.add(sub.id);
     }
     return ids;

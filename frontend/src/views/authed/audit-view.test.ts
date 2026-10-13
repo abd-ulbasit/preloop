@@ -1903,6 +1903,50 @@ describe('AuditView', () => {
       element.remove();
     });
 
+    it('matches a gateway event to its audit row by usage id', async () => {
+      const gatewayRow = {
+        ...row('row-gw'),
+        primary_event: {
+          ...row('row-gw').primary_event,
+          action: 'model_gateway_request',
+          details: { api_usage_id: 'usage-7' },
+        },
+      };
+      const urls = grouped({ groups: [gatewayRow], total: 1 }, 500);
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._loading);
+      // What the gateway emits next to the audit writer's own event.
+      wsCallback?.({
+        type: 'audit_event',
+        payload: { action: 'model_gateway_request', api_usage_id: 'usage-7' },
+      });
+      wsCallback?.({
+        type: 'audit_event',
+        payload: { audit_log_id: 'row-gw' },
+      });
+      await waitUntil(() => !(element as any)._loading);
+      await sleep(900);
+      expect(urls).to.have.length(1);
+      element.remove();
+    });
+
+    it('still refreshes for an event that names no row', async function () {
+      this.timeout(6000);
+      const urls = grouped({ groups: [row('row-1')], total: 1 }, 300);
+      const element = document.createElement('audit-view') as AuditView;
+      document.body.appendChild(element);
+      await waitUntil(() => (element as any)._loading);
+      wsCallback?.({
+        type: 'audit_event',
+        payload: { action: 'managed_agent_updated', agent_id: 'a-1' },
+      });
+      await waitUntil(() => urls.length === 2, 'trailing refresh', {
+        timeout: 4000,
+      });
+      element.remove();
+    });
+
     it('still refreshes for a row the answer does not have', async function () {
       this.timeout(6000);
       const urls = grouped({ groups: [row('row-1')], total: 1 }, 300);
