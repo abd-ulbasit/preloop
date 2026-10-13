@@ -208,3 +208,37 @@ def test_lease_job_skips_runners_without_the_directory(monkeypatch) -> None:
     )
     assert result is with_dir
     assert claimed == [with_dir.id]
+
+
+def test_workspace_refuses_server_fallback() -> None:
+    config = {
+        "harness": "claude_code",
+        "workspace": WORKSPACE,
+        "harness_fallback": "fallback_server",
+        "fallback_model_identifier": "gpt-5",
+    }
+    assert "cannot fall back to hosted compute" in (
+        host_exec_flow_error(agent_type="claude_code", agent_config=config) or ""
+    )
+    config["harness_fallback"] = "fail"
+    assert host_exec_flow_error(agent_type="claude_code", agent_config=config) is None
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "harness", "refused"),
+    [
+        ("cursor", "cursor_cli", True),
+        ("devin", "devin_cli", True),
+        ("copilot", "copilot_cli", False),
+        ("claude_code", "claude_code", False),
+    ],
+)
+def test_workspace_with_preloop_tools_per_harness(
+    agent_type: str, harness: str, refused: bool
+) -> None:
+    config = {"harness": harness, "workspace": WORKSPACE}
+    error = host_exec_flow_error(
+        agent_type=agent_type, agent_config=config, uses_mcp=True
+    )
+    assert bool(error and "MCP configuration" in error) is refused
+    assert host_exec_flow_error(agent_type=agent_type, agent_config=config) is None

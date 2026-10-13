@@ -552,8 +552,21 @@ def host_exec_flow_error(
     agent_config: Any = None,
     runner_pool: Any = None,
     git_clone_config: Any = None,
+    uses_mcp: bool = False,
 ) -> Optional[str]:
-    """Return a validation error for invalid host-exec / hosted combinations."""
+    """Return a validation error for invalid host-exec / hosted combinations.
+
+    Args:
+        agent_type: Flow agent type.
+        agent_config: Flow agent configuration.
+        runner_pool: Flow runner pool.
+        git_clone_config: Flow checkout configuration.
+        uses_mcp: The flow grants Preloop MCP servers or tools, so a host
+            run receives a per-job MCP config.
+
+    Returns:
+        A validation message, or None when the combination is allowed.
+    """
     profile = host_exec_profile_name(agent_config)
     kind = _normalized_agent_type(agent_type)
     pool = (runner_pool or "").strip().lower() if isinstance(runner_pool, str) else ""
@@ -585,13 +598,33 @@ def host_exec_flow_error(
             workspace = host_exec_workspace(agent_config)
         except ValueError as exc:
             return str(exc)
-        if workspace is not None and _clone_enabled(git_clone_config):
-            return (
-                "a host flow that runs in an authorized directory cannot also "
-                "clone repositories; disable git_clone_config or remove "
-                "agent_config.workspace"
-            )
+        if workspace is not None:
+            if _clone_enabled(git_clone_config):
+                return (
+                    "a host flow that runs in an authorized directory cannot "
+                    "also clone repositories; disable git_clone_config or "
+                    "remove agent_config.workspace"
+                )
+            if harness_fallback_mode(agent_config) == HARNESS_FALLBACK_SERVER:
+                return (
+                    "a host flow that runs in an authorized directory cannot "
+                    "fall back to hosted compute, where the directory does not "
+                    "exist; use harness_fallback queue or fail"
+                )
+            if uses_mcp and kind in _WORKSPACE_MCP_IN_CWD:
+                return (
+                    f"{_HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
+                    "working directory, so a flow with Preloop tools cannot run "
+                    "it in an authorized directory; remove the tools or "
+                    "agent_config.workspace"
+                )
     return None
+
+
+#: Host CLIs that read the per-job MCP config from their working directory.
+#: In an authorized directory the runner would have to write into the
+#: operator's project, so it refuses; the API refuses the flow up front.
+_WORKSPACE_MCP_IN_CWD = frozenset({"cursor", "devin"})
 
 
 def _clone_enabled(git_clone_config: Any) -> bool:

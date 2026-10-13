@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestJobHostExecWorkspace(t *testing.T) {
@@ -159,16 +162,70 @@ func TestHostJobAuthorizedDirectoryDirtyTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "notes.md"), []byte("uncommitted\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newHostExecJob(workspaceJob(nil)); err == nil || !strings.HasPrefix(err.Error(), workspaceErrDirty) {
+	// Lease time stays fast: the dirty check is deferred to the job goroutine.
+	run, err := newHostExecJob(workspaceJob(nil))
+	if err != nil {
+		t.Fatalf("newHostExecJob must not run the dirty check: %v", err)
+	}
+	run.cleanup()
+	if run.dirtyCheckDir != project {
+		t.Fatalf("dirty check not scheduled: %q", run.dirtyCheckDir)
+	}
+	if err := hostExecWorkspaceDirtyCheck(context.Background(), run.dirtyCheckDir, run.workspaceLabel); err == nil || !strings.HasPrefix(err.Error(), workspaceErrDirty) {
 		t.Fatalf("dirty tree accepted without allow_dirty: %v", err)
 	}
+	if out, err := exec.Command("git", "-C", project, "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", project, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "x").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v %s", err, out)
+	}
+	if err := hostExecWorkspaceDirtyCheck(context.Background(), project, "proj"); err != nil {
+		t.Fatalf("clean tree refused: %v", err)
+	}
+}
+
+func TestHostJobAuthorizedDirectoryAllowDirtySkipsCheck(t *testing.T) {
+	setupClaudeHost(t, true, `cat >/dev/null`)
+	project := claudeAuthorizedProject(t, authorizedDirModeWrite)
 	run, err := newHostExecJob(workspaceJob(map[string]any{"allow_dirty": true}))
 	if err != nil {
 		t.Fatalf("allow_dirty refused: %v", err)
 	}
 	run.cleanup()
-	if run.cmd.Dir != project {
-		t.Fatalf("dir = %q", run.cmd.Dir)
+	if run.cmd.Dir != project || run.dirtyCheckDir != "" {
+		t.Fatalf("dir = %q dirty check = %q", run.cmd.Dir, run.dirtyCheckDir)
+	}
+}
+
+func TestBeginHostExecJobFailsDirtyTreeBeforeStart(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	marker := filepath.Join(t.TempDir(), "started")
+	setupClaudeHost(t, true, `touch '`+marker+`'`)
+	project := claudeAuthorizedProject(t, authorizedDirModeWrite)
+	if out, err := exec.Command("git", "-C", project, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(project, "notes.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jobs := newRunnerJobs(1)
+	var halted atomic.Bool
+	if err := beginHostExecJob(nil, workspaceJob(nil), claudeTestExecID, &halted, jobs); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case outcome := <-jobs.outcomes:
+		if outcome.status != "FAILED" || !strings.HasPrefix(outcome.errMsg, workspaceErrDirty) {
+			t.Fatalf("outcome = %+v", outcome)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("no outcome")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("claude started in a dirty directory")
 	}
 }
 

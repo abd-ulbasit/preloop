@@ -3276,6 +3276,10 @@ class FlowExecutionOrchestrator:
                 agent_config=self.flow.agent_config,
                 runner_pool=self.flow.runner_pool,
                 git_clone_config=clone_config,
+                uses_mcp=bool(
+                    getattr(self.flow, "allowed_mcp_tools", None)
+                    or getattr(self.flow, "allowed_mcp_servers", None)
+                ),
             ) or host_exec_unavailable_reason(
                 git_clone_config=clone_config,
                 custom_commands=self.flow.custom_commands,

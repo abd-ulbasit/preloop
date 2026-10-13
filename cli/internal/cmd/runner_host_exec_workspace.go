@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -72,6 +73,20 @@ func validateHostExecWorkspaceJob(spec *sessionWorkspaceSpec, harness string, ch
 	}
 	if mcpToken != "" && !hostExecMCPConfigByFlag(harness) {
 		return fmt.Errorf("host_exec_workspace_conflict: %s reads MCP configuration from its working directory; remove the flow's Preloop tools or use a managed workspace", harness)
+	}
+	return nil
+}
+
+// hostExecWorkspaceDirtyCheck refuses a git work tree with uncommitted
+// changes. It runs on the job goroutine, after the lease is accepted and
+// before the CLI starts, so a slow `git status` never blocks heartbeats.
+func hostExecWorkspaceDirtyCheck(ctx context.Context, dir, label string) error {
+	dirty, err := workspaceDirty(ctx, dir)
+	if err != nil {
+		return workspaceError(workspaceErrDirty, "%v", err)
+	}
+	if dirty {
+		return workspaceError(workspaceErrDirty, "directory %s has uncommitted changes; commit or stash them, or set allow_dirty on the flow", label)
 	}
 	return nil
 }

@@ -636,10 +636,13 @@ type hostExecRun struct {
 	// workspaceLabel names the authorized directory the run works in, or
 	// is empty for a fresh execution directory.
 	workspaceLabel string
-	checkout       *hostExecCheckout
-	publication    *hostExecPublication
-	resume         *hostExecResume
-	cleanup        func()
+	// dirtyCheckDir is the authorized directory whose git tree must be
+	// clean before the CLI starts, or empty (managed run, or allow_dirty).
+	dirtyCheckDir string
+	checkout      *hostExecCheckout
+	publication   *hostExecPublication
+	resume        *hostExecResume
+	cleanup       func()
 }
 
 func newHostExecJobCmd(job map[string]any) (*exec.Cmd, string, time.Duration, error) {
@@ -730,7 +733,9 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	// nothing behind.
 	var authorized *sessionWorkspace
 	if workspaceSpec != nil {
-		authorized, err = resolveSessionWorkspace(context.Background(), "", workspaceSpec, sessionWorkspaceOptions{Harness: wantHarness, ReadOnlyUnsupported: true})
+		// The git dirty check can take seconds; it runs on the job
+		// goroutine (hostExecWorkspaceDirtyCheck), not on the message loop.
+		authorized, err = resolveSessionWorkspace(context.Background(), "", workspaceSpec, sessionWorkspaceOptions{Harness: wantHarness, ReadOnlyUnsupported: true, DeferDirtyCheck: true})
 		if err != nil {
 			return nil, err
 		}
@@ -744,8 +749,12 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	}
 	workspace := scratch
 	workspaceLabel := ""
+	dirtyCheckDir := ""
 	if authorized != nil {
 		workspace, workspaceLabel = authorized.Dir, authorized.Label
+		if !workspaceSpec.AllowDirty {
+			dirtyCheckDir = authorized.Dir
+		}
 	}
 	bin, argvPrefix, err := resolveHostExecCommand(profile.Executable)
 	if err != nil {
@@ -840,6 +849,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 		timeout:        hostExecTimeout(profile, job),
 		workspace:      workspace,
 		workspaceLabel: workspaceLabel,
+		dirtyCheckDir:  dirtyCheckDir,
 		checkout:       checkout,
 		publication:    publication,
 		resume:         resume,
@@ -980,6 +990,23 @@ func beginHostExecJob(
 		}
 		if run.workspaceLabel != "" {
 			buffer.note("preloop runner: working in authorized directory " + run.workspaceLabel)
+		}
+		if run.dirtyCheckDir != "" {
+			ctx, cancel := context.WithCancel(context.Background())
+			if !gate.setCancel(cancel) {
+				failed("STOPPED", "")
+				return
+			}
+			err := hostExecWorkspaceDirtyCheck(ctx, run.dirtyCheckDir, run.workspaceLabel)
+			cancel()
+			switch {
+			case halted.Load():
+				failed("STOPPED", "")
+				return
+			case err != nil:
+				failed("FAILED", err.Error())
+				return
+			}
 		}
 		if run.checkout != nil {
 			checkoutTimeout := hostExecCheckoutTimeout

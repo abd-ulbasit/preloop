@@ -170,6 +170,7 @@ def _reject_host_exec_flow(
     db: Optional[Session] = None,
     account_id: Any = None,
     current_user: Any = None,
+    uses_mcp: bool = False,
 ) -> None:
     """Reject hosted Cursor / publication / invalid host-exec combinations.
 
@@ -182,6 +183,7 @@ def _reject_host_exec_flow(
         agent_config=agent_config,
         runner_pool=runner_pool,
         git_clone_config=git_clone_config,
+        uses_mcp=uses_mcp,
     )
     if error:
         raise HTTPException(status_code=400, detail=error)
@@ -342,6 +344,7 @@ def create_flow(
         db=db,
         account_id=current_user.account_id,
         current_user=current_user,
+        uses_mcp=bool(flow_in.allowed_mcp_tools or flow_in.allowed_mcp_servers),
     )
 
     # If creating from a preset, validate and compute source hashes for template tracking
@@ -2978,6 +2981,18 @@ def update_flow(
         db=db,
         account_id=current_user.account_id,
         current_user=current_user,
+        uses_mcp=bool(
+            (
+                flow_in.allowed_mcp_tools
+                if flow_in.allowed_mcp_tools is not None
+                else flow.allowed_mcp_tools
+            )
+            or (
+                flow_in.allowed_mcp_servers
+                if flow_in.allowed_mcp_servers is not None
+                else flow.allowed_mcp_servers
+            )
+        ),
     )
 
     old_enabled = flow.is_enabled
