@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from typing import Any, Dict, List, Literal, Optional, Tuple
 import gc
 import logging
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 import openai
 import os
 import json
@@ -24,6 +27,9 @@ from preloop.schemas.issue_duplicate import (
     IssueDuplicateSuggestionResponse,
     IssueDuplicateResolutionRequest,
     IssueDuplicateResolutionResponse,
+    IssueDuplicateVerdictBatchRequest,
+    IssueDuplicateVerdictBatchResponse,
+    IssueDuplicateVerdictItem,
 )
 from preloop.models.crud import crud_issue_duplicate
 
@@ -52,6 +58,7 @@ from preloop.models.models.account import Account
 from preloop.models.models.user import User  # Import Account model
 from preloop.models.models.project import Project
 from preloop.models.models.issue import Issue
+from preloop.models.models.tracker import Tracker
 
 from .issues import update_issue
 
@@ -183,6 +190,30 @@ def check_or_create_issue_duplicate(
             },
         )
 
+    return _classify_and_store(
+        db,
+        issue1=issue1,
+        issue2=issue2,
+        default_model=default_model,
+        settings=settings,
+    )
+
+
+def _classify_and_store(
+    db: Session,
+    *,
+    issue1: Issue,
+    issue2: Issue,
+    default_model: Any,
+    settings: Settings,
+) -> Any:
+    """Ask the default model about one pair and store its verdict.
+
+    Shared by ``GET /issue-duplicates/check`` and the background checks the
+    batch endpoint starts. Raises the same ``HTTPException``s the single
+    check has always returned.
+    """
+    issue1_id, issue2_id = issue1.id, issue2.id
     logger.info(f"Using AI model '{default_model.model_identifier}'.")
 
     prompts_config = load_duplicates_prompts_config(settings.PROMPTS_FILE)
@@ -323,6 +354,222 @@ def check_or_create_issue_duplicate(
                 "message": f"AI model processing error: {str(e)}",
             },
         )
+
+
+# --- Batched verdicts (one call per Duplicates page) -------------------------
+#
+# ``GET /issue-duplicates/check`` answers one pair and, for a new pair, waits
+# for the model: 10 to 14 s per pair on prod, with a request thread and a
+# pooled connection held the whole time. The console sent one per row. The
+# batch endpoint below answers every pair on a page from stored verdicts in a
+# single query and hands new pairs to a small background pool; the console
+# asks again for the pending ones until they are done.
+
+_VERDICT_FAILURE_TTL_SECONDS = 300.0
+_verdict_lock = threading.Lock()
+_verdict_inflight: Dict[Tuple[str, str, str], Future] = {}
+_verdict_failures: Dict[Tuple[str, str, str], Tuple[str, float]] = {}
+_verdict_executor: Optional[ThreadPoolExecutor] = None
+
+
+def _verdict_concurrency() -> int:
+    raw = os.getenv("ISSUE_DUPLICATE_VERDICT_CONCURRENCY", "2")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 2
+
+
+def _get_verdict_executor() -> ThreadPoolExecutor:
+    global _verdict_executor
+    with _verdict_lock:
+        if _verdict_executor is None:
+            _verdict_executor = ThreadPoolExecutor(
+                max_workers=_verdict_concurrency(),
+                thread_name_prefix="issue-duplicate-verdict",
+            )
+        return _verdict_executor
+
+
+def _pair_key(account_id: Any, a: Any, b: Any) -> Tuple[str, str, str]:
+    low, high = sorted((str(a), str(b)))
+    return (str(account_id), low, high)
+
+
+def _open_verdict_session() -> Session:
+    """A session of its own: the request's session is gone by then."""
+    from preloop.models.db.session import get_session_factory
+
+    return get_session_factory()()
+
+
+def _failure_code(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 429:
+            return "rate_limited"
+        detail = exc.detail
+        if isinstance(detail, dict) and detail.get("code"):
+            return str(detail["code"])
+        if "not configured" in str(detail):
+            return "not_configured"
+    return "ai_model_error"
+
+
+def _run_verdict_check(
+    key: Tuple[str, str, str],
+    account_id: Any,
+    issue1_id: Any,
+    issue2_id: Any,
+    settings: Settings,
+) -> None:
+    """Background body: check one pair unless someone stored it meanwhile."""
+    db = _open_verdict_session()
+    try:
+        if crud_issue_duplicate.get_by_issue_ids(
+            db, issue1_id=issue1_id, issue2_id=issue2_id, account_id=account_id
+        ):
+            return
+        issue1 = crud_issue.get(db, id=issue1_id, account_id=account_id)
+        issue2 = crud_issue.get(db, id=issue2_id, account_id=account_id)
+        model = crud_ai_model.get_default_active_model(db, account_id=account_id)
+        if not issue1 or not issue2 or not model:
+            return
+        _classify_and_store(
+            db, issue1=issue1, issue2=issue2, default_model=model, settings=settings
+        )
+    except Exception as exc:  # recorded for the next poll, never raised
+        logger.warning("Background duplicate verdict for %s failed: %s", key, exc)
+        with _verdict_lock:
+            _verdict_failures[key] = (_failure_code(exc), time.monotonic())
+    finally:
+        with _verdict_lock:
+            _verdict_inflight.pop(key, None)
+        try:
+            db.close()
+        except Exception:  # pragma: no cover - close must not mask the result
+            logger.debug("Closing the verdict session failed", exc_info=True)
+
+
+def _schedule_verdict_check(
+    key: Tuple[str, str, str],
+    account_id: Any,
+    issue1_id: Any,
+    issue2_id: Any,
+    settings: Settings,
+) -> None:
+    """Start a background check for ``key`` unless one is already running."""
+    with _verdict_lock:
+        if key in _verdict_inflight:
+            return
+        # Reserve the slot before submitting so a fast worker's cleanup
+        # cannot run ahead of the bookkeeping.
+        _verdict_inflight[key] = Future()
+    try:
+        future = _get_verdict_executor().submit(
+            _run_verdict_check, key, account_id, issue1_id, issue2_id, settings
+        )
+    except Exception:
+        with _verdict_lock:
+            _verdict_inflight.pop(key, None)
+        raise
+    with _verdict_lock:
+        if key in _verdict_inflight:
+            _verdict_inflight[key] = future
+
+
+def _recent_failure(key: Tuple[str, str, str]) -> Optional[str]:
+    with _verdict_lock:
+        failure = _verdict_failures.get(key)
+        if failure is None:
+            return None
+        code, at = failure
+        if time.monotonic() - at > _VERDICT_FAILURE_TTL_SECONDS:
+            _verdict_failures.pop(key, None)
+            return None
+        return code
+
+
+@router.post(
+    "/issue-duplicates/verdicts",
+    response_model=IssueDuplicateVerdictBatchResponse,
+    tags=["Issue Duplicates"],
+    summary="AI verdicts for a page of duplicate pairs",
+)
+def get_issue_duplicate_verdicts(
+    *,
+    body: IssueDuplicateVerdictBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    settings: Settings = Depends(get_settings),
+) -> IssueDuplicateVerdictBatchResponse:
+    """Stored verdicts for every pair at once; new pairs are checked in the background.
+
+    Answers from the database only, so it returns in milliseconds. A pair
+    without a stored verdict comes back ``pending`` (a background check is
+    running) or ``no_model`` (no default AI model, nothing was started).
+    A failed check is reported as ``failed`` for five minutes, or until the
+    caller sends ``retry: true``. Ask again with the pending pairs to pick
+    up their verdicts.
+    """
+    account_id = current_user.account_id
+    requested = [(p.issue1_id, p.issue2_id) for p in body.pairs]
+
+    stored = {
+        _pair_key(account_id, row.issue1_id, row.issue2_id): row
+        for row in crud_issue_duplicate.get_many_by_pairs(
+            db, pairs=requested, account_id=account_id
+        )
+    }
+    missing = [
+        pair
+        for pair in requested
+        if pair[0] != pair[1] and _pair_key(account_id, *pair) not in stored
+    ]
+
+    owned: set[str] = set()
+    default_model = None
+    if missing:
+        ids = {i for pair in missing for i in pair}
+        owned = {
+            str(issue_id)
+            for (issue_id,) in db.query(Issue.id)
+            .join(Tracker, Issue.tracker_id == Tracker.id)
+            .filter(Issue.id.in_(ids), Tracker.account_id == account_id)
+            .all()
+        }
+        default_model = crud_ai_model.get_default_active_model(
+            db, account_id=account_id
+        )
+
+    items: List[IssueDuplicateVerdictItem] = []
+    for issue1_id, issue2_id in requested:
+        key = _pair_key(account_id, issue1_id, issue2_id)
+        item = IssueDuplicateVerdictItem(
+            issue1_id=issue1_id, issue2_id=issue2_id, state="pending"
+        )
+        row = stored.get(key)
+        if row is not None:
+            item.state = "done"
+            item.verdict = IssueDuplicate.model_validate(row)
+        elif issue1_id == issue2_id or not {str(issue1_id), str(issue2_id)} <= owned:
+            item.state = "not_found"
+        elif default_model is None:
+            item.state = "no_model"
+        else:
+            if body.retry:
+                with _verdict_lock:
+                    _verdict_failures.pop(key, None)
+            code = _recent_failure(key)
+            if code is not None:
+                item.state = "failed"
+                item.error_code = code
+            elif body.analyze:
+                _schedule_verdict_check(key, account_id, issue1_id, issue2_id, settings)
+        items.append(item)
+
+    return IssueDuplicateVerdictBatchResponse(
+        items=items, pending=sum(1 for item in items if item.state == "pending")
+    )
 
 
 @router.patch(

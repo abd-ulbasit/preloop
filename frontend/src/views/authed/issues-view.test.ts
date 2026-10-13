@@ -34,7 +34,38 @@ interface StubOpts {
   duplicates?: unknown[];
   duplicatesStatus?: number;
   aiStatus?: { configured: boolean; model_name: string | null };
-  checkHandler?: (url: string) => Promise<Response> | Response;
+  verdictHandler?: (
+    pairs: { issue1_id: string; issue2_id: string }[],
+    body: { retry?: boolean }
+  ) => Promise<Response> | Response;
+}
+
+const doneFor = (pairs: { issue1_id: string; issue2_id: string }[]) =>
+  new Response(
+    JSON.stringify({
+      items: pairs.map((p) => ({
+        ...p,
+        state: 'done',
+        verdict: { decision: 'duplicate', reason: 'same bug' },
+      })),
+      pending: 0,
+    }),
+    { status: 200 }
+  );
+
+function verdictCalls(stub: sinon.SinonStub) {
+  return stub
+    .getCalls()
+    .filter((call) =>
+      String(call.args[0]).includes('/issue-duplicates/verdicts')
+    )
+    .map(
+      (call) =>
+        JSON.parse(String((call.args[1] as RequestInit).body)) as {
+          pairs: { issue1_id: string; issue2_id: string }[];
+          retry: boolean;
+        }
+    );
 }
 
 function stubFetch(opts: StubOpts = {}) {
@@ -43,11 +74,11 @@ function stubFetch(opts: StubOpts = {}) {
     duplicates = [],
     duplicatesStatus = 200,
     aiStatus = { configured: true, model_name: 'gpt-test' },
-    checkHandler,
+    verdictHandler,
   } = opts;
   return sinon
     .stub(window, 'fetch')
-    .callsFake(async (input: RequestInfo | URL) => {
+    .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
         typeof input === 'string'
           ? input
@@ -61,10 +92,11 @@ function stubFetch(opts: StubOpts = {}) {
       if (url.includes('/api/v1/issue-duplicates/ai-status')) {
         return json(aiStatus);
       }
-      // check must be matched before the broader issue-duplicates route.
-      if (url.includes('/api/v1/issue-duplicates/check')) {
-        if (checkHandler) return checkHandler(url);
-        return json({ decision: 'duplicate', reason: 'same bug' });
+      // verdicts must be matched before the broader issue-duplicates route.
+      if (url.includes('/api/v1/issue-duplicates/verdicts')) {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        if (verdictHandler) return verdictHandler(body.pairs, body);
+        return doneFor(body.pairs);
       }
       if (url.includes('/api/v1/issue-duplicates')) {
         if (duplicatesStatus !== 200) return json({}, duplicatesStatus);
@@ -142,50 +174,76 @@ describe('IssuesView', () => {
     expect(el.shadowRoot?.querySelector('.error')).to.exist;
   });
 
-  it('renders verdict per row while another request is pending', async () => {
-    let resolveSlow: ((value: Response) => void) | undefined;
+  it('asks for every verdict on the page in one call', async () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
-      duplicates: [makePair(1), makePair(2)],
-      checkHandler: (url) => {
-        const json = (data: unknown) =>
-          new Response(JSON.stringify(data), { status: 200 });
-        if (url.includes('i1a')) {
-          return json({ decision: 'duplicate', reason: 'same' });
-        }
-        return new Promise((resolve) => {
-          resolveSlow = resolve;
-        });
-      },
+      duplicates: [1, 2, 3, 4, 5, 6].map(makePair),
     });
     const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
     await waitUntil(
       () => {
-        const state = (
+        const v = (
           el as unknown as { _verdicts: Record<string, { state: string }> }
         )._verdicts;
-        return (
-          state['i1a-i1b']?.state === 'done' &&
-          state['i2a-i2b']?.state === 'checking'
+        return [1, 2, 3, 4, 5, 6].every(
+          (n) => v[`i${n}a-i${n}b`]?.state === 'done'
         );
       },
-      'fast verdict should finish while the second response is still pending',
-      { timeout: 10000 }
+      'every row gets its verdict',
+      { timeout: 4000 }
     );
+    const calls = verdictCalls(fetchStub);
+    expect(calls.length).to.equal(1);
+    expect(calls[0].pairs.length).to.equal(6);
+    expect(
+      fetchStub
+        .getCalls()
+        .filter((call) =>
+          String(call.args[0]).includes('/issue-duplicates/check')
+        ).length
+    ).to.equal(0);
     await el.updateComplete;
-    const verdicts = (
-      el as unknown as { _verdicts: Record<string, { state: string }> }
-    )._verdicts;
-    expect(verdicts['i1a-i1b']?.state).to.equal('done');
-    expect(verdicts['i2a-i2b']?.state).to.equal('checking');
-    const firstCell = el.shadowRoot?.querySelector('#verdict-i1a-i1b');
-    expect(firstCell, 'first verdict cell').to.exist;
-    expect(firstCell?.textContent).to.contain('Duplicate');
-    resolveSlow?.(
-      new Response(JSON.stringify({ decision: 'overlapping' }), {
-        status: 200,
-      })
+    expect(
+      el.shadowRoot?.querySelector('#verdict-i1a-i1b')?.textContent
+    ).to.contain('Duplicate');
+  });
+
+  it('renders stored verdicts at once and polls only the pending pairs', async () => {
+    let round = 0;
+    fetchStub = stubFetch({
+      projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
+      duplicates: [makePair(1), makePair(2)],
+      verdictHandler: (pairs) => {
+        round += 1;
+        const items = pairs.map((p) =>
+          p.issue1_id === 'i1a' || round > 1
+            ? { ...p, state: 'done', verdict: { decision: 'duplicate' } }
+            : { ...p, state: 'pending' }
+        );
+        return new Response(JSON.stringify({ items, pending: 0 }), {
+          status: 200,
+        });
+      },
+    });
+    const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
+    const verdicts = () =>
+      (el as unknown as { _verdicts: Record<string, { state: string }> })
+        ._verdicts;
+    await waitUntil(
+      () =>
+        verdicts()['i1a-i1b']?.state === 'done' &&
+        verdicts()['i2a-i2b']?.state === 'checking',
+      'stored verdict shows while the new pair is checked',
+      { timeout: 4000 }
     );
+    await waitUntil(
+      () => verdicts()['i2a-i2b']?.state === 'done',
+      'the pending pair settles on the next poll',
+      { timeout: 6000 }
+    );
+    const calls = verdictCalls(fetchStub);
+    expect(calls.length).to.equal(2);
+    expect(calls[1].pairs.map((p) => p.issue1_id)).to.deep.equal(['i2a']);
   });
 
   it('shows no-model state and makes zero verdict calls when ai-status is unconfigured', async () => {
@@ -197,12 +255,7 @@ describe('IssuesView', () => {
     const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
     await tick(300);
     await el.updateComplete;
-    const checkCalls = fetchStub
-      .getCalls()
-      .filter((call) =>
-        String(call.args[0]).includes('/issue-duplicates/check')
-      );
-    expect(checkCalls.length).to.equal(0);
+    expect(verdictCalls(fetchStub).length).to.equal(0);
     const verdicts = (
       el as unknown as { _verdicts: Record<string, { state: string }> }
     )._verdicts;
@@ -210,11 +263,11 @@ describe('IssuesView', () => {
     expect(el.shadowRoot?.textContent).to.contain('No AI model');
   });
 
-  it('stops calling check after the verdict service fails (no 503 storm)', async () => {
+  it('marks every row failed after one failed call (no 503 storm)', async () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
       duplicates: [1, 2, 3, 4, 5, 6].map(makePair),
-      checkHandler: () =>
+      verdictHandler: () =>
         new Response(JSON.stringify({ detail: 'unavailable' }), {
           status: 503,
         }),
@@ -232,30 +285,27 @@ describe('IssuesView', () => {
       'every row settles as failed',
       { timeout: 4000 }
     );
-    const checkCalls = fetchStub
-      .getCalls()
-      .filter((call) =>
-        String(call.args[0]).includes('/issue-duplicates/check')
-      );
-    // At most one call per concurrent worker before the breaker trips.
-    expect(checkCalls.length).to.be.at.most(2);
+    expect(verdictCalls(fetchStub).length).to.equal(1);
   });
 
-  it('keeps checking other rows after a per-pair 404', async () => {
+  it('keeps the other rows when one pair is not found or failed', async () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
       duplicates: [1, 2, 3, 4].map(makePair),
-      checkHandler: (url) =>
-        url.includes('i1a')
-          ? new Response(
-              JSON.stringify({ detail: 'Issue(s) not found: i1a.' }),
-              {
-                status: 404,
-              }
-            )
-          : new Response(JSON.stringify({ decision: 'duplicate' }), {
-              status: 200,
-            }),
+      verdictHandler: (pairs) =>
+        new Response(
+          JSON.stringify({
+            items: pairs.map((p) =>
+              p.issue1_id === 'i1a'
+                ? { ...p, state: 'not_found' }
+                : p.issue1_id === 'i2a'
+                  ? { ...p, state: 'failed', error_code: 'rate_limited' }
+                  : { ...p, state: 'done', verdict: { decision: 'duplicate' } }
+            ),
+            pending: 0,
+          }),
+          { status: 200 }
+        ),
     });
     const el = (await fixture(html`<issues-view></issues-view>`)) as IssuesView;
     await waitUntil(
@@ -263,9 +313,13 @@ describe('IssuesView', () => {
         const v = (
           el as unknown as { _verdicts: Record<string, { state: string }> }
         )._verdicts;
-        return [2, 3, 4].every((n) => v[`i${n}a-i${n}b`]?.state === 'done');
+        return (
+          v['i1a-i1b']?.state === 'failed' &&
+          v['i2a-i2b']?.state === 'failed' &&
+          [3, 4].every((n) => v[`i${n}a-i${n}b`]?.state === 'done')
+        );
       },
-      'rows after the 404 still get verdicts',
+      'per-pair failures do not affect the other rows',
       { timeout: 4000 }
     );
   });
@@ -274,7 +328,8 @@ describe('IssuesView', () => {
     fetchStub = stubFetch({
       projects: [{ id: 'p1-xxxx', name: 'Project 1', key: 'P1' }],
       duplicates: [makePair(1)],
-      checkHandler: () => {
+      verdictHandler: (pairs, body) => {
+        if (body.retry) return doneFor(pairs);
         const timeoutError = new Error('Request timed out');
         timeoutError.name = 'TimeoutError';
         return Promise.reject(timeoutError);
@@ -285,13 +340,10 @@ describe('IssuesView', () => {
       () =>
         (el as unknown as { _verdicts: Record<string, { state: string }> })
           ._verdicts['i1a-i1b']?.state === 'timeout',
-      'timeout verdict after the check request rejects',
+      'timeout verdict after the verdicts request rejects',
       { timeout: 4000 }
     );
-    const verdicts = (
-      el as unknown as { _verdicts: Record<string, { state: string }> }
-    )._verdicts;
-    expect(verdicts['i1a-i1b']?.state).to.equal('timeout');
+    await el.updateComplete;
     const retry = el.shadowRoot?.querySelector(
       '#verdict-i1a-i1b sl-button'
     ) as HTMLElement;
@@ -299,13 +351,17 @@ describe('IssuesView', () => {
     expect(retry.textContent).to.contain('Review');
     expect(retry.textContent).to.not.contain('Retry');
     retry.click();
-    await tick(100);
-    const checkCalls = fetchStub
-      .getCalls()
-      .filter((call) =>
-        String(call.args[0]).includes('/issue-duplicates/check')
-      );
-    expect(checkCalls.length).to.be.greaterThan(1);
+    await waitUntil(
+      () =>
+        (el as unknown as { _verdicts: Record<string, { state: string }> })
+          ._verdicts['i1a-i1b']?.state === 'done',
+      'Review asks again with retry',
+      { timeout: 4000 }
+    );
+    const calls = verdictCalls(fetchStub);
+    expect(calls.length).to.equal(2);
+    expect(calls[1].retry).to.equal(true);
+    expect(calls[1].pairs.length).to.equal(1);
   });
 
   it('leads with Resolve as an outline action and a chip status', async () => {
