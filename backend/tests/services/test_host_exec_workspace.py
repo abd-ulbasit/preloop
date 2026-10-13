@@ -242,3 +242,32 @@ def test_workspace_with_preloop_tools_per_harness(
     )
     assert bool(error and "MCP configuration" in error) is refused
     assert host_exec_flow_error(agent_type=agent_type, agent_config=config) is None
+
+
+def test_orchestrator_never_falls_back_with_a_workspace(monkeypatch) -> None:
+    """A saved row that predates the save-time check still never runs hosted."""
+    from preloop.services.flow_orchestrator import FlowExecutionOrchestrator
+
+    monkeypatch.setattr(crud_flow_runner, "find_matching", lambda db, **kw: [])
+    config = {
+        "harness": "claude_code",
+        "harness_fallback": "fallback_server",
+        "fallback_model_identifier": "gpt-5.2",
+        "workspace": WORKSPACE,
+    }
+    orchestrator = FlowExecutionOrchestrator.__new__(FlowExecutionOrchestrator)
+    orchestrator.db = MagicMock()
+    orchestrator.agent_type = "claude_code"
+    orchestrator.ai_model = None
+    orchestrator.trigger_event_data = {}
+    orchestrator.execution_log = SimpleNamespace(routing_reason=None, billing_mode=None)
+    orchestrator.flow = SimpleNamespace(
+        agent_type="claude_code",
+        runner_pool="mac",
+        account_id=uuid4(),
+        agent_config=config,
+    )
+    with pytest.raises(ValueError, match="cannot fall back to hosted compute"):
+        orchestrator._apply_harness_routing_decision()
+    assert orchestrator.agent_type == "claude_code"
+    assert orchestrator.execution_log.routing_reason is None
