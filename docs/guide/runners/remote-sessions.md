@@ -124,6 +124,67 @@ harness's live sessions with `stopped_on_host`. To refuse every remote session
 on the machine regardless of the per-harness setting, set
 `"sessions": {"enabled": false}` in `~/.preloop/runner.json`.
 
+## Headless hosts (no keychain)
+
+On a Linux host with no system credential store (a container or a minimal
+server), `copilot login --with-token` can finish with `Login succeeded, but
+the token was not saved. Install a system keychain or rerun login and accept
+plaintext storage`. The plaintext prompt is interactive, so a non-interactive
+setup never stores a login. The runner then reports Copilot signed out and
+refuses the session with `harness_signed_out`.
+
+Give the runner `COPILOT_GITHUB_TOKEN` or `GH_TOKEN` in its own environment
+(`GITHUB_TOKEN` is accepted the same way). Copilot CLI accepts a GitHub CLI
+(`gh`) OAuth token and a fine-grained personal access token with the Copilot
+Requests permission (verified with Copilot CLI 1.0.96). The host-exec
+allowlist forwards environment names that start with `COPILOT_` or `GH_`,
+plus `GITHUB_TOKEN`, to the Copilot process. It still removes
+`COPILOT_PROVIDER_*` and `COPILOT_ALLOW_ALL`, and it does not forward the
+runner's Preloop credentials.
+
+The inventory reports `login_state: signed_in` when one of those three names
+is set. It checks the name only and never reads the value, so the token
+never leaves the host. A run that later fails with no authentication
+information still marks Copilot signed out until a run succeeds; see the
+[Linux quickstart](quickstart-linux.md#harnesses-are-detected-automatically).
+
+`preloop runner enable` writes
+`~/.config/systemd/user/preloop-runner.service` and replaces that file on
+every later `enable`. The unit sets `HOME` and does not inherit the shell.
+Put the token in a drop-in, which `enable` leaves in place.
+`systemctl --user edit preloop-runner.service` writes
+`~/.config/systemd/user/preloop-runner.service.d/override.conf`; creating
+that file directly is the same mechanism:
+
+```text
+[Service]
+EnvironmentFile=-/home/jane/.preloop/copilot.env
+```
+
+`EnvironmentFile=` is systemd's environment-file setting. The leading `-`
+lets the service start when the file is absent; Copilot stays signed out
+until the variable is set. The file is one `NAME=value` line, mode `0600`,
+owned by the runner user. Use the home directory `enable` pinned as `HOME`:
+
+```text
+COPILOT_GITHUB_TOKEN=replace-with-token
+```
+
+Reload the user manager, then restart, so the running process sees it:
+
+```sh
+systemctl --user daemon-reload
+preloop runner restart
+```
+
+A foreground runner needs no drop-in. Export the variable in the shell that
+starts `preloop runner fg`. The same steps are in the
+[Linux quickstart](quickstart-linux.md#headless-hosts-no-keychain).
+
+On a host that has a keychain, `copilot login --device-code` stores the
+login for the runner user instead of an environment token. An environment
+token is readable by any process of that user.
+
 ## Start a session from the console
 
 1. Open **Sessions** and click **New session**, or open **Runners** and click
@@ -155,7 +216,7 @@ extension.
 |---|---|
 | `runner_offline` | The runner is not connected. |
 | `harness_not_enabled_for_sessions` | Remote sessions are off for this agent on the host. |
-| `harness_signed_out` | The agent CLI is signed out on the host. |
+| `harness_signed_out` | The agent CLI is signed out on the host. On Linux without a keychain, see [Headless hosts (no keychain)](#headless-hosts-no-keychain). |
 | `harness_disabled` | The agent is disabled in the runner configuration. |
 | `workspace_not_authorized` | The directory is not authorized for this agent. |
 | `max_concurrent_reached` | The runner already runs its maximum of remote sessions (2 by default). |
