@@ -81,6 +81,7 @@ from preloop.services.built_in_models import (
     is_available_built_in_model,
     public_built_in_model,
 )
+from preloop.api.heavy_routes import heavy_route
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -363,6 +364,7 @@ def _apply_tariff_visibility(
     summary="Get AI Models Overview",
     tags=["AI Models"],
 )
+@heavy_route
 @require_permission("view_ai_models")
 def get_ai_models_overview(
     start_date: Optional[datetime] = Query(None),
@@ -570,6 +572,7 @@ def get_ai_model_usage_summary(
     summary="List AI Model Runtime Sessions",
     tags=["AI Models"],
 )
+@heavy_route
 @require_permission("view_ai_models")
 def list_ai_model_runtime_sessions(
     model_id: uuid.UUID,
