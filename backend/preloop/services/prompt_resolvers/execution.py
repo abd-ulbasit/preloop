@@ -13,6 +13,11 @@ DEFAULT_PRELOOP_URL = "http://localhost:8000"
 
 _PROVIDER_LABELS = {"github": "GitHub", "gitlab": "GitLab"}
 
+RESUME_PUBLISHED_HISTORY_HINT = (
+    "Add commits on top of the published history. Never amend or squash "
+    "commits that already exist on the remote."
+)
+
 RESUME_REBASE_CONFLICT_HINT = (
     "If /workspace/evidence/rebase-conflict.txt exists, git rebase onto "
     "the flow base branch conflicted and was aborted. Inspect that file "
@@ -37,11 +42,12 @@ def _render_ci_failure(failure: Optional[dict]) -> Optional[str]:
 
 
 def resume_rebase_conflict_hint(trigger_event_data: Optional[dict]) -> str:
-    """Instruction appended to resume prompts so the agent inspects conflicts.
+    """Instructions appended to resume prompts.
 
     The rebase runs inside the container after this prompt is resolved, so
-    the hint is always present on resume runs and the agent checks the
-    evidence file if it appears.
+    both hints are always present on resume runs. The agent adds commits on
+    top of the published history, and checks the conflict evidence file if
+    it appears.
     """
 
     if not isinstance(trigger_event_data, dict):
@@ -49,7 +55,7 @@ def resume_rebase_conflict_hint(trigger_event_data: Optional[dict]) -> str:
     resume = trigger_event_data.get("_resume")
     if not resume:
         return ""
-    return "\n\n" + RESUME_REBASE_CONFLICT_HINT
+    return "\n\n" + RESUME_PUBLISHED_HISTORY_HINT + "\n\n" + RESUME_REBASE_CONFLICT_HINT
 
 
 def execution_console_url(execution_id: str) -> str:
@@ -70,10 +76,11 @@ class ExecutionResolver(PromptResolver):
       that started this resume, empty when the run was not started by CI
 
     Resume rebase conflicts are not a prompt placeholder. Resume runs
-    always get an instruction to inspect
-    ``/workspace/evidence/rebase-conflict.txt`` if that file exists after
-    init. The container also exports ``PRELOOP_RESUME_REBASE_CONFLICT=1``
-    for in-container processes; the control plane never sees that env var.
+    always get an instruction to add commits on top of the published
+    history, and to inspect ``/workspace/evidence/rebase-conflict.txt`` if
+    that file exists after init. The container also exports
+    ``PRELOOP_RESUME_REBASE_CONFLICT=1`` for in-container processes; the
+    control plane never sees that env var.
     """
 
     @property

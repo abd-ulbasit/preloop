@@ -7,6 +7,7 @@ import pytest
 from preloop.services.prompt_resolvers.base import ResolverContext
 from preloop.services.prompt_resolvers.execution import (
     ExecutionResolver,
+    RESUME_PUBLISHED_HISTORY_HINT,
     RESUME_REBASE_CONFLICT_HINT,
     resume_rebase_conflict_hint,
 )
@@ -54,6 +55,11 @@ class TestExecutionResolver:
 
     def test_resume_prompt_tells_the_agent_to_inspect_rebase_conflicts(self):
         hint = resume_rebase_conflict_hint({"_resume": {"execution_id": "prior"}})
+        assert RESUME_PUBLISHED_HISTORY_HINT in hint
+        assert "Never amend or squash" in hint
+        assert hint.index(RESUME_PUBLISHED_HISTORY_HINT) < hint.index(
+            RESUME_REBASE_CONFLICT_HINT
+        )
         assert RESUME_REBASE_CONFLICT_HINT in hint
         assert "/workspace/evidence/rebase-conflict.txt" in hint
         assert resume_rebase_conflict_hint({}) == ""

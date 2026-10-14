@@ -5089,6 +5089,11 @@ fi
         the agent to inspect that file if it exists. ``PRELOOP_RESUME_REBASE_CONFLICT=1``
         is exported in the container for in-container processes. The block
         always exits 0 so a conflict does not abort init.
+
+        ``evidence/resume-rebased`` and ``PRELOOP_RESUME_REBASED=1`` are
+        recorded only when ``HEAD`` changes. A no-op rebase leaves the same
+        commit, so the marker stays unset and the later push cannot
+        force-with-lease over the reviewed pull request.
         """
 
         safe_base = _validated_git_ref(base_branch)
@@ -5105,11 +5110,19 @@ fi
 cd {q_path}
 echo "Resume rebase: fetching origin/{safe_base} and rebasing the PR branch onto it"
 if git fetch origin {safe_base}; then
+    _preloop_head_before=$(git rev-parse HEAD)
     if git rebase origin/{safe_base}; then
-        echo "Resume rebase onto origin/{safe_base} succeeded"
-        mkdir -p {EVIDENCE_DIR_PATH}
-        touch {rebased_marker}
-        export PRELOOP_RESUME_REBASED=1
+        _preloop_head_after=$(git rev-parse HEAD)
+        if [ "$_preloop_head_before" != "$_preloop_head_after" ]; then
+            echo "Resume rebase onto origin/{safe_base} moved HEAD"
+            mkdir -p {EVIDENCE_DIR_PATH}
+            touch {rebased_marker}
+            export PRELOOP_RESUME_REBASED=1
+        else
+            echo "Resume rebase onto origin/{safe_base} left HEAD unchanged"
+            rm -f {rebased_marker}
+            unset PRELOOP_RESUME_REBASED
+        fi
     else
         echo "Resume rebase onto origin/{safe_base} conflicted; leaving rebase aborted"
         mkdir -p {EVIDENCE_DIR_PATH}
@@ -5119,29 +5132,62 @@ if git fetch origin {safe_base}; then
             git diff --name-only --diff-filter=U 2>/dev/null || true
         }} > {conflict_file}
         git rebase --abort || true
+        rm -f {rebased_marker}
+        unset PRELOOP_RESUME_REBASED
         export PRELOOP_RESUME_REBASE_CONFLICT=1
         echo "Wrote conflicting files to {conflict_file}"
     fi
 else
     echo "Resume rebase: could not fetch origin/{safe_base}; skipping rebase"
+    rm -f {rebased_marker}
+    unset PRELOOP_RESUME_REBASED
 fi
 cd /workspace
 true
 """.strip()
 
     def _build_git_push_shell(self, safe_target: str, *, resume_rebase: bool) -> str:
-        """Build the post-exec push. Force-with-lease only after a resume rebase."""
+        """Build the post-exec push.
+
+        ``--force-with-lease`` runs only after a resume rebase that moved
+        HEAD. A no-op rebase pushes fast-forward only. An amended or
+        squashed tip is refused, and the reason is written to
+        ``evidence/push-refused.txt``.
+        """
 
         if not resume_rebase:
             return f"  git push origin {safe_target}"
         rebased_marker = f"{EVIDENCE_DIR_PATH}/resume-rebased"
-        return (
-            f"  if [ -f {rebased_marker} ] || "
-            f'[ "${{PRELOOP_RESUME_REBASED:-}}" = "1" ]; then\n'
-            f"    git push --force-with-lease origin {safe_target}\n"
-            f"  else\n"
-            f"    git push origin {safe_target}\n"
-            f"  fi"
+        refused_log = f"{EVIDENCE_DIR_PATH}/push-refused.txt"
+        remote_ref = f"origin/{safe_target}"
+        return "\n".join(
+            [
+                (
+                    f"  if [ -f {rebased_marker} ] || "
+                    f'[ "${{PRELOOP_RESUME_REBASED:-}}" = "1" ]; then'
+                ),
+                f"    git push --force-with-lease origin {safe_target}",
+                f"  elif git merge-base --is-ancestor {remote_ref} HEAD; then",
+                f"    git push origin {safe_target}",
+                "  else",
+                f"    mkdir -p {EVIDENCE_DIR_PATH}",
+                "    {",
+                (f'      echo "Refusing non-fast-forward push of {safe_target}."'),
+                ('      echo "The resume rebase did not move HEAD, so an amended"'),
+                (
+                    '      echo "or squashed commit cannot replace the '
+                    'reviewed history."'
+                ),
+                (
+                    f'      echo "remote $(git rev-parse {remote_ref} '
+                    f'2>/dev/null || echo missing)"'
+                ),
+                '      echo "local $(git rev-parse HEAD)"',
+                f"    }} > {refused_log}",
+                (f'    echo "Refusing non-fast-forward push; wrote {refused_log}"'),
+                "    exit 1",
+                "  fi",
+            ]
         )
 
     def _build_repository_clone_command_block(

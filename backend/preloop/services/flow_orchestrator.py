@@ -1826,9 +1826,10 @@ class FlowExecutionOrchestrator:
         if isinstance(children_prompt, str) and children_prompt.strip():
             resolved_prompt += "\n\n" + children_prompt[:8000]
 
-        # Resume runs always learn to inspect rebase-conflict.txt, because
-        # the rebase happens after this prompt is resolved. Keep this before
-        # the success-confirmation instruction, which must stay last.
+        # Resume runs always learn to add commits on top of published
+        # history and to inspect rebase-conflict.txt, because the rebase
+        # happens after this prompt is resolved. Keep this before the
+        # success-confirmation instruction, which must stay last.
         resolved_prompt = resolved_prompt + resume_rebase_conflict_hint(
             self.trigger_event_data
         )
