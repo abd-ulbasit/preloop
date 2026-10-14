@@ -295,6 +295,40 @@ def test_listing_pages_one_model(
     assert page["items"][0]["session_source_id"] == "direct"
 
 
+def test_model_page_past_the_end_does_not_invent_a_total(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    """An offset past the last session is an empty page, not ``total == offset``."""
+    data = session_listing_data
+    listed = models.AIModel(
+        account_id=data["account"].id,
+        name="Listed",
+        provider_name="openai",
+        model_identifier="listed-model-past-end",
+    )
+    db_session.add(listed)
+    db_session.flush()
+    data["usage"](
+        "direct",
+        ai_model_id=listed.id,
+        timestamp=data["now"] - timedelta(minutes=2),
+    )
+    db_session.flush()
+
+    page = crud_runtime_session.list_account_sessions(
+        db_session,
+        account_id=str(data["account"].id),
+        start_date=data["now"] - timedelta(days=1),
+        end_date=data["now"],
+        ai_model_id=str(listed.id),
+        limit=10,
+        offset=20,
+    )
+    assert page["items"] == []
+    assert page["has_more"] is False
+    assert page["total"] is None
+
+
 def test_recent_window_ranking_matches_the_full_history(
     db_session: Session,
     session_listing_data: dict[str, Any],

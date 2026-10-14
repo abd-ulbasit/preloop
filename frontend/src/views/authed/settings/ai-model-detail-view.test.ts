@@ -24,10 +24,12 @@ describe('AIModelDetailView', () => {
   let repriceResponse: any;
   let modelPayload: any;
   let sessionsGate: Promise<void> | null = null;
+  let summaryGate: Promise<void> | null = null;
   let sessionsFail = false;
 
   beforeEach(() => {
     sessionsGate = null;
+    summaryGate = null;
     sessionsFail = false;
     modelPayload = {
       id: 'model-1',
@@ -187,6 +189,7 @@ describe('AIModelDetailView', () => {
         }
 
         if (url.startsWith('/api/v1/ai-models/model-1/summary')) {
+          if (summaryGate) await summaryGate;
           return new Response(
             JSON.stringify({
               ai_model_id: 'model-1',
@@ -501,12 +504,47 @@ describe('AIModelDetailView', () => {
     expect(el.shadowRoot!.querySelector('preloop-session-observer')).to.exist;
   });
 
+  it('requests interactions only after the summary resolves', async () => {
+    let releaseSummary!: () => void;
+    summaryGate = new Promise<void>((resolve) => {
+      releaseSummary = resolve;
+    });
+    const el = await fixture<AIModelDetailView>(
+      html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
+    );
+    const interactionCalls = () =>
+      fetchStub
+        .getCalls()
+        .filter((call) => String(call.args[0]).includes('/interactions'));
+    try {
+      await waitUntil(() =>
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('/summary'))
+      );
+      await el.updateComplete;
+      // The summary request is still open. Interactions must not start.
+      expect(interactionCalls()).to.have.length(0);
+      expect((el as any).summary).to.equal(null);
+    } finally {
+      releaseSummary();
+    }
+    await waitUntil(
+      () => interactionCalls().length > 0 && !!(el as any).summary
+    );
+  });
+
   it('keeps usage and interactions when sessions fail', async () => {
     sessionsFail = true;
     const el = await fixture<AIModelDetailView>(
       html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
     );
-    await waitUntil(() => !!(el as any).sessionsError && !!(el as any).summary);
+    await waitUntil(
+      () =>
+        !!(el as any).sessionsError &&
+        !!(el as any).summary &&
+        !!(el as any).interactions
+    );
     await el.updateComplete;
     expect((el as any).summary.total_requests).to.equal(18);
     expect((el as any).interactions.items).to.have.length(1);
@@ -1418,7 +1456,7 @@ describe('AIModelDetailView', () => {
     // One range vocabulary, shared with the Overview, Cost and API usage.
     const range = element.shadowRoot?.querySelector('time-range-select');
     expect(range).to.exist;
-    expect((range as any).value).to.equal('last-30');
+    expect((range as any).value).to.equal('last-7');
     expect(
       element.shadowRoot?.querySelector('sl-select[label="Date range"]')
     ).to.equal(null);
@@ -1436,8 +1474,8 @@ describe('AIModelDetailView', () => {
       ?.textContent?.trim();
     expect(window).to.contain(' to ');
 
-    // The window on the wire is the shared 30 days, not 30 local calendar
-    // days ending tonight.
+    // The window on the wire is the last 7 days. A busy model's 30-day list
+    // does not finish in time; Cost and API usage stay on 30 days.
     const summaryCall = fetchStub
       .getCalls()
       .find((call) =>
@@ -1449,7 +1487,53 @@ describe('AIModelDetailView', () => {
     const start = new Date(query.get('start_date') || '');
     const end = new Date(query.get('end_date') || '');
     const spanDays = (end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
-    expect(Math.abs(spanDays - 30)).to.be.below(0.01);
+    expect(Math.abs(spanDays - 7)).to.be.below(0.01);
+  });
+
+  it('sends one window for the summary, sessions, and interactions on all time', async () => {
+    const element = (await fixture(
+      html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
+    )) as AIModelDetailView;
+    await waitUntil(
+      () => !(element as any).loading && !!(element as any).interactions,
+      'AI model detail view did not finish loading'
+    );
+    const callsFor = (part: string) =>
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes(part));
+    const before = {
+      summary: callsFor('/summary').length,
+      sessions: callsFor('/runtime-sessions').length,
+      interactions: callsFor('/interactions').length,
+    };
+
+    element.shadowRoot?.querySelector('time-range-select')?.dispatchEvent(
+      new CustomEvent('range-change', {
+        detail: { value: 'all' },
+        bubbles: true,
+        composed: true,
+      })
+    );
+
+    await waitUntil(
+      () => callsFor('/interactions').length > before.interactions
+    );
+    await element.updateComplete;
+    for (const [part, prior] of [
+      ['/summary', before.summary],
+      ['/runtime-sessions', before.sessions],
+      ['/interactions', before.interactions],
+    ] as const) {
+      const urls = callsFor(part);
+      expect(urls.length, part).to.be.greaterThan(prior);
+      const query = new URLSearchParams(
+        urls[urls.length - 1].split('?')[1] || ''
+      );
+      expect(query.get('start_date'), part).to.equal(null);
+      expect(query.get('end_date'), part).to.equal(null);
+    }
   });
 
   // A range change is a refinement, not a new page: the answers it is
@@ -1469,7 +1553,7 @@ describe('AIModelDetailView', () => {
     const range = element.shadowRoot?.querySelector('time-range-select');
     range?.dispatchEvent(
       new CustomEvent('range-change', {
-        detail: { value: 'last-7' },
+        detail: { value: 'last-30' },
         bubbles: true,
         composed: true,
       })

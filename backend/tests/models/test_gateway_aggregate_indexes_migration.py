@@ -1,6 +1,7 @@
-"""The gateway aggregate index migration (#1582, #1583).
+"""The gateway aggregate index migration (#1582, #1583) and the model-detail
+index (#1688).
 
-Pins that the model metadata declares the three indexes (else autogenerate
+Pins that the model metadata declares these indexes (else autogenerate
 proposes dropping them) and that the reads they exist for can use them.
 """
 
@@ -16,6 +17,7 @@ INDEXES = (
     "ix_api_usage_gateway_totals",
     "ix_api_usage_gateway_subscription",
     "ix_api_usage_rate_limit_snapshot",
+    "ix_api_usage_account_model_ts",
 )
 
 

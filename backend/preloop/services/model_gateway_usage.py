@@ -43,6 +43,10 @@ from sqlalchemy.orm import Session
 
 #: Window every usage report falls back to when the caller names no dates.
 DEFAULT_USAGE_WINDOW_DAYS = 30
+#: Model detail lists (interactions, runtime sessions) when the caller names
+#: no dates. Shorter than the shared 30-day reports: those two reads used to
+#: walk every request of a busy model (#1688).
+MODEL_DETAIL_WINDOW_DAYS = 7
 
 
 def normalize_usage_period(
@@ -71,6 +75,30 @@ def normalize_usage_period(
     elif start_date.tzinfo is None:
         start_date = start_date.replace(tzinfo=timezone.utc)
 
+    return start_date, end_date
+
+
+def model_detail_window(
+    start_date: Optional[datetime], end_date: Optional[datetime]
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Default an omitted model-detail window to the last 7 days.
+
+    An explicit window is returned unchanged so a caller that asks for 30
+    days still gets 30 days. Only the "no dates at all" case is filled in.
+    The summary uses the same default as the two lists: the console's
+    All time option sends no dates, and the three cards have to cover one
+    window (#1688).
+
+    Args:
+        start_date: Requested lower bound, or None.
+        end_date: Requested upper bound, or None.
+
+    Returns:
+        ``(start_date, end_date)``, with both set when neither was.
+    """
+    if start_date is None and end_date is None:
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=MODEL_DETAIL_WINDOW_DAYS)
     return start_date, end_date
 
 
@@ -584,24 +612,50 @@ class ModelGatewayUsageService:
         start_date, end_date = restrict_history_window(
             self.db, account=account, start_date=start_date, end_date=end_date
         )
-        results = crud_gateway_usage_search_document.search_account_documents(
-            self.db,
-            account_id=str(account.id),
-            start_date=start_date,
-            end_date=end_date,
-            query=query,
-            ai_model_id=ai_model_id,
-            provider_name=provider_name,
-            model_alias=model_alias,
-            flow_id=flow_id,
-            runtime_session_id=runtime_session_id,
-            runtime_principal_id=runtime_principal_id,
-            api_key_id=api_key_id,
-            session_source_type=session_source_type,
-            limit=limit,
-            offset=offset,
-            include_total=include_total,
+        # A model page with no text query only needs the newest page. Counting
+        # every indexed document in the window hash-joins the search corpus
+        # (#1688).
+        bounded_model_page = bool(ai_model_id) and not any(
+            (
+                query,
+                runtime_session_id,
+                session_source_type,
+                provider_name,
+                model_alias,
+                flow_id,
+                runtime_principal_id,
+                api_key_id,
+            )
         )
+        if bounded_model_page:
+            results = crud_gateway_usage_search_document.list_model_interaction_page(
+                self.db,
+                account_id=str(account.id),
+                ai_model_id=str(ai_model_id),
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+                offset=offset,
+            )
+        else:
+            results = crud_gateway_usage_search_document.search_account_documents(
+                self.db,
+                account_id=str(account.id),
+                start_date=start_date,
+                end_date=end_date,
+                query=query,
+                ai_model_id=ai_model_id,
+                provider_name=provider_name,
+                model_alias=model_alias,
+                flow_id=flow_id,
+                runtime_session_id=runtime_session_id,
+                runtime_principal_id=runtime_principal_id,
+                api_key_id=api_key_id,
+                session_source_type=session_source_type,
+                limit=limit,
+                offset=offset,
+                include_total=include_total,
+            )
         return AccountGatewayUsageSearchResponse(
             period_start=start_date,
             period_end=end_date,

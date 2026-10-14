@@ -11684,7 +11684,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Lower bound of the summary window. When both start_date and
+            end_date are omitted, the server uses the last 7 days. A bound the caller
+            sends is kept.
           title: Start Date
+        description: Lower bound of the summary window. When both start_date and end_date
+          are omitted, the server uses the last 7 days. A bound the caller sends is
+          kept.
       - name: end_date
         in: query
         required: false
@@ -11693,7 +11699,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Upper bound of the summary window. When both start_date and
+            end_date are omitted, the server uses the last 7 days. A bound the caller
+            sends is kept.
           title: End Date
+        description: Upper bound of the summary window. When both start_date and end_date
+          are omitted, the server uses the last 7 days. A bound the caller sends is
+          kept.
       - name: failed_since
         in: query
         required: false
@@ -11778,7 +11790,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Lower bound of the session window. When both start_date and
+            end_date are omitted, the server uses the last 7 days. A bound the caller
+            sends is kept.
           title: Start Date
+        description: Lower bound of the session window. When both start_date and end_date
+          are omitted, the server uses the last 7 days. A bound the caller sends is
+          kept.
       - name: end_date
         in: query
         required: false
@@ -11787,7 +11805,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Upper bound of the session window. When both start_date and
+            end_date are omitted, the server uses the last 7 days. A bound the caller
+            sends is kept.
           title: End Date
+        description: Upper bound of the session window. When both start_date and end_date
+          are omitted, the server uses the last 7 days. A bound the caller sends is
+          kept.
       - name: limit
         in: query
         required: false
@@ -11876,7 +11900,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Lower bound of the interaction window. When both start_date
+            and end_date are omitted, the server uses the last 7 days. A bound the
+            caller sends is kept.
           title: Start Date
+        description: Lower bound of the interaction window. When both start_date and
+          end_date are omitted, the server uses the last 7 days. A bound the caller
+          sends is kept.
       - name: end_date
         in: query
         required: false
@@ -11885,7 +11915,13 @@ paths:
           - type: string
             format: date-time
           - type: 'null'
+          description: Upper bound of the interaction window. When both start_date
+            and end_date are omitted, the server uses the last 7 days. A bound the
+            caller sends is kept.
           title: End Date
+        description: Upper bound of the interaction window. When both start_date and
+          end_date are omitted, the server uses the last 7 days. A bound the caller
+          sends is kept.
       - name: limit
         in: query
         required: false
@@ -21962,9 +21998,17 @@ components:
           title: Status
           default: all
         total:
-          type: integer
+          anyOf:
+          - type: integer
+          - type: 'null'
           title: Total
-          default: 0
+          description: Matching sessions. Null when another page exists and the exact
+            count was not computed.
+        has_more:
+          type: boolean
+          title: Has More
+          description: Whether a later page has more sessions.
+          default: false
         limit:
           type: integer
           title: Limit

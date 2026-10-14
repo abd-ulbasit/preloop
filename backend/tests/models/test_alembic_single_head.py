@@ -379,4 +379,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert policy_match.down_revision == "20261014_expected_devices"
     governance_review = script.get_revision("20261016_governance_review")
     assert governance_review.down_revision == "20261014_policy_notice_match"
-    assert script.get_heads() == ["20261016_governance_review"]
+    model_detail = script.get_revision("20261014_model_detail_idx")
+    assert model_detail.down_revision == "20261016_governance_review"
+    assert script.get_heads() == ["20261014_model_detail_idx"]

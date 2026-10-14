@@ -170,7 +170,7 @@ export class AIModelDetailView extends LitElement {
   private error: string | null = null;
 
   @state()
-  private selectedRange: TimeRangeKey = 'last-30';
+  private selectedRange: TimeRangeKey = 'last-7';
 
   @state()
   private interactionQuery = '';
@@ -844,28 +844,33 @@ export class AIModelDetailView extends LitElement {
     this.summaryLoading = true;
     this.sessionsLoading = true;
     this.sessionsError = null;
+    // The interactions card waits until the summary is on screen. It is the
+    // slower of the two list reads, and it must not hold the page (#1688).
     this.interactionsLoading = true;
-    const interactionsRequest = ++this.interactionsRequestId;
     void this.loadPricing();
 
     try {
       const params = this.buildSummaryParams();
+      const summaryLoaded = getAIModelGatewayUsageSummary(this.modelId, params)
+        .then((summary) => {
+          if (isCurrent()) this.summary = summary;
+        })
+        .catch((error: unknown) => {
+          if (!isCurrent()) return;
+          this.summary = null;
+          this.error =
+            error instanceof Error
+              ? error.message
+              : 'Could not load usage summary';
+        })
+        .finally(() => {
+          if (isCurrent()) {
+            this.summaryLoading = false;
+            void this.loadInteractions();
+          }
+        });
       await Promise.all([
-        getAIModelGatewayUsageSummary(this.modelId, params)
-          .then((summary) => {
-            if (isCurrent()) this.summary = summary;
-          })
-          .catch((error: unknown) => {
-            if (!isCurrent()) return;
-            this.summary = null;
-            this.error =
-              error instanceof Error
-                ? error.message
-                : 'Could not load usage summary';
-          })
-          .finally(() => {
-            if (isCurrent()) this.summaryLoading = false;
-          }),
+        summaryLoaded,
         getAIModelRuntimeSessions(this.modelId, {
           ...params,
           limit: 10,
@@ -884,36 +889,6 @@ export class AIModelDetailView extends LitElement {
           })
           .finally(() => {
             if (isCurrent()) this.sessionsLoading = false;
-          }),
-        getAIModelGatewayUsageSearch(this.modelId, {
-          ...params,
-          query: this.interactionQuery.trim() || undefined,
-          limit: 10,
-        })
-          .then((interactions) => {
-            if (
-              !isCurrent() ||
-              interactionsRequest !== this.interactionsRequestId
-            )
-              return;
-            this.interactions = interactions;
-            this.interactionsError = null;
-          })
-          .catch((error: unknown) => {
-            if (
-              !isCurrent() ||
-              interactionsRequest !== this.interactionsRequestId
-            )
-              return;
-            this.interactionsError =
-              error instanceof Error
-                ? error.message
-                : 'Could not load captured interactions';
-            this.interactions = null;
-          })
-          .finally(() => {
-            if (interactionsRequest === this.interactionsRequestId)
-              this.interactionsLoading = false;
           }),
         // A console that cannot read dismissals still has a detail page; it
         // just offers no dismiss control, as it did before.

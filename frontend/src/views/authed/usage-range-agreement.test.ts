@@ -192,8 +192,10 @@ describe('usage range agreement', () => {
     )) as HTMLElement;
     await untilLoaded(models);
 
-    // 1. The same nominal 30 days is the same 30 days on the wire. The three
-    // pages mount milliseconds apart, so the bound is a second, not equality.
+    // 1. Cost and API usage still share the last 30 days. The model detail
+    // page defaults to 7 days: a 30-day interaction list on a busy model
+    // does not finish in time. The three pages mount milliseconds apart, so
+    // the bound is a second, not equality.
     const pages = ['cost', 'api-usage', 'models'];
     for (const page of pages) {
       expect(requestedWindows[page], `${page} sent no window`).to.not.equal(
@@ -203,7 +205,7 @@ describe('usage range agreement', () => {
     const spanDays = (window: { start: string; end: string }) =>
       (new Date(window.end).getTime() - new Date(window.start).getTime()) /
       (24 * 60 * 60 * 1000);
-    for (const page of pages) {
+    for (const page of ['cost', 'api-usage']) {
       const window = requestedWindows[page];
       expect(Math.abs(spanDays(window) - 30), `${page} span`).to.be.below(0.01);
       expect(
@@ -221,6 +223,10 @@ describe('usage range agreement', () => {
         `${page} end`
       ).to.be.below(2000);
     }
+    expect(
+      Math.abs(spanDays(requestedWindows.models) - 7),
+      'models span'
+    ).to.be.below(0.01);
 
     // 2. One fixture, one total. Cost and API usage print the count compact
     // and keep the exact figure in a title; the model page prints it in full.
