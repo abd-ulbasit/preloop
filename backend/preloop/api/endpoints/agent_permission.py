@@ -390,8 +390,9 @@ def _claim_operator_note(
 
     The hook's own conversation can be recorded as a session of its own (the
     origin session, from the hook's ``session_id``), and that is the session
-    an operator finds in ``preloop sessions list`` and attaches to. Notes
-    addressed to it are claimed too, after the credential's session.
+    an operator finds in ``preloop sessions list`` and attaches to. A resolved
+    origin owns the claim; only an unresolved origin uses the credential's
+    session binding. A native conversation never claims another session's notes.
 
     Never raises: a note is a bonus on this route, and a store problem must
     not turn a permission check into a denied tool call.
@@ -400,17 +401,14 @@ def _claim_operator_note(
         # A runner-hosted session has no managed agent; its notes are
         # addressed to the session and still reach the hook (#1482).
         return None
+    # A known native conversation owns its claims. The bearer binding may be
+    # a separate enrollment identity, or another session the token outlived.
     session_ids: list[Optional[str]] = [
-        str(identity.runtime_session_id) if identity.runtime_session_id else None
+        origin_session_id
+        or (str(identity.runtime_session_id) if identity.runtime_session_id else None)
     ]
-    if origin_session_id and origin_session_id not in session_ids:
-        if defer_delivery:
-            session_ids = [origin_session_id]
-        else:
-            session_ids.append(origin_session_id)
-    # Each session is claimed in its own transaction and its own try: a claim
-    # commits the notes as delivered, so a failure on the second session must
-    # not discard notes the first one already took.
+    # Claim only the authoritative scope. A storage failure leaves the
+    # permission decision intact and must not trigger a broader-scope fallback.
     notes: list[Any] = []
     for session_id in session_ids:
         try:
@@ -699,14 +697,28 @@ async def agent_permission_check(
             )
         )
     )
-    operator_note = await run_db_off_loop(
-        lambda: _claim_operator_note(
-            identity,
-            origin_session_id=origin_id,
-            defer_delivery=defer_note_delivery,
-            hosted_origin=hosted_origin,
+    # These native tool gates have no model-visible note field. Keep notes
+    # pending for a carrying model transport instead of claiming or spooling
+    # a block that the adapter cannot deliver.
+    operator_note = None
+    if payload.source not in {
+        "opencode",
+        "pi",
+        "deepseek",
+        "hermes",
+        "openclaw",
+        "nanobot",
+        "devin_cli",
+        "copilot_cli",
+    }:
+        operator_note = await run_db_off_loop(
+            lambda: _claim_operator_note(
+                identity,
+                origin_session_id=origin_id,
+                defer_delivery=defer_note_delivery,
+                hosted_origin=hosted_origin,
+            )
         )
-    )
     activity_session_id = origin_id or identity.runtime_session_id
     if activity_session_id is not None and _records_native_tool_call(payload):
         elapsed_ms = int((time.monotonic() - started) * 1000)

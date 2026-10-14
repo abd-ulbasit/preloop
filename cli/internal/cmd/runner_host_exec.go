@@ -188,7 +188,7 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	harness := hostExecProfileHarness(profile)
 	if harness == "" {
-		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot or devin")
+		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot, devin or claude")
 	}
 	if len(profile.ModelMap) > 64 {
 		return hostExecProfile{}, fmt.Errorf("model_map supports at most 64 entries")
@@ -200,6 +200,12 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	if harness == hostExecHarnessDevin {
 		if err := validateDevinHostExecProfile(profile); err != nil {
+			return hostExecProfile{}, err
+		}
+		return profile, nil
+	}
+	if harness == hostExecHarnessClaude {
+		if err := validateClaudeHostExecProfile(profile); err != nil {
 			return hostExecProfile{}, err
 		}
 		return profile, nil
@@ -294,6 +300,8 @@ func hostExecProfileHarness(profile hostExecProfile) string {
 		return hostExecHarnessCursor
 	case hostExecIsCopilotBinary(profile.Executable):
 		return hostExecHarnessCopilot
+	case hostExecIsClaudeBinary(profile.Executable):
+		return hostExecHarnessClaude
 	default:
 		return ""
 	}
@@ -383,6 +391,17 @@ func lookupHostExecBinary(cleaned string) (string, error) {
 		return "", fmt.Errorf(
 			"copilot_not_installed: Copilot CLI (copilot) was not found on %s; install it with `npm install -g @github/copilot`",
 			runtimeExecutableSearchDescription("copilot"),
+		)
+	}
+	if hostExecIsClaudeBinary(cleaned) && base == cleaned {
+		for _, name := range hostExecCommandCandidates(cleaned, "claude") {
+			if path, err := resolveHostExecRuntimeExecutable(name); err == nil {
+				return path, nil
+			}
+		}
+		return "", fmt.Errorf(
+			"claude_not_installed: Claude Code (claude) was not found on %s; install it from https://docs.claude.com/en/docs/claude-code",
+			runtimeExecutableSearchDescription("claude"),
 		)
 	}
 	if hostExecIsCursorBinary(cleaned) && base == cleaned {
@@ -610,14 +629,20 @@ func buildHostExecArgs(profile hostExecProfile, job map[string]any, workspace st
 // hostExecRun is a prepared host job: the CLI command plus the work that
 // must happen before it starts (checkout) and after it ends (cleanup).
 type hostExecRun struct {
-	resultPath  string
-	cmd         *exec.Cmd
-	timeout     time.Duration
-	workspace   string
-	checkout    *hostExecCheckout
-	publication *hostExecPublication
-	resume      *hostExecResume
-	cleanup     func()
+	resultPath string
+	cmd        *exec.Cmd
+	timeout    time.Duration
+	workspace  string
+	// workspaceLabel names the authorized directory the run works in, or
+	// is empty for a fresh execution directory.
+	workspaceLabel string
+	// dirtyCheckDir is the authorized directory whose git tree must be
+	// clean before the CLI starts, or empty (managed run, or allow_dirty).
+	dirtyCheckDir string
+	checkout      *hostExecCheckout
+	publication   *hostExecPublication
+	resume        *hostExecResume
+	cleanup       func()
 }
 
 func newHostExecJobCmd(job map[string]any) (*exec.Cmd, string, time.Duration, error) {
@@ -645,7 +670,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	agentType, _ := job["agent_type"].(string)
 	wantHarness := hostExecHarnessForAgentType(agentType)
 	if wantHarness == "" || job["completion_protocol"] != hostExecCompletionProtocol {
-		return nil, fmt.Errorf("host job requires explicit Cursor or Copilot host_exec protocol")
+		return nil, fmt.Errorf("host job requires an explicit Cursor, Copilot, Devin or Claude Code host_exec protocol")
 	}
 	name := jobHostExecProfileName(job)
 	profile, err := lookupHostExecProfile(name)
@@ -667,6 +692,13 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	}
 	checkout, err := jobHostExecCheckout(job)
 	if err != nil {
+		return nil, err
+	}
+	workspaceSpec, err := jobHostExecWorkspace(job)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateHostExecWorkspaceJob(workspaceSpec, wantHarness, checkout, mcpToken); err != nil {
 		return nil, err
 	}
 	if checkout != nil && !profile.AllowCheckout {
@@ -697,9 +729,32 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := boundHostExecWorkspace(root, executionID)
+	// An authorized directory is resolved first, so a refused run leaves
+	// nothing behind.
+	var authorized *sessionWorkspace
+	if workspaceSpec != nil {
+		// The git dirty check can take seconds; it runs on the job
+		// goroutine (hostExecWorkspaceDirtyCheck), not on the message loop.
+		authorized, err = resolveSessionWorkspace(context.Background(), "", workspaceSpec, sessionWorkspaceOptions{Harness: wantHarness, ReadOnlyUnsupported: true, DeferDirtyCheck: true})
+		if err != nil {
+			return nil, err
+		}
+	}
+	// The fresh execution directory always exists: it is the working
+	// directory of a managed run, and the runner-owned home of per-job files
+	// (MCP config) when the run works in an authorized directory.
+	scratch, err := boundHostExecWorkspace(root, executionID)
 	if err != nil {
 		return nil, err
+	}
+	workspace := scratch
+	workspaceLabel := ""
+	dirtyCheckDir := ""
+	if authorized != nil {
+		workspace, workspaceLabel = authorized.Dir, authorized.Label
+		if !workspaceSpec.AllowDirty {
+			dirtyCheckDir = authorized.Dir
+		}
 	}
 	bin, argvPrefix, err := resolveHostExecCommand(profile.Executable)
 	if err != nil {
@@ -723,13 +778,14 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	}
 	var mcpArgs []string
 	if mcpToken != "" {
-		mcpArgs, files, err = hostExecMCPConfig(wantHarness, workspace, mcpToken)
+		mcpArgs, files, err = hostExecMCPConfig(wantHarness, scratch, mcpToken)
 		if err != nil {
 			return nil, err
 		}
 	}
 	var args []string
 	var resultPath string
+	var stdin string
 	env := hostExecFlowEnv(
 		hostExecChildEnv(runtime.GOOS, wantHarness, profile, os.Environ()), job,
 	)
@@ -744,6 +800,19 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 			args = append(args, "--resume="+resume.SessionID)
 		}
 		env = copilotHostExecEnv(env)
+	} else if wantHarness == hostExecHarnessClaude {
+		if !claudeApprovalHookInstalled() {
+			err = fmt.Errorf("claude_approval_hook_missing: run `preloop agents onboard \"Claude Code\" --approvals` as the runner user")
+		} else {
+			mcpConfig := ""
+			if len(files) > 0 {
+				mcpConfig = files[0]
+			}
+			args, err = buildClaudeHostExecArgs(profile, job, mcpConfig, "")
+			if err == nil {
+				stdin, err = claudeHostExecPrompt(job)
+			}
+		}
 	} else if wantHarness == hostExecHarnessDevin {
 		if !devinApprovalHooksInstalled() {
 			err = fmt.Errorf("devin_approval_hook_missing: run preloop agents onboard Devin --approvals")
@@ -769,17 +838,22 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = workspace
 	cmd.Env = env
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	cmd.SysProcAttr = hostExecSysProcAttr()
 	cmd.WaitDelay = 250 * time.Millisecond
 	return &hostExecRun{
-		cmd:         cmd,
-		resultPath:  resultPath,
-		timeout:     hostExecTimeout(profile, job),
-		workspace:   workspace,
-		checkout:    checkout,
-		publication: publication,
-		resume:      resume,
-		cleanup:     cleanup,
+		cmd:            cmd,
+		resultPath:     resultPath,
+		timeout:        hostExecTimeout(profile, job),
+		workspace:      workspace,
+		workspaceLabel: workspaceLabel,
+		dirtyCheckDir:  dirtyCheckDir,
+		checkout:       checkout,
+		publication:    publication,
+		resume:         resume,
+		cleanup:        cleanup,
 	}, nil
 }
 
@@ -914,6 +988,26 @@ func beginHostExecJob(
 			buffer.finish()
 			done <- leasedJobOutcome{executionID: executionID, status: status, hostExec: true, profile: profile, errMsg: msg, exitCode: -1, logBuffer: buffer}
 		}
+		if run.workspaceLabel != "" {
+			buffer.note("preloop runner: working in authorized directory " + run.workspaceLabel)
+		}
+		if run.dirtyCheckDir != "" {
+			ctx, cancel := context.WithCancel(context.Background())
+			if !gate.setCancel(cancel) {
+				failed("STOPPED", "")
+				return
+			}
+			err := hostExecWorkspaceDirtyCheck(ctx, run.dirtyCheckDir, run.workspaceLabel)
+			cancel()
+			switch {
+			case halted.Load():
+				failed("STOPPED", "")
+				return
+			case err != nil:
+				failed("FAILED", err.Error())
+				return
+			}
+		}
 		if run.checkout != nil {
 			checkoutTimeout := hostExecCheckoutTimeout
 			if timeout < checkoutTimeout {
@@ -949,6 +1043,9 @@ func beginHostExecJob(
 		outcome := waitHostExecJob(cmd, executionID, buffer, halted, timeout, profile)
 		if buffer.harness == hostExecHarnessCopilot && outcome.status == "FAILED" {
 			outcome.errMsg = copilotHostExecFailure(buffer, profile, job, outcome.errMsg)
+		}
+		if buffer.harness == hostExecHarnessClaude && outcome.status == "FAILED" {
+			outcome.errMsg = claudeHostExecFailure(buffer, outcome.errMsg)
 		}
 		if outcome.result != nil {
 			if requested := jobModelIdentifier(job); requested != "" {

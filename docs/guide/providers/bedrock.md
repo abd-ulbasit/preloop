@@ -63,7 +63,9 @@ inference profile needs `InvokeModel` on the profile ARN **and** on the
 foundation model ARN in every region the profile can route to, which is why
 the example uses `*` for the region. The discovery statement is optional: you
 can type the model id by hand instead of using **Fetch Models**. Without
-`bedrock:ListInferenceProfiles`, Fetch Models returns foundation models only.
+`bedrock:ListInferenceProfiles`, Fetch Models warns that inference profiles
+could not be listed and offers only eligible foundation models. A foundation
+model that requires a profile is not offered as a directly invocable model.
 
 ## Add the model in the console
 
@@ -80,10 +82,20 @@ can type the model id by hand instead of using **Fetch Models**. Without
    IAM credentials expire. Replace the saved credentials before they expire.
 7. **AWS Region**: the region where the model or inference profile is
    available, for example `us-east-1` or `eu-west-1`.
-8. **Model Name / ID**: click **Fetch Models** and pick one, or enter the id
-   by hand. Geo inference profiles such as
-   `us.anthropic.claude-haiku-4-5-20251001-v1:0` are required for newer
-   Anthropic models that are not offered on demand in a single region.
+8. **Model ID or inference profile ID / ARN**: click **Fetch models from
+   provider** and select a model ID or inference profile. An inference profile
+   is an AWS identifier that routes a request to the model in its supported
+   regions. Some models require one because AWS does not support invoking their
+   bare foundation model ID on demand. The list includes active profiles and
+   eligible foundation models. It does not verify invocation permissions.
+   To find a profile manually, open **AWS Bedrock > Cross-region inference**
+   in the same AWS region, select the profile for your model, and copy its
+   **Inference profile ID** or **ARN** into this field. Check its destination
+   regions before choosing it. Use the exact value AWS shows; do not guess a
+   geographic prefix. Application inference profile ARNs can also be pasted.
+   If discovery warns that profiles could not be listed, check credentials and
+   grant `bedrock:ListInferenceProfiles`, then refresh. If no matching profile
+   is found, check availability in AWS for the configured region.
 9. Leave **Route inference through the Preloop gateway** checked. The form
    shows the **Gateway alias**, for example `bedrock/amazon.nova-micro-v1:0`.
    Clients send that alias as `model`.
@@ -142,6 +154,27 @@ API with no `api_key` and this metadata:
 The gateway then uses the standard AWS credential chain of the process that
 serves the request. Assuming a different role per model (`aws_role_name`) is
 not supported.
+
+## Agent onboarding
+
+Native Bedrock configuration import is supported for **Claude Code**,
+**OpenClaw**, and **OpenCode**. When onboarding one of these harnesses with
+`preloop agents onboard`, Preloop preserves its explicit Bedrock model
+identifier, including inference profile IDs and ARNs.
+The gateway also needs the AWS region and credentials. A bare foundation ID
+that AWS requires an inference profile for still needs to be corrected; do not
+assume onboarding will choose a routing geography for you.
+
+This behavior requires updated CLI and control plane versions containing the
+Bedrock onboarding fixes. The fixes are pending release; an updated console
+alone does not update the CLI installed on your machine.
+
+Supported static IAM credentials, shared credential files, temporary session
+credentials, and Bedrock bearer API keys can be imported from supported harness
+configuration. Temporary credentials expire and need replacement. A local IAM
+role or SSO refresh chain cannot be copied into a remote gateway as a renewable
+credential; configure suitable credentials on the gateway or keep that harness
+using its local AWS authentication.
 
 ## Send one request
 
@@ -213,8 +246,9 @@ and user tabs.
   the Bedrock console before any account can invoke them.
 - **`ValidationException: Invocation of model ID ... with on-demand
   throughput isn't supported`.** The model is only offered through an
-  inference profile. Use the geo id, for example
-  `us.anthropic.claude-haiku-4-5-20251001-v1:0`, instead of the bare model id.
+  inference profile. Edit the model and replace its identifier with the exact
+  profile ID or ARN from AWS Bedrock > Cross-region inference in the configured
+  region. Leave the credential fields blank to keep the saved key.
 - **Wrong region.** Model availability is regional. A model that works in
   `us-east-1` can return a not-found error in another region. The region set
   on the model is used for every request to it.
@@ -222,7 +256,9 @@ and user tabs.
   expiry. Edit the model and paste fresh credentials, or switch to long-lived
   keys or ambient credentials.
 - **Fetch Models shows no `us.` ids.** The credentials lack
-  `bedrock:ListInferenceProfiles`. Add it or type the id by hand.
+  `bedrock:ListInferenceProfiles`, or no active profile is available in the
+  selected region. Check the discovery warning, grant the permission if
+  needed, or paste the exact ID/ARN from the AWS console.
 - **Unpriced requests on the Cost page.** Expected for application inference
   profile ARNs. Set a price override or a base model as described above.
 

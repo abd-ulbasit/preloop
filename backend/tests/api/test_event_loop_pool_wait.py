@@ -110,6 +110,10 @@ def _async_routes_with_sync_session(app: FastAPI) -> set[tuple[str, str]]:
             continue
         if not inspect.iscoroutinefunction(endpoint):
             continue
+        if getattr(endpoint, "__heavy_route__", False):
+            # preloop.api.heavy_routes runs the whole handler on its own
+            # bounded thread pool; nothing touches the session on the loop.
+            continue
         if not any(sub.call is get_db_session for sub in dependant.dependencies):
             continue
         for method in context.methods or {"GET"}:

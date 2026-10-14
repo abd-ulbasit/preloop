@@ -119,6 +119,16 @@ describe('AIModelsView', () => {
     localStorage.clear();
   });
 
+  it('pages the model list at ten by default (#1585)', async () => {
+    const element = (await fixture(
+      html`<ai-models-view></ai-models-view>`
+    )) as AIModelsView;
+    await waitUntil(() => !(element as any).isLoading);
+    expect(element.modelTable.paginated).to.equal(true);
+    expect(element.modelTable.pageSize).to.equal(10);
+    expect(element.modelTable.pageSizes).to.deep.equal([10, 25, 50]);
+  });
+
   it('lists the built-in alongside account models and excludes it from mutations', async () => {
     const element = (await fixture(
       html`<ai-models-view></ai-models-view>`
@@ -538,6 +548,34 @@ describe('AIModelsView', () => {
     expect(
       element.shadowRoot?.querySelectorAll('.model-card resource-actions')
     ).to.have.lengthOf(1);
+  });
+
+  it('pages the cards like the list (#1585)', async () => {
+    const element = (await fixture(
+      html`<ai-models-view></ai-models-view>`
+    )) as AIModelsView;
+    await waitUntil(
+      () => !(element as any).isLoading,
+      'AI models view did not finish loading'
+    );
+    const internal = element as any;
+    internal.models = Array.from({ length: 23 }, (_, i) => ({
+      id: `model-${i}`,
+      name: `Model ${String(i).padStart(2, '0')}`,
+      provider_name: 'OpenAI',
+      model_identifier: `m-${i}`,
+      is_default: false,
+      created_at: '2026-03-01T10:00:00Z',
+      updated_at: '2026-03-09T18:30:00Z',
+    }));
+    internal.currentView = 'cards';
+    await element.updateComplete;
+    const cards = () => element.shadowRoot!.querySelectorAll('.model-card');
+    expect(cards()).to.have.lengthOf(internal.modelTable.pageSize);
+    expect(element.shadowRoot!.querySelector('table-pagination')).to.exist;
+    internal.modelTable.setPageIndex(2);
+    await element.updateComplete;
+    expect(cards()).to.have.lengthOf(3);
   });
 
   it('gives each row one kebab holding View, Edit, Set default and Delete', async () => {

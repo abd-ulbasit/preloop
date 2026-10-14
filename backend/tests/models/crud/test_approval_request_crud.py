@@ -276,6 +276,7 @@ def test_session_scoping_combines_account_execution_status_and_paging(
     db_session.flush()
     session_a, session_b = uuid4(), uuid4()
     expected = None
+    tools: list = []
     for owner, session_id, status in [
         (account, session_a, "pending"),
         (account, session_b, "pending"),
@@ -285,9 +286,21 @@ def test_session_scoping_combines_account_execution_status_and_paging(
         workflow = models.ApprovalWorkflow(
             account_id=owner.id, name=f"Example {uuid4()}", workflow_type="simple"
         )
-        tool = models.ToolConfiguration(
-            account_id=owner.id, tool_name="terminal", tool_source="builtin"
+        # One account-wide configuration per tool: the scope constraint
+        # treats NULL scopes as equal, so reuse the account's row if present.
+        tool = next(
+            (
+                t
+                for t in tools
+                if t.account_id == owner.id and t.tool_name == "terminal"
+            ),
+            None,
         )
+        if tool is None:
+            tool = models.ToolConfiguration(
+                account_id=owner.id, tool_name="terminal", tool_source="builtin"
+            )
+            tools.append(tool)
         db_session.add_all([workflow, tool])
         db_session.flush()
         row = models.ApprovalRequest(

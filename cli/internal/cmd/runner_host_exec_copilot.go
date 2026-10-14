@@ -78,6 +78,8 @@ func hostExecHarnessForAgentType(agentType string) string {
 		return hostExecHarnessCursor
 	case "copilot":
 		return hostExecHarnessCopilot
+	case "claude_code":
+		return hostExecHarnessClaude
 	default:
 		return ""
 	}

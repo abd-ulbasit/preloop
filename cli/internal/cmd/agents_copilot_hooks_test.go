@@ -85,7 +85,14 @@ func TestInstallCopilotHooksWritesPreloopJSON(t *testing.T) {
 	}
 
 	for _, key := range copilotUsageHookEvents {
-		entries := flatHookEntries(t, doc, key)
+		allEntries := flatHookEntries(t, doc, key)
+		var entries []map[string]interface{}
+		for _, entry := range allEntries {
+			command, _ := entry[commandKey].(string)
+			if strings.Contains(command, " usage hook ") {
+				entries = append(entries, entry)
+			}
+		}
 		if len(entries) != 1 {
 			t.Fatalf("expected one %s entry, got %d", key, len(entries))
 		}
@@ -95,6 +102,22 @@ func TestInstallCopilotHooksWritesPreloopJSON(t *testing.T) {
 		}
 		if entries[0]["timeoutSec"] != float64(cursorUsageHookTimeoutSeconds) {
 			t.Errorf("%s timeoutSec=%v, want %d", key, entries[0]["timeoutSec"], cursorUsageHookTimeoutSeconds)
+		}
+	}
+	for _, event := range []string{"sessionStart", "sessionEnd"} {
+		entries := flatHookEntries(t, doc, event)
+		if len(entries) != 2 {
+			t.Fatalf("usage and receipt lifecycle must coexist for %s: %v", event, entries)
+		}
+		found := false
+		for _, entry := range entries {
+			command, _ := entry[commandKey].(string)
+			if strings.Contains(command, "permission-hook session") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing native receipt command for %s: %v", event, entries)
 		}
 	}
 	if len(hooks) != 1+len(copilotUsageHookEvents) {

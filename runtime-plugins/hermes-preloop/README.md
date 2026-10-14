@@ -337,3 +337,44 @@ hosted service. *Preloop Enterprise* is the commercial self-hosted edition.
 - Issues: [github.com/preloop/preloop/issues](https://github.com/preloop/preloop/issues)
 
 Apache-2.0. Copyright (c) 2026 Spacecode AI Inc.
+
+## Operator-note receipts
+
+The native note carrier uses Hermes' supported `pre_llm_call` context return
+and confirms the exact rendered batch in `pre_api_request.request_messages`
+before acknowledging it to Preloop. Each native session registers with the
+server before a deferred note claim. Notes fail open independently of the
+approval gate; network or configuration failures never stop a model turn.
+
+`pre_llm_call` runs in the **turn prologue**, not before every model iteration.
+A note queued mid-turn waits for the next turn, or becomes undeliverable when
+Hermes authoritatively finalizes that session. Model calls routed through the
+Preloop gateway still have the gateway's next-request boundary. The native
+adapter does not mutate request observer payloads or invent a per-model hook.
+
+The installed host must declare both `pre_llm_call` and `pre_api_request` in
+`hermes_cli.plugins.VALID_HOOKS`; otherwise native notes stay disabled and tool
+approval remains installed. The contracts were audited at immutable Hermes
+commit [`8f817911`](https://github.com/NousResearch/hermes-agent/tree/8f817911723e3ec13e7f47fc022fdcc9e2149354):
+`agent/turn_context.py` consumes `{"context": ...}` and supplies session/turn
+ids; `agent/turn_api_request.py` observes effective messages after request
+middleware. Missing native session or turn identity prevents a note claim.
+Oversized context that the host spills or strips remains claimed unless its
+full rendered text appears in the effective request.
+
+Hermes' `on_session_end` is a **per-turn** event and never terminalizes notes.
+It releases an unadmitted batch for retry only when its turn id matches.
+Only the host's `on_session_finalize`, when declared by the installed SDK,
+sends the authoritative session-end receipt. That hook hard-closes the native
+conversation; it is not inferred from idle time, a completed turn or transport
+silence. Older hosts without finalization degrade to expiry or another
+server-authoritative end.
+
+Callbacks serialize per session. Confirmed delivery with a failed ACK retries
+without injecting a second copy, including before finalization. Unconfirmed
+batches are held in a cache of at most 256 sessions. Inactive entries without
+claims can be evicted so older hosts without finalization continue registering
+new conversations; running and queued callbacks pin their entries. Native
+finalization remains authoritative after eviction. A process restart or a missing
+matching end event can leave them claimed until expiry. Session finalization
+that cannot reach Preloop likewise does not imply the server observed the end.

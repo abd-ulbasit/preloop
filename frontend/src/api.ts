@@ -4256,6 +4256,7 @@ export interface AvailableModelsResult {
   models: string[];
   source: 'live' | 'fallback';
   error?: AvailableModelsFallbackReason;
+  warnings?: string[];
 }
 
 /**
@@ -4335,6 +4336,13 @@ export async function getAvailableModelsForProvider(
     models: Array.isArray(data?.models) ? (data.models as string[]) : [],
     source: data?.source === 'fallback' ? 'fallback' : 'live',
     ...(data?.error ? { error: data.error } : {}),
+    ...(Array.isArray(data?.warnings)
+      ? {
+          warnings: data.warnings.filter(
+            (warning: unknown) => typeof warning === 'string'
+          ),
+        }
+      : {}),
   };
 }
 
@@ -4401,6 +4409,9 @@ export async function getAIModelGatewayUsageSearch(
 export const FLOW_LIST_PAGE_SIZE = 100;
 /** Stop paging so a broken skip cannot loop forever. */
 export const FLOW_LIST_MAX_PAGES = 50;
+
+/** Server maximum on `GET /api/v1/flows/summary` (`limit <= 500`). */
+export const FLOW_SUMMARY_PAGE_SIZE = 500;
 
 /**
  * One row per flow id. Offset paging with no ORDER BY can surface the
@@ -4522,15 +4533,25 @@ export async function getFlows(
 export async function getAllFlows(
   options: { statsSince?: string; pageSize?: number } = {}
 ): Promise<{ flows: any[]; truncated: boolean }> {
-  const pageSize = options.pageSize ?? FLOW_LIST_PAGE_SIZE;
-  const flows: any[] = [];
+  return pageFlows(
+    (skip, limit) => getFlows({ statsSince: options.statsSince, skip, limit }),
+    options.pageSize ?? FLOW_LIST_PAGE_SIZE
+  );
+}
+
+/**
+ * Page a flows endpoint until a short page, folding duplicate ids. Stops
+ * after FLOW_LIST_MAX_PAGES pages and reports `truncated`, so a broken skip
+ * cannot loop forever. A failed or malformed page throws.
+ */
+async function pageFlows<T extends { id?: unknown }>(
+  fetchPage: (skip: number, limit: number) => Promise<T[]>,
+  pageSize: number
+): Promise<{ flows: T[]; truncated: boolean }> {
+  const flows: T[] = [];
   let skip = 0;
   for (let page = 0; page < FLOW_LIST_MAX_PAGES; page += 1) {
-    const batch = await getFlows({
-      statsSince: options.statsSince,
-      skip,
-      limit: pageSize,
-    });
+    const batch = await fetchPage(skip, pageSize);
     if (!Array.isArray(batch)) {
       throw new Error('Failed to fetch flows');
     }
@@ -4541,6 +4562,23 @@ export async function getAllFlows(
     skip += pageSize;
   }
   return { flows: uniqueFlowsById(flows), truncated: true };
+}
+
+/**
+ * Every flow in the account as summaries (id, name, agent, model, preset
+ * flag), paging past one request's limit of 500.
+ *
+ * Pickers that only name flows use this instead of `getAllFlows`: the full
+ * `/flows` rows carry every configuration plus execution statistics, which
+ * made Flows > New wait 5.9 s on prod for a list of names (#1662).
+ */
+export async function getAllFlowSummaries(
+  options: { pageSize?: number } = {}
+): Promise<{ flows: FlowSummary[]; truncated: boolean }> {
+  return pageFlows(
+    (skip, limit) => getFlowSummaries({ includeStats: false, skip, limit }),
+    options.pageSize ?? FLOW_SUMMARY_PAGE_SIZE
+  );
 }
 
 export async function getFlow(flowId: string): Promise<any> {
@@ -5787,11 +5825,46 @@ function verdictErrorFromBody(status: number, body: unknown): VerdictError {
   return new VerdictError('failed', status);
 }
 
-export async function checkAIVerdict(issue1_id: string, issue2_id: string) {
+export type VerdictBatchState =
+  'done' | 'pending' | 'failed' | 'no_model' | 'not_found';
+
+export interface VerdictBatchItem {
+  issue1_id: string;
+  issue2_id: string;
+  state: VerdictBatchState;
+  verdict?: {
+    decision?: string;
+    reason?: string;
+    suggestion?: string;
+    resolution?: string;
+  } | null;
+  error_code?: string | null;
+}
+
+export interface VerdictBatchResponse {
+  items: VerdictBatchItem[];
+  pending: number;
+}
+
+/**
+ * Verdicts for a page of pairs in one call (#1588 successor). Stored verdicts
+ * come back at once; new pairs come back `pending` while the server checks
+ * them in the background, so callers ask again for those.
+ */
+export async function getAIVerdicts(
+  pairs: { issue1_id: string; issue2_id: string }[],
+  options: { retry?: boolean } = {}
+): Promise<VerdictBatchResponse> {
   let response: Response;
   try {
     response = await fetchWithTimeout(
-      `/api/v1/issue-duplicates/check?issue1_id=${issue1_id}&issue2_id=${issue2_id}`
+      '/api/v1/issue-duplicates/verdicts',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairs, retry: options.retry ?? false }),
+      },
+      15000
     );
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') {

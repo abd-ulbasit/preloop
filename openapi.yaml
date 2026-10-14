@@ -25040,6 +25040,12 @@ components:
           description: Short safe reason for a fallback after a failed or impossible
             live attempt (fixed vocabulary, never raw provider error text). None for
             a clean live result.
+        warnings:
+          items:
+            type: string
+          type: array
+          title: Warnings
+          description: Safe warning codes for incomplete provider discovery
       type: object
       title: AvailableModelsResponse
       description: 'A provider''s model listing plus the provenance of the result.

@@ -70,4 +70,14 @@ describe('SessionPages', () => {
     ]);
     expect(pages.pageSize).to.equal(10);
   });
+
+  it('offers the host default page size in the size select', () => {
+    const pages = new SessionPages(
+      host(),
+      async () => ({ usage_by_session: [], total_sessions: 0 }),
+      5
+    );
+    const template = pages.renderPagination() as { values: unknown[] };
+    expect(template.values).to.deep.include([5, 10, 25, 50]);
+  });
 });

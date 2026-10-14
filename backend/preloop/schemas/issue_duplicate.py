@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional, Dict
+from typing import Dict, List, Literal, Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class IssueDuplicate(BaseModel):
@@ -145,3 +145,59 @@ class IssueDuplicateAiError(BaseModel):
     """HTTP 422 or 500 envelope: FastAPI wraps the detail object."""
 
     detail: IssueDuplicateAiErrorDetail
+
+
+class IssueDuplicateVerdictPair(BaseModel):
+    """One candidate pair whose AI verdict the console wants."""
+
+    issue1_id: UUID
+    issue2_id: UUID
+
+
+class IssueDuplicateVerdictBatchRequest(BaseModel):
+    """Verdicts for every pair on one page of the Duplicates list."""
+
+    pairs: List[IssueDuplicateVerdictPair] = Field(..., min_length=1, max_length=50)
+    analyze: bool = Field(
+        True,
+        description=(
+            "Start a background AI check for pairs without a stored verdict. "
+            "False only reads stored verdicts."
+        ),
+    )
+    retry: bool = Field(
+        False,
+        description="Forget a recent failure for these pairs and check them again.",
+    )
+
+
+VerdictBatchState = Literal["done", "pending", "failed", "no_model", "not_found"]
+
+
+class IssueDuplicateVerdictItem(BaseModel):
+    """The verdict, or where it stands, for one requested pair."""
+
+    issue1_id: UUID
+    issue2_id: UUID
+    state: VerdictBatchState
+    verdict: Optional[IssueDuplicate] = None
+    error_code: Optional[str] = Field(
+        None,
+        description=(
+            "For `failed`: `ai_model_error`, `rate_limited` or `not_configured`."
+        ),
+    )
+
+    @field_serializer("issue1_id", "issue2_id")
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string."""
+        return str(value)
+
+
+class IssueDuplicateVerdictBatchResponse(BaseModel):
+    """Stored verdicts now; pairs still being checked come back as `pending`."""
+
+    items: List[IssueDuplicateVerdictItem]
+    pending: int = Field(
+        0, description="Pairs still being checked. Ask again for those in a moment."
+    )

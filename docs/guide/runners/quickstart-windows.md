@@ -200,8 +200,8 @@ profile adds, and the launcher runs `-NoProfile`. In practice:
 
 The runner reports the agent harnesses installed for the user it runs as
 (Copilot CLI, Cursor CLI, Claude Code and others) and generates host
-execution profiles named `copilot` and `cursor` for Copilot CLI and Cursor
-CLI, so no profile file is needed. Sign in to the harness as that user (for
+execution profiles named `copilot`, `cursor` and `claude` for Copilot CLI,
+Cursor CLI and a signed-in Claude Code, so no profile file is needed. Sign in to the harness as that user (for
 Copilot CLI: `copilot login`, or set `COPILOT_GITHUB_TOKEN` for the runner
 user), then check what the runner reports:
 

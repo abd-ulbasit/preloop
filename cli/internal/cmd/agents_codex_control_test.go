@@ -215,7 +215,7 @@ func TestCodexValidateReportsControlKeys(t *testing.T) {
 
 func TestCodexSidecarServiceRenderingAndClaudeGolden(t *testing.T) {
 	const bin = "/usr/local/bin/preloop"
-	claudeLaunchd := renderAgentControlSidecarLaunchd(claudeAgentControlSidecarSpec(), bin)
+	claudeLaunchd := renderAgentControlSidecarLaunchd(claudeAgentControlSidecarSpec(), bin, agentControlSidecarServiceEnv{})
 	claudeGolden := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -231,7 +231,7 @@ func TestCodexSidecarServiceRenderingAndClaudeGolden(t *testing.T) {
 	if claudeLaunchd != claudeGolden {
 		t.Fatalf("Claude launchd rendering changed:\n%s", claudeLaunchd)
 	}
-	claudeSystemd := renderAgentControlSidecarSystemd(claudeAgentControlSidecarSpec(), bin)
+	claudeSystemd := renderAgentControlSidecarSystemd(claudeAgentControlSidecarSpec(), bin, agentControlSidecarServiceEnv{})
 	claudeSystemdGolden := `[Unit]
 Description=Preloop Claude Code Agent Control sidecar
 After=network-online.target
@@ -248,12 +248,12 @@ WantedBy=default.target
 		t.Fatalf("Claude systemd rendering changed:\n%s", claudeSystemd)
 	}
 
-	codexLaunchd := renderAgentControlSidecarLaunchd(codexAgentControlSidecarSpec(), bin)
+	codexLaunchd := renderAgentControlSidecarLaunchd(codexAgentControlSidecarSpec(), bin, agentControlSidecarServiceEnv{})
 	if !strings.Contains(codexLaunchd, "ai.preloop.codex-sidecar") ||
 		!strings.Contains(codexLaunchd, "<string>codex</string><string>sidecar</string><string>run</string>") {
 		t.Fatalf("Codex launchd = %s", codexLaunchd)
 	}
-	codexSystemd := renderAgentControlSidecarSystemd(codexAgentControlSidecarSpec(), bin)
+	codexSystemd := renderAgentControlSidecarSystemd(codexAgentControlSidecarSpec(), bin, agentControlSidecarServiceEnv{})
 	if !strings.Contains(codexSystemd, "Description=Preloop Codex CLI Agent Control sidecar") ||
 		!strings.Contains(codexSystemd, `ExecStart="/usr/local/bin/preloop" codex sidecar run`) {
 		t.Fatalf("Codex systemd = %s", codexSystemd)

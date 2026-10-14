@@ -162,7 +162,7 @@ graph LR
 | [Governance](docs/architecture/governance.md) | Subject-scoped allowed models, tool access rules, and tool output filters. |
 | [Account access rules](docs/architecture/account-access-rules.md) | Closed policy syntax, audited CRUD/snapshots, committed H4 invalidation, and H3 resource sharing integration. |
 | [Approvals](docs/architecture/approvals.md) | Tool configuration, human-in-the-loop approval workflows, `ask_user`, and native-tool permission-check. |
-| [Agent Control](docs/architecture/agent-control.md) | Operator channel to managed agents, operator notes delivered at the next turn boundary through the gateway or a permission hook, CLI/desktop enrollment, mobile/watch voice contact, and persistent flow execution on a live Agent Control target. |
+| [Agent Control](docs/architecture/agent-control.md) | Operator channel to managed agents, operator notes delivered at model/tool boundaries through the gateway, carrying permission hooks, or native lifecycle/model-input hooks; non-carrying approval hooks leave notes pending, CLI/desktop enrollment, mobile/watch voice contact, and persistent flow execution on a live Agent Control target. |
 | [Cost](docs/architecture/cost.md) | `ApiUsage` ledger, OSS spend and budget-health surfaces, and the Enterprise plugin boundary. |
 | [Sync](docs/architecture/sync.md) | Tracker polling, NATS scheduler/worker, issue tracker clients, and tracker scope rules. |
 | [Data model](docs/architecture/data-model.md) | `preloop.models`, PostgreSQL + PGVector, schema, and backend project layout. |
@@ -234,6 +234,16 @@ runner-reported `harness_session_id` resolve to that runtime session while it is
 live (`agent_session_lineage.runner_session_for_external`); a session a hook
 opened before the id arrived is folded into it. See
 [Remote sessions](docs/guide/runners/remote-sessions.md).
+
+Operator-note receipts distinguish a deferred claim from delivery at a supported
+model or hook boundary. Native session-end signals settle pending and claimed
+notes targeted at that session. The minute runner sweeper also reconciles notes
+against authoritatively ended `RuntimeSession` rows in bounded batches, with
+guarded transitions and once-only audit/webhook emission. It does not infer
+termination from inactivity alone, and standing agent-targeted notes remain
+available for a later session. The [operator-note guide](docs/guide/operator-notes.md)
+lists harness capabilities; the [verification guide](docs/guide/operator-notes-smoke.md)
+provides isolated receipt and lifecycle checks.
 
 Runner registration and heartbeats report `docker_available` from a five-second `docker ps` probe. Container leases require that capability, including explicitly pinned runners. The CRUD layer excludes paused runners from selection and slot claims; leasing rechecks scheduling preferences after locking the row. Capability tags are derived from the current daemon result and enabled, signed-in harness inventory alongside custom labels. `accept_untagged` defaults to false and `paused` defaults to false; console scheduling edits persist independently of the process's registration and heartbeat. Automatic routing uses hosted compute when no private runner accepts the job.
 

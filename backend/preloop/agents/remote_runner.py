@@ -27,6 +27,7 @@ from preloop.services.host_exec import (
     HARNESS_FALLBACK_FAIL,
     HARNESS_GENERATED_PROFILES,
     HOST_EXEC_AGENT_TYPE,
+    HOST_EXEC_WORKSPACE_KEY,
     ISOLATED_PUBLICATION_UNAVAILABLE,
     ROUTING_QUEUE_TIMEOUT,
     harness_fallback_mode,
@@ -36,6 +37,7 @@ from preloop.services.host_exec import (
     host_exec_profile_name,
     host_exec_model_identifier,
     host_exec_unavailable_reason,
+    host_exec_workspace,
     is_host_exec_agent_type,
 )
 from preloop.services.host_exec_publication import (
@@ -558,6 +560,12 @@ class RemoteRunnerExecutor(AgentExecutor):
                     "profile": profile,
                     "model": payload.get("model_identifier"),
                 }
+            workspace = host_exec_workspace(self._flow_agent_config(flow))
+            if workspace is not None:
+                # Names an authorized directory only. The runner resolves
+                # the id against its own list and re-applies the root, home,
+                # read-only, harness and dirty-tree refusals.
+                payload[HOST_EXEC_WORKSPACE_KEY] = workspace
             if host_publication_requested(git_clone_config):
                 # Data only: assignment requires a host_publication runner
                 # and delivery replaces it with the transient runner plan.

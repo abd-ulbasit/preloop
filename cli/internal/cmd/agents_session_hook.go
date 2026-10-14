@@ -243,6 +243,12 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 	if json.Unmarshal(raw, &event) != nil {
 		return nil
 	}
+	if source == permissionSourceCursor && event.HookEventName == "" {
+		event.HookEventName = "sessionStart"
+		if strings.TrimSpace(event.Prompt) != "" {
+			event.HookEventName = "beforeSubmitPrompt"
+		}
+	}
 	if event.SessionID == "" {
 		event.SessionID = hookEventSessionID(raw)
 	}
@@ -319,7 +325,7 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 	// The permission-hook fallback registers lineage only. Claiming notes
 	// here would mark them delivered before SessionStart and write a second
 	// JSON document onto the permission decision's stdout.
-	if !sessionHookRegisterOnly(cmd) && registered && (!isPrompt || !haveFile) {
+	if !sessionHookRegisterOnly(cmd) && sessionEventCarriesNotes(source, event.HookEventName) && registered && (!isPrompt || !haveFile) {
 		if text := claimNotesForHook(cred, externalID, noteEventSessionStart); text != "" {
 			writeSessionAdditionalContext(cmd.OutOrStdout(), event.HookEventName, text)
 		}
@@ -368,7 +374,25 @@ func registerSpawnFromPermissionHook(source string, raw []byte) {
 // note into the model's context at SessionStart or UserPromptSubmit. Both
 // events accept hookSpecificOutput.additionalContext; the event name must
 // match the event that fired.
+func sessionEventCarriesNotes(source, event string) bool {
+	switch source {
+	case permissionSourceClaudeCode, permissionSourceCodexCLI:
+		return strings.EqualFold(event, "SessionStart") || strings.EqualFold(event, "UserPromptSubmit")
+	case permissionSourceCursor:
+		return strings.EqualFold(event, "sessionStart")
+	default:
+		return false
+	}
+}
+
 func writeSessionAdditionalContext(out io.Writer, hookEventName, text string) {
+	if hookEventName == "sessionStart" {
+		data, err := json.Marshal(map[string]string{"additional_context": text})
+		if err == nil {
+			fmt.Fprintln(out, string(data))
+		} //nolint:errcheck
+		return
+	}
 	name := "SessionStart"
 	if strings.EqualFold(strings.TrimSpace(hookEventName), "UserPromptSubmit") {
 		name = "UserPromptSubmit"

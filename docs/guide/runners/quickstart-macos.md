@@ -116,8 +116,8 @@ that must run jobs with nobody logged in should use a Linux runner instead.
 
 The runner reports the agent harnesses installed for the user it runs as
 (Copilot CLI, Cursor CLI, Claude Code and others) and generates host
-execution profiles named `copilot` and `cursor` for Copilot CLI and Cursor
-CLI, so no profile file is needed. Sign in to the harness as that user, then
+execution profiles named `copilot`, `cursor` and `claude` for Copilot CLI,
+Cursor CLI and a signed-in Claude Code, so no profile file is needed. Sign in to the harness as that user, then
 check what the runner reports:
 
 ```bash
@@ -201,6 +201,8 @@ completion, injection rejection, process-group halt). macOS specifics:
 | --- | --- |
 | `copilot_not_installed` in the execution log | `npm install -g @github/copilot` or `brew install copilot-cli` as the runner user. |
 | `copilot_not_logged_in` | Run `copilot` once and `/login` as the runner user, or export `COPILOT_GITHUB_TOKEN` where the runner starts. |
+| `claude_approval_hook_missing` | Run `preloop agents onboard "Claude Code" --approvals` as the runner user. |
+| `claude_not_logged_in` | Run `claude auth login` as the runner user, then `preloop runner inventory --refresh`. |
 | CLI found in a terminal but not by the launchd runner | The agent CLI is outside the searched locations. Symlink it into `~/.local/bin` or install via Homebrew or npm. |
 | Service dies after logout | LaunchAgents run per login session. Use a Linux runner with systemd lingering for always-on machines. |
 | Docker flows report `docker is not available` | Host profiles do not need Docker. For the Docker harness, install Docker Desktop and make sure `docker ps` succeeds as the runner user. |

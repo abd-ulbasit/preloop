@@ -3163,6 +3163,16 @@ class FlowExecutionOrchestrator:
         harness = host_exec_harness_selector(kind, config)
         if not harness or harness_fallback_mode(config) != HARNESS_FALLBACK_SERVER:
             return
+        from preloop.services.host_exec import host_exec_workspace
+
+        if host_exec_workspace(config) is not None:
+            # Checked before any fallback can swap in the hosted agent type:
+            # the authorized directory exists only on the runner host.
+            raise ValueError(
+                "a host flow that runs in an authorized directory cannot fall "
+                "back to hosted compute, where the directory does not exist; "
+                "use harness_fallback queue or fail"
+            )
         from preloop.models.crud.flow_runner import crud_flow_runner
         from preloop.services.runner_service import (
             AUTO_RUNNER_POOL,
@@ -3275,6 +3285,11 @@ class FlowExecutionOrchestrator:
                 agent_type=effective_agent_type,
                 agent_config=self.flow.agent_config,
                 runner_pool=self.flow.runner_pool,
+                git_clone_config=clone_config,
+                uses_mcp=bool(
+                    getattr(self.flow, "allowed_mcp_tools", None)
+                    or getattr(self.flow, "allowed_mcp_servers", None)
+                ),
             ) or host_exec_unavailable_reason(
                 git_clone_config=clone_config,
                 custom_commands=self.flow.custom_commands,

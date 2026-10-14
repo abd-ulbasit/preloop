@@ -8054,7 +8054,9 @@ class OpenAIGatewayService:
         ):
             kwargs["api_key"] = resolved_credentials.value
         if region := _bedrock_region(ai_model):
-            kwargs.setdefault("aws_region_name", region)
+            # Model routing metadata is editable; the imported secret region
+            # is only a fallback when this model has no explicit region.
+            kwargs["aws_region_name"] = region
         if stream:
             kwargs["stream"] = True
             # Always request the final usage chunk from litellm. Without it,
@@ -8462,7 +8464,9 @@ class OpenAIGatewayService:
                 resolved_credentials.value if resolved_credentials else None
             )
         if region := _bedrock_region(ai_model):
-            kwargs.setdefault("aws_region_name", region)
+            # Model routing metadata is editable; the imported secret region
+            # is only a fallback when this model has no explicit region.
+            kwargs["aws_region_name"] = region
         if api_base := checked_model_api_base(ai_model, provider="openai"):
             kwargs["api_base"] = api_base
         # Azure needs the resource root (not the pasted deployment URL) and

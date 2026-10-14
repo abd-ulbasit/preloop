@@ -309,3 +309,61 @@ hosted service. *Preloop Enterprise* is the commercial self-hosted edition.
 - Issues: [github.com/preloop/preloop/issues](https://github.com/preloop/preloop/issues)
 
 Apache-2.0. Copyright (c) 2026 Spacecode AI Inc.
+
+## Operator-note receipts
+
+Native notes use supported OpenClaw SDK hooks, audited against **2026.6.11**.
+`before_prompt_build` returns `prependContext` for a deferred claimed batch
+registered to that native session. `llm_input` supplies a tentative exact-text
+witness, but it runs before preflight checks and is never enough to mark a
+receipt delivered. A matching `model_call_started` snapshots that witness for
+its call id; `model_call_ended` with native `outcome: "completed"` confirms the
+actual call admission and then ACKs the batch. An explicit error outcome,
+changed current input, foreign session/run, or preflight rejection does not ACK.
+
+Native `completed` describes call completion/cleanup and can include an early
+stream-consumer return. It does not promise a successful provider reply or that
+the model obeyed the note. The source contracts are
+[`hook-types.ts`](https://github.com/openclaw/openclaw/blob/v2026.6.11/src/plugins/hook-types.ts),
+[`attempt.ts`](https://github.com/openclaw/openclaw/blob/v2026.6.11/src/agents/embedded-agent-runner/run/attempt.ts)
+and [`attempt.model-diagnostic-events.ts`](https://github.com/openclaw/openclaw/blob/v2026.6.11/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts).
+This native prompt hook is a run boundary; model calls using a Preloop-managed
+gateway also receive notes at the gateway's next routed request.
+
+OpenClaw's host permissions belong beside the plugin `config`, not inside it:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "preloop-plugin": {
+        "hooks": {
+          "allowPromptInjection": true,
+          "allowConversationAccess": true
+        }
+      }
+    }
+  }
+}
+```
+
+Non-bundled plugins need explicit conversation access for the input observers.
+An older SDK that refuses any required note hook disables note claims while
+preserving the existing `before_tool_call` approval gate. A host that accepts
+hooks but does not emit the admission diagnostics leaves receipts claimed;
+missing session or run identity also prevents claims. Notes fail open and have
+a bounded HTTP deadline independently of approval decisions.
+
+`agent_end` releases matching unadmitted context for a later run; it never ends
+the backend session. Only native `session_end` reasons `new`, `reset` and
+`deleted` report a terminal session. `idle`, `daily`, `compaction`, `shutdown`,
+`restart` and unknown reasons stay resumable. Authoritative end events are sent
+even after local session-cache eviction; the backend resolves external ids
+within the caller's principal and ignores unknown ids.
+
+Callbacks serialize per session. A failed ACK of confirmed context is retried
+without reinjection, including before reporting session end. Unadmitted
+batches are stored in bounded process memory; a process restart, missing
+confirmation diagnostics or an unreachable end endpoint can leave a receipt
+claimed until expiry or another authoritative end. No dead session is guessed
+from silence.

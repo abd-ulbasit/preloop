@@ -353,8 +353,8 @@ async def resolve_tool_config(
 ) -> Any:
     """Get or create a ToolConfiguration row for this native tool."""
     from preloop.models.crud.tool_configuration import (
+        get_or_create_tool_configuration_async,
         get_tool_config_by_name_and_source_async,
-        create_tool_configuration_async,
     )
     from preloop.models.schemas.tool_configuration import ToolConfigurationCreate
 
@@ -367,7 +367,10 @@ async def resolve_tool_config(
     if config is not None:
         return config
 
-    return await create_tool_configuration_async(
+    # Insert-if-absent: a concurrent first permission check for the same
+    # tool adopts the winner's row without rolling back the session, so the
+    # caller's already loaded objects (the workflow) stay usable.
+    return await get_or_create_tool_configuration_async(
         db,
         obj_in=ToolConfigurationCreate(
             tool_name=tool_name,

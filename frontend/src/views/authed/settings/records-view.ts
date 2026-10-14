@@ -40,6 +40,7 @@ import {
 } from '../../../records-api';
 import { consoleDialogStyles } from '../../../styles/console-dialog';
 import '../../../table/table-pagination';
+import '../../../components/collapsible-section';
 import consoleStyles from '../../../styles/console-styles.css?inline';
 import {
   CHAIN_HONESTY,
@@ -67,7 +68,8 @@ import {
   type VerifyRange,
 } from '../../../utils/records-format';
 
-const CHECKPOINT_PAGE = 50;
+/** Ten checkpoints a page: 50 made Records 6.4 viewports on prod (#1585). */
+export const CHECKPOINT_PAGE = 10;
 const RESOURCE_TYPES = [
   { value: 'execution', label: 'Flow execution' },
   { value: 'approval', label: 'Approval request' },
@@ -866,62 +868,71 @@ ${offlineAuditCommand(range)}</pre>
             : nothing
         }
         <h3>Checkpoints</h3>
-        ${
-          this.checkpoints.length === 0
-            ? html`<div class="empty-state">No checkpoints yet.</div>`
-            : html`<div class="table-scroll">
-                <table class="styled-table">
-                  <thead>
-                    <tr>
-                      <th>Seq</th>
-                      <th>Row count</th>
-                      <th>Checkpointed at</th>
-                      <th>Key id</th>
-                      <th>Signature</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${this.checkpoints.map(
-                      (row) =>
-                        html`<tr>
-                          <td>${row.seq}</td>
-                          <td>${row.row_count}</td>
-                          <td>${row.checkpointed_at}</td>
-                          <td>${row.signing_key_id || 'None'}</td>
-                          <td>
-                            ${
-                              row.signature
-                                ? html`${truncateMiddle(row.signature)}
-                                    <sl-copy-button
-                                      value=${row.signature}
-                                    ></sl-copy-button>`
-                                : 'None'
-                            }
-                          </td>
-                        </tr>`
-                    )}
-                  </tbody>
-                </table>
-              </div>`
-        }
-        <table-pagination
-          class="checkpoint-pager"
-          page-index=${this.checkpointPage}
-          page-size=${this.checkpointPageSize}
-          .pageSizes=${[25, 50, 100]}
-          .total=${null}
-          page-rows=${this.checkpoints.length}
-          ?has-next=${this.checkpointAfter[this.checkpointPage + 1] != null}
-          ?loading=${this.checkpointsLoading}
-          noun="checkpoints, oldest first"
-          @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
-            void this.loadCheckpoints(event.detail.pageIndex)}
-          @page-size-change=${(event: CustomEvent<{ pageSize: number }>) => {
-            this.checkpointPageSize = event.detail.pageSize;
-            this.checkpointAfter = [0];
-            void this.loadCheckpoints(0);
-          }}
-        ></table-pagination>
+        <!-- Closed by default: the status above already says whether the
+             chain verifies, and the signed rows are evidence a reader opens
+             on purpose. Open, the page stays within three viewports (#1585). -->
+        <collapsible-section
+          class="checkpoint-section"
+          heading="checkpoints"
+          storage-key="records:checkpoints"
+        >
+          ${
+            this.checkpoints.length === 0
+              ? html`<div class="empty-state">No checkpoints yet.</div>`
+              : html`<div class="table-scroll">
+                  <table class="styled-table">
+                    <thead>
+                      <tr>
+                        <th>Seq</th>
+                        <th>Row count</th>
+                        <th>Checkpointed at</th>
+                        <th>Key id</th>
+                        <th>Signature</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${this.checkpoints.map(
+                        (row) =>
+                          html`<tr>
+                            <td>${row.seq}</td>
+                            <td>${row.row_count}</td>
+                            <td>${row.checkpointed_at}</td>
+                            <td>${row.signing_key_id || 'None'}</td>
+                            <td>
+                              ${
+                                row.signature
+                                  ? html`${truncateMiddle(row.signature)}
+                                      <sl-copy-button
+                                        value=${row.signature}
+                                      ></sl-copy-button>`
+                                  : 'None'
+                              }
+                            </td>
+                          </tr>`
+                      )}
+                    </tbody>
+                  </table>
+                </div>`
+          }
+          <table-pagination
+            class="checkpoint-pager"
+            page-index=${this.checkpointPage}
+            page-size=${this.checkpointPageSize}
+            .pageSizes=${[10, 25, 50, 100]}
+            .total=${null}
+            page-rows=${this.checkpoints.length}
+            ?has-next=${this.checkpointAfter[this.checkpointPage + 1] != null}
+            ?loading=${this.checkpointsLoading}
+            noun="checkpoints, oldest first"
+            @page-change=${(event: CustomEvent<{ pageIndex: number }>) =>
+              void this.loadCheckpoints(event.detail.pageIndex)}
+            @page-size-change=${(event: CustomEvent<{ pageSize: number }>) => {
+              this.checkpointPageSize = event.detail.pageSize;
+              this.checkpointAfter = [0];
+              void this.loadCheckpoints(0);
+            }}
+          ></table-pagination>
+        </collapsible-section>
         ${
           this.checkpointError
             ? html`<div data-testid="checkpoint-error">

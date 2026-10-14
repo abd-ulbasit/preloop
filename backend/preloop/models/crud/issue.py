@@ -115,6 +115,20 @@ class CRUDIssue(CRUDBase[Issue]):
 
         return issue
 
+    def get_owned_ids(
+        self, db: Session, *, ids: List[Any], account_id: Any
+    ) -> set[str]:
+        """The subset of ``ids`` that are issues of this account, as strings."""
+        if not ids:
+            return set()
+        rows = (
+            db.query(Issue.id)
+            .join(Tracker, Issue.tracker_id == Tracker.id)
+            .filter(Issue.id.in_(list(ids)), Tracker.account_id == account_id)
+            .all()
+        )
+        return {str(issue_id) for (issue_id,) in rows}
+
     def get_by_title(
         self,
         db: Session,

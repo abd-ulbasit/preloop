@@ -41,15 +41,63 @@ async function run(binary, args, env, cwd, input) {
   return output;
 }
 
-for (const runtime of ["pi", "deepseek"]) {
+const runtimes = process.env.PRELOOP_TEST_RUNTIME
+  ? [process.env.PRELOOP_TEST_RUNTIME]
+  : ["pi", "deepseek"];
+assert.ok(runtimes.every((runtime) => ["pi", "deepseek"].includes(runtime)));
+
+for (const runtime of runtimes) {
   const root = mkdtempSync(join(tmpdir(), "preloop-harness-smoke-"));
   let approvals = 0,
     results = 0,
-    sessionHeader;
+    sessionHeader,
+    noteSession,
+    noteDelivered = false,
+    noteSeen = false,
+    noteEnded = false;
   const server = http.createServer(async (req, res) => {
     let text = "";
     for await (const chunk of req) text += chunk;
     const body = JSON.parse(text);
+    if (req.url === "/api/v1/agents/session-start") {
+      assert.equal(body.source, "deepseek");
+      assert.ok(body.session_id);
+      noteSession = body.session_id;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ runtime_session_id: "synthetic-runtime" }));
+      return;
+    }
+    if (req.url === "/api/v1/agents/notes/pending") {
+      assert.equal(body.session_id, noteSession);
+      assert.equal(body.defer_delivery, true);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify(
+          noteDelivered
+            ? { notes: [], text: null }
+            : {
+                notes: [{ note_id: "synthetic-note", envelope: {} }],
+                text: "<operator-notes>synthetic-note: verify the denial</operator-notes>",
+              },
+        ),
+      );
+      return;
+    }
+    if (req.url === "/api/v1/agents/notes/ack") {
+      assert.equal(body.session_id, noteSession);
+      assert.deepEqual(body.note_ids, ["synthetic-note"]);
+      noteDelivered = true;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+      return;
+    }
+    if (req.url === "/api/v1/agents/session-end") {
+      assert.equal(body.external_session_id, noteSession);
+      noteEnded = true;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+      return;
+    }
     if (req.url === "/api/v1/agents/permission-check") {
       approvals++;
       assert.equal(body.source, runtime);
@@ -62,6 +110,22 @@ for (const runtime of ["pi", "deepseek"]) {
       return;
     }
     sessionHeader ||= req.headers["x-preloop-session-id"];
+    if (runtime === "deepseek" && body.tools?.length) {
+      const noteMessages = body.messages.filter((message) =>
+        JSON.stringify(message).includes("synthetic-note: verify the denial"),
+      );
+      assert.equal(
+        noteMessages.length,
+        1,
+        "the native log must include the note once",
+      );
+      assert.equal(noteMessages[0].role, "user");
+      assert.ok(
+        noteDelivered,
+        "receipt acknowledges admitted history before model transport",
+      );
+      noteSeen = true;
+    }
     const toolResult = body.messages?.find(
       (message) => message.role === "tool",
     );
@@ -163,6 +227,10 @@ for (const runtime of ["pi", "deepseek"]) {
     assert.equal(results, 1, output);
     assert.equal(existsSync(join(root, "must-not-exist")), false);
     if (runtime === "pi") assert.ok(sessionHeader);
+    else {
+      assert.ok(noteSeen && noteDelivered, "native model-input note receipt");
+      assert.ok(noteEnded, "native session disposal reports authoritative end");
+    }
     console.log(
       `${runtime}: real runtime, model routing, native approval denial and clean exit passed`,
     );

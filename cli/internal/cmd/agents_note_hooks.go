@@ -82,6 +82,9 @@ func hookCredentialForCommand(cmd *cobra.Command) (permissionHookCredential, boo
 	if source == "" {
 		source = permissionSourceClaudeCode
 	}
+	if source == permissionSourceClaudeCode && isCursorHostInvokingClaudeHook() {
+		return permissionHookCredential{}, false
+	}
 	cred, err := resolvePermissionHookCredential(source)
 	if err != nil {
 		return permissionHookCredential{}, false
@@ -215,6 +218,8 @@ type stopHookEvent struct {
 	SessionID      string `json:"session_id"`
 	HookEventName  string `json:"hook_event_name"`
 	StopHookActive bool   `json:"stop_hook_active"`
+	LoopCount      int    `json:"loop_count"`
+	Status         string `json:"status"`
 }
 
 var agentsStopHookCmd = &cobra.Command{
@@ -240,13 +245,13 @@ func runAgentsStopHook(cmd *cobra.Command, _ []string) error {
 	if json.Unmarshal(raw, &event) != nil {
 		return nil
 	}
-	sessionID := strings.TrimSpace(event.SessionID)
+	sessionID := strings.TrimSpace(hookEventSessionID(raw))
 	if sessionID == "" {
 		return nil
 	}
 	// Respect the harness's own loop guard: `stop_hook_active` means this
 	// Stop already follows a block, so blocking again would spin.
-	if event.StopHookActive {
+	if event.StopHookActive || event.LoopCount >= stopBlockSessionMax {
 		return nil
 	}
 	// Check the cap before the pull: the pull marks a note delivered, so a
@@ -259,12 +264,21 @@ func runAgentsStopHook(cmd *cobra.Command, _ []string) error {
 	if !ok {
 		return nil
 	}
+	if cred.Source != permissionSourceClaudeCode && cred.Source != permissionSourceCodexCLI && cred.Source != permissionSourceCursor {
+		return nil
+	}
+	if cred.Source == permissionSourceCursor && event.Status != "" && event.Status != "completed" {
+		return nil
+	}
 	text := claimNotesForHook(cred, sessionID, noteEventStop)
 	if text == "" {
 		return nil
 	}
 	recordStopBlock(sessionID)
 	payload := map[string]interface{}{"decision": "block", "reason": text}
+	if cred.Source == permissionSourceCursor {
+		payload = map[string]interface{}{"followup_message": text}
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil
@@ -305,7 +319,10 @@ func runAgentsSessionEndHook(cmd *cobra.Command, _ []string) error {
 	if json.Unmarshal(raw, &event) != nil {
 		return nil
 	}
-	sessionID := strings.TrimSpace(event.SessionID)
+	sessionID := strings.TrimSpace(hookEventSessionID(raw))
+	if sessionID == "" {
+		return nil
+	}
 	// The conversation is over either way: its Stop-cap state is stale.
 	resetStopBlocks(sessionID)
 	cred, ok := hookCredentialForCommand(cmd)

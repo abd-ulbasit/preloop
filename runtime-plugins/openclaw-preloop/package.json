@@ -60,7 +60,13 @@
       "publishToNpm": true
     },
     "hooks": [
-      "before_tool_call"
+      "before_tool_call",
+      "before_prompt_build",
+      "llm_input",
+      "model_call_started",
+      "model_call_ended",
+      "agent_end",
+      "session_end"
     ],
     "capabilities": {
       "tool_approval": true

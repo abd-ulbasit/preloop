@@ -1630,6 +1630,16 @@ describe('FlowExecutionsView', () => {
         { timeout: 4000 }
       );
       await tick(20);
+      // Names and models come from the summaries, not the full /flows rows.
+      const flowLists = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter(
+          (url) => url.includes('/api/v1/flows') && !url.includes('/executions')
+        );
+      expect(flowLists.length).to.be.greaterThan(0);
+      expect(flowLists.every((url) => url.includes('/api/v1/flows/summary'))).to
+        .be.true;
 
       actionById(el, 'retry').onClick?.();
       await tick(20);

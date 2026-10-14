@@ -243,9 +243,7 @@ func TestParseOpenClawConfigPrefersInlineBedrockAPIKey(t *testing.T) {
 	if parsed.UsesAmbientAuth {
 		t.Fatal("expected inline Bedrock API key to disable ambient fallback")
 	}
-	if parsed.ProviderAPIKey != "ABSKQ-inline-test" {
-		t.Fatalf("expected inline Bedrock API key, got %q", parsed.ProviderAPIKey)
-	}
+	assertBedrockOnboardingSecret(t, parsed.ProviderAPIKey, "ABSKQ-inline-test", "us-east-1")
 }
 
 func TestParseOpenClawConfigResolvesAmazonBedrockRefToBedrockProviderBlock(t *testing.T) {
@@ -285,9 +283,7 @@ func TestParseOpenClawConfigResolvesAmazonBedrockRefToBedrockProviderBlock(t *te
 	if err != nil {
 		t.Fatalf("parseOpenClawConfig returned error: %v", err)
 	}
-	if parsed.ProviderAPIKey != "ABSKQ-alias-test" {
-		t.Fatalf("expected provider alias fallback to resolve inline key, got %q", parsed.ProviderAPIKey)
-	}
+	assertBedrockOnboardingSecret(t, parsed.ProviderAPIKey, "ABSKQ-alias-test", "us-east-1")
 }
 
 func TestParseOpenClawConfigRecoversUpstreamFromManagedConfigState(t *testing.T) {
@@ -387,9 +383,7 @@ func TestParseOpenClawConfigRecoversUpstreamFromManagedConfigState(t *testing.T)
 	if parsed.ProviderBaseURL != "https://bedrock-runtime.us-east-1.amazonaws.com" {
 		t.Fatalf("expected recovered base url, got %q", parsed.ProviderBaseURL)
 	}
-	if parsed.ProviderAPIKey != "ABSKQ-state-test" {
-		t.Fatalf("expected recovered api key, got %q", parsed.ProviderAPIKey)
-	}
+	assertBedrockOnboardingSecret(t, parsed.ProviderAPIKey, "ABSKQ-state-test", "us-east-1")
 	if parsed.ModelAlias != "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" {
 		t.Fatalf("expected recovered model alias, got %q", parsed.ModelAlias)
 	}

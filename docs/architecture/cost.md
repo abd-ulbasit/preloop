@@ -56,6 +56,15 @@ rules are unchanged: replay-validation rows stay excluded, retries stay included
 unless the caller sets `exclude_retries`, and there is no daily rollup. Summary
 responses are not cached.
 
+The headline totals read the newest rows through the covering partial index
+`ix_api_usage_gateway_totals`. That read stays index-only only for pages that
+VACUUM has marked all-visible. `api_usage` therefore has its own autovacuum
+thresholds (migration `20261015_api_usage_autovacuum`): about 1% new or
+changed rows, instead of the server default of 20% (#1583). Without them, the
+newest unvacuumed rows, which are exactly the Spend window, pushed the planner
+to scan the whole table. A reprice rewrites its whole range and had the same
+effect until the next vacuum.
+
 ## Cost Analytics and Budgeting
 *   **Purpose:** Turn model usage telemetry into explainable spend, enforceable budgets, and optimization guidance.
 *   **Canonical Ledger:** `ApiUsage` remains the source of truth for model call tokens, estimated cost, provider, model, runtime principal, API key, flow, managed agent, and runtime-session attribution.

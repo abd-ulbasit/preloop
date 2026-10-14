@@ -155,6 +155,7 @@ from preloop.services.subject_governance import (
 from preloop.utils.permissions import require_permission
 from preloop.utils.redaction import redact_dict
 from preloop.schemas.gateway_usage import GatewayUsageBreakdown
+from preloop.api.heavy_routes import heavy_route
 
 logger = logging.getLogger(__name__)
 
@@ -1391,6 +1392,7 @@ async def update_account_details(
     "/account/gateway-usage/summary",
     response_model=AccountGatewayUsageSummaryResponse,
 )
+@heavy_route
 @require_permission("view_cost")
 def get_account_gateway_usage_summary(
     account: Annotated[Account, Depends(get_account_for_user)],
@@ -1495,6 +1497,7 @@ def search_account_gateway_usage(
     "/account/gateway-usage/rate-limits",
     response_model=AccountRateLimitReportResponse,
 )
+@heavy_route
 @require_permission("view_cost")
 def get_account_rate_limit_report(
     account: Annotated[Account, Depends(get_account_for_user)],
