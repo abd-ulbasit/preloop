@@ -21931,9 +21931,17 @@ components:
           title: Status
           default: all
         total:
-          type: integer
+          anyOf:
+          - type: integer
+          - type: 'null'
           title: Total
-          default: 0
+          description: Matching sessions. Null when another page exists and the exact
+            count was not computed.
+        has_more:
+          type: boolean
+          title: Has More
+          description: Whether a later page has more sessions.
+          default: false
         limit:
           type: integer
           title: Limit

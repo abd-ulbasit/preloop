@@ -605,7 +605,9 @@ export interface AccountRuntimeSessionListResponse {
   query: string | null;
   session_source_type: string | null;
   status: 'all' | 'active' | 'ended';
-  total: number;
+  /** Null when another page exists and the exact count was not computed. */
+  total: number | null;
+  has_more?: boolean;
   limit: number;
   offset: number;
   items: RuntimeSessionSummary[];

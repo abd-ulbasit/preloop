@@ -762,6 +762,131 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             .all()
         )
 
+    @staticmethod
+    def _model_page_is_bounded(
+        *,
+        principals: Optional[list[tuple[str, str]]],
+        source_types: Optional[list[str]],
+        alias: Optional[str],
+        parent_session_id: Optional[str],
+        flow_execution_id: Optional[str],
+        has_artifacts: Optional[str],
+        active_within: Optional[timedelta],
+        min_requests: Optional[int],
+        runtime_principal_type: Optional[str],
+        runtime_principal_id: Optional[str],
+    ) -> bool:
+        """Whether a model-scoped list can stop at the page.
+
+        The model detail page asks for one model's recent sessions and
+        nothing else. Extra filters still use the full ranking.
+        """
+        return not any(
+            (
+                principals is not None,
+                source_types is not None,
+                alias,
+                parent_session_id,
+                flow_execution_id,
+                has_artifacts,
+                active_within is not None,
+                min_requests is not None,
+                runtime_principal_type,
+                runtime_principal_id,
+            )
+        )
+
+    def _model_session_page_ids(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        ai_model_id: str,
+        start_date: Optional[datetime],
+        end_date: Optional[datetime],
+        query: Optional[str],
+        session_source_type: Optional[str],
+        status: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[List[Any], bool]:
+        """Session ids for one model, newest request first, one page.
+
+        Groups the model's gateway rows and stops at ``limit + 1``. The
+        predicate matches ``ix_api_usage_account_model_ts``, so this is an
+        index range on that model rather than a scan of the account's
+        usage (#1688).
+
+        Args:
+            db: Database session.
+            account_id: Account that owns the sessions.
+            ai_model_id: Model whose usage selects the sessions.
+            start_date: Inclusive lower bound on usage time, if set.
+            end_date: Exclusive upper bound on usage time, if set.
+            query: Optional case-insensitive session text filter.
+            session_source_type: Optional source-type filter.
+            status: ``all``, ``active``, or ``ended``.
+            limit: Page size.
+            offset: Rows to skip.
+
+        Returns:
+            The page of session ids, and whether another page exists.
+        """
+        last_request = func.max(ApiUsage.timestamp)
+        # The model detail page asks for one model's newest sessions and
+        # nothing else. That predicate is exactly ``ix_api_usage_account_model_ts``
+        # (account, model, timestamp, and the included session id), so the
+        # aggregate can be index-only. Joining ``runtime_session`` here made
+        # the planner walk ``ix_api_usage_timestamp`` and recheck every row
+        # in the window (#1688). Status and text filters still need the
+        # session row, and those pages are not the busy-model load.
+        needs_session_row = bool(
+            query or session_source_type or status in ("active", "ended")
+        )
+        stmt = db.query(
+            ApiUsage.runtime_session_id, last_request.label("last_request_at")
+        ).filter(
+            ApiUsage.account_id == account_id,
+            ApiUsage.ai_model_id == ai_model_id,
+            ApiUsage.action_type == "model_gateway",
+            ApiUsage.runtime_session_id.isnot(None),
+        )
+        if start_date is not None:
+            stmt = stmt.filter(ApiUsage.timestamp >= start_date)
+        if end_date is not None:
+            stmt = stmt.filter(ApiUsage.timestamp < end_date)
+        if needs_session_row:
+            stmt = stmt.join(
+                RuntimeSession, RuntimeSession.id == ApiUsage.runtime_session_id
+            ).filter(RuntimeSession.account_id == account_id)
+            if status == "active":
+                stmt = stmt.filter(RuntimeSession.ended_at.is_(None))
+            elif status == "ended":
+                stmt = stmt.filter(RuntimeSession.ended_at.isnot(None))
+            if session_source_type:
+                stmt = stmt.filter(
+                    RuntimeSession.session_source_type == session_source_type
+                )
+            if query:
+                normalized_query = f"%{' '.join(query.strip().split())}%"
+                stmt = stmt.filter(
+                    or_(
+                        RuntimeSession.session_source_type.ilike(normalized_query),
+                        RuntimeSession.session_source_id.ilike(normalized_query),
+                        RuntimeSession.session_reference.ilike(normalized_query),
+                        RuntimeSession.runtime_principal_name.ilike(normalized_query),
+                    )
+                )
+        rows = (
+            stmt.group_by(ApiUsage.runtime_session_id)
+            .order_by(last_request.desc(), ApiUsage.runtime_session_id.desc())
+            .limit(limit + 1)
+            .offset(offset)
+            .all()
+        )
+        has_more = len(rows) > limit
+        return [row.runtime_session_id for row in rows[:limit]], has_more
+
     def list_account_sessions(
         self,
         db: Session,
@@ -864,7 +989,38 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                     self.model.runtime_principal_name.ilike(normalized_query),
                 )
             )
-        if ai_model_id:
+        use_model_page = bool(ai_model_id) and self._model_page_is_bounded(
+            principals=principals,
+            source_types=source_types,
+            alias=alias,
+            parent_session_id=parent_session_id,
+            flow_execution_id=flow_execution_id,
+            has_artifacts=has_artifacts,
+            active_within=active_within,
+            min_requests=min_requests,
+            runtime_principal_type=runtime_principal_type,
+            runtime_principal_id=runtime_principal_id,
+        )
+        model_page_ids: Optional[List[Any]] = None
+        has_more = False
+        if use_model_page:
+            model_page_ids, has_more = self._model_session_page_ids(
+                db,
+                account_id=account_id,
+                ai_model_id=str(ai_model_id),
+                start_date=start_date,
+                end_date=end_date,
+                query=query,
+                session_source_type=session_source_type,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+            if model_page_ids:
+                session_query = session_query.filter(self.model.id.in_(model_page_ids))
+            else:
+                session_query = session_query.filter(false())
+        elif ai_model_id:
             matching_session_ids = db.query(ApiUsage.runtime_session_id).filter(
                 ApiUsage.account_id == account_id,
                 ApiUsage.runtime_session_id.isnot(None),
@@ -959,7 +1115,16 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         elif status == "ended":
             session_query = session_query.filter(self.model.ended_at.isnot(None))
 
-        total = session_query.count()
+        if use_model_page:
+            # The probe already stopped at limit + 1. Counting every session
+            # that ever used the model is the read that scaled with request
+            # count (#1688). The total is exact only when this page is the
+            # last one.
+            total = None if has_more else offset + len(model_page_ids or [])
+            page_ids = model_page_ids or []
+        else:
+            total = session_query.count()
+            page_ids = None
         link_filters = {
             "account_id": account_id,
             "start_date": start_date,
@@ -972,10 +1137,16 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         # detail page (#1584). The ranking itself is tried on recent usage
         # first; it falls back to the whole history only when the recent
         # window cannot decide the page.
-        page_ids = None
         # Deep pages almost never fit a recent window; go straight to the
-        # full ranking instead of paying for two windows first.
-        windows = _RANKING_WINDOWS if offset + limit <= _RANKING_WINDOW_MAX_ROWS else ()
+        # full ranking instead of paying for two windows first. A model
+        # detail page already has its ids from the bounded probe.
+        windows = (
+            ()
+            if use_model_page
+            else _RANKING_WINDOWS
+            if offset + limit <= _RANKING_WINDOW_MAX_ROWS
+            else ()
+        )
         for window in windows:
             page_ids = self._rank_page_from_recent_usage(
                 db,
@@ -987,7 +1158,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             )
             if page_ids is not None:
                 break
-        if page_ids is None:
+        if page_ids is None and not use_model_page:
             page_ids = self._rank_page_from_all_usage(
                 db,
                 session_query=session_query,
@@ -1041,7 +1212,9 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 summary["last_request_at"] = latest_usage.timestamp
             items.append(summary)
 
-        return {"total": total, "items": items}
+        if not use_model_page and total is not None:
+            has_more = offset + len(items) < total
+        return {"total": total, "has_more": has_more, "items": items}
 
     def _rank_page_from_all_usage(
         self,

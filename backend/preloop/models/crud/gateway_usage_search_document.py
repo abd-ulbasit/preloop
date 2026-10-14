@@ -144,6 +144,7 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
         limit: int = 20,
         offset: int = 0,
         include_total: bool = True,
+        api_usage_ids: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """Return account-scoped gateway interaction search hits.
 
@@ -240,6 +241,13 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
             base_query = base_query.filter(
                 resolved_session_source_type == session_source_type
             )
+        if api_usage_ids is not None:
+            # The caller already picked a bounded page of ids. Do not count
+            # the window, and do not widen the join past those rows.
+            if not api_usage_ids:
+                return {"total": None, "has_more": False, "items": []}
+            base_query = base_query.filter(ApiUsage.id.in_(list(api_usage_ids)))
+            include_total = False
 
         total = (
             base_query.with_entities(func.count(GatewayUsageSearchDocument.id)).scalar()
@@ -315,6 +323,83 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
             "total": int(total or 0) if include_total else None,
             "has_more": has_more,
             "items": items,
+        }
+
+    def list_model_interaction_page(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        ai_model_id: str,
+        start_date: datetime,
+        end_date: datetime,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Newest indexed interactions for one model, without counting them.
+
+        The id probe is ``ORDER BY timestamp DESC, id DESC LIMIT``. That
+        matches ``ix_api_usage_account_model_ts``, so the database stops
+        after the page instead of joining every document in the window
+        (#1688). Rows without a search document are not interactions.
+
+        Args:
+            db: Database session.
+            account_id: Account that owns the usage.
+            ai_model_id: Model the page is about.
+            start_date: Inclusive lower bound on ``api_usage.timestamp``.
+            end_date: Exclusive upper bound on ``api_usage.timestamp``.
+            limit: Page size.
+            offset: Rows to skip.
+
+        Returns:
+            ``total`` (exact only when the page is the last one, else None),
+            ``has_more``, and the hydrated items.
+        """
+        has_document = (
+            db.query(GatewayUsageSearchDocument.id)
+            .filter(GatewayUsageSearchDocument.api_usage_id == ApiUsage.id)
+            .exists()
+        )
+        id_rows = (
+            db.query(ApiUsage.id)
+            .filter(
+                ApiUsage.account_id == account_id,
+                ApiUsage.ai_model_id == ai_model_id,
+                ApiUsage.action_type == "model_gateway",
+                ApiUsage.timestamp >= start_date,
+                ApiUsage.timestamp < end_date,
+                has_document,
+            )
+            .order_by(ApiUsage.timestamp.desc(), ApiUsage.id.desc())
+            .limit(limit + 1)
+            .offset(offset)
+            .all()
+        )
+        has_more = len(id_rows) > limit
+        usage_ids = [row.id for row in id_rows[:limit]]
+        if not usage_ids:
+            return {
+                "total": 0 if offset == 0 and not has_more else None,
+                "has_more": has_more,
+                "items": [],
+            }
+        hydrated = self.search_account_documents(
+            db,
+            account_id=account_id,
+            start_date=start_date,
+            end_date=end_date,
+            ai_model_id=ai_model_id,
+            limit=len(usage_ids),
+            offset=0,
+            include_total=False,
+            api_usage_ids=usage_ids,
+        )
+        total = None if has_more else offset + len(hydrated["items"])
+        return {
+            "total": total,
+            "has_more": has_more,
+            "items": hydrated["items"],
         }
 
     @staticmethod

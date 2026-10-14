@@ -216,6 +216,24 @@ class ApiUsage(Base):
             "timestamp",
             postgresql_ops={"timestamp": "DESC"},
         ),
+        # Model detail lists the newest gateway rows for one model (#1688).
+        # ``timestamp`` is the request time (there is no separate created_at
+        # on this table). The tie-break on id lets a LIMIT stop in index
+        # order, and runtime_session_id is included so the session page can
+        # group without reading the heap. Partial on model-gateway rows that
+        # name a model, which is the filter both lists apply.
+        Index(
+            "ix_api_usage_account_model_ts",
+            "account_id",
+            "ai_model_id",
+            "timestamp",
+            "id",
+            postgresql_ops={"timestamp": "DESC", "id": "DESC"},
+            postgresql_include=["runtime_session_id"],
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND ai_model_id IS NOT NULL"
+            ),
+        ),
         Index(
             "ix_api_usage_account_principal_ts",
             "account_id",

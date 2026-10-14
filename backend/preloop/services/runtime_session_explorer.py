@@ -195,6 +195,7 @@ class RuntimeSessionExplorerService:
             session_source_type=session_source_type,
             status=status,
             total=results["total"],
+            has_more=bool(results.get("has_more", False)),
             limit=limit,
             offset=offset,
             items=items,

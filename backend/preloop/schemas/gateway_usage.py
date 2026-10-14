@@ -461,7 +461,17 @@ class AccountRuntimeSessionListResponse(BaseModel):
     query: Optional[str] = None
     session_source_type: Optional[str] = None
     status: str = "all"
-    total: int = 0
+    total: Optional[int] = Field(
+        default=None,
+        description=(
+            "Matching sessions. Null when another page exists and the exact "
+            "count was not computed."
+        ),
+    )
+    has_more: bool = Field(
+        default=False,
+        description="Whether a later page has more sessions.",
+    )
     limit: int = 20
     offset: int = 0
     items: List[RuntimeSessionSummary] = Field(default_factory=list)

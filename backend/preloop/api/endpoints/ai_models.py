@@ -63,6 +63,7 @@ from preloop.services.ai_model_pricing import (
 from preloop.services.model_gateway_usage import (
     ModelGatewayUsageService,
     _alias_failures,
+    model_detail_window,
     normalize_usage_period,
 )
 from preloop.services.runtime_session_explorer import RuntimeSessionExplorerService
@@ -591,6 +592,8 @@ def list_ai_model_runtime_sessions(
         db=db, model_id=model_id, current_user=current_user
     )
     account = _get_current_account(db=db, current_user=current_user)
+    # No dates means the last 7 days. The console sends the range it shows.
+    start_date, end_date = model_detail_window(start_date, end_date)
     return RuntimeSessionExplorerService(db).list_account_sessions(
         account=account,
         query=query,
@@ -628,6 +631,8 @@ def list_ai_model_interactions(
         db=db, model_id=model_id, current_user=current_user
     )
     account = _get_current_account(db=db, current_user=current_user)
+    # No dates means the last 7 days. The console sends the range it shows.
+    start_date, end_date = model_detail_window(start_date, end_date)
     return ModelGatewayUsageService(db).search_account_interactions(
         account=account,
         query=query,
