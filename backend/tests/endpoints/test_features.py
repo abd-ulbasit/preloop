@@ -63,6 +63,7 @@ class TestGetFeatures:
                 "multi_account": False,
                 "account_hierarchy": False,
                 "abac_rules": False,
+                "anthropic_inference_hooks": False,
                 "ticket_readiness": False,
                 "desktop_views": False,
             },
@@ -103,6 +104,7 @@ class TestGetFeatures:
                 "multi_account": False,
                 "account_hierarchy": False,
                 "abac_rules": False,
+                "anthropic_inference_hooks": False,
                 "ticket_readiness": False,
                 "desktop_views": False,
             },
@@ -135,7 +137,7 @@ class TestGetFeatures:
         assert "plugins" in result
         assert "features" in result
         assert len(result["plugins"]) == 3
-        assert len(result["features"]) == 18
+        assert len(result["features"]) == 19
         assert result["features"]["policy_simulation"] is True
         assert result["features"]["session_optimization"] is True
         assert result["features"]["chat_connections"] is True
@@ -388,7 +390,12 @@ class TestGetFeatures:
 class TestAccountCapabilities:
     """The account capabilities (issue #988) default off; a plugin turns them on."""
 
-    CAPABILITIES = ("multi_account", "account_hierarchy", "abac_rules")
+    CAPABILITIES = (
+        "multi_account",
+        "account_hierarchy",
+        "abac_rules",
+        "anthropic_inference_hooks",
+    )
 
     @patch("preloop.api.auth.bootstrap.crud_user")
     @patch("preloop.api.endpoints.features.get_plugin_manager")

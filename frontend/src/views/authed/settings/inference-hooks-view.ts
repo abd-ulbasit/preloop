@@ -453,8 +453,11 @@ export class InferenceHooksView extends LitElement {
                   <span class="state">Coverage unverified</span
                   ><span class="state">Pilot pending</span
                   ><span class="state"
-                    >Vendor settings
-                    ${this.health?.vendor_settings_state === 'declared' ? 'declared' : 'unknown'}</span
+                    >${`Vendor settings ${
+                      this.health?.vendor_settings_state === 'declared'
+                        ? 'declared'
+                        : 'unknown'
+                    }`}</span
                   >
                   <dl>
                     <dt>Integration</dt>

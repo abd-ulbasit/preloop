@@ -32,6 +32,7 @@ describe('Inference hook console', () => {
 
   beforeEach(() => {
     invalidateApiCaches();
+    localStorage.setItem('accessToken', 'test-token');
     active = true;
     permissions = ['manage_policies'];
     failWrite = false;
@@ -72,6 +73,7 @@ describe('Inference hook console', () => {
 
   afterEach(() => {
     fetchStub.restore();
+    localStorage.removeItem('accessToken');
     invalidateApiCaches();
   });
 

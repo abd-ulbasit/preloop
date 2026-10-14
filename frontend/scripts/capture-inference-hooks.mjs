@@ -148,8 +148,10 @@ try {
     .locator('inference-hooks-view')
     .getByText('Health and evidence', { exact: true })
     .waitFor();
+  // The console shell mirrors status text into its own live region, so wait
+  // on the view's paragraph only.
   await page
-    .locator('inference-hooks-view')
+    .locator('inference-hooks-view p[role=status]')
     .getByText('Integration loaded.', { exact: true })
     .waitFor();
   await capture(
