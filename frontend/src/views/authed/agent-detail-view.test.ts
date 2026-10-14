@@ -1082,6 +1082,359 @@ describe('AgentDetailView', () => {
     ).to.equal('Upstream refused, unverified');
   });
 
+  describe('progressive load', () => {
+    function agentCalls(): URL[] {
+      return fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter(
+          (url) =>
+            url.startsWith('/api/v1/agents/agent-1') &&
+            !url.includes('/governance') &&
+            !url.includes('/model-bindings')
+        )
+        .map((url) => new URL(url, window.location.origin));
+    }
+
+    async function mount(): Promise<AgentDetailView> {
+      const element = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(
+        () => !(element as any).loading && (element as any).agent !== null,
+        'header did not load'
+      );
+      return element;
+    }
+
+    it("reads the header alone, then only the open tab's section", async () => {
+      const element = await mount();
+      await waitUntil(() => (element as any).loadedSections.has('sessions'));
+      const calls = agentCalls();
+      expect(calls[0].searchParams.get('include')).to.equal('');
+      const sections = calls
+        .slice(1)
+        .map((url) => url.searchParams.get('include'));
+      expect(sections).to.deep.equal(['sessions']);
+      expect(calls[1].searchParams.has('start_date')).to.equal(false);
+
+      (element as any).activeTab = 'models';
+      await (element as any).loadActiveTabData();
+      const models = agentCalls().at(-1)!;
+      expect(models.searchParams.get('include')).to.equal('usage_by_model');
+      expect(models.searchParams.has('start_date')).to.equal(true);
+      // Opening it again does not read it again.
+      await (element as any).loadActiveTabData();
+      expect(agentCalls()).to.have.length(3);
+    });
+
+    it('shows skeleton rows until the first session page arrives', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('include=sessions')) await gate;
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      await waitUntil(() =>
+        element.shadowRoot!.querySelector('[data-testid="sessions-skeleton"]')
+      );
+      expect(element.shadowRoot!.querySelector('preloop-session-observer')).to
+        .be.null;
+      release();
+      await waitUntil(() =>
+        element.shadowRoot!.querySelector('preloop-session-observer')
+      );
+      const observer = element.shadowRoot!.querySelector(
+        'preloop-session-observer'
+      )!;
+      expect(observer.getAttribute('layout')).to.equal('full');
+    });
+
+    it('pages sessions with Load more and keeps the rows on refresh', async () => {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(String(input), window.location.origin);
+          if (url.searchParams.get('include') === 'sessions') {
+            const offset = Number(url.searchParams.get('session_offset') || 0);
+            const limit = Number(url.searchParams.get('session_limit') || 20);
+            const sessions = Array.from(
+              { length: Math.min(limit, 45 - offset) },
+              (_, i) => ({
+                id: `s-${offset + i}`,
+                session_source_type: 'claude_code',
+                session_source_id: `src-${offset + i}`,
+                started_at: '2026-10-01T00:00:00Z',
+              })
+            );
+            return new Response(
+              JSON.stringify({
+                agent: { id: 'agent-1' },
+                sessions,
+                session_total: 45,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      await element.updateComplete;
+      const more = element.shadowRoot!.querySelector(
+        '[data-testid="load-more-sessions"]'
+      ) as HTMLElement;
+      expect(more.textContent?.replace(/\s+/g, ' ')).to.contain('20 of 45');
+      more.click();
+      await waitUntil(() => (element as any).sessions.length === 40);
+      expect(agentCalls().at(-1)!.searchParams.get('session_offset')).to.equal(
+        '20'
+      );
+
+      await (element as any).loadSessions({ refresh: true });
+      const refresh = agentCalls().at(-1)!;
+      expect(refresh.searchParams.get('session_limit')).to.equal('40');
+      expect(refresh.searchParams.has('session_offset')).to.equal(false);
+      expect((element as any).sessions).to.have.length(40);
+    });
+
+    function sessionsServer(total: number | null, fail = () => false) {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(String(input), window.location.origin);
+          const include = url.searchParams.get('include');
+          if (include === 'sessions' || include === 'usage_by_model') {
+            if (fail()) return new Response('{}', { status: 500 });
+          }
+          if (include === 'sessions' && total !== null) {
+            const offset = Number(url.searchParams.get('session_offset') || 0);
+            const limit = Number(url.searchParams.get('session_limit') || 20);
+            const sessions = Array.from(
+              { length: Math.max(0, Math.min(limit, total - offset)) },
+              (_, i) => ({
+                id: `s-${offset + i}`,
+                session_source_type: 'claude_code',
+                session_source_id: `src-${offset + i}`,
+                started_at: '2026-10-01T00:00:00Z',
+              })
+            );
+            return new Response(
+              JSON.stringify({
+                agent: { id: 'agent-1' },
+                sessions,
+                session_total: total,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          return defaultFetch(input, init);
+        }
+      );
+    }
+
+    it('shows the list without Load more on a server that does not page', async () => {
+      sessionsServer(null);
+      const element = await mount();
+      await waitUntil(() => (element as any).loadedSections.has('sessions'));
+      await element.updateComplete;
+      expect((element as any).sessions.length).to.be.greaterThan(0);
+      expect((element as any).sessionTotal).to.equal(null);
+      expect(
+        Boolean(
+          element.shadowRoot!.querySelector(
+            '[data-testid="load-more-sessions"]'
+          )
+        )
+      ).to.equal(false);
+    });
+
+    it('keeps rows past the first 100 when a refresh lands', async () => {
+      sessionsServer(150);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      for (let i = 0; i < 5; i++)
+        await (element as any).loadSessions({ more: true });
+      expect((element as any).sessions).to.have.length(120);
+      await (element as any).loadSessions({ refresh: true });
+      const ids = ((element as any).sessions as Array<{ id: string }>).map(
+        (r) => r.id
+      );
+      expect(ids).to.have.length(120);
+      expect(new Set(ids).size).to.equal(120);
+      expect(ids[119]).to.equal('s-119');
+    });
+
+    it('keeps rows that new sessions push past the re-read', async () => {
+      sessionsServer(150);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      for (let i = 0; i < 5; i++)
+        await (element as any).loadSessions({ more: true });
+      // Two new sessions arrive at the top: s-98 and s-99 fall past row 100.
+      const shifted = (element as any).sessions.slice();
+      fetchStub.callsFake(
+        async () =>
+          new Response(
+            JSON.stringify({
+              agent: { id: 'agent-1' },
+              sessions: [
+                {
+                  id: 'new-1',
+                  session_source_type: 'claude_code',
+                  session_source_id: 'n1',
+                },
+                {
+                  id: 'new-2',
+                  session_source_type: 'claude_code',
+                  session_source_id: 'n2',
+                },
+                ...shifted.slice(0, 98),
+              ],
+              session_total: 152,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      await (element as any).loadSessions({ refresh: true });
+      const ids = ((element as any).sessions as Array<{ id: string }>).map(
+        (r) => r.id
+      );
+      expect(ids).to.have.length(122);
+      expect(ids).to.include.members(['s-98', 's-99', 's-119']);
+      expect(new Set(ids).size).to.equal(122);
+    });
+
+    it('never lets a refresh overwrite a page loaded after it', async () => {
+      sessionsServer(60);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      const refresh = (element as any).loadSessions({ refresh: true });
+      const more = (element as any).loadSessions({ more: true });
+      await Promise.all([refresh, more]);
+      expect((element as any).sessions).to.have.length(40);
+    });
+
+    it('keeps the list and says so when a session read fails', async () => {
+      let failing = false;
+      sessionsServer(45, () => failing);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      failing = true;
+      await (element as any).loadSessions({ refresh: true });
+      expect((element as any).sessions).to.have.length(20);
+      expect((element as any).sessionsError).to.be.a('string');
+    });
+
+    it('reports a failed usage read instead of zero spend', async () => {
+      sessionsServer(5, () => true);
+      const element = await mount();
+      await (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.be.a('string');
+      expect((element as any).loadedSections.has('usage_by_model')).to.equal(
+        false
+      );
+    });
+
+    it('hides spend until the usage read resolves', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('include=usage_by_model')) await gate;
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      (element as any).activeTab = 'models';
+      await element.updateComplete;
+      const reading = (element as any).loadActiveTabData();
+      await waitUntil(() => (element as any).editorContextReady);
+      await element.updateComplete;
+      const modelsCard = [
+        ...element.shadowRoot!.querySelectorAll('sl-card'),
+      ].find((card) => getDeepText(card).includes('Models & spend'));
+      expect(modelsCard, 'models card while usage is in flight').to.exist;
+      const pending = getDeepText(modelsCard);
+      expect(pending).to.contain('openai/gpt-5');
+      expect(pending).to.not.contain('spent');
+      expect(pending).to.not.contain('$0.00');
+      release();
+      await reading;
+      await element.updateComplete;
+      expect(getDeepText(modelsCard)).to.contain('spent');
+    });
+
+    it('clears a usage error when the next read starts', async () => {
+      let fail = true;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('include=usage_by_model')) {
+            if (fail) return new Response('{}', { status: 500 });
+            await gate;
+          }
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      await (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.be.a('string');
+      fail = false;
+      const retry = (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.equal(null);
+      release();
+      await retry;
+      expect((element as any).usageError).to.equal(null);
+      expect((element as any).loadedSections.has('usage_by_model')).to.equal(
+        true
+      );
+    });
+
+    it('spaces live refreshes out on a busy agent', async () => {
+      const element = await mount();
+      const clock = sinon.useFakeTimers({
+        now: Date.now(),
+        toFake: ['setTimeout', 'clearTimeout', 'Date'],
+      });
+      const load = sinon.stub(element as any, 'loadData').resolves();
+      try {
+        for (let i = 0; i < 10; i++) (element as any).scheduleRefresh();
+        clock.tick(300);
+        expect(load.callCount, 'one refresh for a burst').to.equal(1);
+        expect(load.firstCall.args[0]).to.equal(true);
+        (element as any).scheduleRefresh();
+        clock.tick(5_000);
+        expect(load.callCount, 'not again within the interval').to.equal(1);
+        clock.tick(10_100);
+        expect(load.callCount, 'the trailing refresh lands').to.equal(2);
+      } finally {
+        load.restore();
+        clock.restore();
+      }
+    });
+
+    it('keeps Decommission and Remove in the More menu', async () => {
+      const element = await mount();
+      const actions = (element as any).agentActions as Array<{
+        id: string;
+        menu?: boolean;
+      }>;
+      const pinned = actions.filter((action) => action.menu).map((a) => a.id);
+      expect(pinned).to.deep.equal(['decommission', 'remove']);
+    });
+  });
+
   describe('notes', () => {
     function withNotes(
       total: number,

@@ -1,4 +1,11 @@
-import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
+import {
+  LitElement,
+  html,
+  css,
+  nothing,
+  unsafeCSS,
+  type TemplateResult,
+} from 'lit';
 import { customElement, property, state, query } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
@@ -36,6 +43,12 @@ export interface ResourceAction {
    * action from the everyday ones so it is not clicked by muscle memory.
    */
   separated?: boolean;
+  /**
+   * Always behind the "More" menu, never a button on the row. For rare,
+   * destructive moves on a detail page (Decommission, Remove), so they do
+   * not sit at the same weight as Rename.
+   */
+  menu?: boolean;
   disabled?: boolean;
   loading?: boolean;
   tooltip?: string;
@@ -242,10 +255,45 @@ export class ResourceActions extends LitElement {
     `;
   }
 
+  private renderOverflow(actions: ResourceAction[], trailing: boolean) {
+    return html`
+      <sl-dropdown placement=${trailing ? 'bottom-end' : 'bottom-start'}>
+        <sl-button
+          slot="trigger"
+          size=${this.size}
+          variant="default"
+          ?caret=${!this.menuOnly}
+          aria-label=${trailing ? 'More actions' : 'Resource actions'}
+          data-testid=${trailing ? 'more-actions' : nothing}
+        >
+          <sl-icon
+            name=${this.menuOnly ? 'three-dots-vertical' : 'three-dots'}
+          ></sl-icon>
+        </sl-button>
+        <sl-menu>
+          ${actions.map((action) => this.renderMenuItem(action))}
+        </sl-menu>
+      </sl-dropdown>
+    `;
+  }
+
   render() {
-    const effectiveActions = this.getEffectiveActions();
-    if (effectiveActions.length === 0) {
+    const allActions = this.getEffectiveActions();
+    if (allActions.length === 0) {
       return html`<div class="actions-container"></div>`;
+    }
+    // Menu-pinned actions never take a slot on the row; they open from a
+    // trailing "More" menu so the destructive ones stay last.
+    const pinnedMenuActions = this.menuOnly
+      ? []
+      : allActions.filter((action) => action.menu && !action.render);
+    const effectiveActions = pinnedMenuActions.length
+      ? allActions.filter((action) => !pinnedMenuActions.includes(action))
+      : allActions;
+    if (effectiveActions.length === 0) {
+      return html`<div class="actions-container" part="container">
+        ${this.renderOverflow(pinnedMenuActions, true)}
+      </div>`;
     }
 
     // A separated action (Remove) is pushed away by `--sl-spacing-large`,
@@ -323,34 +371,20 @@ export class ResourceActions extends LitElement {
 
     // Destructive actions stay last in the menu, as they are on the row.
     overflowActions = [...overflowActions, ...foldedActions];
+    const trailingMenu = pinnedMenuActions.length > 0;
+    if (trailingMenu) {
+      overflowActions = [...overflowActions, ...pinnedMenuActions];
+    }
 
     return html`
       <div class="actions-container" part="container">
         ${
-          overflowActions.length > 0
-            ? html`
-                <sl-dropdown placement="bottom-start">
-                  <sl-button
-                    slot="trigger"
-                    size=${this.size}
-                    variant="default"
-                    ?caret=${!this.menuOnly}
-                    aria-label="Resource actions"
-                  >
-                    <sl-icon
-                      name=${this.menuOnly ? 'three-dots-vertical' : 'three-dots'}
-                    ></sl-icon>
-                  </sl-button>
-                  <sl-menu>
-                    ${overflowActions.map((action) =>
-                      this.renderMenuItem(action)
-                    )}
-                  </sl-menu>
-                </sl-dropdown>
-              `
+          overflowActions.length > 0 && !trailingMenu
+            ? this.renderOverflow(overflowActions, false)
             : ''
         }
         ${visibleActions.map((action) => this.renderButton(action))}
+        ${trailingMenu ? this.renderOverflow(overflowActions, true) : ''}
       </div>
     `;
   }

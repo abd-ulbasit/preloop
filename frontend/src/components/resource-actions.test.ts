@@ -37,6 +37,43 @@ describe('ResourceActions', () => {
     expect(getComputedStyle(item).textAlign).to.equal('left');
   });
 
+  it('puts menu-pinned actions in a trailing More menu, never on the row', async () => {
+    const actions = [
+      { id: 'rename', label: 'Rename', icon: 'pencil' },
+      {
+        id: 'decommission',
+        label: 'Decommission',
+        variant: 'danger' as const,
+        menu: true,
+      },
+      { id: 'remove', label: 'Remove', variant: 'danger' as const, menu: true },
+    ];
+    const host = await fixture<HTMLElement>(html`
+      <div style="width: 1200px;">
+        <resource-actions .actions=${actions}></resource-actions>
+      </div>
+    `);
+    const el = host.querySelector('resource-actions') as ResourceActions;
+    await el.updateComplete;
+    const root = el.shadowRoot!;
+    const rowIds = Array.from(
+      root.querySelectorAll('sl-button[data-action]')
+    ).map((button) => button.getAttribute('data-action'));
+    expect(rowIds).to.deep.equal(['rename']);
+    const container = root.querySelector('.actions-container')!;
+    const last = container.lastElementChild as HTMLElement;
+    expect(last.tagName).to.equal('SL-DROPDOWN');
+    expect(
+      last
+        .querySelector('[data-testid="more-actions"]')
+        ?.getAttribute('aria-label')
+    ).to.equal('More actions');
+    const items = Array.from(last.querySelectorAll('sl-menu-item')).map(
+      (item) => item.textContent?.trim()
+    );
+    expect(items).to.deep.equal(['Decommission', 'Remove']);
+  });
+
   it('keeps the separated destructive action out of the row on a phone', async () => {
     const { element, cleanup } = await renderInPhoneFrame<ResourceActions>({
       moduleUrl: new URL('./resource-actions.ts', import.meta.url).href,

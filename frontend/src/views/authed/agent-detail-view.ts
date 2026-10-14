@@ -26,6 +26,7 @@ import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/switch/switch.js';
 import '@shoelace-style/shoelace/dist/components/textarea/textarea.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
+import '@shoelace-style/shoelace/dist/components/skeleton/skeleton.js';
 import '../../components/governance-rule-set-editor.ts';
 import '../../components/budget-policy-editor.ts';
 import '../../components/tools-editor-component.ts';
@@ -129,6 +130,15 @@ type AllowedModelCandidate = {
  * control as the Overview usage card, so "30d" means the same thing and looks
  * the same wherever it is offered.
  */
+/** Sessions per page on the agent page (and per "Load more"). */
+export const AGENT_SESSION_PAGE = 20;
+/** The server's largest session page (`session_limit` <= 100). */
+const AGENT_SESSION_MAX_PAGE = 100;
+/** Live events coalesce for this long before a refresh. */
+const LIVE_REFRESH_DEBOUNCE_MS = 250;
+/** At most one live refresh per this interval on a busy agent. */
+export const LIVE_REFRESH_INTERVAL_MS = 15_000;
+
 const SPEND_RANGE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'day', label: '24h' },
   { value: 'week', label: '7d' },
@@ -167,6 +177,23 @@ export class AgentDetailView extends LitElement {
 
   @state()
   private sessions: RuntimeSessionSummary[] = [];
+
+  /** Sessions across all pages; null until known (or on an older server). */
+  @state() private sessionTotal: number | null = null;
+  /** True while the first session page of this agent is being read. */
+  @state() private sessionsLoading = false;
+  @state() private sessionsLoadingMore = false;
+  @state() private sessionsError: string | null = null;
+  /** The per-model usage read failed; the Models tab says so. */
+  @state() private usageError: string | null = null;
+  /**
+   * Tab sections already read for this agent and range. The header is one
+   * light call; each tab reads its own section the first time it opens.
+   */
+  private loadedSections = new Set<'sessions' | 'usage_by_model'>();
+  private sectionGeneration = 0;
+  /** When the last live refresh ran, to space them out on a busy agent. */
+  private lastLiveRefreshAt = 0;
 
   @state()
   private activeTab:
@@ -585,6 +612,20 @@ export class AgentDetailView extends LitElement {
         padding: var(--sl-spacing-x-large);
       }
 
+      .session-skeleton {
+        display: grid;
+        gap: var(--sl-spacing-x-small);
+        max-width: 360px;
+      }
+
+      .session-skeleton sl-skeleton {
+        height: 14px;
+      }
+
+      .session-skeleton sl-skeleton:nth-child(2n) {
+        margin-bottom: var(--sl-spacing-medium);
+      }
+
       .loading-state sl-spinner {
         font-size: 2rem;
         margin-bottom: var(--sl-spacing-small);
@@ -747,17 +788,25 @@ export class AgentDetailView extends LitElement {
     void unifiedWebSocketManager.connect();
   }
 
+  /**
+   * Live events re-read the header and the open tab, at most once per
+   * LIVE_REFRESH_INTERVAL_MS. A busy agent emits audit and session events
+   * several times a second; refetching on each kept the page permanently
+   * loading and multiplied the server's work by the number of viewers.
+   */
   private scheduleRefresh(): void {
-    if (!this.agentId) {
+    if (!this.agentId || this.refreshTimer !== null) {
       return;
     }
-    if (this.refreshTimer !== null) {
-      window.clearTimeout(this.refreshTimer);
-    }
+    const wait = Math.max(
+      LIVE_REFRESH_DEBOUNCE_MS,
+      this.lastLiveRefreshAt + LIVE_REFRESH_INTERVAL_MS - Date.now()
+    );
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
+      this.lastLiveRefreshAt = Date.now();
       void this.loadData(true);
-    }, 250);
+    }, wait);
   }
 
   private detailLoadGeneration = 0;
@@ -825,46 +874,36 @@ export class AgentDetailView extends LitElement {
       }
       this.aggregate = null;
       this.usageByModel = [];
+      this.usageError = null;
       this.activityByServer = [];
       this.activityByTool = [];
+      if (this.loadedSectionsAgentId !== this.agentId) {
+        this.sessions = [];
+        this.sessionTotal = null;
+      }
+      this.loadedSections = new Set();
+      ++this.sectionGeneration;
     }
 
-    let startDate: string | undefined;
-    const now = new Date();
-    if (this.budgetTimeRange === 'day') {
-      startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-    } else if (this.budgetTimeRange === 'week') {
-      startDate = new Date(
-        now.getTime() - 7 * 24 * 60 * 60 * 1000
-      ).toISOString();
-    } else if (this.budgetTimeRange === 'month') {
-      startDate = new Date(
-        now.getTime() - 30 * 24 * 60 * 60 * 1000
-      ).toISOString();
-    } else if (this.budgetTimeRange === 'year') {
-      startDate = new Date(
-        now.getTime() - 365 * 24 * 60 * 60 * 1000
-      ).toISOString();
-    }
-
+    const startDate = this.rangeStartDate();
     try {
       await Promise.all([
-        getAccountAgent(this.agentId, { start_date: startDate }).then(
-          (detail) => {
-            if (generation !== this.detailLoadGeneration) return detail;
-            this.agent = detail.agent;
-            this.aggregate = detail.aggregate;
-            this.usageByModel = detail.usage_by_model;
-            this.activityByServer = detail.activity_by_server;
-            this.activityByTool = detail.activity_by_tool;
-            this.sessions = detail.sessions;
-            this.selectedOwnerUserId = detail.agent.owner_user_id ?? '';
-            if (!isSoftRefresh)
-              this.editableDisplayName = detail.agent.display_name;
-            this.loading = false;
-            return detail;
-          }
-        ),
+        // The header only: agent, aggregate, credentials, enrollments. The
+        // session list and the per-model usage load with their tabs, so a
+        // busy agent's header no longer waits for them.
+        getAccountAgent(this.agentId, {
+          start_date: startDate,
+          include: [],
+        }).then((detail) => {
+          if (generation !== this.detailLoadGeneration) return detail;
+          this.agent = detail.agent;
+          this.aggregate = detail.aggregate;
+          this.selectedOwnerUserId = detail.agent.owner_user_id ?? '';
+          if (!isSoftRefresh)
+            this.editableDisplayName = detail.agent.display_name;
+          this.loading = false;
+          return detail;
+        }),
         (isSoftRefresh
           ? Promise.resolve(this.availableUsers)
           : this.fetchUsers()
@@ -891,6 +930,7 @@ export class AgentDetailView extends LitElement {
       }
       if (this.activeTab === 'tools' || this.activeTab === 'models')
         void this.ensureEditorContext(isSoftRefresh);
+      void this.loadActiveTabData(isSoftRefresh);
       if (this.activeTab === 'associated-flows')
         void this.loadAssociatedFlows(true);
       if (!isSoftRefresh) void this.loadDesktopEndpoints(generation);
@@ -910,6 +950,156 @@ export class AgentDetailView extends LitElement {
       if (!isSoftRefresh && generation === this.detailLoadGeneration) {
         this.loading = false;
       }
+    }
+  }
+
+  private loadedSectionsAgentId = '';
+
+  /** `start_date` of the spend range picked on the summary strip. */
+  private rangeStartDate(): string | undefined {
+    const day = 24 * 60 * 60 * 1000;
+    const span = {
+      day,
+      week: 7 * day,
+      month: 30 * day,
+      year: 365 * day,
+    }[this.budgetTimeRange];
+    return span ? new Date(Date.now() - span).toISOString() : undefined;
+  }
+
+  /** In-flight first reads, so a tab opened twice reads its section once. */
+  private sectionRequests = new Map<string, Promise<void>>();
+
+  /** Read the open tab's section, once per agent and range (or to refresh). */
+  private loadActiveTabData(refresh = false): Promise<void> {
+    const section =
+      this.activeTab === 'sessions'
+        ? 'sessions'
+        : this.activeTab === 'models'
+          ? 'usage_by_model'
+          : null;
+    if (!section) return Promise.resolve();
+    const key = `${section}:${this.sectionGeneration}:${refresh}`;
+    const pending = this.sectionRequests.get(key);
+    if (pending) return pending;
+    const request = (
+      section === 'sessions'
+        ? this.loadSessions({ refresh })
+        : this.loadUsageByModel(refresh)
+    ).finally(() => this.sectionRequests.delete(key));
+    this.sectionRequests.set(key, request);
+    return request;
+  }
+
+  /**
+   * One page of the agent's sessions, light rows only: a session's events
+   * load when the observer opens it. A refresh re-reads as many rows as are
+   * shown, so "Load more" pages survive live updates.
+   */
+  /** Session reads run one after another, so none lands on a newer page. */
+  private sessionsChain: Promise<void> = Promise.resolve();
+
+  private loadSessions(
+    options: { refresh?: boolean; more?: boolean } = {}
+  ): Promise<void> {
+    const next = this.sessionsChain.then(() => this.readSessions(options));
+    this.sessionsChain = next.catch(() => undefined);
+    return next;
+  }
+
+  /**
+   * One read of the agent's session rows. A refresh re-reads the first
+   * page (up to the server's 100) and keeps any rows loaded past it, so
+   * "Load more" pages survive live updates.
+   */
+  private async readSessions(options: {
+    refresh?: boolean;
+    more?: boolean;
+  }): Promise<void> {
+    const agentId = this.agentId;
+    if (!agentId) return;
+    if (
+      !options.refresh &&
+      !options.more &&
+      this.loadedSections.has('sessions')
+    )
+      return;
+    const generation = this.sectionGeneration;
+    const more = Boolean(options.more);
+    const limit = more
+      ? AGENT_SESSION_PAGE
+      : Math.min(
+          AGENT_SESSION_MAX_PAGE,
+          Math.max(AGENT_SESSION_PAGE, this.sessions.length)
+        );
+    if (more) this.sessionsLoadingMore = true;
+    else if (!options.refresh) this.sessionsLoading = true;
+    this.sessionsError = null;
+    try {
+      const detail = await getAccountAgent(agentId, {
+        include: ['sessions'],
+        session_limit: limit,
+        session_offset: more ? this.sessions.length : 0,
+      });
+      if (generation !== this.sectionGeneration || agentId !== this.agentId)
+        return;
+      const fresh = detail.sessions;
+      if (more) {
+        const shown = new Set(this.sessions.map((row) => row.id));
+        this.sessions = [
+          ...this.sessions,
+          ...fresh.filter((row) => !shown.has(row.id)),
+        ];
+      } else {
+        // Rows that new sessions pushed past the re-read stay too, so the
+        // list never loses a row and Load more continues after the last one.
+        const head = new Set(fresh.map((row) => row.id));
+        this.sessions =
+          this.sessions.length > limit
+            ? [...fresh, ...this.sessions.filter((row) => !head.has(row.id))]
+            : fresh;
+      }
+      this.sessionTotal =
+        typeof detail.session_total === 'number' ? detail.session_total : null;
+      this.loadedSections.add('sessions');
+      this.loadedSectionsAgentId = agentId;
+    } catch (error) {
+      if (generation !== this.sectionGeneration) return;
+      this.sessionsError =
+        error instanceof Error ? error.message : 'Could not load sessions';
+    } finally {
+      if (generation === this.sectionGeneration) {
+        this.sessionsLoading = false;
+        this.sessionsLoadingMore = false;
+      }
+    }
+  }
+
+  /** Per-model usage for the Models & spend tab, in the strip's range. */
+  private async loadUsageByModel(refresh = false): Promise<void> {
+    const agentId = this.agentId;
+    if (!agentId || (!refresh && this.loadedSections.has('usage_by_model')))
+      return;
+    const generation = this.sectionGeneration;
+    // Drop the previous failure as the read starts, so Retry does not
+    // keep the old banner up while the new read is in flight.
+    this.usageError = null;
+    try {
+      const detail = await getAccountAgent(agentId, {
+        start_date: this.rangeStartDate(),
+        include: ['usage_by_model'],
+      });
+      if (generation !== this.sectionGeneration || agentId !== this.agentId)
+        return;
+      this.usageByModel = detail.usage_by_model;
+      this.usageError = null;
+      this.loadedSections.add('usage_by_model');
+    } catch (error) {
+      if (generation !== this.sectionGeneration) return;
+      // Say so: with no usage rows the configured model would read as
+      // "$0.00 spent", which is a claim, not a failed read.
+      this.usageError =
+        error instanceof Error ? error.message : 'Could not load model usage';
     }
   }
 
@@ -1667,6 +1857,98 @@ export class AgentDetailView extends LitElement {
     `;
   }
 
+  /**
+   * Session history: a window-high master/detail panel (the list and the
+   * open session scroll inside it), 20 light rows a page. Rows show as
+   * skeletons until the first page arrives, so the header and the tabs never
+   * wait for the list.
+   */
+  private renderSessionsTab(): TemplateResult {
+    const total = this.sessionTotal;
+    const firstLoad = this.sessionsLoading && this.sessions.length === 0;
+    return html`
+      <sl-card
+        style="border: none; box-shadow: 0 10px 32px rgba(19,27,46,0.03); border-radius: var(--sl-border-radius-large); width: 100%;"
+      >
+        <div class="stack" style="padding: var(--sl-spacing-large);">
+          <div
+            class="hero"
+            style="margin-bottom: var(--sl-spacing-medium); display: flex; align-items: baseline; justify-content: flex-start; gap: var(--sl-spacing-small);"
+          >
+            <div class="hero-title">Session History</div>
+            <span class="meta-line" data-testid="session-count"
+              >${
+                total !== null
+                  ? `${total} session${total === 1 ? '' : 's'}`
+                  : nothing
+              }</span
+            >
+            <sl-icon-button
+              name="arrow-clockwise"
+              label="Refresh sessions"
+              style="font-size: 1.1rem; color: var(--console-meta-color);"
+              @click=${() => void this.loadSessions({ refresh: true })}
+            ></sl-icon-button>
+          </div>
+          ${
+            this.sessionsError
+              ? html`<p class="meta-line" role="alert">
+                  ${this.sessionsError}
+                </p>`
+              : nothing
+          }
+          ${
+            firstLoad
+              ? html`<div
+                  class="session-skeleton"
+                  data-testid="sessions-skeleton"
+                  aria-busy="true"
+                  aria-label="Loading sessions"
+                >
+                  ${[0, 1, 2, 3, 4].map(
+                    () =>
+                      html`<sl-skeleton effect="pulse"></sl-skeleton
+                        ><sl-skeleton
+                          effect="pulse"
+                          style="width: 60%;"
+                        ></sl-skeleton>`
+                  )}
+                </div>`
+              : html`<preloop-session-observer
+                  scope="managed_agent"
+                  .scopeId=${this.agentId}
+                  .sessions=${this.sessions}
+                  .talkAgent=${this.agent}
+                  layout="full"
+                  defaultReplayMode="timeline"
+                  .features=${{
+                    summaries: true,
+                    optimization:
+                      this.featureFlags.session_optimization === true,
+                    auditLinks: true,
+                    liveFollow: true,
+                  }}
+                ></preloop-session-observer>`
+          }
+          ${
+            total !== null && this.sessions.length < total
+              ? html`<div style="margin-top: var(--sl-spacing-small);">
+                  <sl-button
+                    size="small"
+                    data-testid="load-more-sessions"
+                    ?loading=${this.sessionsLoadingMore}
+                    @click=${() => void this.loadSessions({ more: true })}
+                    >Load more sessions (${this.sessions.length} of
+                    ${total})</sl-button
+                  >
+                </div>`
+              : nothing
+          }
+        </div>
+      </sl-card>
+    `;
+  }
+
   /** Whether a note can reach this agent (gateway or a harness hook). */
   private get canSendNotes(): boolean {
     return this.agent?.supports_operator_notes !== false;
@@ -2296,11 +2578,16 @@ export class AgentDetailView extends LitElement {
     });
     // After Talk (which brings its own element), before the everyday edits.
     const talkCount = actions.filter((action) => action.render).length;
+    // Decommission and Remove are rare and destructive: a "More" menu at the
+    // end of the row, not two red buttons at Rename's weight.
+    const pinned = new Set(['decommission', 'remove']);
     return [
       ...actions.slice(0, talkCount),
       ...note,
       ...actions.slice(talkCount),
-    ];
+    ].map((action) =>
+      pinned.has(action.id) ? { ...action, menu: true } : action
+    );
   }
 
   private handleSshKeyDown(e: KeyboardEvent) {
@@ -3276,6 +3563,7 @@ export class AgentDetailView extends LitElement {
                     void this.ensureEditorContext();
                   if (this.activeTab === 'associated-flows')
                     void this.loadAssociatedFlows();
+                  void this.loadActiveTabData();
                 }}
                 style="--indicator-color: var(--sl-color-primary-600);"
               >
@@ -3369,63 +3657,7 @@ export class AgentDetailView extends LitElement {
               </sl-tab-group>
             </div>
 
-            ${
-              this.activeTab === 'sessions'
-                ? html`
-                    <sl-card
-                      style="border: none; box-shadow: 0 10px 32px rgba(19,27,46,0.03); border-radius: var(--sl-border-radius-large); width: 100%;"
-                    >
-                      <div
-                        class="stack"
-                        style="padding: var(--sl-spacing-large);"
-                      >
-                        <div
-                          class="hero"
-                          style="margin-bottom: var(--sl-spacing-large);"
-                        >
-                          <div
-                            style="display: flex; justify-content: space-between; align-items: center; width: 100%;"
-                          >
-                            <div>
-                              <div
-                                class="hero-title"
-                                style="display: flex; align-items: center; gap: 8px;"
-                              >
-                                Session History
-                                <sl-icon-button
-                                  name="arrow-clockwise"
-                                  label="Refresh sessions"
-                                  style="font-size: 1.1rem; color: var(--console-meta-color);"
-                                  @click=${() => this.loadData(true)}
-                                ></sl-icon-button>
-                              </div>
-                              <div class="meta-line">
-                                Expand a session to view its captured
-                                interactions.
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <preloop-session-observer
-                          scope="managed_agent"
-                          .scopeId=${this.agentId}
-                          .sessions=${this.sessions}
-                          .talkAgent=${this.agent}
-                          layout="embedded"
-                          defaultReplayMode="timeline"
-                          .features=${{
-                            summaries: true,
-                            optimization:
-                              this.featureFlags.session_optimization === true,
-                            auditLinks: true,
-                            liveFollow: true,
-                          }}
-                        ></preloop-session-observer>
-                      </div>
-                    </sl-card>
-                  `
-                : nothing
-            }
+            ${this.activeTab === 'sessions' ? this.renderSessionsTab() : nothing}
             ${
               (this.activeTab === 'tools' || this.activeTab === 'models') &&
               !this.editorContextReady
@@ -3674,6 +3906,20 @@ export class AgentDetailView extends LitElement {
                 : nothing
             }
             ${
+              this.activeTab === 'models' && this.usageError
+                ? html`<p role="alert" data-testid="usage-error">
+                    Could not load spend per model (${this.usageError}). The
+                    amounts below are not current.
+                    <sl-button
+                      size="small"
+                      variant="text"
+                      @click=${() => void this.loadUsageByModel(true)}
+                      >Retry</sl-button
+                    >
+                  </p>`
+                : nothing
+            }
+            ${
               this.activeTab === 'models' && this.editorContextReady
                 ? html`
                     <sl-card
@@ -3723,7 +3969,10 @@ export class AgentDetailView extends LitElement {
                               const usage =
                                 this.getUsageForDisplayedModel(model);
                               const modelId = this.getDisplayedModelId(model);
-                              const showZeroSpend = isConfiguredModel && !usage;
+                              const showZeroSpend =
+                                isConfiguredModel &&
+                                !usage &&
+                                this.loadedSections.has('usage_by_model');
                               return html`
                                 <div
                                   class="stat-card"
