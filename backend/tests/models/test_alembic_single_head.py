@@ -369,4 +369,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert gateway_agg.down_revision == "20261011_session_alias"
     execution_end = script.get_revision("20261014_execution_end_idx")
     assert execution_end.down_revision == "20261014_gateway_agg_idx"
-    assert script.get_heads() == ["20261014_execution_end_idx"]
+    api_usage_autovacuum = script.get_revision("20261015_api_usage_autovacuum")
+    assert api_usage_autovacuum.down_revision == "20261014_execution_end_idx"
+    assert script.get_heads() == ["20261015_api_usage_autovacuum"]
