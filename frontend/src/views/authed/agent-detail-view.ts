@@ -1717,6 +1717,9 @@ export class AgentDetailView extends LitElement {
             }
             @notes-count-changed=${(event: CustomEvent<{ total: number }>) => {
               this.notesTotal = event.detail.total;
+              // The page read at load is now stale: a tab mounted later
+              // (after switching tabs) reads its own instead of seeding it.
+              this.notesPage = null;
             }}
           ></agent-notes-tab>
         </div>

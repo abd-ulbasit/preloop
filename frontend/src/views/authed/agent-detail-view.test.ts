@@ -1207,6 +1207,17 @@ describe('AgentDetailView', () => {
       expect(label?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
         'Notes (6)'
       );
+      // Leaving the tab and coming back reads a fresh page, not the stale one.
+      (element as any).activeTab = 'sessions';
+      await element.updateComplete;
+      (element as any).activeTab = 'notes';
+      await element.updateComplete;
+      const remounted = element.shadowRoot!.querySelector('agent-notes-tab')!;
+      expect((remounted as any).initial).to.equal(null);
+      expect((element as any).notesPage).to.equal(null);
+      expect(label?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
+        'Notes (6)'
+      );
       // Older notes continue after the four on screen, with none repeated.
       expect(
         tab.shadowRoot!.querySelector('[data-testid="notes-older"]')
