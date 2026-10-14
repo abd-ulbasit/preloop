@@ -53,6 +53,9 @@ class CRUDDiscoveryObservation:
             model.source_ref == source_ref,
             model.observation_id == observation_id,
         )
+        from .expected_device import crud_expected_device
+
+        crud_expected_device.lock_account(db, account_id=account_id)
         db.execute(
             insert(model)
             .values(
@@ -77,6 +80,12 @@ class CRUDDiscoveryObservation:
             raise ObservationConflictError(
                 "Observation identifier already contains different evidence"
             )
+        crud_expected_device.touch_last_reported_at(
+            db,
+            account_id=account_id,
+            device_ref_hash=workstation_fingerprint,
+            at=received,
+        )
         return row
 
     def list_for_account(

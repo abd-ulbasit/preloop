@@ -124,7 +124,15 @@ def observation_db() -> Generator[Session, None, None]:
     """Fresh in-memory storage never connects to a configured database."""
     engine = create_engine("sqlite://")
     models.DiscoveryObservation.__table__.create(engine)
-    with Session(engine) as db:
+    # This fixture deliberately contains only the observation table. Receipt
+    # locks and history use PostgreSQL and are covered by test_expected_device.
+    with (
+        Session(engine) as db,
+        patch("preloop.models.crud.expected_device.crud_expected_device.lock_account"),
+        patch(
+            "preloop.models.crud.expected_device.crud_expected_device.touch_last_reported_at"
+        ),
+    ):
         yield db
     engine.dispose()
 
