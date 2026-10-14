@@ -306,10 +306,14 @@ def _plans(db_session, statements):
     raw = connection.connection.driver_connection
     plans = []
     with raw.cursor() as cursor:
-        # A seq scan is still legal when this is off; it just becomes the
-        # plan of last resort. If the model/time index cannot serve the
-        # probe, that scan shows up and the assertion fails.
+        # On a table that holds only this seed, a parallel bitmap of
+        # ``ix_api_usage_timestamp`` is cheaper than the model/time index
+        # even though it reads every model in the window. These settings
+        # ask for a plain index scan. A seq scan stays legal as the last
+        # resort, so a probe the model/time index cannot serve still fails.
         cursor.execute("SET LOCAL enable_seqscan = off")
+        cursor.execute("SET LOCAL enable_bitmapscan = off")
+        cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
         for statement, parameters in statements:
             cursor.execute("EXPLAIN " + statement, parameters)
             plans.append(
