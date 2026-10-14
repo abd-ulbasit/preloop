@@ -322,7 +322,7 @@ func claudeLoginFromStatus(output string) string {
 	return harnessLoginSignedOut
 }
 
-// buildClaudeEntry reports Claude Code. It runs flows only when the
+// buildClaudeEntry reports Claude Code. It runs flows and sessions only when the
 // executable resolves and the login is verified; otherwise it is
 // presence-only so the console does not offer a runner path that cannot run.
 func buildClaudeEntry(d harnessInventoryDeps, discovered map[string]AgentConfig) (harnessInventoryEntry, bool) {
@@ -407,8 +407,8 @@ func buildClaudeEntry(d harnessInventoryDeps, discovered map[string]AgentConfig)
 	return entry, true
 }
 
-// Runner flows run Claude Code; runner sessions do not yet (#1670).
+// Runner flows and runner sessions (#1670) both run Claude Code.
 const (
-	claudeSupportLevel = harnessSupportFlowsOnly
-	claudeSessionMode  = "none"
+	claudeSupportLevel = harnessSupportFlowsSessions
+	claudeSessionMode  = "resume"
 )

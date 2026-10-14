@@ -417,8 +417,8 @@ file. (Agent discovery, which the inventory shares with `preloop agents discover
 still checks whether a Claude credential file or keychain entry exists; that
 check alone never makes Claude Code runnable.) The approval hook is found in `~/.claude/settings.json`,
 `~/.claude/settings.local.json` (or the same files under
-`$CLAUDE_CONFIG_DIR`) or the managed settings file. Runner sessions for Claude
-Code are not available yet.
+`$CLAUDE_CONFIG_DIR`) or the managed settings file. Claude Code also runs
+[remote sessions](remote-sessions.md).
 
 What the runner checks, and what it never reads:
 

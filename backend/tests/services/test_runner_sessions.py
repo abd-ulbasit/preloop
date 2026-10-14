@@ -144,7 +144,7 @@ def test_kill_switch_refuses_new_sessions(db_session, runner, test_user):
 
 def test_unsupported_harness_is_refused(db_session, runner, test_user):
     with pytest.raises(svc.RunnerSessionError) as err:
-        _start(db_session, runner, test_user, harness="claude_code")
+        _start(db_session, runner, test_user, harness="codex_cli")
     assert err.value.code == "harness_not_supported"
 
 
@@ -726,7 +726,7 @@ def test_first_turn_result_before_any_state_frame(db_session, runner, test_user)
     svc.queue_turn(db_session, row, actor=test_user, text="next")
 
 
-@pytest.mark.parametrize("harness", ["cursor_cli", "devin_cli"])
+@pytest.mark.parametrize("harness", ["cursor_cli", "devin_cli", "claude_code"])
 def test_native_session_harnesses_are_supported(db_session, runner, test_user, harness):
     row = _start(db_session, runner, test_user, harness=harness)
     assert row.harness == harness

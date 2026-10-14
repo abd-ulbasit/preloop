@@ -383,7 +383,7 @@ func claudeInventoryHost(t *testing.T, login string, env map[string]string, hook
 func TestBuildHarnessInventoryClaudeVerified(t *testing.T) {
 	inv := buildHarnessInventory(claudeInventoryHost(t, harnessLoginSignedIn, map[string]string{}, true))
 	entry := entryFor(t, inv, "claude_code")
-	if entry.Version != "2.1.296" || entry.SupportLevel != harnessSupportFlowsOnly || entry.LoginSource != "cli_status" || entry.Governance != "governed" || entry.Billing != "seat" {
+	if entry.Version != "2.1.296" || entry.SupportLevel != harnessSupportFlowsSessions || entry.SessionMode != "resume" || entry.LoginSource != "cli_status" || entry.Governance != "governed" || entry.Billing != "seat" {
 		t.Fatalf("entry = %+v", entry)
 	}
 	if entry.GeneratedProfile == nil || *entry.GeneratedProfile != "claude" {
@@ -407,7 +407,7 @@ func TestBuildHarnessInventoryClaudeVerified(t *testing.T) {
 
 func TestBuildHarnessInventoryClaudeEnvLogin(t *testing.T) {
 	entry := entryFor(t, buildHarnessInventory(claudeInventoryHost(t, harnessLoginUnknown, map[string]string{"ANTHROPIC_API_KEY": fakeToken}, false)), "claude_code")
-	if entry.LoginState != harnessLoginSignedIn || entry.LoginSource != "env" || entry.SupportLevel != harnessSupportFlowsOnly || entry.Governance != "ungoverned" {
+	if entry.LoginState != harnessLoginSignedIn || entry.LoginSource != "env" || entry.SupportLevel != harnessSupportFlowsSessions || entry.SessionMode != "resume" || entry.Governance != "ungoverned" {
 		t.Fatalf("entry = %+v", entry)
 	}
 }
