@@ -84,6 +84,8 @@ These commands use the saved login or `PRELOOP_TOKEN`. `--token` is rejected, so
 preloop agents discover                  # detect local agents (read-only), then offer onboarding
 preloop agents discover --json           # machine-readable, no prompts
 preloop agents discover --inventory      # offline known-app inventory JSON
+preloop agents discover --inventory --all-users # elevated, offline local-profile inventory
+preloop agents discover --report --all-users    # elevated, opt-in local-profile report
 preloop agents discover --no-onboard-prompt
 preloop agents onboard <agent>           # onboard one agent ("enroll" is an alias)
 preloop agents onboard --all -y          # everything discovered, no prompts
@@ -111,6 +113,28 @@ preloop agents starter-policy <mcp-server> [-o file] [--apply]
 ```
 
 `discover --json` emits only allowlisted summaries (`name`, `app_id`, `mcp_server_count`, `auth_state`, `runtime_state`). `agents status <agent> --json` reuses that agent allowlist and adds enrollment health: local apply state, remote lifecycle, validation booleans, and model credential status. It does not emit MCP env, headers, auth, config paths, tokens, or raw local or remote config. `--inventory` writes an offline `preloop.inventory.v1` envelope of known-app presence and aggregate MCP counts, with no credentials, prompts, or network calls.
+
+`discover --all-users` requires either `--inventory` or an explicit `--report`,
+plus root on Linux/macOS or an elevated administrator on Windows. For example,
+run `sudo preloop agents discover --inventory --all-users` for an offline scan.
+It reads bounded local profile stores: `/Users` on macOS, `/home` and `/root`
+on Linux, or local Windows `ProfileList` entries. It does not onboard agents
+or prompt for onboarding. Reporting requires a Preloop login or token with
+`report_discovery` permission in the elevated process.
+
+All-user output uses `preloop.inventory.v2`, adding `profiles` with keyed
+`profile_ref`, `completeness` and optional `error_code`; app and probe entries
+carry the matching `profile_ref`. Profile names and paths stay local. Offline
+references use a fresh random salt for each run, so they are not stable across
+offline scans. Reports use the account's salt and workstation context.
+
+Collection is limited to 64 profiles and 4 MiB per configuration file; a report
+includes at most 100 app contexts. Unreadable profiles, oversized or unsafe
+files, and limits are represented as failed or partial coverage, so an empty
+result is not evidence that the workstation has no agents. These aggregate
+profile contexts do not automatically link to later agent enrollments. See
+[Agent discovery reporting](agent-discovery-reporting.md#all-user-profile-reports)
+for report fields and coverage semantics.
 
 Onboarding runs a direct gateway route/accounting probe by default; skip it with `--skip-live-validate`. The probe reads managed configuration but does not launch the application or verify that it consumed that configuration. Application behavior remains unverified.
 
