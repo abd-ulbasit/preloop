@@ -229,6 +229,7 @@ Describe 'Disposable runner protection setup' {
     $env:RUNNER_ENVIRONMENT = 'github-hosted'
     $env:OS = 'Windows_NT'
     Mock Start-Service { }
+    Mock Restart-Service { }
     Mock Set-MpPreference { }
     Mock Get-MpPreference { [pscustomobject]@{
       ExclusionPath = @('C:\', 'D:\'); ExclusionExtension = @()
@@ -279,6 +280,7 @@ Describe 'Disposable runner protection setup' {
     }
     Initialize-GitHubHostedDefender
     Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Restart-Service -Times 2 -Exactly -ParameterFilter { $Name -eq 'WinDefend' -and $Force -eq $true }
     Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
     Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 10 }
     Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
@@ -293,6 +295,7 @@ Describe 'Disposable runner protection setup' {
     }
     { Initialize-GitHubHostedDefender } | Should -Throw '*remote procedure call failed*'
     Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Restart-Service -Times 2 -Exactly -ParameterFilter { $Name -eq 'WinDefend' -and $Force -eq $true }
     Should -Invoke Start-Sleep -Times 2 -Exactly
     Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
   }
@@ -313,7 +316,8 @@ Describe 'Disposable runner protection setup' {
     }
     Initialize-GitHubHostedDefender
     Should -Invoke Update-MpSignature -Times 3 -Exactly
-    Should -Invoke Start-Service -Times 3 -Exactly -ParameterFilter { $Name -eq 'WinDefend' }
+    Should -Invoke Restart-Service -Times 1 -Exactly -ParameterFilter { $Name -eq 'WinDefend' -and $Force -eq $true }
+    Should -Invoke Start-Service -Times 2 -Exactly -ParameterFilter { $Name -eq 'WinDefend' }
     Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
   }
 
@@ -338,12 +342,10 @@ Describe 'Disposable runner protection setup' {
         'HRESULT 0x800706be,Update-MpSignature',
         [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
     }
-    Mock Start-Service {
-      $script:updateAttempts++
-      if ($script:updateAttempts -gt 1) { throw 'service disabled by policy' }
-    }
+    Mock Restart-Service { throw 'service disabled by policy' }
     { Initialize-GitHubHostedDefender } | Should -Throw '*disabled by policy*'
     Should -Invoke Update-MpSignature -Times 1 -Exactly
+    Should -Invoke Restart-Service -Times 1 -Exactly
     Should -Invoke Start-Sleep -Times 0 -Exactly
     Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
   }
