@@ -1,7 +1,7 @@
 """Index model-detail usage by account, model and request time.
 
 Revision ID: 20261014_model_detail_idx
-Revises: 20261014_policy_notice_match
+Revises: 20261016_governance_review
 
 ``GET /ai-models/{id}/interactions`` and ``GET /ai-models/{id}/runtime-sessions``
 filtered a busy model's gateway rows through indexes that lead with
@@ -30,7 +30,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20261014_model_detail_idx"
-down_revision: Union[str, None] = "20261014_policy_notice_match"
+down_revision: Union[str, None] = "20261016_governance_review"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

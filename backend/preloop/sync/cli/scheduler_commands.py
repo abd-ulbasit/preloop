@@ -33,6 +33,24 @@ def optimization_digest_trigger() -> CronTrigger:
     return CronTrigger(day_of_week="mon", hour=9, minute=0, timezone="UTC")
 
 
+def governance_session_digest_sweep_trigger() -> CronTrigger:
+    """Return the hourly session-digest sweep: minute 0 of every hour, UTC.
+
+    Cron only, same as the weekly digest. An interval trigger with a startup
+    offset would summarise sessions after every scheduler restart.
+    """
+    return CronTrigger(minute=0, timezone="UTC")
+
+
+def governance_weekly_review_trigger() -> CronTrigger:
+    """Return the weekly governance review trigger: Monday 07:00 UTC.
+
+    Two hours before the Monday 09:00 UTC optimization digest, so the digest
+    can include the review. No startup offset.
+    """
+    return CronTrigger(day_of_week="mon", hour=7, minute=0, timezone="UTC")
+
+
 def spend_outlier_daily_trigger() -> CronTrigger:
     """Return the daily spend outlier trigger: 00:30 UTC.
 
@@ -354,6 +372,46 @@ async def run_scheduler_async(
             misfire_grace_time=3600,
         )
         logger.info("Scheduled weekly optimization digest for Monday 09:00 UTC.")
+
+    # Governance review (#1709). Cron only, for the same reason as the digest
+    # above: the job store is in-memory, so a next_run_time of "now" would
+    # run the review after every scheduler restart. The worker tasks no-op
+    # unless an Enterprise handler is registered.
+    if getattr(settings, "governance_review_enabled", True):
+
+        async def _publish_governance_session_digest_sweep() -> None:
+            try:
+                await event_bus_service.publish_task("governance_session_digest_sweep")
+            except Exception:
+                logger.exception("Failed to publish governance session digest sweep")
+
+        scheduler.add_job(
+            _publish_governance_session_digest_sweep,
+            trigger=governance_session_digest_sweep_trigger(),
+            id="governance_session_digest_sweep_job",
+            name="Sweep Governance Session Digests",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
+        async def _publish_governance_weekly_review() -> None:
+            try:
+                await event_bus_service.publish_task("governance_weekly_review")
+            except Exception:
+                logger.exception("Failed to publish governance weekly review")
+
+        scheduler.add_job(
+            _publish_governance_weekly_review,
+            trigger=governance_weekly_review_trigger(),
+            id="governance_weekly_review_job",
+            name="Run Weekly Governance Review",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(
+            "Scheduled governance review: digest sweep hourly, "
+            "weekly review Monday 07:00 UTC."
+        )
 
     await stop_event.wait()
     logger.info("Scheduler event loop stopped.")

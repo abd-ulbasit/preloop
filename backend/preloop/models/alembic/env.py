@@ -37,6 +37,7 @@ _MODEL_MODULES = (
     "provider_billing",
     "copilot_import",
     "anthropic_import",
+    "governance_review",
 )
 for _model_module in _MODEL_MODULES:
     importlib.import_module(f"preloop.models.models.{_model_module}")

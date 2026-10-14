@@ -38,6 +38,8 @@ DISPATCHABLE_TASKS: tuple[str, ...] = (
     "reconcile_security_maintenance",
     "evaluate_spend_outliers",
     "evaluate_spend_outlier_sessions",
+    "governance_session_digest_sweep",
+    "governance_weekly_review",
 )
 
 
@@ -618,6 +620,45 @@ def evaluate_spend_outliers() -> dict[str, int] | None:
         return None
     finally:
         db.close()
+
+
+def _run_governance_handler(service_name: str) -> object | None:
+    """Call a registered governance handler, or no-op when none is installed."""
+    from preloop.plugins.base import get_plugin_manager
+
+    service = get_plugin_manager().get_service(service_name)
+    if service is None:
+        logger.debug("%s service not available; skipping", service_name)
+        return None
+    db = next(get_db_session())
+    try:
+        result: object | None = service(db)
+        return result
+    except Exception as e:
+        logger.error("%s failed: %s", service_name, e, exc_info=True)
+        return None
+    finally:
+        db.close()
+
+
+def governance_session_digest_sweep() -> object | None:
+    """Hourly sweep that summarises closed or idle session segments.
+
+    The implementation lives in the Enterprise plugin. This shim calls the
+    ``governance_session_digest_sweep`` service and no-ops when that handler
+    is not registered.
+    """
+    return _run_governance_handler("governance_session_digest_sweep")
+
+
+def governance_weekly_review() -> object | None:
+    """Monday review of the week's session segments against account policy.
+
+    The implementation lives in the Enterprise plugin. This shim calls the
+    ``governance_weekly_review`` service and no-ops when that handler is not
+    registered.
+    """
+    return _run_governance_handler("governance_weekly_review")
 
 
 def evaluate_spend_outlier_sessions() -> dict[str, int] | None:

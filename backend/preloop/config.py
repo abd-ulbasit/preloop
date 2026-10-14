@@ -1353,6 +1353,15 @@ class Settings(BaseSettings):
             "Enterprise billing plugin is installed."
         ),
     )
+    governance_review_enabled: bool = Field(
+        True,
+        description=(
+            "Schedule the governance session digest sweep hourly and the "
+            "weekly governance review for Monday 07:00 UTC. A scheduler "
+            "restart does not run either. Both tasks no-op unless an "
+            "Enterprise handler is registered."
+        ),
+    )
     model_gateway_max_preview_chars: int = Field(
         32768,
         description=(
