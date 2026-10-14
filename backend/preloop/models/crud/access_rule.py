@@ -586,6 +586,10 @@ class CRUDAccessRule:
                     "resource_type": resource_type,
                     "resource_id": str(resource_id),
                     "losing_subjects": losing_subjects,
+                    "before": before.model_dump(mode="json"),
+                    "after": _document(
+                        db, account, resource_type, resource_id
+                    ).model_dump(mode="json"),
                 },
                 resource_type="resource_access",
             )
@@ -965,6 +969,10 @@ class CRUDAccessRule:
             ]
             modes = {}
             ancestor_require_permit = set()
+            account_modes = {
+                str(row.id): dict((row.meta_data or {}).get("access_rule_mode") or {})
+                for row in account_rows
+            }
             for row in account_rows:
                 for action, mode in (
                     (row.meta_data or {}).get("access_rule_mode") or {}
@@ -980,6 +988,7 @@ class CRUDAccessRule:
                 "rules": applicable,
                 "modes": modes,
                 "ancestor_require_permit": sorted(ancestor_require_permit),
+                "account_modes": account_modes,
                 "resource_access_rules": local_rules,
                 "resource_access": [
                     {**policy.model_dump(mode="json"), "account_id": str(owner.id)}
