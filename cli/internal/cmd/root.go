@@ -51,7 +51,7 @@ suppressed too, as they depend on the check-in response.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Inventory and managed exports are offline, even when validation rejects
 		// conflicting flags. Skip telemetry counters and version/cache work.
-		if isOfflineInventoryCommand(cmd) || isManagedConfigCommand(cmd) {
+		if isOfflineInventoryCommand(cmd) || isManagedConfigCommand(cmd) || isAllUsersInventoryCommand(cmd) {
 			silenceUsageForRuntimeErrors(cmd)
 			return
 		}

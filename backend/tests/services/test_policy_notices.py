@@ -350,6 +350,52 @@ def _hit_at(
     )
 
 
+def test_rule_and_user_summaries_truncate_independently(
+    db_session: Session, test_user: User
+) -> None:
+    """Each list stops at its own limit, so the sums match only under the cap.
+
+    The summary route uses :data:`POLICY_NOTICE_SUMMARY_LIMIT` (100) for
+    both lists. A smaller limit is the same cutoff, and it is enough to
+    show the two caps do not share a remainder.
+    """
+    from preloop.models.models.policy_notice_hit import POLICY_NOTICE_SUMMARY_LIMIT
+
+    second = _named_user(db_session, "second-dev", "Second Dev", test_user.account_id)
+    third = _named_user(db_session, "third-dev", "Third Dev", test_user.account_id)
+    moment = NOW
+    for user, rule_id in (
+        (test_user, "rule-a"),
+        (second, "rule-b"),
+        (third, "rule-c"),
+    ):
+        _hit_at(db_session, user, moment, rule_id=rule_id)
+    db_session.commit()
+
+    shared = {
+        "account_id": test_user.account_id,
+        "since": moment - timedelta(days=1),
+        "until": moment + timedelta(days=1),
+    }
+    full_rules = crud_policy_notice_hit.summarize_by_rule(db_session, **shared)
+    full_users = crud_policy_notice_hit.summarize_by_user(db_session, **shared)
+    assert sum(row.count for row in full_rules) == 3
+    assert sum(row.count for row in full_users) == 3
+
+    capped_rules = crud_policy_notice_hit.summarize_by_rule(
+        db_session, limit=2, **shared
+    )
+    capped_users = crud_policy_notice_hit.summarize_by_user(
+        db_session, limit=1, **shared
+    )
+    assert len(capped_rules) == 2
+    assert len(capped_users) == 1
+    assert sum(row.count for row in capped_rules) != sum(
+        row.count for row in capped_users
+    )
+    assert POLICY_NOTICE_SUMMARY_LIMIT == 100
+
+
 def _named_user(db: Session, username: str, full_name: str, account_id: UUID) -> User:
     """A user of ``account_id`` with the given login and display name."""
     return crud_user.create(

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, aliased
@@ -124,6 +124,38 @@ def _count_rows(db: Session, filters: List[Any], limit: Optional[int]) -> int:
     return db.query(func.count()).select_from(capped).scalar() or 0
 
 
+def audit_row_id(details: Optional[Dict[str, Any]]) -> UUID:
+    """Primary key for an audit row.
+
+    A policy match records the same id on ``policy_notice_hit.audit_event_id``
+    and in ``details['audit_event_id']`` before the audit plugin writes the
+    row. Using that value as the row id makes the two point at each other
+    without the plugin having to learn a new argument.
+
+    The EE audit plugin builds that payload with ``tool_args`` nested under
+    ``details['tool_args']``, then ``details.update(extra_details)``.
+    ``audit_event_id`` therefore has to be a top-level key. A nested
+    ``details['extra_details']`` object is ignored. Any other value, or a
+    missing one, falls back to a fresh id.
+
+    Args:
+        details: Audit details payload. ``audit_event_id`` is read only from
+            the top level, which is where the plugin places ``extra_details``.
+
+    Returns:
+        The id the row should be inserted with.
+    """
+    raw = None if not details else details.get("audit_event_id")
+    if isinstance(raw, UUID):
+        return raw
+    if raw is not None:
+        try:
+            return UUID(str(raw))
+        except (TypeError, ValueError):
+            pass
+    return uuid4()
+
+
 class CRUDAuditLog(CRUDBase[AuditLog]):
     """CRUD operations for audit logging."""
 
@@ -163,6 +195,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         account_id_str = str(account_id) if isinstance(account_id, UUID) else account_id
 
         db_obj = AuditLog(
+            id=audit_row_id(details),
             account_id=account_id_str,
             user_id=user_id,
             action=action,

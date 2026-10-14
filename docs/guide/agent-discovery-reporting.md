@@ -48,7 +48,7 @@ Run the job with `PRELOOP_TOKEN=<key>` and `PRELOOP_DISCOVERY_REPORT=1`.
 | `cli_version` | The CLI version. |
 | `os` | OS family only: `darwin`, `linux`, `windows` or `other`. |
 | `candidates[].agent_kind` | The product kind, for example `cursor` or `claude_code`. |
-| `candidates[].config_path_hash` | HMAC-SHA256, same salt, of the config path with the home directory replaced by `~`. The user name in the home path never enters the hash. |
+| `candidates[].config_path_hash` | For current-user discovery, HMAC-SHA256, same salt, of the config path with the home directory replaced by `~`. All-user reports use a separate keyed profile/app context hash, described below. |
 | `candidates[].mcp_server_count` | How many MCP servers the config defines. A count, not names. |
 | `candidates[].enrolled` | Whether the CLI already saw an enrollment for it. |
 
@@ -72,7 +72,7 @@ status: `new`, `onboarded` or `ignored`.
 
 - A new row fires the [`agent.discovered`](webhooks.md) webhook once. A
   re-report of the same tool only moves `last_seen_at` and emits nothing.
-- When an agent from the same workstation is onboarded and its enrollment
+- For current-user discovery, when an agent from the same workstation is onboarded and its enrollment
   validates, the CLI sends the same two hashes with the validation and the
   matching candidate becomes `onboarded`, linked to the managed agent.
 - **Mark ignored** in the console hides a candidate. **Copy onboard command**
@@ -126,7 +126,7 @@ the host. Each change is audited as `runner.harness_inventory_changed`.
 ## Versioned source observations
 
 The existing report accepts an optional `evidence` envelope with
-`schema_version: 1`. An installed evidence service consumes it within the same
+`schema_version: 1` or `2`. An installed evidence service consumes it within the same
 report transaction; without that service the extension returns 503, while
 legacy reports continue unchanged. No second collector endpoint is introduced.
 
@@ -139,6 +139,56 @@ discovery sweeper purges expired observations even if the evidence plugin is
 disabled or the source stops reporting. None of these records
 prove device identity, app runtime enforcement or use. Collector assertions
 cannot carry effective or successful runtime-verification fields.
+
+## All-user profile reports
+
+Use `preloop agents discover --all-users --report` from an elevated process
+(root on Linux/macOS, administrator on Windows). `--all-users` requires an
+explicit `--report` or `--inventory`; the environment variable alone does not
+select all-user reporting. The elevated process needs the reporting token or
+login. For an offline scan, use `--all-users --inventory`; this makes no network
+calls and prints a `preloop.inventory.v2` envelope. Both modes print safe
+inventory JSON and do not onboard agents.
+
+The scan enumerates local profiles from `/Users` on macOS, `/home` and `/root`
+on Linux, or Windows `ProfileList`. It covers the known application registry,
+not every possible install location or network/directory-service profile.
+It scans at most 64 profiles, reads at most 4 MiB per configuration file, and
+reports at most 100 application contexts. Symlinks and unsafe configuration
+paths are refused. Reaching a limit or failing to read a profile leaves the
+coverage incomplete rather than treating that scope as an empty successful scan.
+
+All-user reports send `evidence.schema_version: 2` on the existing report
+endpoint. Version 1 reports remain supported. Version 2 adds:
+
+| Field | Content |
+| --- | --- |
+| `evidence.profiles[].profile_ref` | A keyed reference scoped to the account and workstation. It identifies profile scope without sending a profile name or home path. |
+| `evidence.profiles[].completeness` | `complete`, `partial` or `failed`, including profiles that yielded no application rows. |
+| `evidence.profiles[].error_code` | Absent for complete scope; otherwise `profile_unavailable`, `profile_unreadable` or `probe_incomplete`. |
+| `evidence.applications[].profile_ref` | The reference of the profile in which this app context was observed. |
+
+Offline v2 output also associates probe results with `profile_ref`. Its fresh
+per-run random salt makes profile references unrelated across offline runs.
+Reported references use the account salt and workstation context instead.
+
+If profile enumeration fails, the inventory has `completeness: failed` and
+`scope.error_code: profiles_unavailable`. A profile limit produces partial
+inventory with `scope.error_code: profile_limit`. The report retains enumerated
+profile states even when no apps were readable; its evidence records partial
+or failed completeness and an `unavailable` error. A report truncated at 100
+apps is also partial. Incomplete scope never proves absence of agents.
+
+All-user candidates represent aggregate profile/app contexts. Their
+`config_path_hash` uses the `preloop-profile-app:v2:` namespace, while
+current-user enrollment uses `preloop-config-path:v1:`. Consequently these
+candidates do not automatically become `onboarded` when a current-user agent
+is later enrolled, and their emitted `enrolled: false` means enrollment was
+not observed. Automatic linking requires a future profile-aware enrollment
+contract. App presence and configuration observations do not prove runtime
+enforcement or use.
+
+## Administrative device identifiers
 
 For a fleet roster with an explicit administrative identifier, use
 `preloop agents discover --report --device-ref synthetic-device`. This replaces

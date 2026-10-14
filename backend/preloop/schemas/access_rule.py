@@ -86,6 +86,14 @@ class SubjectSelector(LabelSelector):
 
 class ResourceSelector(LabelSelector):
     account: LabelSelector | None = None
+    ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+    @field_validator("ids")
+    @classmethod
+    def distinct_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("resource IDs must be distinct")
+        return value
 
 
 class TimeWindow(ClosedModel):
@@ -189,6 +197,8 @@ class AccessRuleDefinition(ClosedModel):
 
     @model_validator(mode="after")
     def validate_action_conditions(self) -> AccessRuleDefinition:
+        if self.resource_selector.ids and self.resource_type is None:
+            raise ValueError("resource IDs require an explicit resource type")
         if len(set(self.actions)) != len(self.actions):
             raise ValueError("actions must be distinct")
         if not self.name.strip():
@@ -199,3 +209,67 @@ class AccessRuleDefinition(ClosedModel):
         ) and self.actions != ["runner:accept"]:
             raise ValueError("flow conditions are only valid for runner:accept rules")
         return self
+
+
+class ResourceAccessRequirement(ClosedModel):
+    """An independent AND gate satisfied only by its designated local permits."""
+
+    action: Action
+    mode: Literal["require_permit"] = "require_permit"
+    permit_rule_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+    @field_validator("permit_rule_ids")
+    @classmethod
+    def distinct_permits(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("permit rule IDs must be distinct")
+        return value
+
+
+class ResourceAccessPolicy(ClosedModel):
+    """Portable owner-local identity and rule provenance; absence means inherit."""
+
+    resource_type: str
+    resource_id: UUID
+    rule_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    requirements: list[ResourceAccessRequirement] = Field(
+        default_factory=list, max_length=len(RULE_ACTIONS)
+    )
+
+    @field_validator("resource_type")
+    @classmethod
+    def validate_resource_type(cls, value: str) -> str:
+        if value not in TAGGABLE_RESOURCE_TYPES:
+            raise ValueError("unknown resource type")
+        return value
+
+    @model_validator(mode="after")
+    def validate_bindings(self) -> ResourceAccessPolicy:
+        if len(self.rule_ids) != len(set(self.rule_ids)):
+            raise ValueError("local rule IDs must be distinct")
+        actions = [requirement.action for requirement in self.requirements]
+        if len(actions) != len(set(actions)):
+            raise ValueError("resource requirements must have distinct actions")
+        if any(
+            not set(requirement.permit_rule_ids).issubset(self.rule_ids)
+            for requirement in self.requirements
+        ):
+            raise ValueError("requirements must bind designated local rules")
+        return self
+
+
+class ResourceAccessUpdate(ClosedModel):
+    """Complete replacement of one resource's local permits and gates."""
+
+    rules: list[AccessRuleDefinition] = Field(default_factory=list, max_length=100)
+    requirements: list[ResourceAccessRequirement] = Field(
+        default_factory=list, max_length=len(RULE_ACTIONS)
+    )
+
+
+class ResourceAccessDocument(ResourceAccessUpdate):
+    account_id: UUID
+    resource_type: str
+    resource_id: UUID
+    version: int = Field(ge=0)
+    generation: int = Field(ge=0)

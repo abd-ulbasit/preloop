@@ -17886,9 +17886,23 @@ paths:
     get:
       tags:
       - Policies
-      summary: Summarize notify rule hits by rule
-      description: Return notify rule hits of the last ``days`` days, one row per
-        rule.
+      summary: Summarize policy matches
+      description: 'Return policy matches from the last ``days`` days.
+
+
+        The default ``group_by=rule`` list is notify hits, which is what the
+
+        Attention page renders. ``group_by=user`` is the per-developer summary.
+
+        Rule and user lists are each capped at 100. Within that cap, user
+
+        counts add up to rule counts. Past it the two lists are truncated
+
+        independently and the sums can diverge. Model and agent breakdowns
+
+        count every stored action either way, and each of those lists uses
+
+        the same cap.'
       operationId: get_policy_notice_summary_api_v1_policies_notices_summary_get
       security:
       - bearerAuth: []
@@ -17904,6 +17918,23 @@ paths:
           default: 7
           title: Days
         description: Window length in days
+      - name: group_by
+        in: query
+        required: false
+        schema:
+          enum:
+          - rule
+          - user
+          - action
+          type: string
+          description: rule keeps the Attention list to notify hits. user and action
+            include deny and require_approval hits. Rule and user lists are each capped
+            at 100. Within that cap, per-user counts sum to the rule totals.
+          default: rule
+          title: Group By
+        description: rule keeps the Attention list to notify hits. user and action
+          include deny and require_approval hits. Rule and user lists are each capped
+          at 100. Within that cap, per-user counts sum to the rule totals.
       responses:
         '200':
           description: Successful Response
@@ -28355,9 +28386,17 @@ components:
       properties:
         schema_version:
           type: integer
-          const: 1
+          enum:
+          - 1
+          - 2
           title: Schema Version
           default: 1
+        profiles:
+          items:
+            $ref: '#/components/schemas/ObservedProfile'
+          type: array
+          maxItems: 64
+          title: Profiles
         observation_id:
           type: string
           format: uuid
@@ -36122,6 +36161,12 @@ components:
           type: string
           pattern: ^[0-9a-f]{64}$
           title: Config Path Hash
+        profile_ref:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Profile Ref
         app_version:
           anyOf:
           - type: string
@@ -36228,6 +36273,36 @@ components:
       - axis
       title: ObservedControl
       description: Independent collector assertions, with no effective/verified field.
+    ObservedProfile:
+      properties:
+        profile_ref:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+          title: Profile Ref
+        completeness:
+          type: string
+          enum:
+          - complete
+          - partial
+          - failed
+          title: Completeness
+        error_code:
+          anyOf:
+          - type: string
+            enum:
+            - profile_unavailable
+            - profile_unreadable
+            - probe_incomplete
+          - type: 'null'
+          title: Error Code
+      additionalProperties: false
+      type: object
+      required:
+      - profile_ref
+      - completeness
+      title: ObservedProfile
+      description: Keyed local profile scope with fixed failure codes and no clear
+        paths.
     OnboardingRequest:
       properties:
         email:
@@ -37177,6 +37252,40 @@ components:
       - policy_name
       title: PolicyImportResult
       description: Result of importing a policy.
+    PolicyNoticeActionSummaryResponse:
+      properties:
+        action:
+          type: string
+          title: Action
+          description: 'Stored action that occurred: notify, deny, or require_approval.
+            redact is reserved on the column and is not written.'
+        count:
+          type: integer
+          title: Count
+          description: Hits in the window
+      type: object
+      required:
+      - action
+      - count
+      title: PolicyNoticeActionSummaryResponse
+      description: Hits of one action inside the window.
+    PolicyNoticeBreakdownResponse:
+      properties:
+        key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Key
+          description: Model alias or agent reference
+        count:
+          type: integer
+          title: Count
+          description: Hits in the window
+      type: object
+      required:
+      - count
+      title: PolicyNoticeBreakdownResponse
+      description: Hits sharing one model alias or agent reference.
     PolicyNoticeRuleSummaryResponse:
       properties:
         rule_id:
@@ -37193,6 +37302,11 @@ components:
           type: string
           title: Target
           description: model.request or model.response
+        action:
+          type: string
+          title: Action
+          description: 'Newest hit''s stored action: notify, deny, or require_approval.
+            redact is reserved and is not written.'
         count:
           type: integer
           title: Count
@@ -37230,28 +37344,86 @@ components:
       required:
       - rule_id
       - target
+      - action
       - count
       - last_hit_id
       - last_hit_at
       title: PolicyNoticeRuleSummaryResponse
-      description: Hits of one notify rule inside the window.
+      description: Hits of one rule inside the window.
     PolicyNoticeSummaryResponse:
       properties:
         days:
           type: integer
           title: Days
           description: Window length in days
+        group_by:
+          type: string
+          enum:
+          - rule
+          - user
+          - action
+          title: Group By
+          description: Grouping requested by the caller
         rules:
           items:
             $ref: '#/components/schemas/PolicyNoticeRuleSummaryResponse'
           type: array
           title: Rules
+        users:
+          items:
+            $ref: '#/components/schemas/PolicyNoticeUserSummaryResponse'
+          type: array
+          title: Users
+        actions:
+          items:
+            $ref: '#/components/schemas/PolicyNoticeActionSummaryResponse'
+          type: array
+          title: Actions
+        models:
+          items:
+            $ref: '#/components/schemas/PolicyNoticeBreakdownResponse'
+          type: array
+          title: Models
+        agents:
+          items:
+            $ref: '#/components/schemas/PolicyNoticeBreakdownResponse'
+          type: array
+          title: Agents
       type: object
       required:
       - days
+      - group_by
       - rules
+      - users
+      - actions
+      - models
+      - agents
       title: PolicyNoticeSummaryResponse
-      description: Notify rule hits grouped by rule, newest first.
+      description: Policy matches for one window, with model and agent breakdowns.
+    PolicyNoticeUserSummaryResponse:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+          description: User id, when the hit has one
+        username:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Username
+          description: Username in this account
+        count:
+          type: integer
+          title: Count
+          description: Hits in the window
+      type: object
+      required:
+      - count
+      title: PolicyNoticeUserSummaryResponse
+      description: Hits of one developer inside the window.
     PolicyValidationError:
       properties:
         path:

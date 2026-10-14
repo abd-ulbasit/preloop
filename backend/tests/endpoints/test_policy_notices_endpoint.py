@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from preloop.models.crud import crud_account
+from uuid import uuid4
+
+from preloop.models.crud import crud_account, crud_policy_notice_hit, crud_user
 from preloop.models.models.user import User
 from preloop.services.policy_notices import PolicyNotice, record_policy_notice
 
@@ -78,6 +80,86 @@ def test_summary_is_scoped_to_the_account(
 
     assert response.status_code == 200
     assert response.json()["rules"] == []
+
+
+def _user(db: Session, account_id, username: str) -> User:
+    return crud_user.create(
+        db,
+        obj_in={
+            "account_id": account_id,
+            "email": f"{username}@example.com",
+            "username": username,
+            "full_name": username,
+            "is_active": True,
+            "email_verified": True,
+            "hashed_password": "x",
+            "user_source": "local",
+        },
+    )
+
+
+def test_group_by_user_counts_sum_to_rule_totals(
+    client: TestClient, db_session: Session, test_user: User
+) -> None:
+    other = _user(db_session, test_user.account_id, "otherdev")
+    now = datetime.now(timezone.utc)
+    shared = {
+        "account_id": test_user.account_id,
+        "target": "model.request",
+        "rule_description": None,
+        "text_sha256": "a" * 64,
+        "excerpt": "project-x",
+        "model_alias": "flash-test",
+        "agent_ref": "codex:agent-1",
+        "now": now,
+    }
+    crud_policy_notice_hit.record(
+        db_session,
+        user_id=test_user.id,
+        rule_id="notify-a",
+        action="notify",
+        **shared,
+    )
+    crud_policy_notice_hit.record(
+        db_session,
+        user_id=test_user.id,
+        rule_id="deny-a",
+        action="deny",
+        audit_event_id=uuid4(),
+        **shared,
+    )
+    crud_policy_notice_hit.record(
+        db_session,
+        user_id=other.id,
+        rule_id="deny-a",
+        action="deny",
+        **shared,
+    )
+    db_session.commit()
+
+    default = client.get("/api/v1/policies/notices/summary")
+    assert default.status_code == 200
+    default_body = default.json()
+    assert default_body["group_by"] == "rule"
+    assert [row["rule_id"] for row in default_body["rules"]] == ["notify-a"]
+    assert {row["key"] for row in default_body["models"]} == {"flash-test"}
+    assert {row["key"] for row in default_body["agents"]} == {"codex:agent-1"}
+
+    grouped = client.get("/api/v1/policies/notices/summary?group_by=user")
+    assert grouped.status_code == 200
+    body = grouped.json()
+    rule_total = sum(row["count"] for row in body["rules"])
+    user_total = sum(row["count"] for row in body["users"])
+    assert rule_total == user_total == 3
+    users = {row["username"]: row["count"] for row in body["users"]}
+    assert users["testuser"] == 2
+    assert users["otherdev"] == 1
+
+
+def test_summary_rejects_unknown_group_by(client: TestClient) -> None:
+    assert (
+        client.get("/api/v1/policies/notices/summary?group_by=team").status_code == 422
+    )
 
 
 def test_summary_window_is_bounded(client: TestClient) -> None:

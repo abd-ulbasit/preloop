@@ -1,0 +1,69 @@
+{
+  "workstation_fingerprint": "8a350b56bc25d52a9105517f63a1a0d2c105aa0881aaa605fe68ffc4f83a7b33",
+  "cli_version": "0.0.0-test",
+  "os": "linux",
+  "candidates": [
+    {
+      "agent_kind": "cursor",
+      "config_path_hash": "4fed059d729fe16b2390aca81c39b41cc0aefa7e47aa7c038159d6c3ab03b0f6",
+      "mcp_server_count": 2,
+      "enrolled": false
+    },
+    {
+      "agent_kind": "cursor",
+      "config_path_hash": "6e9f53bd8034b34756f5ddb86d02731b88c132210a7ec01b14dec7b18c12de68",
+      "mcp_server_count": 1,
+      "enrolled": false
+    }
+  ],
+  "evidence": {
+    "schema_version": 2,
+    "observation_id": "00000000-0000-4000-8000-000000000001",
+    "collector_version": "0.0.0-test",
+    "os_family": "linux",
+    "detector_version": "1",
+    "source_environment": "unknown",
+    "started_at": "2026-01-02T03:04:05Z",
+    "ended_at": "2026-01-02T03:04:05Z",
+    "scan_scope": [
+      "user_config"
+    ],
+    "completeness": "partial",
+    "errors": [
+      "unavailable"
+    ],
+    "profiles": [
+      {
+        "profile_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "completeness": "partial",
+        "error_code": "probe_incomplete"
+      },
+      {
+        "profile_ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "completeness": "partial",
+        "error_code": "probe_incomplete"
+      },
+      {
+        "profile_ref": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "completeness": "failed",
+        "error_code": "profile_unreadable"
+      }
+    ],
+    "applications": [
+      {
+        "agent_kind": "cursor",
+        "config_path_hash": "4fed059d729fe16b2390aca81c39b41cc0aefa7e47aa7c038159d6c3ab03b0f6",
+        "profile_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "installed": "unknown",
+        "configured": "true"
+      },
+      {
+        "agent_kind": "cursor",
+        "config_path_hash": "6e9f53bd8034b34756f5ddb86d02731b88c132210a7ec01b14dec7b18c12de68",
+        "profile_ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "installed": "unknown",
+        "configured": "true"
+      }
+    ]
+  }
+}
