@@ -1045,11 +1045,13 @@ export class AgentDetailView extends LitElement {
           ...fresh.filter((row) => !shown.has(row.id)),
         ];
       } else {
+        // Rows that new sessions pushed past the re-read stay too, so the
+        // list never loses a row and Load more continues after the last one.
         const head = new Set(fresh.map((row) => row.id));
-        this.sessions = [
-          ...fresh,
-          ...this.sessions.slice(limit).filter((row) => !head.has(row.id)),
-        ];
+        this.sessions =
+          this.sessions.length > limit
+            ? [...fresh, ...this.sessions.filter((row) => !head.has(row.id))]
+            : fresh;
       }
       this.sessionTotal =
         typeof detail.session_total === 'number' ? detail.session_total : null;
@@ -3957,7 +3959,10 @@ export class AgentDetailView extends LitElement {
                               const usage =
                                 this.getUsageForDisplayedModel(model);
                               const modelId = this.getDisplayedModelId(model);
-                              const showZeroSpend = isConfiguredModel && !usage;
+                              const showZeroSpend =
+                                isConfiguredModel &&
+                                !usage &&
+                                this.loadedSections.has('usage_by_model');
                               return html`
                                 <div
                                   class="stat-card"

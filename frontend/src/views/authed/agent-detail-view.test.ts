@@ -1268,6 +1268,46 @@ describe('AgentDetailView', () => {
       expect(ids[119]).to.equal('s-119');
     });
 
+    it('keeps rows that new sessions push past the re-read', async () => {
+      sessionsServer(150);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      for (let i = 0; i < 5; i++)
+        await (element as any).loadSessions({ more: true });
+      // Two new sessions arrive at the top: s-98 and s-99 fall past row 100.
+      const shifted = (element as any).sessions.slice();
+      fetchStub.callsFake(
+        async () =>
+          new Response(
+            JSON.stringify({
+              agent: { id: 'agent-1' },
+              sessions: [
+                {
+                  id: 'new-1',
+                  session_source_type: 'claude_code',
+                  session_source_id: 'n1',
+                },
+                {
+                  id: 'new-2',
+                  session_source_type: 'claude_code',
+                  session_source_id: 'n2',
+                },
+                ...shifted.slice(0, 98),
+              ],
+              session_total: 152,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+      );
+      await (element as any).loadSessions({ refresh: true });
+      const ids = ((element as any).sessions as Array<{ id: string }>).map(
+        (r) => r.id
+      );
+      expect(ids).to.have.length(122);
+      expect(ids).to.include.members(['s-98', 's-99', 's-119']);
+      expect(new Set(ids).size).to.equal(122);
+    });
+
     it('never lets a refresh overwrite a page loaded after it', async () => {
       sessionsServer(60);
       const element = await mount();
