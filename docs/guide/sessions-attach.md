@@ -77,7 +77,8 @@ returns them (they carry `activity_type`), and pending approvals as
 - While an approval is pending, `a` or `d` and Enter approves or declines the
   oldest one; `a <id>` or `d <id>` picks one by its short id. It is the same
   request as `preloop approvals approve`, with the same permission check and
-  audit as a console decision. With nothing pending, `a` is just a note.
+  audit as a console decision. These shortcuts keep that meaning in command
+  mode too. In note mode, with nothing pending, `a` is just a note.
 - `--read-only` sends nothing: typed lines are answered with `read-only: not
   sent`, and no decision prompt is shown.
 
@@ -88,7 +89,7 @@ On attach the CLI asks the server which mode applies
 
 ```text
 -- attached to 31aeec9d-001e-4bb5-8d17-7bc5156cc5e9 (Hermes warehouse, hermes 2026-10-04 00:11:46Z)
--- mode: command. A line starts a new turn for Hermes warehouse through Agent Control; /note <text> sends a note instead
+-- mode: command. A line starts a new turn for Hermes warehouse through Agent Control; a and d decide a pending approval (nothing is sent when none is), /note <text> sends a note, /turn <text> sends that text
 -- Ctrl-C detaches; the session keeps running
 list the goods-receipt workflows for nord
 -- command 8f579255 delivered
@@ -117,18 +118,25 @@ list the goods-receipt workflows for nord
   turn stream into the same terminal like any other event.
 - `/note <text>` sends a plain note instead, read at the agent's next tool or
   model call. `/mode` asks the server again and prints the current mode.
-- Approvals work as before: `a` and `d` decide while something is pending.
+- `a` and `d`, with an optional short id, approve or decline in command mode
+  the same way they do in note mode. With nothing pending, attach prints
+  `no pending approval; nothing sent (/turn <text> sends a turn)` and does not
+  start a turn. A short id that matches nothing prints the same kind of notice.
+- `/turn <text>` sends `<text>` as a turn, including when the text is `a` or
+  `d`, so a one-letter turn is still possible.
 
 ### Runner-hosted sessions
 
 A session a personal runner hosts (Copilot CLI, Cursor CLI, Devin CLI; see
 [Remote sessions](runners/remote-sessions.md)) is in command mode too, without
 a managed agent: a typed line is posted to
-`POST /api/v1/runner-sessions/{session_id}/turns`. There is no Agent Control
-command to follow, so the turn's states come from the session's own timeline
-as it streams: `queued`, `started`, then `finished` or `failed`. The agent's
-messages print as `reply` lines and its tool calls as `tool` lines. When the
-session ends or fails, attach prints `session ended` and exits.
+`POST /api/v1/runner-sessions/{session_id}/turns`. `a` and `d` still decide a
+pending approval, and `/turn <text>` sends that text as a turn. There is no
+Agent Control command to follow, so the turn's states come from the session's
+own timeline as it streams: `queued`, `started`, then `finished` or `failed`.
+The agent's messages print as `reply` lines and its tool calls as `tool`
+lines. When the session ends or fails, attach prints `session ended` and
+exits.
 
 ```text
 fix the failing parser test
