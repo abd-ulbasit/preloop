@@ -165,15 +165,23 @@ async function runCustomAgentWizard(
   await page.goto('/console/agents');
 
   const wizard = page.locator('preloop-deploy-wizard');
-  const trigger = page.getByRole('button', {
-    name: /Onboard existing agent/i,
-  });
-  // Fresh accounts auto-open the wizard. Otherwise the Agents page trigger
-  // is "Onboard existing agent" (the custom-agent path). "Deploy new agent"
-  // opens a different dialog and is not this flow.
-  if ((await wizard.count()) === 0) {
-    await trigger.first().waitFor({ state: 'visible', timeout: 30_000 });
-    await trigger.first().click();
+  const dialog = page.locator(
+    'sl-dialog[label="Onboard an existing agent"][open]'
+  );
+  const trigger = page
+    .getByRole('button', { name: /Onboard existing agent/i })
+    .first();
+  // A first visit opens this dialog after the agents request returns. The
+  // header button is visible during that request, so a click started while
+  // the wizard is still absent lands under the dialog. If the dialog is
+  // already open, or it opens and steals the click, that is the wizard.
+  await trigger.waitFor({ state: 'visible', timeout: 30_000 });
+  if ((await dialog.count()) === 0) {
+    try {
+      await trigger.click({ timeout: 5_000 });
+    } catch (error) {
+      if ((await dialog.count()) === 0) throw error;
+    }
   }
   await wizard.first().waitFor({ state: 'attached', timeout: 30_000 });
 
