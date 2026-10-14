@@ -3,7 +3,6 @@ import sinon from 'sinon';
 import {
   getKillSwitchSnapshot,
   holdKillSwitchPoll,
-  KILL_SWITCH_POLL_MS,
   refreshKillSwitch,
   resetKillSwitchStore,
   setKillSwitchStatus,
@@ -113,17 +112,20 @@ describe('kill-switch-store', () => {
     const release = holdKillSwitchPoll();
     const off = subscribeKillSwitch(() => undefined);
     try {
-      await clock.tickAsync(0);
+      // Subscribe starts the read outside a timer. Wait for that read to
+      // settle before advancing the poll, or a later forced tick joins it
+      // and window.fetch is never called again.
+      await refreshKillSwitch();
       expect(statusCalls(), 'the initial read still happens').to.equal(1);
 
-      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      await clock.nextAsync();
       expect(
         statusCalls(),
         'the poll waits until the load releases it'
       ).to.equal(1);
 
       release();
-      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      await clock.nextAsync();
       expect(statusCalls(), 'the following interval asks again').to.equal(2);
     } finally {
       off();
@@ -137,13 +139,13 @@ describe('kill-switch-store', () => {
     const release = holdKillSwitchPoll();
     const off = subscribeKillSwitch(() => undefined);
     try {
-      await clock.tickAsync(0);
+      await refreshKillSwitch();
       expect(statusCalls()).to.equal(1);
 
-      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      await clock.nextAsync();
       expect(statusCalls(), 'the first held tick is the cold load').to.equal(1);
 
-      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      await clock.nextAsync();
       expect(statusCalls(), 'a hung load cannot skip a second tick').to.equal(
         2
       );
