@@ -283,9 +283,10 @@ class AIModelUpdate(BaseModel):
         # provider_name is optional on update; CRUD re-runs this with the
         # stored provider so a partial write still cannot mark a non-Azure
         # model configured.
-        self.meta_data = normalize_azure_auth_meta(
-            self.meta_data, provider_name=self.provider_name
-        )
+        if "meta_data" in self.model_fields_set:
+            self.meta_data = normalize_azure_auth_meta(
+                self.meta_data, provider_name=self.provider_name
+            )
         has_inline_payload = (
             self.credential_type is not None or self.credential_payload is not None
         )
@@ -588,6 +589,11 @@ class AvailableModelsResponse(BaseModel):
             "live attempt (fixed vocabulary, never raw provider error text). "
             "None for a clean live result."
         ),
+    )
+
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Safe warning codes for incomplete provider discovery",
     )
 
 

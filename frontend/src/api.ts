@@ -4250,6 +4250,7 @@ export interface AvailableModelsResult {
   models: string[];
   source: 'live' | 'fallback';
   error?: AvailableModelsFallbackReason;
+  warnings?: string[];
 }
 
 /**
@@ -4329,6 +4330,13 @@ export async function getAvailableModelsForProvider(
     models: Array.isArray(data?.models) ? (data.models as string[]) : [],
     source: data?.source === 'fallback' ? 'fallback' : 'live',
     ...(data?.error ? { error: data.error } : {}),
+    ...(Array.isArray(data?.warnings)
+      ? {
+          warnings: data.warnings.filter(
+            (warning: unknown) => typeof warning === 'string'
+          ),
+        }
+      : {}),
   };
 }
 
