@@ -629,14 +629,20 @@ func buildHostExecArgs(profile hostExecProfile, job map[string]any, workspace st
 // hostExecRun is a prepared host job: the CLI command plus the work that
 // must happen before it starts (checkout) and after it ends (cleanup).
 type hostExecRun struct {
-	resultPath  string
-	cmd         *exec.Cmd
-	timeout     time.Duration
-	workspace   string
-	checkout    *hostExecCheckout
-	publication *hostExecPublication
-	resume      *hostExecResume
-	cleanup     func()
+	resultPath string
+	cmd        *exec.Cmd
+	timeout    time.Duration
+	workspace  string
+	// workspaceLabel names the authorized directory the run works in, or
+	// is empty for a fresh execution directory.
+	workspaceLabel string
+	// dirtyCheckDir is the authorized directory whose git tree must be
+	// clean before the CLI starts, or empty (managed run, or allow_dirty).
+	dirtyCheckDir string
+	checkout      *hostExecCheckout
+	publication   *hostExecPublication
+	resume        *hostExecResume
+	cleanup       func()
 }
 
 func newHostExecJobCmd(job map[string]any) (*exec.Cmd, string, time.Duration, error) {
@@ -688,6 +694,13 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaceSpec, err := jobHostExecWorkspace(job)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateHostExecWorkspaceJob(workspaceSpec, wantHarness, checkout, mcpToken); err != nil {
+		return nil, err
+	}
 	if checkout != nil && !profile.AllowCheckout {
 		return nil, fmt.Errorf(
 			"%s: the flow clones repositories but host profile %q does not set allow_checkout; set \"allow_checkout\": true in %s to let this profile clone flow repositories",
@@ -716,9 +729,32 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := boundHostExecWorkspace(root, executionID)
+	// An authorized directory is resolved first, so a refused run leaves
+	// nothing behind.
+	var authorized *sessionWorkspace
+	if workspaceSpec != nil {
+		// The git dirty check can take seconds; it runs on the job
+		// goroutine (hostExecWorkspaceDirtyCheck), not on the message loop.
+		authorized, err = resolveSessionWorkspace(context.Background(), "", workspaceSpec, sessionWorkspaceOptions{Harness: wantHarness, ReadOnlyUnsupported: true, DeferDirtyCheck: true})
+		if err != nil {
+			return nil, err
+		}
+	}
+	// The fresh execution directory always exists: it is the working
+	// directory of a managed run, and the runner-owned home of per-job files
+	// (MCP config) when the run works in an authorized directory.
+	scratch, err := boundHostExecWorkspace(root, executionID)
 	if err != nil {
 		return nil, err
+	}
+	workspace := scratch
+	workspaceLabel := ""
+	dirtyCheckDir := ""
+	if authorized != nil {
+		workspace, workspaceLabel = authorized.Dir, authorized.Label
+		if !workspaceSpec.AllowDirty {
+			dirtyCheckDir = authorized.Dir
+		}
 	}
 	bin, argvPrefix, err := resolveHostExecCommand(profile.Executable)
 	if err != nil {
@@ -742,7 +778,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	}
 	var mcpArgs []string
 	if mcpToken != "" {
-		mcpArgs, files, err = hostExecMCPConfig(wantHarness, workspace, mcpToken)
+		mcpArgs, files, err = hostExecMCPConfig(wantHarness, scratch, mcpToken)
 		if err != nil {
 			return nil, err
 		}
@@ -808,14 +844,16 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	cmd.SysProcAttr = hostExecSysProcAttr()
 	cmd.WaitDelay = 250 * time.Millisecond
 	return &hostExecRun{
-		cmd:         cmd,
-		resultPath:  resultPath,
-		timeout:     hostExecTimeout(profile, job),
-		workspace:   workspace,
-		checkout:    checkout,
-		publication: publication,
-		resume:      resume,
-		cleanup:     cleanup,
+		cmd:            cmd,
+		resultPath:     resultPath,
+		timeout:        hostExecTimeout(profile, job),
+		workspace:      workspace,
+		workspaceLabel: workspaceLabel,
+		dirtyCheckDir:  dirtyCheckDir,
+		checkout:       checkout,
+		publication:    publication,
+		resume:         resume,
+		cleanup:        cleanup,
 	}, nil
 }
 
@@ -949,6 +987,26 @@ func beginHostExecJob(
 		failed := func(status, msg string) {
 			buffer.finish()
 			done <- leasedJobOutcome{executionID: executionID, status: status, hostExec: true, profile: profile, errMsg: msg, exitCode: -1, logBuffer: buffer}
+		}
+		if run.workspaceLabel != "" {
+			buffer.note("preloop runner: working in authorized directory " + run.workspaceLabel)
+		}
+		if run.dirtyCheckDir != "" {
+			ctx, cancel := context.WithCancel(context.Background())
+			if !gate.setCancel(cancel) {
+				failed("STOPPED", "")
+				return
+			}
+			err := hostExecWorkspaceDirtyCheck(ctx, run.dirtyCheckDir, run.workspaceLabel)
+			cancel()
+			switch {
+			case halted.Load():
+				failed("STOPPED", "")
+				return
+			case err != nil:
+				failed("FAILED", err.Error())
+				return
+			}
 		}
 		if run.checkout != nil {
 			checkoutTimeout := hostExecCheckoutTimeout

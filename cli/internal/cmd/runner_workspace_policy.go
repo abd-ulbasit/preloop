@@ -195,7 +195,11 @@ type sessionWorkspaceOptions struct {
 	// ReadOnlyUnsupported says the harness cannot be run in a read-only
 	// configuration, so a read_only directory must be refused for it.
 	ReadOnlyUnsupported bool
-	Logf                func(string)
+	// DeferDirtyCheck skips the git dirty-tree check so a caller on the
+	// runner's message loop stays fast; the caller must run
+	// hostExecWorkspaceDirtyCheck before it starts anything there.
+	DeferDirtyCheck bool
+	Logf            func(string)
 }
 
 // sessionWorkspace is a resolved working directory for one session.
@@ -796,12 +800,14 @@ func resolveAuthorizedDirectoryWorkspace(ctx context.Context, spec *sessionWorks
 	if err := refuseHomeDirectory(dir); err != nil {
 		return nil, workspaceError(workspaceErrNotAuthorized, "%v", err)
 	}
-	dirty, err := workspaceDirty(ctx, dir)
-	if err != nil {
-		return nil, workspaceError(workspaceErrDirty, "%v", err)
-	}
-	if dirty && !spec.AllowDirty {
-		return nil, workspaceError(workspaceErrDirty, "directory %s has uncommitted changes; commit or stash them, or start with allow_dirty as the owner", spec.ID)
+	if !opts.DeferDirtyCheck {
+		dirty, err := workspaceDirty(ctx, dir)
+		if err != nil {
+			return nil, workspaceError(workspaceErrDirty, "%v", err)
+		}
+		if dirty && !spec.AllowDirty {
+			return nil, workspaceError(workspaceErrDirty, "directory %s has uncommitted changes; commit or stash them, or start with allow_dirty as the owner", spec.ID)
+		}
 	}
 	label := authorizedDirectoryLabel(*entry)
 	if subpath != "" {

@@ -617,6 +617,37 @@ branches or open pull requests unless a Copilot profile also sets
 [Copilot CLI publication](../copilot-cli.md#review-and-implementation-flows).
 Otherwise use the Docker harness for flows that publish.
 
+### Running a host flow in an authorized directory
+
+By default every host run gets a fresh execution directory. A flow can
+instead work in a directory the runner owner listed with
+`preloop runner dirs add` (the same list remote sessions use):
+
+```json
+{
+  "harness": "claude_code",
+  "workspace": {"kind": "authorized_directory", "id": "dir_9f2c", "allow_dirty": false}
+}
+```
+
+The control plane sends only the id. A run is leased only to a runner that
+advertises that directory as `write` for the flow's harness, and the runner
+re-checks the entry before the CLI starts: it refuses an unknown id, a
+`read_only` entry, a harness the entry does not allow, the filesystem root,
+the home directory, and a git work tree with uncommitted changes unless the
+flow sets `"allow_dirty": true`. The dirty check runs after the runner
+accepts the lease and before the CLI starts, so a slow `git status` never
+delays heartbeats. Such a flow cannot also clone repositories or use
+`"harness_fallback": "fallback_server"` (the directory does not exist on
+hosted compute); the API refuses both when the flow is saved. Per-job files
+(the MCP config) stay in the runner's own execution directory, so Cursor and
+Devin flows with Preloop tools are refused in an authorized directory: both
+read MCP configuration from their working directory. The CLI
+runs with the directory's own project configuration, so authorize only
+directories whose contents you trust. Two flows that name the same
+directory can run at the same time; give them separate directories or limit
+the runner's concurrency if that matters.
+
 ### Copilot CLI profiles
 
 Set `"executable": "copilot"` to run GitHub Copilot CLI under the runner
