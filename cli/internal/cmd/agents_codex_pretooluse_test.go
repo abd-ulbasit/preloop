@@ -44,6 +44,10 @@ func TestCodexPreToolUseCentralDecision(t *testing.T) {
 			testenv.SetHome(t, home)
 			var posted []map[string]interface{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == agentSessionStartPath {
+					_ = json.NewEncoder(w).Encode(map[string]string{"runtime_session_id": "synthetic-session"})
+					return
+				}
 				var req map[string]interface{}
 				_ = json.NewDecoder(r.Body).Decode(&req)
 				posted = append(posted, req)
@@ -80,6 +84,10 @@ func TestCodexHooksNeverReuseApprovalAcrossEvents(t *testing.T) {
 	testenv.SetHome(t, home)
 	var posted []map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == agentSessionStartPath {
+			_ = json.NewEncoder(w).Encode(map[string]string{"runtime_session_id": "synthetic-session"})
+			return
+		}
 		var req map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		posted = append(posted, req)
