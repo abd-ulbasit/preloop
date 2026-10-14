@@ -11,6 +11,7 @@ import logging
 from typing import Optional
 
 from preloop.models.db.session import get_db_session
+from preloop.services.operator_notes import reconcile_ended_session_notes
 from preloop.services.runner_sessions import sweep_runner_sessions
 from preloop.services.service_roles import (
     background_passes_allowed,
@@ -32,7 +33,11 @@ def run_runner_session_sweep_once() -> int:
     """
     db = next(get_db_session())
     try:
-        return sweep_runner_sessions(db)
+        ended = sweep_runner_sessions(db)
+        reconciled = reconcile_ended_session_notes(db)
+        if reconciled:
+            logger.info("Settled %s notes for ended runtime sessions", reconciled)
+        return ended
     finally:
         db.close()
 

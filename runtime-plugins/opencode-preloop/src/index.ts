@@ -163,6 +163,9 @@ export class PreloopOpenCodePlugin {
   private socket?: WebSocket;
   private client?: OpenCodeClient;
   private stopped = false;
+  private noteSessions = new Map<string, Promise<void>>();
+  private pendingNoteAcks = new Map<string, string[]>();
+  private noteTransforms = new Map<string, Promise<void>>();
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
@@ -298,7 +301,10 @@ export class PreloopOpenCodePlugin {
       void this.handleFrame(socket, String(event.data));
     });
 
-    const onClose = (event: { code?: number; reason?: string | Buffer }): void => {
+    const onClose = (event: {
+      code?: number;
+      reason?: string | Buffer;
+    }): void => {
       this.stopHeartbeat();
       if (this.socket === socket) {
         this.socket = undefined;
@@ -542,16 +548,20 @@ export class PreloopOpenCodePlugin {
   }
 
   /**
-   * Derive the REST API base URL from the Agent Control WS URL, e.g.
-   * `wss://host/api/v1/agents/control/ws` -> `https://host`.
+   * Derive the permission endpoint from the control URL, retaining its path prefix.
    */
   permissionCheckUrl(config: ControlConfig): string {
     if (config.permission_check_url) {
       return config.permission_check_url;
     }
     const wsUrl = new URL(config.control_ws_url!);
-    const httpProtocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
-    return `${httpProtocol}//${wsUrl.host}/api/v1/agents/permission-check`;
+    wsUrl.protocol = wsUrl.protocol === "wss:" ? "https:" : "http:";
+    wsUrl.pathname = wsUrl.pathname.endsWith("/control/ws")
+      ? wsUrl.pathname.slice(0, -"control/ws".length) + "permission-check"
+      : "/api/v1/agents/permission-check";
+    wsUrl.search = "";
+    wsUrl.hash = "";
+    return wsUrl.toString();
   }
 
   /**
@@ -915,7 +925,10 @@ export class PreloopOpenCodePlugin {
       tool_name: mapOpenCodeToolName(input.tool),
       tool_input: toolInput,
       session_id:
-        input.sessionID ?? config.session_reference ?? input.callID ?? undefined,
+        input.sessionID ??
+        config.session_reference ??
+        input.callID ??
+        undefined,
       cwd: this.workingDirectory ?? process.cwd(),
     };
     const description = toolInput["description"];
@@ -1011,6 +1024,137 @@ export class PreloopOpenCodePlugin {
     );
   }
 
+  /** Bounded, fail-open lifecycle requests; never delay tools for operator notes. */
+  async postNoteLifecycle(
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const config = this.controlConfig ?? this.loadConfig();
+    if (
+      !config.bearer_token ||
+      (!config.control_ws_url && !config.permission_check_url)
+    )
+      throw new Error("missing note lifecycle credential");
+    const url = new URL(path, this.permissionCheckUrl(config));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await (
+        this.fetchImpl ?? (fetch as unknown as FetchLike)
+      )(url.toString(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.bearer_token}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!response.ok)
+        throw new Error(`note lifecycle returned HTTP ${response.status}`);
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async registerNoteSession(sessionID: string): Promise<void> {
+    let registration = this.noteSessions.get(sessionID);
+    if (!registration) {
+      registration = this.postNoteLifecycle("session-start", {
+        session_id: sessionID,
+        source: this.runtime,
+        cwd: this.workingDirectory ?? process.cwd(),
+        parent_session_id: process.env.PRELOOP_PARENT_SESSION_ID,
+        alias: process.env.PRELOOP_SESSION_ALIAS,
+      }).then(() => undefined);
+      this.noteSessions.set(sessionID, registration);
+    }
+    try {
+      await registration;
+    } catch (error) {
+      this.noteSessions.delete(sessionID);
+      throw error;
+    }
+  }
+
+  /** OpenCode 1.18.32's transform runs before every model request. */
+  async transformOperatorNotes(
+    input: { sessionID?: string },
+    output: { system: string[] },
+  ): Promise<void> {
+    const sessionID = input.sessionID?.trim();
+    if (!sessionID) return;
+    const previous = this.noteTransforms.get(sessionID) ?? Promise.resolve();
+    const work = previous.then(() =>
+      this.deliverOperatorNotes(sessionID, output),
+    );
+    this.noteTransforms.set(sessionID, work);
+    try {
+      await work;
+    } finally {
+      if (this.noteTransforms.get(sessionID) === work)
+        this.noteTransforms.delete(sessionID);
+    }
+  }
+
+  private async deliverOperatorNotes(
+    sessionID: string,
+    output: { system: string[] },
+  ): Promise<void> {
+    try {
+      await this.registerNoteSession(sessionID);
+      if (this.pendingNoteAcks.has(sessionID)) {
+        await this.postNoteLifecycle("notes/ack", {
+          session_id: sessionID,
+          note_ids: this.pendingNoteAcks.get(sessionID),
+        });
+        this.pendingNoteAcks.delete(sessionID);
+      }
+      const result = (await this.postNoteLifecycle("notes/pending", {
+        session_id: sessionID,
+        channel: "hook",
+        event: "pre_tool_use",
+        defer_delivery: true,
+      })) as
+        | { text?: string | null; notes?: Array<{ note_id: string }> }
+        | undefined;
+      if (result?.text?.trim()) {
+        output.system.push(result.text);
+        const ids = (result.notes ?? []).map((note) => note.note_id);
+        if (ids.length) {
+          this.pendingNoteAcks.set(sessionID, ids);
+          await this.postNoteLifecycle("notes/ack", {
+            session_id: sessionID,
+            note_ids: ids,
+          });
+          this.pendingNoteAcks.delete(sessionID);
+        }
+      }
+    } catch (error) {
+      this.log(
+        `operator note delivery unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Idle is resumable; only deletion is an authoritative native session end. */
+  async endNoteSession(sessionID: string): Promise<void> {
+    try {
+      await this.postNoteLifecycle("session-end", {
+        external_session_id: sessionID,
+        reason: "session_deleted",
+      });
+    } catch (error) {
+      this.log(
+        `operator note session end unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.noteSessions.delete(sessionID);
+      this.pendingNoteAcks.delete(sessionID);
+    }
+  }
+
   /** Shared round trip for both the ask bridge and the tool gate. */
   async requestDecision(
     body: Record<string, unknown>,
@@ -1097,7 +1241,13 @@ export const PreloopPlugin = async (ctx: {
   client?: OpenCodeClient;
   directory?: string;
 }): Promise<{
-  event: (input: { event: { type: string; properties?: unknown } }) => Promise<void>;
+  event: (input: {
+    event: { type: string; properties?: unknown };
+  }) => Promise<void>;
+  "experimental.chat.system.transform": (
+    input: { sessionID?: string },
+    output: { system: string[] },
+  ) => Promise<void>;
   "tool.execute.before": (
     input: ToolExecuteBeforeInput,
     output: ToolExecuteBeforeOutput,
@@ -1114,11 +1264,20 @@ export const PreloopPlugin = async (ctx: {
   // too would only double the fetch and the read-modify-write.
   await instance.start(ctx.client);
   return {
+    "experimental.chat.system.transform": async (input, output) => {
+      await instance.transformOperatorNotes(input, output);
+    },
     "tool.execute.before": async (input, output) => {
       // Throws on deny; OpenCode reports the message as the tool error.
       await instance.handleToolExecuteBefore(input, output ?? {});
     },
     event: async ({ event }) => {
+      if (event.type === "session.deleted") {
+        const properties = event.properties as
+          { info?: { id?: string } } | undefined;
+        const sessionID = properties?.info?.id;
+        if (sessionID) await instance.endNoteSession(sessionID);
+      }
       if (
         event.type === "permission.asked" ||
         event.type === "permission.replied"

@@ -55,6 +55,7 @@ from preloop.services.model_gateway_usage import (
 )
 from preloop.services.usage_repricing import reprice_gateway_usage
 from preloop.utils.permissions import require_permission
+from preloop.api.heavy_routes import heavy_route
 
 router = APIRouter(prefix="/cost", tags=["Cost Analytics"])
 
@@ -91,6 +92,7 @@ def _price_catalog_info() -> Optional[PriceCatalogInfo]:
 
 
 @router.get("/timeseries", response_model=CostTimeseriesResponse)
+@heavy_route
 @require_permission("view_cost")
 def get_cost_timeseries(
     start_date: Optional[datetime] = Query(None),
@@ -140,6 +142,7 @@ def get_cost_timeseries(
 
 
 @router.get("/summary", response_model=CostAnalyticsSummaryResponse)
+@heavy_route
 @require_permission("view_cost")
 def get_cost_summary(
     start_date: Optional[datetime] = Query(None),

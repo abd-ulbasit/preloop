@@ -24,7 +24,7 @@ import '../../components/view-header.ts';
 import {
   listProjects,
   listIssueDuplicates,
-  checkAIVerdict,
+  getAIVerdicts,
   getIssueDuplicateAiStatus,
   dismissDuplicatePair,
   listOrganizations,
@@ -61,26 +61,36 @@ function issueStatusLabel(status: string | null | undefined): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }
 
-/** Parallel verdict checks per page load. */
-const VERDICT_CONCURRENCY = 2;
-
 /**
- * A failure of the verdict service as a whole, not of one pair. A 404 is
- * per pair ("Issue(s) not found"), so it never trips the breaker.
+ * One verdict call per page: stored verdicts come back at once, new pairs
+ * come back `pending` while the server checks them, and the view asks again
+ * for those every VERDICT_POLL_MS. The server checks a few pairs at a time,
+ * so a page of 50 new pairs takes minutes: the view keeps asking while
+ * verdicts keep arriving, and gives up only after VERDICT_STALL_POLLS polls
+ * in a row with no new verdict, or after VERDICT_MAX_POLLS in total.
  */
-function isServiceFailure(error: unknown): boolean {
-  if (!(error instanceof VerdictError)) return false;
-  return error.code === 'no_default_ai_model' || error.status >= 500;
-}
+const VERDICT_POLL_MS = 2000;
+const VERDICT_STALL_POLLS = 45;
+const VERDICT_MAX_POLLS = 600;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 @customElement('issues-view')
 export class IssuesView extends LitElement {
+  /** Verdict polling cadence; tests shorten these. */
+  static verdictPollMs = VERDICT_POLL_MS;
+  static verdictStallPolls = VERDICT_STALL_POLLS;
+  static verdictMaxPolls = VERDICT_MAX_POLLS;
+
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state()
   private _duplicates: DuplicatePair[] = [];
 
   @state()
   private _verdicts: Record<string, VerdictState> = {};
+
+  /** Bumped per page load so an older verdict poll stops. */
+  private _verdictRound = 0;
 
   @state()
   private _aiModelName = '';
@@ -387,54 +397,77 @@ export class IssuesView extends LitElement {
       const current = this._verdicts[this._pairKey(pair)];
       return !current || current.state === 'checking';
     });
-
-    for (const pair of pending) {
-      this._setVerdict(this._pairKey(pair), { state: 'checking' });
-    }
-
-    // A small pool instead of one request per row, and a breaker: once the
-    // verdict service itself fails (5xx, no model) the remaining rows
-    // are marked without calling it again. Each row keeps its Review action.
-    const queue = [...pending];
-    let tripped: VerdictState | null = null;
-    const worker = async () => {
-      for (let pair = queue.shift(); pair; pair = queue.shift()) {
-        if (tripped) {
-          this._setVerdict(this._pairKey(pair), tripped);
-          continue;
-        }
-        const failure = await this._fetchVerdictForPair(pair);
-        if (failure && !tripped) tripped = failure;
-      }
-    };
-    await Promise.all(
-      Array.from(
-        { length: Math.min(VERDICT_CONCURRENCY, queue.length) },
-        worker
-      )
-    );
+    this._verdictRound += 1;
+    await this._loadVerdicts(pending, this._verdictRound, false);
   }
 
-  /** Fetch one verdict; returns the state to apply to the rest on a service failure. */
-  private async _fetchVerdictForPair(
-    pair: DuplicatePair
-  ): Promise<VerdictState | null> {
-    const pairKey = this._pairKey(pair);
-    this._setVerdict(pairKey, { state: 'checking' });
-    try {
-      const verdict = await checkAIVerdict(pair.issue1.id, pair.issue2.id);
-      this._setVerdict(pairKey, { state: 'done', verdict });
-      return null;
-    } catch (error) {
-      console.warn(`AI verdict unavailable for ${pairKey}:`, error);
-      const next = this._stateFromError(error);
-      this._setVerdict(pairKey, next);
-      return isServiceFailure(error) ? next : null;
+  /**
+   * Ask for the verdicts of `pairs` in one call, then again for the pairs
+   * still pending. A newer page load (a higher `round`) stops this loop.
+   */
+  private async _loadVerdicts(
+    pairs: DuplicatePair[],
+    round: number,
+    retry: boolean
+  ) {
+    for (const pair of pairs) {
+      this._setVerdict(this._pairKey(pair), { state: 'checking' });
+    }
+    let remaining = pairs;
+    let stalled = 0;
+    for (
+      let attempt = 0;
+      remaining.length > 0 &&
+      attempt < IssuesView.verdictMaxPolls &&
+      stalled < IssuesView.verdictStallPolls;
+      attempt++
+    ) {
+      if (attempt > 0) await sleep(IssuesView.verdictPollMs);
+      if (round !== this._verdictRound) return;
+      let response;
+      try {
+        response = await getAIVerdicts(
+          remaining.map((pair) => ({
+            issue1_id: pair.issue1.id,
+            issue2_id: pair.issue2.id,
+          })),
+          { retry: retry && attempt === 0 }
+        );
+      } catch (error) {
+        console.warn('AI verdicts unavailable:', error);
+        const next = this._stateFromError(error);
+        for (const pair of remaining) {
+          this._setVerdict(this._pairKey(pair), next);
+        }
+        return;
+      }
+      if (round !== this._verdictRound) return;
+      const stillPending: DuplicatePair[] = [];
+      const updates: Record<string, VerdictState> = {};
+      remaining.forEach((pair, index) => {
+        const item = response.items[index];
+        const key = this._pairKey(pair);
+        if (!item || item.state === 'pending') {
+          stillPending.push(pair);
+        } else if (item.state === 'done') {
+          updates[key] = { state: 'done', verdict: item.verdict ?? undefined };
+        } else if (item.state === 'no_model') {
+          updates[key] = { state: 'no_model' };
+        } else {
+          updates[key] = { state: 'failed' };
+        }
+      });
+      this._verdicts = { ...this._verdicts, ...updates };
+      stalled = stillPending.length < remaining.length ? 0 : stalled + 1;
+      remaining = stillPending;
+    }
+    for (const pair of remaining) {
+      this._setVerdict(this._pairKey(pair), { state: 'timeout' });
     }
   }
 
   private _retryVerdict(pair: DuplicatePair) {
-    void this._fetchVerdictForPair(pair);
+    void this._loadVerdicts([pair], this._verdictRound, true);
   }
 
   private _renderRowVerdict(

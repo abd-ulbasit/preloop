@@ -645,6 +645,37 @@ class TestGroupedStandalonePolicyDecisions:
         assert len(groups) == 1
         assert total == 4
 
+    def test_count_limit_caps_the_total_and_says_there_is_more(
+        self, db_session: Session, test_account, events
+    ):
+        # The exact total reads every matching row; a capped one stops past
+        # the cap (#1592). Above the cap it reports cap + 1: "more than".
+        def total(**kwargs):
+            return crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, limit=1, **kwargs
+            )[1]
+
+        assert total() == 4
+        assert total(count_limit=10) == 4
+        assert total(count_limit=4) == 4
+        assert total(count_limit=3) == 4
+        assert total(count_limit=1) == 2
+        assert total(count_limit=0) == 1
+        assert total(count_limit=1, event_type_filter=["tool_call"]) == 2
+        with pytest.raises(ValueError):
+            total(count_limit=-1)
+
+    def test_count_limit_leaves_window_totals_exact(
+        self, db_session: Session, test_account, events
+    ):
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session,
+            account_id=test_account.id,
+            outcome_filter=["deny"],
+            count_limit=1,
+        )
+        assert total == len(groups) == 2
+
     def test_tool_call_probe_is_not_hashed(
         self, db_session: Session, test_account, events
     ):

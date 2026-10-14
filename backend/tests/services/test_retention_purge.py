@@ -74,16 +74,27 @@ def _approval(db_session, test_user, *, age_days: int, status: str = "approved")
     )
     db_session.add(workflow)
     db_session.flush()
-    config = models.ToolConfiguration(
-        account_id=test_user.account_id,
-        tool_name="send_payment",
-        tool_source="mcp",
-        approval_workflow_id=workflow.id,
-        is_enabled=True,
-        custom_config={},
+    # One account-wide configuration per tool (NULLS NOT DISTINCT scope).
+    config = (
+        db_session.query(models.ToolConfiguration)
+        .filter_by(
+            account_id=test_user.account_id,
+            tool_name="send_payment",
+            tool_source="mcp",
+        )
+        .first()
     )
-    db_session.add(config)
-    db_session.flush()
+    if config is None:
+        config = models.ToolConfiguration(
+            account_id=test_user.account_id,
+            tool_name="send_payment",
+            tool_source="mcp",
+            approval_workflow_id=workflow.id,
+            is_enabled=True,
+            custom_config={},
+        )
+        db_session.add(config)
+        db_session.flush()
     request = models.ApprovalRequest(
         account_id=test_user.account_id,
         tool_configuration_id=config.id,

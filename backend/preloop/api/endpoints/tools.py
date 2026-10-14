@@ -75,6 +75,7 @@ from preloop.tools.builtin_defs import (
     UPDATE_ISSUE_SCHEMA,
 )
 from preloop.tools.native_defs import NATIVE_TOOL_NAMES, NATIVE_TOOLS
+from preloop.api.heavy_routes import heavy_route
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -478,6 +479,7 @@ class ToolUsageStatsResponse(BaseModel):
 
 
 @router.get("/tools/stats", response_model=ToolUsageStatsResponse)
+@heavy_route
 @require_permission("view_cost")
 def get_tool_usage_stats(
     start_date: Optional[datetime] = None,

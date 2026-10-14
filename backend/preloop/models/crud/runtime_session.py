@@ -209,6 +209,51 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
 
     ACTIVE_WINDOW = timedelta(minutes=10)
 
+    def lock_active_note_target(
+        self, db: Session, *, account_id: Any, runtime_session_id: Any
+    ) -> Optional[RuntimeSession]:
+        """Serialize delivery with session termination, using account scope."""
+        return (
+            db.query(self.model)
+            .filter(
+                self.model.id == runtime_session_id,
+                self.model.account_id == account_id,
+                self.model.ended_at.is_(None),
+            )
+            .with_for_update()
+            .first()
+        )
+
+    def lock_ended_sessions_with_pending_notes(
+        self, db: Session, *, limit: int = 100
+    ) -> List[RuntimeSession]:
+        """Lock a bounded batch of authoritatively ended note targets.
+
+        Row locks serialize reconciliation with a harness reopening the same
+        session. SKIP LOCKED lets API replicas divide work without waiting.
+        Account equality prevents malformed cross-account note references
+        from participating in reconciliation.
+        """
+        note = models.AgentControlCommand
+        pending_note = (
+            db.query(note.id)
+            .filter(
+                note.account_id == self.model.account_id,
+                note.runtime_session_id == self.model.id,
+                note.kind == "note",
+                note.status.in_(["pending", "claimed"]),
+            )
+            .exists()
+        )
+        return (
+            db.query(self.model)
+            .filter(self.model.ended_at.isnot(None), pending_note)
+            .order_by(self.model.ended_at, self.model.id)
+            .limit(max(1, limit))
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+
     def get_by_source(
         self,
         db: Session,

@@ -22,14 +22,17 @@ from preloop.services.host_exec import (
     BILLING_MODES,
     BILLING_MODE_UNKNOWN,
     HOST_EXEC_AGENT_TYPE,
+    HOST_EXEC_WORKSPACE_KEY,
     ROUTING_HARNESS_DISABLED,
     ROUTING_HARNESS_SIGNED_OUT,
     ROUTING_MODEL_NOT_AVAILABLE,
     ROUTING_NO_RUNNER_WITH_HARNESS,
     ROUTING_OWNER_HAS_NO_RUNNER,
     ROUTING_RUNNER_OFFLINE,
+    host_exec_harness,
     host_exec_profile_name,
     runner_has_host_exec_profile,
+    runner_offers_authorized_directory,
 )
 from preloop.services.account_realtime import (
     ACCOUNT_TOPIC_RUNNERS,
@@ -798,6 +801,9 @@ def lease_job(
     selection = payload.get(HOST_EXEC_LEASE_KEY)
     harness = selection.get("harness") if isinstance(selection, Mapping) else None
     harness_model = selection.get("model") if isinstance(selection, Mapping) else None
+    workspace = payload.get(HOST_EXEC_WORKSPACE_KEY)
+    workspace_id = workspace.get("id") if isinstance(workspace, Mapping) else None
+    workspace_harness = harness or host_exec_harness(payload.get("agent_type"))
     # ``agent_config.runner_id`` and a host-bound continuation both arrive
     # as ``required_runner_id``: a runner the flow names explicitly.
     pinned = required_runner_id
@@ -841,6 +847,12 @@ def lease_job(
             require_publication=bool(payload.get("host_exec_publication")),
             require_continuation=bool(payload.get("host_exec_resume")),
         ):
+            continue
+        if workspace_id and not runner_offers_authorized_directory(
+            candidate, workspace_id, workspace_harness
+        ):
+            # Only a runner whose owner authorized this directory for the
+            # harness may take a run that works in it.
             continue
         runner = crud_flow_runner.claim_free_slot(db, runner_id=candidate.id)
         if runner is None:
@@ -1011,6 +1023,7 @@ _HARNESS_DISPLAY_NAMES = {
     "copilot_cli": "GitHub Copilot CLI",
     "cursor_cli": "Cursor CLI",
     "devin_cli": "Devin CLI",
+    "claude_code": "Claude Code",
 }
 
 
@@ -1032,7 +1045,7 @@ def harness_options(
 
     Returns:
         ``{"harnesses": [...]}`` for runnable harnesses (``copilot_cli``,
-        ``cursor_cli``) reported by at least one usable runner. A runner is
+        ``cursor_cli``, ``devin_cli``, ``claude_code``) reported by at least one usable runner. A runner is
         counted online when :func:`runner_eligible_for_harness` accepts it
         (pinned to itself, so the owner rule is the caller's, not a flow's).
     """

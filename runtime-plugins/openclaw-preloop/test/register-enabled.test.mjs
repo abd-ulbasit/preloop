@@ -12,7 +12,17 @@ const baseConfig = {
   runtime_principal_id: "principal-1",
 };
 
-const REGISTERED_HOOKS = ["gateway_start", "gateway_stop", "before_tool_call"];
+const REGISTERED_HOOKS = [
+  "gateway_start",
+  "gateway_stop",
+  "before_tool_call",
+  "before_prompt_build",
+  "llm_input",
+  "model_call_started",
+  "model_call_ended",
+  "agent_end",
+  "session_end",
+];
 
 function makeApi(pluginConfig) {
   const hooks = [];
@@ -133,4 +143,26 @@ test("tool_approval_enabled false with enabled absent still starts the channel a
   } finally {
     spy.restore();
   }
+});
+
+test("older host refusal disables partial note hooks and keeps tool approval installed", async () => {
+  const hooks = new Map();
+  const logs = [];
+  register({
+    pluginConfig: baseConfig,
+    on(name, callback) {
+      if (name === "model_call_started") throw new Error("unsupported hook");
+      hooks.set(name, callback);
+    },
+    logger: { warn: (message) => logs.push(message) },
+  });
+  assert.equal(typeof hooks.get("before_tool_call"), "function");
+  assert.equal(
+    await hooks.get("before_prompt_build")(
+      { prompt: "user", messages: [] },
+      { sessionId: "synthetic", runId: "synthetic" },
+    ),
+    undefined,
+  );
+  assert.ok(logs.some((message) => message.includes("note hooks unavailable")));
 });

@@ -37,6 +37,7 @@ type runnerLogBuffer struct {
 	// stream-json, which keeps older call sites unchanged.
 	harness        string
 	copilotCapture copilotCapture
+	claudeCapture  claudeCapture
 	mu             sync.Mutex
 	partial        []byte
 	discarding     bool
@@ -83,6 +84,8 @@ func (b *runnerLogBuffer) appendLineLocked(line string) {
 		if !applyCopilotLine(&b.copilotCapture, line) {
 			return
 		}
+	} else if b.native && b.harness == hostExecHarnessClaude {
+		applyClaudeLine(&b.claudeCapture, line)
 	} else if b.native {
 		var event cursorStreamEvent
 		if json.Unmarshal([]byte(line), &event) == nil {
@@ -280,6 +283,9 @@ func nativeRunnerResult(b *runnerLogBuffer, waitErr error) (map[string]any, erro
 	}
 	if b.harness == hostExecHarnessCopilot {
 		return copilotRunnerResult(b.copilotCapture)
+	}
+	if b.harness == hostExecHarnessClaude {
+		return claudeRunnerResult(b.claudeCapture)
 	}
 	if b.nativeResults != 1 || !b.nativeCapture.HasResult {
 		return nil, fmt.Errorf("host execution exited without a valid structured completion result")

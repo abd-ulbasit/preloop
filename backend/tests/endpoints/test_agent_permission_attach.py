@@ -280,10 +280,12 @@ def test_native_tool_status(
     assert endpoint._native_tool_status(decision, request_id, timed_out) == status
 
 
-def test_a_failed_second_claim_keeps_the_notes_the_first_one_took(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("has_origin", [True, False])
+@pytest.mark.parametrize("store_fails", [True, False])
+def test_claim_uses_only_authoritative_session_and_fails_open(
+    monkeypatch: pytest.MonkeyPatch, has_origin: bool, store_fails: bool
 ) -> None:
-    """A claim commits its notes as delivered, so they must reach the agent."""
+    """Origin claims cannot spill into a bearer binding, even on store failure."""
 
     class _Session:
         def __enter__(self) -> "_Session":
@@ -296,9 +298,9 @@ def test_a_failed_second_claim_keeps_the_notes_the_first_one_took(
 
     def claim(db: Any, **kwargs: Any) -> list[str]:
         calls.append(kwargs["runtime_session_id"])
-        if len(calls) == 2:
+        if store_fails:
             raise RuntimeError("store unavailable")
-        return ["note-from-first-session"]
+        return ["note-from-authoritative-session"]
 
     monkeypatch.setattr(endpoint, "get_session_factory", lambda: _Session)
     monkeypatch.setattr(endpoint.operator_notes, "claim_pending_notes", claim)
@@ -313,9 +315,9 @@ def test_a_failed_second_claim_keeps_the_notes_the_first_one_took(
         runtime_session_id=uuid4(),
         managed_agent_name="Agent",
     )
-    origin = str(uuid4())
+    origin = str(uuid4()) if has_origin else None
 
     rendered = endpoint._claim_operator_note(identity, origin_session_id=origin)
 
-    assert calls == [str(identity.runtime_session_id), origin]
-    assert rendered == "note-from-first-session"
+    assert calls == [origin or str(identity.runtime_session_id)]
+    assert rendered == (None if store_fails else "note-from-authoritative-session")

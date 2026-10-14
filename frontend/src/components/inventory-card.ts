@@ -1082,10 +1082,13 @@ export class InventoryCard extends LitElement {
                               this.formatCompactNumber(row.requests)
                             )}
                           </td>
-                          <!-- Tokens before cost, split in and out. -->
+                          <!-- Tokens before cost, as one compact total: an
+                             11% column cut "734.6M in · 2.3M out" mid-figure
+                             (#1647). The split is in the tooltip. -->
                           <td class="num" data-label="Tokens">
                             ${this.renderUsageCell(
                               html`<token-figures
+                                total-only
                                 .usage=${row.tokenUsage}
                               ></token-figures>`
                             )}
@@ -1232,12 +1235,13 @@ export class InventoryCard extends LitElement {
                               true
                             )}
                           </td>
-                          <!-- Tokens before cost, split in and out: the
-                             volume that earned the dollar figure beside
-                             it. -->
+                          <!-- Tokens before cost: the volume that earned the
+                             dollar figure beside it, as one total (the split
+                             is in the tooltip). -->
                           <td class="num" data-label="Tokens">
                             ${this.renderUsageCell(
                               html`<token-figures
+                                total-only
                                 .usage=${row.tokenUsage}
                               ></token-figures>`,
                               this.isFlowCostLoading()
@@ -1330,6 +1334,7 @@ export class InventoryCard extends LitElement {
                           <td class="num" data-label="Tokens">
                             ${this.renderUsageCell(
                               html`<token-figures
+                                total-only
                                 .usage=${row.tokenUsage}
                               ></token-figures>`,
                               this.isUsageLoading('models')
@@ -1420,6 +1425,7 @@ export class InventoryCard extends LitElement {
                           <td class="num" data-label="Tokens">
                             ${this.renderUsageCell(
                               html`<token-figures
+                                total-only
                                 .usage=${row.tokenUsage}
                               ></token-figures>`
                             )}

@@ -148,7 +148,9 @@ class ToolConfiguration(Base):
     )
 
     # Unique constraint: one configuration per tool+source per account and
-    # per scope (account-wide vs a specific managed agent).
+    # per scope (account-wide vs a specific MCP server or managed agent).
+    # NULLS NOT DISTINCT makes the account-wide scope (both NULL) unique too;
+    # with default NULL semantics a get-or-create race inserted duplicates.
     __table_args__ = (
         UniqueConstraint(
             "account_id",
@@ -157,6 +159,7 @@ class ToolConfiguration(Base):
             "mcp_server_id",
             "managed_agent_id",
             name="uq_account_tool_source",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

@@ -251,6 +251,8 @@ export class AddAIModelModal extends LitElement {
   @state() private _modelsSource: 'live' | 'fallback' | null = null;
   /** Short safe reason code accompanying a fallback listing. */
   @state() private _modelsFallbackReason: string | null = null;
+  @state() private _modelsWarnings: string[] = [];
+  private _bedrockDiscoveryRevision = 0;
   /**
    * Extra models to create alongside the primary one, all sharing the single
    * provider key entered on this form. Create-mode only.
@@ -404,6 +406,7 @@ export class AddAIModelModal extends LitElement {
     this._modelsFetchError = null;
     this._modelsSource = null;
     this._modelsFallbackReason = null;
+    this._modelsWarnings = [];
     this._resetBedrockFields();
     // Restore the persisted routing region so editing a model configured for
     // e.g. eu-west-1 does not silently re-route it to the default region on
@@ -459,6 +462,18 @@ export class AddAIModelModal extends LitElement {
     this._azureClientId = '';
   }
 
+  /** Invalidate in-flight discovery and clear state derived from its listing. */
+  private _clearBedrockDiscovery() {
+    this._bedrockDiscoveryRevision += 1;
+    this._modelSuggestions = [];
+    this._additionalModelIds = [];
+    this._modelsWarnings = [];
+    this._modelsSource = null;
+    this._modelsFallbackReason = null;
+    this._modelsFetchError = null;
+    this._isOtherModel = false;
+  }
+
   /**
    * Mirror the assembled AWS credential blob into `api_key` so submit,
    * gateway gating, and extra-model creation all keep working unchanged:
@@ -466,6 +481,7 @@ export class AddAIModelModal extends LitElement {
    */
   private _syncBedrockApiKey() {
     if (!this._isBedrock) return;
+    this._clearBedrockDiscovery();
     this._currentModel.api_key =
       buildBedrockCredentialBlob({
         bearerToken:
@@ -671,6 +687,7 @@ export class AddAIModelModal extends LitElement {
     this._modelsFetchError = null;
     this._modelsSource = null;
     this._modelsFallbackReason = null;
+    this._modelsWarnings = [];
     this.requestUpdate();
     if (this._selectedServiceKind !== 'llm') {
       void this._fetchModelsForCurrentProvider();
@@ -741,6 +758,7 @@ export class AddAIModelModal extends LitElement {
     this._modelsFetchError = null;
     this._modelsSource = null;
     this._modelsFallbackReason = null;
+    this._modelsWarnings = [];
     this.requestUpdate();
     if (providerSupported && modelKind !== 'llm') {
       void this._fetchModelsForCurrentProvider();
@@ -790,7 +808,9 @@ export class AddAIModelModal extends LitElement {
               }),
           region: this._bedrockRegion.trim(),
         };
-      } else if (!hasStoredKey) {
+      } else if (hasStoredKey) {
+        awsAuth = { region: this._bedrockRegion.trim() };
+      } else {
         this._modelsFetchError =
           'Enter the AWS Bedrock API key or IAM keys and region first, then fetch models';
         return;
@@ -810,10 +830,12 @@ export class AddAIModelModal extends LitElement {
       return;
     }
 
+    const bedrockDiscoveryRevision = this._bedrockDiscoveryRevision;
     this._isFetchingModels = true;
     this._modelsFetchError = null;
     this._modelsSource = null;
     this._modelsFallbackReason = null;
+    this._modelsWarnings = [];
 
     try {
       const typedKey = (this._currentModel.api_key || '').trim();
@@ -826,7 +848,19 @@ export class AddAIModelModal extends LitElement {
         awsAuth,
         storedModelId
       );
+      if (
+        provider !== this._currentModel.provider_name ||
+        (provider === 'bedrock' &&
+          bedrockDiscoveryRevision !== this._bedrockDiscoveryRevision)
+      )
+        return;
       this._modelSuggestions = result.models;
+      this._modelsWarnings = result.warnings || [];
+      if (this._isBedrock && this._currentModel.model_identifier) {
+        this._isOtherModel = !result.models.includes(
+          this._currentModel.model_identifier
+        );
+      }
       this._modelsSource = result.source;
       this._modelsFallbackReason =
         result.source === 'fallback' ? result.error || null : null;
@@ -840,10 +874,17 @@ export class AddAIModelModal extends LitElement {
             : `No ${this._selectedServiceKind.toUpperCase()} models available for this provider`;
       }
     } catch (error) {
+      if (
+        provider !== this._currentModel.provider_name ||
+        (provider === 'bedrock' &&
+          bedrockDiscoveryRevision !== this._bedrockDiscoveryRevision)
+      )
+        return;
       console.error('Failed to fetch models:', error);
       this._modelSuggestions = [];
       this._modelsSource = null;
       this._modelsFallbackReason = null;
+      this._modelsWarnings = [];
       this._modelsFetchError =
         error instanceof Error ? error.message : 'Failed to fetch models';
     } finally {
@@ -1028,6 +1069,32 @@ export class AddAIModelModal extends LitElement {
   }
 
   // ── render ───────────────────────────────────────────
+
+  private _renderBedrockDiscoveryWarnings() {
+    if (!this._isBedrock) return html``;
+    return html`
+      ${
+        this._modelsWarnings.includes('bedrock_inference_profiles_unavailable')
+          ? html`<sl-alert variant="warning" open style="margin-top: 0.5rem;">
+              Inference profiles could not be listed. Check credentials and
+              grant bedrock:ListInferenceProfiles, then refresh. You can also
+              paste a profile ID or ARN from AWS Bedrock &gt; Cross-region
+              inference.
+            </sl-alert>`
+          : ''
+      }
+      ${
+        this._modelsWarnings.includes('bedrock_inference_profile_required')
+          ? html`<sl-alert variant="warning" open style="margin-top: 0.5rem;">
+              Some models are hidden because they require an inference profile
+              and no active matching profile was found. Check Cross-region
+              inference in AWS Bedrock for the selected region, then paste the
+              profile ID or ARN here.
+            </sl-alert>`
+          : ''
+      }
+    `;
+  }
 
   /**
    * Non-blocking provenance notice for the model list. Fallback listings say
@@ -1380,14 +1447,16 @@ export class AddAIModelModal extends LitElement {
                       this._bedrockRegion = (
                         e.target as HTMLInputElement
                       ).value;
+                      this._clearBedrockDiscovery();
                       this.requestUpdate();
                     }}
                     placeholder=${BEDROCK_DEFAULT_REGION}
                     ?disabled=${this._isSubmitting}
                   >
                     <div slot="help-text">
-                      Bedrock model availability is regional, e.g.
-                      ${BEDROCK_DEFAULT_REGION} or eu-west-1.
+                      Use the same region where your Bedrock API key was
+                      generated and where the model or inference profile is
+                      available. Refresh models after changing the region.
                     </div>
                   </sl-input>
                 `
@@ -1543,6 +1612,20 @@ export class AddAIModelModal extends LitElement {
             </div>
           </div>
 
+          ${
+            this._isBedrock
+              ? html`<div class="full-width" style="font-size: 0.875rem;">
+                  Some Bedrock models require an inference profile: an AWS ID
+                  that routes requests to the model in its supported regions.
+                  Fetch models to select a model ID or profile. To find a
+                  profile yourself, open AWS Bedrock &gt; Cross-region inference
+                  in the same region, select the model, and copy its profile ID
+                  or ARN. Check the profile's destination regions before
+                  choosing it. Listing a model does not verify your permission
+                  to invoke it.
+                </div>`
+              : ''
+          }
           ${this._isAzure ? this._renderAzureDeploymentInput() : ''}
           <div class="full-width" ?hidden=${this._isAzure}>
             <!-- A secondary action at natural width: full width made it read
@@ -1570,6 +1653,7 @@ export class AddAIModelModal extends LitElement {
                 : ''
             }
             ${this._renderModelsProvenanceNotice()}
+            ${this._renderBedrockDiscoveryWarnings()}
           </div>
 
           ${
@@ -1577,7 +1661,7 @@ export class AddAIModelModal extends LitElement {
               ? html`
                   <sl-select
                     class="full-width"
-                    label="Model Name / ID"
+                    label=${this._isBedrock ? 'Model ID or inference profile ID / ARN' : 'Model Name / ID'}
                     .value=${
                       this._isOtherModel
                         ? 'other'
@@ -1599,7 +1683,7 @@ export class AddAIModelModal extends LitElement {
                     () => html`
                       <sl-input
                         class="full-width"
-                        label="Custom Model Name / ID"
+                        label=${this._isBedrock ? 'Model ID or inference profile ID / ARN' : 'Custom Model Name / ID'}
                         data-field="model_identifier"
                         placeholder="Enter custom model name"
                         .value=${this._currentModel.model_identifier || ''}
@@ -1632,17 +1716,21 @@ export class AddAIModelModal extends LitElement {
                     `
                   )}
                 `
-              : this._modelsFetchError
+              : this._modelsFetchError || this._isBedrock
                 ? html`
                     <sl-input
                       class="full-width"
-                      label="Model Name / ID"
+                      label=${this._isBedrock ? 'Model ID or inference profile ID / ARN' : 'Model Name / ID'}
                       data-field="model_identifier"
                       placeholder="Enter model name manually"
                       .value=${this._currentModel.model_identifier || ''}
                       @sl-input=${this._handleCustomModelInput}
                       ?disabled=${this._isSubmitting}
-                      help-text="Could not fetch models. You can enter the model name manually."
+                      help-text=${
+                        this._isBedrock
+                          ? 'Paste an inference profile ID or ARN if AWS requires one. A bare model ID works only when AWS supports on-demand invocation.'
+                          : 'Could not fetch models. You can enter the model name manually.'
+                      }
                     ></sl-input>
                   `
                 : ''

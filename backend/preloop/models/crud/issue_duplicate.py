@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, UTC
 
 from sqlalchemy.orm import Query, Session
-from sqlalchemy import or_
+from sqlalchemy import or_, tuple_
 
 from preloop.models.crud.base import CRUDBase
 from ..models.issue_duplicate import IssueDuplicate
@@ -81,6 +81,26 @@ class CRUDIssueDuplicate(CRUDBase[IssueDuplicate]):
                 .filter(Tracker.account_id == account_id)
             )
         return query.first()
+
+    def get_many_by_pairs(
+        self,
+        db: Session,
+        *,
+        pairs: List[tuple[Any, Any]],
+        account_id: Any,
+    ) -> List[IssueDuplicate]:
+        """Stored verdicts for many pairs in one query, order-agnostic.
+
+        Pairs are normalised the way :meth:`create` stores them (smaller id
+        first) and scoped through the first issue's tracker.
+        """
+        normalised = {(min(a, b), max(a, b)) for a, b in pairs}
+        if not normalised:
+            return []
+        query = db.query(self.model).filter(
+            tuple_(self.model.issue1_id, self.model.issue2_id).in_(list(normalised))
+        )
+        return self._scope_to_account(query, account_id).all()
 
     def get_all_for_issue(
         self, db: Session, *, issue_id: int, account_id: Optional[str] = None
