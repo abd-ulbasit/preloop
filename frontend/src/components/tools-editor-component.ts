@@ -369,6 +369,7 @@ export class ToolsEditorComponent extends LitElement {
       updated.add(groupId);
     }
     this.collapsedGroups = updated;
+    this.pageIndex = 0;
     this._hasAutoCollapsed = true;
     try {
       sessionStorage.setItem(
@@ -641,10 +642,9 @@ export class ToolsEditorComponent extends LitElement {
 
   render() {
     const allGroups = this._getToolGroups();
-    const total = allGroups.reduce(
-      (n, group) => n + Math.max(1, group.tools.length),
-      0
-    );
+    const rowCount = (group: ToolGroup): number =>
+      group.collapsed ? 1 : Math.max(1, group.tools.length);
+    const total = allGroups.reduce((n, group) => n + rowCount(group), 0);
     const pageIndex =
       this.pageSize > 0
         ? Math.min(
@@ -657,7 +657,7 @@ export class ToolsEditorComponent extends LitElement {
     const groups = allGroups
       .map((group) => {
         const groupStart = offset;
-        offset += Math.max(1, group.tools.length);
+        offset += rowCount(group);
         const visibleTools =
           this.pageSize > 0
             ? group.tools.slice(
@@ -699,7 +699,7 @@ export class ToolsEditorComponent extends LitElement {
       ${
         this.pageSize > 0
           ? html`<table-pagination
-              noun="tools and empty servers"
+              noun="tools and groups"
               .pageSize=${this.pageSize}
               .pageSizes=${[this.pageSize]}
               .pageIndex=${pageIndex}

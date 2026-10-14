@@ -20,6 +20,9 @@ import './settings/plan-view';
 import '../../components/preloop-flow-form';
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
 
+const VIEWPORT = { width: 1440, height: 900 };
+const MAX_VIEWPORTS = 3;
+
 const tokenUsage = {
   prompt_tokens: 1000,
   completion_tokens: 100,
@@ -101,7 +104,7 @@ describe('Heavy console list defaults at 1440x900', () => {
   let sheet: HTMLStyleElement;
   let requests: string[];
   beforeEach(async () => {
-    await setViewport({ width: 1440, height: 900 });
+    await setViewport(VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
     localStorage.setItem('accessToken', 'example-token');
@@ -206,7 +209,7 @@ describe('Heavy console list defaults at 1440x900', () => {
       html`<preloop-flow-form></preloop-flow-form>`
     );
     await waitUntil(() => !(el as any)._loadingReferenceData);
-    expect(await measure(el)).to.be.at.most(2700);
+    expect(await measure(el)).to.be.at.most(VIEWPORT.height * MAX_VIEWPORTS);
     const root = el.shadowRoot!;
     const picker = root.querySelector<PreloopFlowPresetPicker>(
       'preloop-flow-preset-picker'
@@ -276,14 +279,14 @@ describe('Heavy console list defaults at 1440x900', () => {
     await waitUntil(
       () => !(el as any).loading && (el as any).sessionPages.loaded
     );
-    expect(await measure(el)).to.be.at.most(2700);
+    expect(await measure(el)).to.be.at.most(VIEWPORT.height * MAX_VIEWPORTS);
   });
   it('requests a bounded Audit page', async () => {
     const el = await fixture<LitElement>(html`<audit-view></audit-view>`);
     await waitUntil(
       () => !(el as any)._loading && (el as any)._groups.length > 0
     );
-    expect(await measure(el)).to.be.at.most(2700);
+    expect(await measure(el)).to.be.at.most(VIEWPORT.height * MAX_VIEWPORTS);
     expect(
       new URL(
         requests.find((url) => url.includes('audit-logs/grouped'))!,
@@ -294,7 +297,7 @@ describe('Heavy console list defaults at 1440x900', () => {
   it('bounds the Tools catalog', async () => {
     const el = await fixture<LitElement>(html`<tools-view></tools-view>`);
     await waitUntil(() => !(el as any).loading);
-    expect(await measure(el)).to.be.at.most(2700);
+    expect(await measure(el)).to.be.at.most(VIEWPORT.height * MAX_VIEWPORTS);
     const editor = el.shadowRoot!.querySelector('tools-editor-component')!;
     expect(
       editor.shadowRoot!.querySelectorAll('tool-list-item').length
@@ -319,7 +322,7 @@ describe('Heavy console list defaults at 1440x900', () => {
   it('keeps Plan comparison available on request', async () => {
     const el = await fixture<LitElement>(html`<plan-view></plan-view>`);
     await waitUntil(() => !(el as any)._loading);
-    expect(await measure(el)).to.be.at.most(2700);
+    expect(await measure(el)).to.be.at.most(VIEWPORT.height * MAX_VIEWPORTS);
     const section = el.shadowRoot!.querySelector<CollapsibleSection>(
       'collapsible-section'
     )!;

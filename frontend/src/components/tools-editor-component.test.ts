@@ -469,6 +469,7 @@ describe('ToolsEditorComponent – native family', () => {
 });
 
 describe('ToolsEditorComponent bounded pages', () => {
+  beforeEach(() => sessionStorage.clear());
   afterEach(() => sessionStorage.clear());
 
   const exampleTool = (name: string, source: string, sourceId?: string) => ({
@@ -517,6 +518,62 @@ describe('ToolsEditorComponent bounded pages', () => {
     el.tools = [tools[0]];
     await el.updateComplete;
     expect(root.querySelectorAll('tool-list-item').length).to.equal(1);
+  });
+
+  it('counts restored collapsed groups once and repages after expanding', async () => {
+    sessionStorage.setItem('preloopCollapsedGroups', JSON.stringify(['first']));
+    const servers = [
+      { id: 'first', name: 'First server' },
+      { id: 'second', name: 'Second server' },
+    ];
+    const tools = Array.from({ length: 70 }, (_, i) =>
+      exampleTool(`tool_${i}`, 'mcp', i < 50 ? 'first' : 'second')
+    );
+    const el = await fixture<ToolsEditorComponent>(
+      html`<tools-editor-component
+        .pageSize=${10}
+        .tools=${tools}
+        .mcpServers=${servers}
+      ></tools-editor-component>`
+    );
+    const root = el.shadowRoot!;
+    const pager = root.querySelector('table-pagination') as HTMLElement & {
+      total: number;
+      pageRows: number;
+      pageIndex: number;
+      updateComplete: Promise<unknown>;
+    };
+    expect(pager.total).to.equal(21);
+    expect(pager.pageRows).to.equal(10);
+    expect(root.querySelectorAll('.tool-group').length).to.equal(2);
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(9);
+    pager.dispatchEvent(
+      new CustomEvent('page-change', { detail: { pageIndex: 2 } })
+    );
+    await el.updateComplete;
+    expect(pager.pageRows).to.equal(1);
+    expect(root.querySelectorAll('.tool-group').length).to.equal(1);
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(1);
+    // Expand the first server from page one: all 70 tools become reachable.
+    pager.dispatchEvent(
+      new CustomEvent('page-change', { detail: { pageIndex: 0 } })
+    );
+    await el.updateComplete;
+    root.querySelector<HTMLButtonElement>('.section-toggle')!.click();
+    await el.updateComplete;
+    expect(pager.total).to.equal(70);
+    expect(pager.pageIndex).to.equal(0);
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(10);
+    // Collapse on a later page: reset the range rather than stranding it.
+    pager.dispatchEvent(
+      new CustomEvent('page-change', { detail: { pageIndex: 4 } })
+    );
+    await el.updateComplete;
+    root.querySelector<HTMLButtonElement>('.section-toggle')!.click();
+    await el.updateComplete;
+    expect(pager.total).to.equal(21);
+    expect(pager.pageIndex).to.equal(0);
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(9);
   });
 
   it('bounds empty server headers too', async () => {

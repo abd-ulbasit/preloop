@@ -530,7 +530,7 @@ permissions. Backend authorization remains the enforcement boundary.
 
 At 1440x900, the default content of the five remaining list pages in #1585
 fits within three viewports. Audit requests 25 events per page, retaining
-explicit URL and saved size choices. Tools shows ten tool rows or empty server
+explicit URL and saved size choices. Tools shows ten tool rows or collapsed/empty server
 headers per page across MCP and native groups. New Flow shows five catalog
 presets and ten searchable allowed tools per page, preserving selections
 across pages. Its allowed-tool section starts closed. Gateway session usage,
