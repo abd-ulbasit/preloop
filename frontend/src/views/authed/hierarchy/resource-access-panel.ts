@@ -424,6 +424,7 @@ export class ResourceAccessPanel extends LitElement {
   }
   private retrySharing = async (): Promise<void> => {
     if (this.saving) return;
+    if (!this.accessDraftReady) return this.load();
     const generation = this.generation;
     this.saving = true;
     await this.loadShares(generation, this.kind, this.resourceId);

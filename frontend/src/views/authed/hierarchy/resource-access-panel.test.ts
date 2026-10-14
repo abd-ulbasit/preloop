@@ -8,6 +8,7 @@ import type { Share, ShareWrite } from '../../../hierarchy-api';
 import {
   mockApi,
   signInForTest,
+  TEST_PROFILE,
   type MockApi,
   type MockRoute,
 } from '../../../test-helpers/capability-api';
@@ -270,6 +271,31 @@ describe('compact resource access', () => {
     expect(
       (api.callsTo(SHARES, 'POST')[0].body as ShareWrite).access_rule_id
     ).to.equal('rule-envelope');
+  });
+  it('recovers initial profile loading through Retry and restores sharing permissions', async () => {
+    const profile: MockRoute = {
+      path: '/api/v1/auth/users/me',
+      status: 500,
+      body: { detail: 'Profile unavailable' },
+    };
+    setup([profile]);
+    const el = await mount();
+    await waitUntil(() => q(el, 'access-control'));
+    await click(el, 'access-control');
+    await waitUntil(() => q(el, 'share-retry'));
+    expect(api.callsTo(SHARES)).to.have.length(0);
+    profile.status = 200;
+    profile.body = TEST_PROFILE;
+    await click(el, 'share-retry');
+    await waitUntil(() => !el.shadowRoot!.querySelector('[data-editor]'));
+    await waitUntil(() => api.callsTo(SHARES).length === 1);
+    expect(api.callsTo('/api/v1/auth/users/me')).to.have.length(2);
+    expect(api.callsTo('/api/v1/accounts//shares')).to.have.length(0);
+    await click(el, 'access-control');
+    await change(el, 'share-toggle', 'checked', true);
+    await click(el, 'editor-save');
+    await waitUntil(() => persisted.length === 1);
+    expect(persisted[0].target_mode).to.equal('all');
   });
   it('keeps a draft recoverable when both the save and reconciliation fail', async () => {
     setup([
