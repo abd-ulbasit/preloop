@@ -8,6 +8,7 @@ import {
   isNotFound,
   lastUsedAccounts,
   listSubaccounts,
+  listSharingRules,
   switchAccount,
   switchTarget,
 } from './hierarchy-api';
@@ -28,6 +29,31 @@ describe('hierarchy-api', () => {
     localStorage.clear();
     window.history.replaceState({}, '', originalPath);
   });
+
+  for (const envelope of [false, true]) {
+    it(`reads sharing rules from ${envelope ? 'the rules envelope' : 'the current EE bare list'}`, async () => {
+      const rules = [
+        {
+          id: 'rule-1',
+          name: 'Tagged subaccounts',
+          effect: 'permit',
+          actions: ['resource:share'],
+          is_enabled: true,
+        },
+      ];
+      api = mockApi({
+        routes: [
+          {
+            path: '/api/v1/access/rules',
+            body: envelope
+              ? { rules, inherited: [], modes: {}, version: 'v1' }
+              : rules,
+          },
+        ],
+      });
+      expect(await listSharingRules()).to.deep.equal(rules);
+    });
+  }
 
   describe('404 semantics', () => {
     it('reads a collection 404 as capability off', async () => {

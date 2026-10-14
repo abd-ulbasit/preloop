@@ -31,12 +31,12 @@ export const CAPABILITY_EXTENSIONS: Record<string, ExtensionEntry> = {
     load: () => import('../views/authed/hierarchy/account-switcher'),
   },
   'resource-access': {
-    capabilities: ['account_hierarchy', 'abac_rules'],
+    capabilities: ['resource_sharing', 'abac_rules'],
     tag: 'resource-access-panel',
     load: () => import('../views/authed/hierarchy/resource-access-panel'),
   },
   'runner-pools': {
-    capabilities: ['account_hierarchy', 'abac_rules'],
+    capabilities: ['abac_rules'],
     tag: 'runner-pool-access',
     load: () => import('../views/authed/hierarchy/runner-pool-access'),
   },

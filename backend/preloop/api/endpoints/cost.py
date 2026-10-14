@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from concurrent.futures import Future
 from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
@@ -20,10 +22,10 @@ from sqlalchemy.orm import Session
 
 from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.common import get_account_or_404
+from preloop.api.heavy_routes import heavy_route
+from preloop.models import models
 from preloop.models.crud import crud_api_usage
 from preloop.models.db.session import get_db_session
-from preloop.models.models.account import Account
-from preloop.models.models.user import User
 from preloop.schemas.cost_analytics import (
     CostAnalyticsSummaryResponse,
     CostHealthResponse,
@@ -42,6 +44,7 @@ from preloop.schemas.cost_analytics import (
     UnpricedModelUsage,
 )
 from preloop.schemas.gateway_usage import UsageBreakdown
+from preloop.services.analytics_history import restrict_history_window
 from preloop.services.gateway_accounting_check import run_accounting_checks
 from preloop.services.ledger_backfill import (
     apply_ledger_backfill,
@@ -55,7 +58,6 @@ from preloop.services.model_gateway_usage import (
 )
 from preloop.services.usage_repricing import reprice_gateway_usage
 from preloop.utils.permissions import require_permission
-from preloop.api.heavy_routes import heavy_route
 
 router = APIRouter(prefix="/cost", tags=["Cost Analytics"])
 
@@ -102,7 +104,7 @@ def get_cost_timeseries(
     ),
     runtime_principal_id: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_active_user),
 ) -> CostTimeseriesResponse:
     """Return gateway spend and requests per time bucket for the spend chart.
 
@@ -188,7 +190,7 @@ def get_cost_summary(
         None, description="End of the comparison window; see compare_start_date."
     ),
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_active_user),
 ) -> CostAnalyticsSummaryResponse:
     """Return the OSS cost overview using gateway usage and pricing metadata."""
     if (compare_start_date is None) != (compare_end_date is None):
@@ -197,7 +199,7 @@ def get_cost_summary(
             detail="compare_start_date and compare_end_date go together.",
         )
     account = get_account_or_404(db, current_user)
-    summary = _build_cost_summary(
+    summary = _cached_cost_summary(
         db,
         account=account,
         start_date=start_date,
@@ -210,7 +212,7 @@ def get_cost_summary(
         session_offset=session_offset,
     )
     if compare_start_date is not None and compare_end_date is not None:
-        summary.previous = _build_cost_summary(
+        summary.previous = _cached_cost_summary(
             db,
             account=account,
             start_date=compare_start_date,
@@ -223,10 +225,105 @@ def get_cost_summary(
     return summary
 
 
+SUMMARY_CACHE_TTL_SECONDS = 60.0
+_SUMMARY_CACHE_MAX_ENTRIES = 128
+_SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE: dict[
+    tuple[object, ...], tuple[float, Future[CostAnalyticsSummaryResponse]]
+] = {}
+
+
+def _cached_cost_summary(
+    db: Session,
+    *,
+    account: models.Account,
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+    runtime_principal_id: Optional[str],
+    exclude_retries: bool,
+    include_breakdown: bool,
+    breakdown: Optional[list[UsageBreakdown]],
+    session_limit: Optional[int] = None,
+    session_offset: int = 0,
+) -> CostAnalyticsSummaryResponse:
+    """Share exact-window aggregates for a minute, including concurrent reads.
+
+    Authorization and current history policy run before every cache lookup.
+    Return a copy so attaching a comparison cannot modify another response.
+    Failed reads are never cached; the bounded cache is local to each worker.
+    """
+    start, end = normalize_usage_period(start_date, end_date)
+    restricted_start, restricted_end = restrict_history_window(
+        db, account=account, start_date=start, end_date=end
+    )
+    # Normalization supplies a lower bound even for an omitted start date.
+    assert restricted_start is not None and restricted_end is not None
+    start, end = restricted_start, restricted_end
+    key = (
+        str(account.id),
+        json.dumps(account.meta_data or {}, sort_keys=True),
+        start,
+        end,
+        runtime_principal_id,
+        exclude_retries,
+        include_breakdown,
+        tuple(sorted(set(breakdown))) if breakdown is not None else None,
+        session_limit,
+        session_offset,
+    )
+    now = time.monotonic()
+    with _SUMMARY_CACHE_LOCK:
+        cached = _SUMMARY_CACHE.get(key)
+        if cached is not None and (not cached[1].done() or cached[0] > now):
+            future = cached[1]
+            owner = False
+        else:
+            future = Future()
+            owner = True
+            # Keep in-flight entries so readers can share them. If every slot
+            # is busy, compute without caching rather than grow without bound.
+            if len(_SUMMARY_CACHE) >= _SUMMARY_CACHE_MAX_ENTRIES:
+                for old_key, (_, pending) in list(_SUMMARY_CACHE.items()):
+                    if pending.done():
+                        del _SUMMARY_CACHE[old_key]
+                        break
+            if len(_SUMMARY_CACHE) < _SUMMARY_CACHE_MAX_ENTRIES:
+                _SUMMARY_CACHE[key] = (now + SUMMARY_CACHE_TTL_SECONDS, future)
+    if not owner:
+        return future.result().model_copy(deep=True)
+    try:
+        result = _build_cost_summary(
+            db,
+            account=account,
+            start_date=start,
+            end_date=end,
+            runtime_principal_id=runtime_principal_id,
+            exclude_retries=exclude_retries,
+            include_breakdown=include_breakdown,
+            breakdown=breakdown,
+            session_limit=session_limit,
+            session_offset=session_offset,
+        )
+    except Exception as exc:
+        with _SUMMARY_CACHE_LOCK:
+            if _SUMMARY_CACHE.get(key, (0, None))[1] is future:
+                del _SUMMARY_CACHE[key]
+        future.set_exception(exc)
+        raise
+    with _SUMMARY_CACHE_LOCK:
+        if _SUMMARY_CACHE.get(key, (0, None))[1] is future:
+            _SUMMARY_CACHE[key] = (
+                time.monotonic() + SUMMARY_CACHE_TTL_SECONDS,
+                future,
+            )
+    future.set_result(result)
+    return result.model_copy(deep=True)
+
+
 def _build_cost_summary(
     db: Session,
     *,
-    account: Account,
+    account: models.Account,
     start_date: Optional[datetime],
     end_date: Optional[datetime],
     runtime_principal_id: Optional[str],
@@ -342,7 +439,9 @@ def _build_cost_summary(
                 exclude_retries=exclude_retries,
                 limit=UNPRICED_MODELS_LIMIT,
             )
-        ],
+        ]
+        if summary.unpriced_requests
+        else [],
         price_catalog=_price_catalog_info(),
         budget=summary.budget,
         requests_by_day=summary.requests_by_day,
@@ -366,7 +465,7 @@ def get_cost_health(
         description="Lookback window in hours (max 168 = 7 days).",
     ),
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_active_user),
 ) -> CostHealthResponse:
     """Run the gateway accounting self-check over a lookback window.
 
@@ -412,6 +511,14 @@ _HEALTH_CACHE_LOCK = threading.Lock()
 
 
 def _forget_cost_health(account_id: str) -> None:
+    """Drop summary and health entries for an account's plain string id.
+
+    Removing in-flight summaries also prevents their old results from being
+    stored after an OSS reprice or CSV reconciliation.
+    """
+    with _SUMMARY_CACHE_LOCK:
+        for key in [key for key in _SUMMARY_CACHE if key[0] == account_id]:
+            del _SUMMARY_CACHE[key]
     with _HEALTH_CACHE_LOCK:
         _HEALTH_GENERATION[account_id] = _HEALTH_GENERATION.get(account_id, 0) + 1
         for key in [key for key in _HEALTH_CACHE if key[0] == account_id]:
@@ -423,7 +530,7 @@ def _forget_cost_health(account_id: str) -> None:
 def reprice_account_gateway_usage(
     reprice_in: RepriceRequest,
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_active_user),
 ) -> RepriceResponse:
     """Re-price historical gateway usage synchronously and report real counts.
 
@@ -493,7 +600,7 @@ async def backfill_from_provider_ledger_csv(
         description="Persist the allocation. Default is a dry run.",
     ),
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_active_user),
 ) -> LedgerBackfillResponse:
     """Reconcile unpriced gateway rows against a provider daily-usage export.
 
@@ -545,6 +652,8 @@ async def backfill_from_provider_ledger_csv(
     )
     plan = plan_ledger_allocation(entries, rows)
     rows_updated = apply_ledger_backfill(db, plan) if apply else None
+    if rows_updated:
+        _forget_cost_health(str(current_user.account_id))
 
     return LedgerBackfillResponse(
         dry_run=not apply,

@@ -6,11 +6,11 @@ Cost analytics turns gateway telemetry into explainable spend and budget health.
 
 ## Progressive reporting
 
-The Cost console requests `GET /api/v1/cost/summary?include_breakdown=false`
-for its first paint and previous-period comparison. This keeps account totals,
-budget, pricing/unpriced context, and separately reported imported totals, but
-skips the grouped breakdown queries. Settings and model metadata load separately
-and do not block those totals.
+The Cost console requests one `GET /api/v1/cost/summary` for the headline,
+previous-period comparison, initially selected tab and imported details.
+The default Agents tab asks for `breakdown=sessions&breakdown=flows&breakdown=imported`.
+Settings and model metadata load separately and do not block that summary.
+Totals-only API readers can still set `include_breakdown=false`.
 
 Callers can select details with repeated `breakdown` parameters: `models`,
 `flows`, `sessions`, `tools`, `days`, or `imported`. For example,
@@ -20,9 +20,11 @@ retains its full historical response. `include_breakdown=false` takes precedence
 over a selection. Unselected arrays are empty because they were not requested;
 clients must distinguish this from a loaded section with no data.
 
-Agents, Sessions and Users share an in-flight/session breakdown within the
-current view. Tools and user ownership load when their tabs are opened. Imported
-details load separately when imported totals identify visible content. Each
+Agents and Users share the recent-session breakdown within the current view.
+Sessions uses server paging; when it remains selected on a range reload, page
+one rides in the initial summary. A paged answer never substitutes for the
+recent-session window. Later tabs and user ownership load when opened. Imported
+details share the initial summary, avoiding another totals query. Each
 section has its own loading/error/retry state. Range changes invalidate loaded
 sections and reject late responses, then reload the tab that remains selected.
 All details use the effective period returned with the initial totals.
@@ -35,9 +37,19 @@ and full-query ordering remain unchanged. It adds no rollups.
 The headline totals request also carries the comparison range:
 `compare_start_date` and `compare_end_date` (sent together, 422 otherwise)
 return that window's totals, without breakdowns, as `previous`. A Spend load is
-one totals request plus the selected tab's breakdowns.
+one summary request shared with the selected tab and imported usage.
 
-`GET /cost/health` is the one cached response. Each worker keeps the self-check
+Exact-window summaries are cached for 60 seconds per worker, with at most 128
+entries. Keys include account, budget metadata, effective dates, principal,
+retry policy, selected breakdowns and session paging. Concurrent identical
+misses share one computation. Permission and current history policy checks run
+before cache hits; responses are copied before adding comparisons. Failures
+are not cached. An OSS non-dry-run reprice or applied CSV reconciliation
+invalidates the account's entries, including in-flight entries. Rolling windows with new timestamps still compute
+fresh answers; this cache does not introduce a daily rollup. Other ledger writes
+and EE repricing may take up to the TTL to appear in an exact repeat.
+
+Each worker also keeps the `GET /cost/health` self-check
 per (account, window) for 60 s, because the Spend page asks it on every load
 and it changes slowly. A non-dry-run reprice drops that account's entries, and
 a check computed while a reprice ran is not stored.
@@ -53,8 +65,8 @@ in a materialized day bucket, then sort those buckets. Per-user windows filter
 (`account_id`, `runtime_principal_id`, `timestamp` for `model_gateway` rows).
 `ix_api_usage_account_principal_ts` still leads with principal type. Accounting
 rules are unchanged: replay-validation rows stay excluded, retries stay included
-unless the caller sets `exclude_retries`, and there is no daily rollup. Summary
-responses are not cached.
+unless the caller sets `exclude_retries`, and there is no daily rollup. A summary
+with no unpriced requests skips the unpriced-model aggregate.
 
 The headline totals read the newest rows through the covering partial index
 `ix_api_usage_gateway_totals`. That read stays index-only only for pages that
