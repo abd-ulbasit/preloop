@@ -19130,7 +19130,12 @@ paths:
       - Operator Notes
       - Operator Notes
       summary: List Operator Notes
-      description: List notes for one agent, session or execution, newest first.
+      description: 'List notes for one agent, session or execution, newest first.
+
+
+        Paged with ``limit``/``offset``; ``total`` counts every match, so a page
+
+        can say "Notes (N)" and load older ones on demand.'
       operationId: list_operator_notes_api_v1_operator_notes_get
       security:
       - bearerAuth: []
@@ -19171,6 +19176,14 @@ paths:
           minimum: 1
           default: 50
           title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
       - name: state
         in: query
         required: false
@@ -35563,6 +35576,10 @@ components:
             type: string
           type: array
           title: Supported Output Modes
+        supports_operator_notes:
+          type: boolean
+          title: Supports Operator Notes
+          default: true
       type: object
       required:
       - id
@@ -36339,6 +36356,10 @@ components:
             $ref: '#/components/schemas/OperatorNoteResponse'
           type: array
           title: Notes
+        total:
+          type: integer
+          title: Total
+          default: 0
       type: object
       title: OperatorNoteList
       description: Notes for one agent, session or execution, newest first.

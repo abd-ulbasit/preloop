@@ -517,23 +517,15 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
             .first()
         )
 
-    def list_notes(
+    def _notes_query(
         self,
         db: Session,
         *,
         account_id: Union[uuid.UUID, str],
         managed_agent_id: Optional[Union[uuid.UUID, str]] = None,
         runtime_session_id: Optional[Union[uuid.UUID, str]] = None,
-        limit: int = 50,
         state: Optional[str] = None,
-    ) -> List[AgentControlCommand]:
-        """List notes for an agent or a session, newest first.
-
-        This is the composer history, so withdrawn, expired and failed notes
-        stay in the list. The sessions-list badge uses
-        ``note_summaries_for_sessions``, which counts only notes that steered
-        or still will.
-        """
+    ) -> Any:
         query = db.query(AgentControlCommand).filter(
             AgentControlCommand.account_id == account_id,
             AgentControlCommand.kind == "note",
@@ -551,12 +543,62 @@ class CRUDAgentControlCommand(CRUDBase[AgentControlCommand]):
                 AgentControlCommand.status
                 == ("acked" if state == "acknowledged" else state)
             )
+        return query
+
+    def list_notes(
+        self,
+        db: Session,
+        *,
+        account_id: Union[uuid.UUID, str],
+        managed_agent_id: Optional[Union[uuid.UUID, str]] = None,
+        runtime_session_id: Optional[Union[uuid.UUID, str]] = None,
+        limit: int = 50,
+        state: Optional[str] = None,
+        offset: int = 0,
+    ) -> List[AgentControlCommand]:
+        """List notes for an agent or a session, newest first.
+
+        This is the composer history, so withdrawn, expired and failed notes
+        stay in the list. The sessions-list badge uses
+        ``note_summaries_for_sessions``, which counts only notes that steered
+        or still will.
+        """
         return (
-            query.order_by(
+            self._notes_query(
+                db,
+                account_id=account_id,
+                managed_agent_id=managed_agent_id,
+                runtime_session_id=runtime_session_id,
+                state=state,
+            )
+            .order_by(
                 AgentControlCommand.created_at.desc(), AgentControlCommand.id.desc()
             )
+            .offset(max(0, offset))
             .limit(max(1, limit))
             .all()
+        )
+
+    def count_notes(
+        self,
+        db: Session,
+        *,
+        account_id: Union[uuid.UUID, str],
+        managed_agent_id: Optional[Union[uuid.UUID, str]] = None,
+        runtime_session_id: Optional[Union[uuid.UUID, str]] = None,
+        state: Optional[str] = None,
+    ) -> int:
+        """Count the notes ``list_notes`` pages through."""
+        return (
+            self._notes_query(
+                db,
+                account_id=account_id,
+                managed_agent_id=managed_agent_id,
+                runtime_session_id=runtime_session_id,
+                state=state,
+            )
+            .order_by(None)
+            .count()
         )
 
     def list_deliverable_notes(

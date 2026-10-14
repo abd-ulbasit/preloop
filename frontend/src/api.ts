@@ -2662,12 +2662,24 @@ export async function listOperatorNotes(params: {
   executionId?: string;
   limit?: number;
 }): Promise<OperatorNote[]> {
+  return (await listOperatorNotesPage(params)).notes;
+}
+
+/** One page of notes, newest first, with the total across pages. */
+export async function listOperatorNotesPage(params: {
+  agentId?: string;
+  runtimeSessionId?: string;
+  executionId?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ notes: OperatorNote[]; total: number }> {
   const query = new URLSearchParams();
   if (params.agentId) query.set('agent_id', params.agentId);
   if (params.runtimeSessionId)
     query.set('runtime_session_id', params.runtimeSessionId);
   if (params.executionId) query.set('execution_id', params.executionId);
   if (params.limit) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
   const response = await fetchWithAuth(
     `/api/v1/operator-notes?${query.toString()}`
   );
@@ -2676,7 +2688,8 @@ export async function listOperatorNotes(params: {
     throw new Error(extractErrorMessage(errorData, 'Failed to load notes'));
   }
   const payload: OperatorNoteList = await response.json();
-  return payload.notes || [];
+  const notes = payload.notes || [];
+  return { notes, total: payload.total ?? notes.length };
 }
 
 /** Withdraw a note that has not been delivered yet. */

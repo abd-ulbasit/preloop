@@ -137,6 +137,8 @@ class OperatorNoteList(BaseModel):
     """Notes for one agent, session or execution, newest first."""
 
     notes: list[OperatorNoteResponse] = Field(default_factory=list)
+    #: Every note matching the filter, across pages.
+    total: int = 0
 
 
 class OperatorNotePendingRequest(BaseModel):

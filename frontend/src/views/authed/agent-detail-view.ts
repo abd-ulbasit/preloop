@@ -34,7 +34,9 @@ import '../../components/preloop-session-observer.ts';
 import '../../components/token-figures.ts';
 import '../../components/view-header.ts';
 import '../../components/resource-actions.ts';
-import '../../components/operator-note-composer.ts';
+import '../../components/agent-notes-tab';
+import type { AgentNotesTab } from '../../components/agent-notes-tab';
+import { NOTES_FIRST_PAGE } from '../../components/agent-notes-tab';
 import '../../components/talk-button.ts';
 import '../../components/time-range-select.ts';
 import '../../components/confirm-dialog.ts';
@@ -61,6 +63,7 @@ import {
   updateAccountAgent,
   getFlows,
   getUserProfile,
+  listOperatorNotesPage,
 } from '../../api';
 import type {
   GatewayUsageByModel,
@@ -174,7 +177,25 @@ export class AgentDetailView extends LitElement {
     | 'desktop'
     | 'ssh'
     | 'dashboard'
-    | 'associated-flows' = 'sessions';
+    | 'associated-flows'
+    | 'notes' = 'sessions';
+
+  /**
+   * First page of this agent's notes, read after the header so the tab can
+   * say "Notes (N)". The notes themselves render only in the Notes tab.
+   */
+  @state() private notesPage: {
+    notes: import('../../types').OperatorNote[];
+    total: number;
+  } | null = null;
+  private notesPageAgentId = '';
+  /**
+   * Bumped when a note is sent so a notes read that started earlier cannot
+   * put the pre-send page back.
+   */
+  private notesSendEpoch = 0;
+  /** The tab label's count; follows sends without replacing the page. */
+  @state() private notesTotal: number | null = null;
 
   /**
    * Online desktop endpoints linked to this agent (#870). Empty while the
@@ -647,6 +668,7 @@ export class AgentDetailView extends LitElement {
       'ssh',
       'dashboard',
       'associated-flows',
+      'notes',
     ];
     if (requestedTab && validTabs.includes(requestedTab)) {
       this.activeTab = requestedTab as typeof this.activeTab;
@@ -872,6 +894,7 @@ export class AgentDetailView extends LitElement {
       if (this.activeTab === 'associated-flows')
         void this.loadAssociatedFlows(true);
       if (!isSoftRefresh) void this.loadDesktopEndpoints(generation);
+      if (!isSoftRefresh) void this.loadNotesPage();
     } catch (error) {
       if (generation !== this.detailLoadGeneration) return;
       console.error('Failed to load managed agent detail:', error);
@@ -1644,29 +1667,67 @@ export class AgentDetailView extends LitElement {
     `;
   }
 
-  /**
-   * The note box for this agent, above the tabs.
-   *
-   * It sits on the page rather than behind a tab because the moment someone
-   * needs it, the agent is already running and the operator is already
-   * looking at this page. A note leaves the run alone: it is not a takeover,
-   * it is one sentence the agent reads at its next turn.
-   */
-  private renderOperatorNotes() {
-    if (!this.agentId) return nothing;
+  /** Whether a note can reach this agent (gateway or a harness hook). */
+  private get canSendNotes(): boolean {
+    return this.agent?.supports_operator_notes !== false;
+  }
+
+  /** Read the first notes page for the tab count; never blocks the page. */
+  private async loadNotesPage(): Promise<void> {
+    const agentId = this.agentId;
+    if (!agentId) return;
+    if (this.notesPageAgentId !== agentId) {
+      this.notesPage = null;
+      this.notesTotal = null;
+    }
+    const epoch = this.notesSendEpoch;
+    try {
+      const page = await listOperatorNotesPage({
+        agentId,
+        limit: NOTES_FIRST_PAGE,
+      });
+      if (epoch !== this.notesSendEpoch || agentId !== this.agentId) return;
+      this.notesPageAgentId = agentId;
+      this.notesPage = page;
+      this.notesTotal = page.total;
+    } catch {
+      // No count is fine: the tab still opens and reads its own page.
+      if (epoch !== this.notesSendEpoch || agentId !== this.agentId) return;
+      this.notesPage = null;
+      this.notesTotal = null;
+    }
+  }
+
+  /** The header's "Note" action: open the Notes tab with the box focused. */
+  private async openNoteComposer(): Promise<void> {
+    this.activeTab = 'notes';
+    this.rememberTab('notes');
+    await this.updateComplete;
+    const tab = this.renderRoot.querySelector<AgentNotesTab>('agent-notes-tab');
+    await tab?.updateComplete;
+    tab?.focusComposer();
+  }
+
+  private renderNotesTab() {
     return html`
       <sl-card
-        style="border: none; box-shadow: 0 10px 32px rgba(19,27,46,0.03); border-radius: var(--sl-border-radius-large); background: var(--console-surface); width: 100%; margin-top: var(--sl-spacing-medium);"
+        style="border: none; box-shadow: 0 10px 32px rgba(19,27,46,0.03); border-radius: var(--sl-border-radius-large); width: 100%;"
       >
         <div style="padding: var(--sl-spacing-large);">
-          <div
-            style="font-weight: 700; font-size: 1.15rem; color: var(--sl-color-neutral-800); margin-bottom: var(--sl-spacing-small);"
-          >
-            Note to this agent
-          </div>
-          <operator-note-composer
+          <agent-notes-tab
             agent-id=${this.agentId}
-          ></operator-note-composer>
+            ?can-send=${this.canSendNotes}
+            .initial=${
+              this.notesPageAgentId === this.agentId ? this.notesPage : null
+            }
+            @notes-count-changed=${(event: CustomEvent<{ total: number }>) => {
+              this.notesTotal = event.detail.total;
+              // The page read at load is now stale: a tab mounted later
+              // (after switching tabs) reads its own instead of seeding it.
+              this.notesPage = null;
+              this.notesSendEpoch += 1;
+            }}
+          ></agent-notes-tab>
         </div>
       </sl-card>
     `;
@@ -2203,7 +2264,18 @@ export class AgentDetailView extends LitElement {
    */
   private get agentActions(): ResourceAction[] {
     if (!this.agent) return [];
-    return actionsFor('agent', this.agent, {
+    const note: ResourceAction[] = this.canSendNotes
+      ? [
+          {
+            id: 'note',
+            label: 'Note',
+            icon: 'chat-left-text',
+            tooltip: 'Tell the agent something before its next turn',
+            onClick: () => void this.openNoteComposer(),
+          },
+        ]
+      : [];
+    const actions = actionsFor('agent', this.agent, {
       busy: this.actionLoading,
       canChangeOwner: this.featureFlags.user_management === true,
       renderTalk: (agent) => html`
@@ -2222,6 +2294,13 @@ export class AgentDetailView extends LitElement {
         void this.removeAgent();
       },
     });
+    // After Talk (which brings its own element), before the everyday edits.
+    const talkCount = actions.filter((action) => action.render).length;
+    return [
+      ...actions.slice(0, talkCount),
+      ...note,
+      ...actions.slice(talkCount),
+    ];
   }
 
   private handleSshKeyDown(e: KeyboardEvent) {
@@ -3168,7 +3247,6 @@ export class AgentDetailView extends LitElement {
       </view-header>
       <div class="page" style="padding-top: 0;">
         ${this.renderSummaryStrip(aggregate)} ${this.renderIdentityHistory()}
-        ${this.renderOperatorNotes()}
         <capability-extension
           name="resource-access"
           .context=${{ kind: 'managed_agent', resourceId: this.agent.id }}
@@ -3271,6 +3349,21 @@ export class AgentDetailView extends LitElement {
                           flows${this.associatedFlowsLoaded ? ` (${this.associatedFlows.length})` : ''}</sl-tab
                         >
                       `
+                    : nothing
+                }
+                ${
+                  this.canSendNotes || (this.notesTotal ?? 0) > 0
+                    ? html`<sl-tab
+                        slot="nav"
+                        panel="notes"
+                        data-testid="notes-tab"
+                        ?active=${this.activeTab === 'notes'}
+                        >Notes${
+                          this.notesTotal !== null
+                            ? ` (${this.notesTotal})`
+                            : ''
+                        }</sl-tab
+                      >`
                     : nothing
                 }
               </sl-tab-group>
@@ -3830,6 +3923,7 @@ export class AgentDetailView extends LitElement {
                 ? this.renderFlowsTab()
                 : nothing
             }
+            ${this.activeTab === 'notes' ? this.renderNotesTab() : nothing}
           `;
         })()}
       </div>

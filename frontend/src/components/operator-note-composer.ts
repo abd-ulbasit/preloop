@@ -49,6 +49,38 @@ export const RUNNER_TURN_FAILED_EVENT = 'runner-turn-failed';
 /** Mirrors MAX_NOTE_BODY_CHARS on the server, which is the real bound. */
 const MAX_NOTE_CHARS = 4096;
 
+/** The delivery state of one note, in words. */
+export function noteStateLabel(note: OperatorNote): string {
+  switch (note.state) {
+    case 'claimed':
+      return 'Claimed, waiting for a carrying hook';
+    case 'delivered':
+      if (note.delivery_event === 'stop') {
+        return 'Delivered to keep the run going';
+      }
+      if (note.delivery_event === 'session_start') {
+        return 'Delivered at session start';
+      }
+      return note.delivery_channel === 'gateway'
+        ? 'Delivered at a turn boundary'
+        : 'Delivered to the agent';
+    case 'acknowledged':
+      return 'Acknowledged by the agent';
+    case 'cancelled':
+      return 'Withdrawn';
+    case 'expired':
+      return 'Expired undelivered';
+    case 'failed':
+      return 'Not delivered';
+    case 'undeliverable':
+      return note.undeliverable_reason === 'spool_dropped'
+        ? 'Dropped before delivery'
+        : 'Session ended before delivery';
+    default:
+      return 'Waiting for the next turn';
+  }
+}
+
 @customElement('operator-note-composer')
 export class OperatorNoteComposer extends LitElement {
   /** Target the agent: the note rides its current or next session. */
@@ -71,6 +103,13 @@ export class OperatorNoteComposer extends LitElement {
    */
   @property({ type: String, attribute: 'runner-session-id' })
   runnerSessionId: string | null = null;
+
+  /**
+   * Hide the recent-notes list under the box. The agent page lists notes in
+   * its own Notes tab, paged and collapsed, so the box there is input only.
+   */
+  @property({ type: Boolean, attribute: 'no-history' })
+  noHistory = false;
 
   @state()
   private text = '';
@@ -248,6 +287,7 @@ export class OperatorNoteComposer extends LitElement {
 
   /** Reload the recent notes for whichever target this composer names. */
   async refresh(): Promise<void> {
+    if (this.noHistory) return;
     if (!this.agentId && !this.executionId && !this.sessionId) {
       this.notes = [];
       return;
@@ -410,34 +450,7 @@ export class OperatorNoteComposer extends LitElement {
   }
 
   private stateLabel(note: OperatorNote): string {
-    switch (note.state) {
-      case 'claimed':
-        return 'Claimed, waiting for a carrying hook';
-      case 'delivered':
-        if (note.delivery_event === 'stop') {
-          return 'Delivered to keep the run going';
-        }
-        if (note.delivery_event === 'session_start') {
-          return 'Delivered at session start';
-        }
-        return note.delivery_channel === 'gateway'
-          ? 'Delivered at a turn boundary'
-          : 'Delivered to the agent';
-      case 'acknowledged':
-        return 'Acknowledged by the agent';
-      case 'cancelled':
-        return 'Withdrawn';
-      case 'expired':
-        return 'Expired undelivered';
-      case 'failed':
-        return 'Not delivered';
-      case 'undeliverable':
-        return note.undeliverable_reason === 'spool_dropped'
-          ? 'Dropped before delivery'
-          : 'Session ended before delivery';
-      default:
-        return 'Waiting for the next turn';
-    }
+    return noteStateLabel(note);
   }
 
   render() {
@@ -489,7 +502,7 @@ export class OperatorNoteComposer extends LitElement {
           : nothing
       }
       ${
-        this.notes.length
+        this.notes.length && !this.noHistory
           ? html`<ul data-testid="note-list">
               ${this.notes.map(
                 (note) => html`

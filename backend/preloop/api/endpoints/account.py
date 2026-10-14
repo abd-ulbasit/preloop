@@ -120,6 +120,7 @@ from preloop.services.gateway_event_history import elide_replayed_history
 from preloop.services.account_governance_cache import (
     invalidate_account_governance_cache,
 )
+from preloop.services import operator_notes
 from preloop.services.event_webhooks.emitters import emit_session_ended
 from preloop.services.spend_outliers import (
     record_dismissal as record_spend_outlier_dismissal,
@@ -927,6 +928,12 @@ def _enrich_managed_agent_summaries(
                 latest_enrollment_summary,
                 control_enrollment_summary,
             )
+        )
+        summary["supports_operator_notes"] = operator_notes.agent_supports_notes(
+            agent_kind=summary.get("agent_kind") or summary.get("session_source_type"),
+            model_gateway_configured=bool(summary.get("model_gateway_configured")),
+            control_enabled=bool(summary.get("control_enabled")),
+            total_requests=int(summary.get("total_requests") or 0),
         )
 
     if unresolved_model_summaries:

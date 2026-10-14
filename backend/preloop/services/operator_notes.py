@@ -77,6 +77,35 @@ DELIVERY_CHANNELS = (
     CHANNEL_CLAUDE_MESSAGE,
 )
 
+#: Harnesses with a native note carrier when the agent bypasses the gateway:
+#: the permission hook (Claude Code, Codex CLI, Cursor CLI) or a lifecycle
+#: plugin (OpenCode, Hermes, OpenClaw, DeepSeek Harness). Mirrors the carrier
+#: table in docs/guide/operator-notes.md. Kinds left out (Devin, Copilot CLI,
+#: Gemini, Windsurf, Pi, Nanobot) carry notes only on gateway model requests.
+HOOK_NOTE_AGENT_KINDS = frozenset(
+    {"claude_code", "codex", "cursor", "opencode", "hermes", "openclaw", "deepseek"}
+)
+
+
+def agent_supports_notes(
+    *,
+    agent_kind: Optional[str],
+    model_gateway_configured: bool,
+    control_enabled: bool,
+    total_requests: int = 0,
+) -> bool:
+    """Return True when a note addressed to this agent has a way to arrive.
+
+    A note rides the gateway (every governed model call) or a harness hook. An
+    agent enrolled only for the MCP proxy, of a kind with no note hook, has
+    neither: a note to it would wait a day and expire, so the console does not
+    offer the box.
+    """
+    if model_gateway_configured or control_enabled or total_requests > 0:
+        return True
+    return str(agent_kind or "").lower() in HOOK_NOTE_AGENT_KINDS
+
+
 #: Harness lifecycle points a hook can pull a note at. Recorded on the
 #: delivery so audit can tell an ordinary next-tool-call delivery from the
 #: ``stop`` rescue that keeps a headless ``claude -p`` run alive one more step.
