@@ -2318,6 +2318,14 @@ describe('RuntimeSessionsView', () => {
       // The page and its count stay what the server said.
       expect((element as any).sessions.items).to.have.length(SESSION_PAGE_SIZE);
       expect(countLabel(element)).to.equal('Showing 20 of 50');
+
+      // A live refresh must not swap the pinned link for the newest session.
+      await (element as any).loadSessions(true);
+      await element.updateComplete;
+      expect((element as any).selectedSessionId).to.equal(linked);
+      expect(
+        new URLSearchParams(window.location.search).get('sessionId')
+      ).to.equal(linked);
     });
 
     it('falls back to the newest session when a linked one cannot be read', async () => {

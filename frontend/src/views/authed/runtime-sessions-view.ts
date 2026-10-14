@@ -1181,7 +1181,13 @@ export class RuntimeSessionsView extends LitElement {
         // is pinned above the list instead of being swapped for the newest.
         // Only a session the location named: after a filter change the
         // selection belongs to the new list, as before.
-        const linked = this.linkedSessionId;
+        // A live refresh keeps the pin: the linked id is cleared after the
+        // first load, but the pinned row still names the selection.
+        const linked =
+          this.linkedSessionId ??
+          (this.pinnedSession?.id === this.selectedSessionId
+            ? this.selectedSessionId
+            : null);
         const pinned =
           linked && linked === this.selectedSessionId
             ? await this.loadPinnedSession(linked)
