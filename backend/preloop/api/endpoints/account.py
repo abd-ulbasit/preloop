@@ -976,6 +976,29 @@ def _enrich_managed_agent_summary(
     )[0]
 
 
+#: Optional sections of the agent detail response. The page reads the header
+#: (agent, aggregate, credentials, enrollments) first and each tab's data when
+#: the tab opens, so a busy agent's header never waits for its session list.
+MANAGED_AGENT_DETAIL_SECTIONS = frozenset({"usage_by_model", "activity", "sessions"})
+
+
+def _parse_detail_sections(include: Optional[str]) -> frozenset[str]:
+    """``None`` keeps every section (the old response); ``""`` asks for none."""
+    if include is None:
+        return MANAGED_AGENT_DETAIL_SECTIONS
+    requested = {part.strip() for part in include.split(",") if part.strip()}
+    unknown = requested - MANAGED_AGENT_DETAIL_SECTIONS
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown include section(s): {', '.join(sorted(unknown))}. "
+                f"Known: {', '.join(sorted(MANAGED_AGENT_DETAIL_SECTIONS))}"
+            ),
+        )
+    return frozenset(requested)
+
+
 def _build_managed_agent_detail_response(
     db: Session,
     *,
@@ -984,6 +1007,9 @@ def _build_managed_agent_detail_response(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     background_tasks: Optional[BackgroundTasks] = None,
+    sections: frozenset[str] = MANAGED_AGENT_DETAIL_SECTIONS,
+    session_limit: int = 20,
+    session_offset: int = 0,
 ) -> Optional[ManagedAgentDetailResponse]:
     if start_date and start_date.tzinfo:
         start_date = start_date.astimezone(UTC).replace(tzinfo=None)
@@ -1002,40 +1028,51 @@ def _build_managed_agent_detail_response(
         start_date=start_date,
         end_date=end_date,
     )
-    usage_by_model = crud_managed_agent.get_usage_by_model_for_account(
-        db,
-        account_id=account_id,
-        agent_id=agent_id,
-        start_date=start_date,
-        end_date=end_date,
+    usage_by_model = (
+        crud_managed_agent.get_usage_by_model_for_account(
+            db,
+            account_id=account_id,
+            agent_id=agent_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if "usage_by_model" in sections
+        else []
     )
-    activity_by_server = crud_runtime_session_activity.get_server_summary_for_principal(
-        db,
-        account_id=account_id,
-        runtime_principal_type=summary["session_source_type"],
-        runtime_principal_id=summary["session_source_id"],
-    )
-    activity_by_tool = crud_runtime_session_activity.get_tool_summary_for_principal(
-        db,
-        account_id=account_id,
-        runtime_principal_type=summary["session_source_type"],
-        runtime_principal_id=summary["session_source_id"],
-    )
-    sessions = crud_runtime_session.list_account_sessions(
-        db,
-        account_id=account_id,
-        runtime_principal_type=summary["session_source_type"],
-        runtime_principal_id=summary["session_source_id"],
-        min_requests=1,
-        status="all",
-        limit=20,
-        offset=0,
-    )
-    RuntimeSessionExplorerService(db).schedule_missing_session_titles(
-        account_id=account_id,
-        rows=sessions["items"],
-        background_tasks=background_tasks,
-    )
+    activity_by_server: list[dict[str, Any]] = []
+    activity_by_tool: list[dict[str, Any]] = []
+    if "activity" in sections:
+        activity_by_server = (
+            crud_runtime_session_activity.get_server_summary_for_principal(
+                db,
+                account_id=account_id,
+                runtime_principal_type=summary["session_source_type"],
+                runtime_principal_id=summary["session_source_id"],
+            )
+        )
+        activity_by_tool = crud_runtime_session_activity.get_tool_summary_for_principal(
+            db,
+            account_id=account_id,
+            runtime_principal_type=summary["session_source_type"],
+            runtime_principal_id=summary["session_source_id"],
+        )
+    sessions: dict[str, Any] = {"items": [], "total": None}
+    if "sessions" in sections:
+        sessions = crud_runtime_session.list_account_sessions(
+            db,
+            account_id=account_id,
+            runtime_principal_type=summary["session_source_type"],
+            runtime_principal_id=summary["session_source_id"],
+            min_requests=1,
+            status="all",
+            limit=session_limit,
+            offset=session_offset,
+        )
+        RuntimeSessionExplorerService(db).schedule_missing_session_titles(
+            account_id=account_id,
+            rows=sessions["items"],
+            background_tasks=background_tasks,
+        )
     return ManagedAgentDetailResponse(
         agent=ManagedAgentSummary(**summary),
         aggregate=ManagedAgentUsageAggregate(
@@ -1064,6 +1101,7 @@ def _build_managed_agent_detail_response(
             RuntimeSessionExplorerService._summary_row_to_schema(item)
             for item in sessions["items"]
         ],
+        session_total=sessions.get("total"),
         credentials=[
             ManagedAgentCredentialSummary(**item)
             for item in crud_managed_agent_credential.list_for_agent(
@@ -1720,9 +1758,23 @@ def get_account_managed_agent(
     db: Session = Depends(get_db_session),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    include: Optional[str] = Query(
+        None,
+        description=(
+            "Comma list of optional sections: usage_by_model, activity, "
+            "sessions. Omitted returns all of them; an empty value returns "
+            "the agent, its aggregate, credentials and enrollments only."
+        ),
+    ),
+    session_limit: int = Query(20, ge=1, le=100),
+    session_offset: int = Query(0, ge=0),
 ):
     """Return one enrolled external agent for the current account."""
     from preloop.models.crud.resource_share import crud_resource_share
+
+    # Validated before the shared-resource branch, so a mistyped section is a
+    # 422 on every path (a shared read ignores the sections).
+    sections = _parse_detail_sections(include)
 
     shared = crud_resource_share.public_read(
         db, account_id=account.id, resource_type="managed_agent", resource_id=agent_id
@@ -1740,6 +1792,9 @@ def get_account_managed_agent(
         start_date=start_date,
         end_date=end_date,
         background_tasks=background_tasks,
+        sections=sections,
+        session_limit=session_limit,
+        session_offset=session_offset,
     )
     if response is None:
         raise HTTPException(

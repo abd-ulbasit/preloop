@@ -154,6 +154,15 @@ The service reads credentials the same way the CLI does; make sure
 `~/.preloop/config.yaml` exists (via `preloop login`) for the user that
 runs the service, since the unit does not inherit your shell exports.
 
+### Headless hosts (no keychain)
+
+A host with no system credential store (a container or a minimal server)
+cannot keep a Copilot login from `copilot login --with-token`: Copilot
+reports that login succeeded but the token was not saved, and the runner
+then reports Copilot signed out. Start the runner with
+`COPILOT_GITHUB_TOKEN` set. The full procedure is in
+[Headless hosts (no keychain)](remote-sessions.md#headless-hosts-no-keychain).
+
 ### Rotate the token or retire the runner
 
 ```sh
@@ -425,11 +434,14 @@ What the runner checks, and what it never reads:
 - **Login.** For Copilot CLI: whether `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or
   `GITHUB_TOKEN` is **set** (the value is never read), otherwise whether
   `~/.copilot/config.json` (or `$COPILOT_HOME/config.json`) has a stored
-  login record, of which only the host is read. A run that fails with
-  "No authentication information found" marks Copilot signed out until the
-  next successful run. For Cursor CLI: whether `CURSOR_API_KEY` is set,
-  otherwise the result of `cursor-agent status`. The runner never opens a
-  credential store and never reads, copies or forwards a harness token.
+  login record, of which only the host is read. On a host with no
+  keychain, set one of those variables in the runner service environment
+  ([Headless hosts (no keychain)](#headless-hosts-no-keychain)). A run
+  that fails with "No authentication information found" marks Copilot
+  signed out until the next successful run. For Cursor CLI: whether
+  `CURSOR_API_KEY` is set, otherwise the result of `cursor-agent status`.
+  The runner never opens a credential store and never reads, copies or
+  forwards a harness token.
 - **Account host.** `COPILOT_GH_HOST` or `GH_HOST`, or the host of the stored
   login (for example `github.com` or `<name>.ghe.com`). Host only.
 - **Governance.** The same checks `preloop agents status` uses: Preloop hooks
@@ -437,8 +449,16 @@ What the runner checks, and what it never reads:
   (`partial`), nothing installed (`ungoverned`).
 - **Models.** Copilot CLI has no command that lists models, so the runner
   reports a short list shipped with the CLI (`static`), the `model` set in
-  Copilot's config (`configured`) and models seen in completed runs
-  (`observed`).
+  Copilot's config (`configured`) and models the seat's own runs reported
+  (`observed`). A Copilot session turn or host execution that includes a
+  model id in its `usage` event is remembered for that harness (the id
+  only; paths, tokens and environment values are not) and published on the
+  next inventory refresh. An id already in the static list is not repeated,
+  and the most recently observed id is listed immediately after `auto`.
+  The static list is updated in the CLI when Copilot's models change
+  (the 1.0.9x list includes `claude-sonnet-5.5` and the older ids); update
+  the runner's CLI to pick up a new list, then run
+  `preloop runner inventory --refresh`.
 
 Executable paths, arguments, environment values and user names never leave
 the host.

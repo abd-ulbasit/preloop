@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,9 +204,126 @@ func TestBuildHarnessInventorySignedOutHintWins(t *testing.T) {
 	if copilot.LoginState != "signed_out" {
 		t.Fatalf("login_state = %s", copilot.LoginState)
 	}
-	last := copilot.Models[len(copilot.Models)-1]
-	if last.ID != "gpt-5.3" || last.Source != "observed" {
+	if copilot.Models[0].ID != "auto" || copilot.Models[0].Source != "static" {
 		t.Fatalf("models = %+v", copilot.Models)
+	}
+	if copilot.Models[1].ID != "gpt-5.3" || copilot.Models[1].Source != "observed" {
+		t.Fatalf("most recent observed model must follow auto: %+v", copilot.Models)
+	}
+}
+
+func TestCopilotStaticModelsFor109xIncludeSonnet55(t *testing.T) {
+	got := harnessStaticModelsFor("copilot_cli", "1.0.96")
+	want := []string{
+		"auto",
+		"claude-sonnet-5.5",
+		"claude-sonnet-4.6",
+		"claude-sonnet-4.5",
+		"claude-haiku-4.5",
+		"gpt-5.2",
+		"gpt-5-mini",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("static models = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("static models = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestCopilotUsageModelObservedOnceAfterAuto(t *testing.T) {
+	saved := runnerHarnessHints
+	savedPublisher := runnerInventory
+	hints := &harnessRuntimeHints{}
+	runnerHarnessHints = hints
+	runnerInventory = newRunnerInventoryPublisher(func() harnessInventory { return harnessInventory{} })
+	t.Cleanup(func() {
+		runnerHarnessHints = saved
+		runnerInventory = savedPublisher
+	})
+
+	const usage = `{"type":"result","sessionId":"33810b72-1e9a-4a02-bbcb-a125d10b886c","exitCode":0,"usage":{"premiumRequests":1,"model":"gpt-5.4","cwd":"/tmp/secret-workspace","token":"` + fakeToken + `"}}`
+	capture := copilotCapture{}
+	kind, payload, ok := copilotSessionEvent(&capture, usage)
+	if !ok || kind != "usage" {
+		t.Fatalf("usage event: ok=%v kind=%s", ok, kind)
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken, "cwd", "token"} {
+		if strings.Contains(string(rawPayload), leak) {
+			t.Fatalf("usage payload leaks %q: %s", leak, rawPayload)
+		}
+	}
+	usageMap, _ := payload["usage"].(map[string]any)
+	if usageMap["model"] != "gpt-5.4" || usageMap["premiumRequests"] != float64(1) {
+		t.Fatalf("usage = %#v", usageMap)
+	}
+	for key := range usageMap {
+		switch key {
+		case "premiumRequests", "model", "totalApiDurationMs", "sessionDurationMs":
+		default:
+			t.Fatalf("usage key %q is not allowlisted: %#v", key, usageMap)
+		}
+	}
+
+	result, err := copilotRunnerResult(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range result {
+		switch key {
+		case "status", "harness", "session_id", "model", "premium_requests":
+		default:
+			t.Fatalf("result key %q is not allowlisted: %#v", key, result)
+		}
+	}
+	if result["model"] != "gpt-5.4" {
+		t.Fatalf("result = %#v", result)
+	}
+	rawResult, _ := json.Marshal(result)
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken} {
+		if strings.Contains(string(rawResult), leak) {
+			t.Fatalf("host-exec result leaks %q: %s", leak, rawResult)
+		}
+	}
+
+	capture2 := copilotCapture{}
+	applyCopilotLine(&capture2, `{"type":"result","sessionId":"33810b72-1e9a-4a02-bbcb-a125d10b886c","exitCode":0,"usage":{"premiumRequests":1,"model":"claude-sonnet-5.5"}}`)
+	if _, err := copilotRunnerResult(capture2); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	host := fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{"copilot": true}, hints: hints}
+	copilot := entryFor(t, buildHarnessInventory(host.deps("linux")), "copilot_cli")
+	counts := map[string]int{}
+	for _, model := range copilot.Models {
+		counts[model.ID]++
+	}
+	for _, id := range []string{"auto", "gpt-5.4", "claude-sonnet-5.5", "claude-sonnet-4.6", "claude-sonnet-4.5", "claude-haiku-4.5", "gpt-5.2", "gpt-5-mini"} {
+		if counts[id] != 1 {
+			t.Fatalf("%s published %d times: %+v", id, counts[id], copilot.Models)
+		}
+	}
+	if copilot.Models[0].ID != "auto" || copilot.Models[0].Source != "static" {
+		t.Fatalf("models = %+v", copilot.Models)
+	}
+	if copilot.Models[1].ID != "claude-sonnet-5.5" || copilot.Models[1].Source != "observed" {
+		t.Fatalf("most recent observed model must follow auto: %+v", copilot.Models)
+	}
+	if copilot.Models[2].ID != "gpt-5.4" || copilot.Models[2].Source != "observed" {
+		t.Fatalf("older observed model = %+v", copilot.Models[2])
+	}
+	raw, _ := json.Marshal(buildHarnessInventory(host.deps("linux")))
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken, "cwd", home, "GITHUB_TOKEN"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("inventory leaks %q: %s", leak, raw)
+		}
 	}
 }
 
@@ -344,5 +462,72 @@ func TestCursorLoginFromStatus(t *testing.T) {
 	}
 	if parseHarnessVersion("GitHub Copilot CLI 1.0.95.\n") != "1.0.95" {
 		t.Fatal("version parse")
+	}
+}
+
+func TestCopilotLoginStatusFrames(t *testing.T) {
+	for _, tc := range []struct{ name, payload, want string }{
+		{"signed in", `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":true,"login":"jane-doe","token":"must-never-publish"}}`, harnessLoginSignedIn},
+		{"signed out", `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":false}}`, harnessLoginSignedOut},
+		{"missing verdict", `{"jsonrpc":"2.0","id":1,"result":{}}`, harnessLoginUnknown},
+		{"wrong response", `{"jsonrpc":"2.0","id":2,"result":{"isAuthenticated":true}}`, harnessLoginUnknown},
+		{"unsupported method", `{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}`, harnessLoginUnknown},
+		{"malformed", `{`, harnessLoginUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(tc.payload), tc.payload)
+			if got := readCopilotLoginStatus(strings.NewReader(frame)); got != tc.want {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+	for _, frame := range []string{"", "Content-Length: 65537\r\n\r\n", "Content-Length: -1\r\n\r\n", "Content-Length: nope\r\n\r\n", "Content-Length: 100\r\n\r\n{}", "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", strings.Repeat("x", 4097)} {
+		if got := readCopilotLoginStatus(strings.NewReader(frame)); got != harnessLoginUnknown {
+			t.Fatalf("invalid frame accepted: %s", got)
+		}
+	}
+}
+
+func TestBuildHarnessInventoryCopilotSDKLogin(t *testing.T) {
+	for _, tc := range []struct{ name, stored, verdict, want, source string }{
+		{"modern credential store", "// Settings moved to settings.json\n{\"firstLaunchAt\":\"2026-01-01\"}", harnessLoginSignedIn, harnessLoginSignedIn, "cli_status"},
+		{"signed out overrides stale record", `{"logged_in_users":[{"host":"https://github.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, "cli_status"},
+		{"old CLI fallback", `{"logged_in_users":[{"host":"https://github.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "stored"},
+		{"no login unknown", `{}`, harnessLoginUnknown, harnessLoginUnknown, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCopilotConfig(t, filepath.Join(home, ".copilot"), tc.stored)
+			deps := (fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{"copilot": true}}).deps("darwin")
+			deps.CopilotLogin = func(string) string { return tc.verdict }
+			entry := entryFor(t, buildHarnessInventory(deps), hostExecHarnessCopilot)
+			if entry.LoginState != tc.want || entry.LoginSource != tc.source {
+				t.Fatalf("login = %s/%s, want %s/%s", entry.LoginState, entry.LoginSource, tc.want, tc.source)
+			}
+		})
+	}
+}
+
+func TestProbeCopilotLoginSDKProcess(t *testing.T) {
+	skipNoShebangOnWindows(t, "fake Copilot SDK transport")
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "copilot")
+	payload := `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":true,"login":"jane-doe"}}`
+	script := fmt.Sprintf("#!/bin/sh\nprintf 'Content-Length: %%s\\r\\n\\r\\n%%s' '%d' '%s'\nwhile :; do :; done\n", len(payload), payload)
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if got := probeCopilotLogin(executable); got != harnessLoginSignedIn {
+		t.Fatalf("got %s", got)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("status cleanup took %s", elapsed)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := probeCopilotLogin(executable); got != harnessLoginUnknown {
+		t.Fatalf("failed command got %s", got)
 	}
 }

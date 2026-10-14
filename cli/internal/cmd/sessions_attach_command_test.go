@@ -197,6 +197,74 @@ func TestAttachRefusedCommandRereadsTheModeAndSendsNothingElse(t *testing.T) {
 	}
 }
 
+func TestAttachCommandModeDecidesApprovalsInsteadOfStartingATurn(t *testing.T) {
+	fake := newAttachFake(t)
+	(&controlFake{modes: []string{controlCommandMode}, states: []string{"finished"}}).install(fake)
+	pendingView := `{"id":"40df09c3-0000-4000-8000-000000000002","approval_workflow_id":"w","status":"pending","tool_name":"view","requested_at":"2026-10-02T11:59:31","runtime_session_id":"` + attachTestSession + `"}`
+	fake.pending = []string{pendingBash, pendingView}
+	fake.conns = []attachConnScript{{}}
+
+	run := startAttach(t, fake, attachOptions{target: attachTestSession})
+	run.waitFor(t, "approval pending Bash")
+	run.waitFor(t, "approval pending view")
+
+	_, _ = io.WriteString(run.input, "a\n")
+	run.waitFor(t, "approval 3b3eb5f2 approved")
+	_, _ = io.WriteString(run.input, "d 40df\n")
+	run.waitFor(t, "approval 40df09c3 declined")
+	_ = run.stop(t)
+
+	posts := fake.postsCopy()
+	if len(posts) != 2 {
+		t.Fatalf("want an approve and a decline and no turn, got %+v", posts)
+	}
+	if posts[0].path != approvalRequestsPath+"/3b3eb5f2-0000-4000-8000-000000000001/approve" {
+		t.Errorf("a must approve the oldest pending approval, posted to %s", posts[0].path)
+	}
+	if posts[1].path != approvalRequestsPath+"/40df09c3-0000-4000-8000-000000000002/decline" {
+		t.Errorf("d <id> must decline the named approval, posted to %s", posts[1].path)
+	}
+	for _, post := range posts {
+		if post.path == agentPromptPath(attachTestAgent) {
+			t.Errorf("an approval shortcut must not start a turn, posted %+v", posts)
+		}
+	}
+}
+
+func TestAttachCommandModeApprovalShortcutSendsNothingWhenIdle(t *testing.T) {
+	fake := newAttachFake(t)
+	(&controlFake{modes: []string{controlCommandMode}, states: []string{"finished"}}).install(fake)
+	fake.conns = []attachConnScript{{}}
+
+	run := startAttach(t, fake, attachOptions{target: attachTestSession})
+	run.waitFor(t, "mode: command")
+	_, _ = io.WriteString(run.input, "a\n")
+	run.waitFor(t, "no pending approval; nothing sent")
+	_ = run.stop(t)
+
+	if posts := fake.postsCopy(); len(posts) != 0 {
+		t.Fatalf("a with nothing pending must send nothing, sent %+v", posts)
+	}
+}
+
+func TestAttachTurnEscapeSendsALiteralTurn(t *testing.T) {
+	shortenCommandPolling(t)
+	fake := newAttachFake(t)
+	(&controlFake{modes: []string{controlCommandMode}, states: []string{"finished"}}).install(fake)
+	fake.conns = []attachConnScript{{}}
+
+	run := startAttach(t, fake, attachOptions{target: attachTestSession})
+	run.waitFor(t, "mode: command")
+	_, _ = io.WriteString(run.input, "/turn a\n")
+	run.waitFor(t, "command c0ffee00 delivered")
+	_ = run.stop(t)
+
+	posts := fake.postsCopy()
+	if len(posts) != 1 || posts[0].path != agentPromptPath(attachTestAgent) || posts[0].body["message"] != "a" {
+		t.Fatalf("/turn a must send a turn whose text is a, got %+v", posts)
+	}
+}
+
 func TestAttachPermissionRefusalNamesThePermission(t *testing.T) {
 	fake := newAttachFake(t)
 	(&controlFake{modes: []string{controlCommandMode}, promptStatus: http.StatusForbidden, promptBody: `{"detail":"forbidden"}`}).install(fake)
@@ -226,7 +294,13 @@ func TestParseAttachInputCommandMode(t *testing.T) {
 		{line: "/mode", commandMode: true, want: attachInput{kind: "mode"}},
 		{line: "/notes are fine", commandMode: true, want: attachInput{kind: "command", text: "/notes are fine"}},
 		{line: "a", pending: pending, commandMode: true, want: attachInput{kind: "approve", approvalID: "3b3eb5f2-aaaa"}},
-		{line: "a", commandMode: true, want: attachInput{kind: "command", text: "a"}},
+		{line: "d 3b3e", pending: pending, commandMode: true, want: attachInput{kind: "decline", approvalID: "3b3eb5f2-aaaa"}},
+		{line: "a", commandMode: true, err: true},
+		{line: "d zzzz", pending: pending, commandMode: true, err: true},
+		{line: "/turn a", commandMode: true, want: attachInput{kind: "command", text: "a"}},
+		{line: "/turn", commandMode: true, err: true},
+		{line: "/turn a", commandMode: false, err: true},
+		{line: "a different plan", commandMode: true, want: attachInput{kind: "command", text: "a different plan"}},
 	}
 	for _, c := range cases {
 		got, err := parseAttachInput(c.line, c.pending, c.commandMode)

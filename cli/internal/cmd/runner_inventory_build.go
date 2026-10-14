@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -10,7 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +21,7 @@ import (
 // Building the harness inventory (contract A). Everything here reads only
 // presence facts: executable found, variable NAME set, a login record's host,
 // the configured model. Token values, usernames, paths and argv never enter
-// the inventory, and no credential store is opened.
+// the inventory. Harnesses resolve their own credentials for status probes.
 
 // copilotTokenEnvNames are the variables Copilot CLI reads a token from, in
 // precedence order. Only their presence is checked.
@@ -76,6 +78,8 @@ type harnessInventoryDeps struct {
 	Version     func(executable string) string
 	DevinStatus func(executable string) (string, []string)
 	CursorLogin func(executable string) string
+	// CopilotLogin reads the SDK auth verdict without creating a session.
+	CopilotLogin func(executable string) string
 	// ClaudeLogin returns the `claude auth status` verdict only.
 	ClaudeLogin func(executable string) string
 	// ClaudeHook reports whether the Preloop approval hook is installed.
@@ -90,11 +94,13 @@ type harnessInventoryDeps struct {
 }
 
 // harnessRuntimeHints carries what the runner learned from real runs:
-// an explicit "not logged in" failure and models a harness reported.
+// an explicit "not logged in" failure and model ids a harness reported.
+// Observed ids are newest-first. Values, paths and environment never land
+// here.
 type harnessRuntimeHints struct {
 	mu        sync.Mutex
 	signedOut map[string]bool
-	observed  map[string]map[string]struct{}
+	observed  map[string][]string
 }
 
 var runnerHarnessHints = &harnessRuntimeHints{}
@@ -117,20 +123,25 @@ func (h *harnessRuntimeHints) markSignedOut(harness string, signedOut bool) {
 
 func (h *harnessRuntimeHints) noteModel(harness, model string) {
 	model = strings.TrimSpace(model)
-	if h == nil || model == "" || len(model) > maxHarnessModelIDLength || !hostExecModelRe.MatchString(model) {
+	if h == nil || harness == "" || model == "" || len(model) > maxHarnessModelIDLength || !hostExecModelRe.MatchString(model) {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.observed == nil {
-		h.observed = map[string]map[string]struct{}{}
+		h.observed = map[string][]string{}
 	}
-	if h.observed[harness] == nil {
-		h.observed[harness] = map[string]struct{}{}
+	next := make([]string, 0, len(h.observed[harness])+1)
+	next = append(next, model)
+	for _, id := range h.observed[harness] {
+		if id != model {
+			next = append(next, id)
+		}
 	}
-	if len(h.observed[harness]) < maxHarnessModels {
-		h.observed[harness][model] = struct{}{}
+	if len(next) > maxHarnessModels {
+		next = next[:maxHarnessModels]
 	}
+	h.observed[harness] = next
 }
 
 func (h *harnessRuntimeHints) snapshot(harness string) (bool, []string) {
@@ -139,12 +150,7 @@ func (h *harnessRuntimeHints) snapshot(harness string) (bool, []string) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	models := make([]string, 0, len(h.observed[harness]))
-	for model := range h.observed[harness] {
-		models = append(models, model)
-	}
-	sort.Strings(models)
-	return h.signedOut[harness], models
+	return h.signedOut[harness], append([]string(nil), h.observed[harness]...)
 }
 
 func defaultHarnessInventoryDeps() harnessInventoryDeps {
@@ -176,6 +182,7 @@ func defaultHarnessInventoryDeps() harnessInventoryDeps {
 		},
 		Version:        probeHarnessVersion,
 		CursorLogin:    probeCursorLogin,
+		CopilotLogin:   probeCopilotLogin,
 		ClaudeLogin:    probeClaudeLogin,
 		ClaudeHook:     claudeApprovalHookInstalled,
 		DevinStatus:    probeDevinStatus,
@@ -240,6 +247,95 @@ func cursorLoginFromStatus(output string, ok bool) string {
 func hostExecProbeEnv(executable string) []string {
 	profile := hostExecProfile{Executable: executable}
 	return hostExecChildEnv(runtime.GOOS, hostExecProfileHarness(profile), profile, os.Environ())
+}
+
+// probeCopilotLogin asks the CLI's SDK transport for its current auth state.
+// Modern Copilot stores login outside config.json; the status response is
+// reduced to a boolean and never retained or advertised with account details.
+func probeCopilotLogin(executable string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	bin, prefix, err := resolveHostExecCommand(executable)
+	if err != nil {
+		return harnessLoginUnknown
+	}
+	args := append(prefix, "--headless", "--no-auto-update", "--stdio", "--log-level", "none")
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = hostExecPrependPath(runtime.GOOS, hostExecProbeEnv(executable), hostExecBinaryDirs(bin, executable)...)
+	cmd.SysProcAttr = hostExecSysProcAttr()
+	cmd.Cancel = func() error { killRunnerJobProcess(cmd); return nil }
+	cmd.WaitDelay = time.Second
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return harnessLoginUnknown
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return harnessLoginUnknown
+	}
+	if err := cmd.Start(); err != nil {
+		return harnessLoginUnknown
+	}
+	defer func() { cancel(); _ = cmd.Wait() }()
+	const request = `{"jsonrpc":"2.0","id":1,"method":"auth.getStatus","params":{}}`
+	if _, err := fmt.Fprintf(stdin, "Content-Length: %d\r\n\r\n%s", len(request), request); err != nil {
+		return harnessLoginUnknown
+	}
+	return readCopilotLoginStatus(stdout)
+}
+
+// readCopilotLoginStatus accepts only a bounded, matching JSON-RPC response.
+func readCopilotLoginStatus(output io.Reader) string {
+	reader := bufio.NewReaderSize(output, 4096)
+	length := 0
+	separated := false
+	for i := 0; i < 8; i++ {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			return harnessLoginUnknown
+		}
+		header := strings.TrimSpace(string(line))
+		if header == "" {
+			separated = true
+			break
+		}
+		key, value, ok := strings.Cut(header, ":")
+		if !ok {
+			return harnessLoginUnknown
+		}
+		if strings.EqualFold(key, "Content-Length") {
+			if length != 0 {
+				return harnessLoginUnknown
+			}
+			length, err = strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || length <= 0 || length > 64*1024 {
+				return harnessLoginUnknown
+			}
+		}
+	}
+	if !separated || length <= 0 {
+		return harnessLoginUnknown
+	}
+	raw := make([]byte, length)
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return harnessLoginUnknown
+	}
+	var response struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int    `json:"id"`
+		Result  *struct {
+			IsAuthenticated *bool `json:"isAuthenticated"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &response) != nil || response.JSONRPC != "2.0" || response.ID != 1 || response.Result == nil || response.Result.IsAuthenticated == nil || (len(response.Error) != 0 && string(response.Error) != "null") {
+		return harnessLoginUnknown
+	}
+	if *response.Result.IsAuthenticated {
+		return harnessLoginSignedIn
+	}
+	return harnessLoginSignedOut
 }
 
 // copilotConfigDir is $COPILOT_HOME or ~/.copilot on every OS.
@@ -344,6 +440,30 @@ func discoveryLogin(agent AgentConfig) (string, string) {
 	default:
 		return harnessLoginUnknown, "unknown"
 	}
+}
+
+// copilotModelsFor lists Copilot models with auto first, then ids the seat
+// reported in usage (newest first, source observed), then the rest of the
+// static table and a configured id. Each id is published once; an observed
+// id keeps source observed when the static table also names it.
+func copilotModelsFor(version, configured string, observed []string) []harnessModel {
+	static := harnessStaticModelsFor(hostExecHarnessCopilot, version)
+	seen := map[string]struct{}{}
+	var models []harnessModel
+	rest := make([]string, 0, len(static))
+	for _, id := range static {
+		if id == "auto" && len(models) == 0 {
+			models = appendModels(models, seen, harnessModelSourceStatic, id)
+			continue
+		}
+		rest = append(rest, id)
+	}
+	models = appendModels(models, seen, harnessModelSourceObserved, observed...)
+	models = appendModels(models, seen, harnessModelSourceStatic, rest...)
+	if hostExecModelRe.MatchString(strings.TrimSpace(configured)) {
+		models = appendModels(models, seen, harnessModelSourceConfigured, configured)
+	}
+	return models
 }
 
 func appendModels(models []harnessModel, seen map[string]struct{}, source string, ids ...string) []harnessModel {
@@ -518,6 +638,11 @@ func buildCopilotEntry(d harnessInventoryDeps, discovered map[string]AgentConfig
 	if entry.LoginSource != "env" && hasStoredLogin {
 		entry.LoginState, entry.LoginSource = harnessLoginSignedIn, "stored"
 	}
+	if entry.LoginSource != "env" && err == nil && d.CopilotLogin != nil {
+		if state := d.CopilotLogin(executable); state == harnessLoginSignedIn || state == harnessLoginSignedOut {
+			entry.LoginState, entry.LoginSource = state, "cli_status"
+		}
+	}
 	signedOut, observed := d.Hints.snapshot(id)
 	if signedOut {
 		entry.LoginState = harnessLoginSignedOut
@@ -526,7 +651,7 @@ func buildCopilotEntry(d harnessInventoryDeps, discovered map[string]AgentConfig
 	if host == "" {
 		host = hostOnly(d.HostEnv("GH_HOST"))
 	}
-	if host == "" && entry.LoginSource == "stored" {
+	if host == "" && hasStoredLogin && entry.LoginState == harnessLoginSignedIn {
 		host = hostOnly(storedHost)
 	}
 	if host == "" && entry.LoginState == harnessLoginSignedIn {
@@ -534,12 +659,7 @@ func buildCopilotEntry(d harnessInventoryDeps, discovered map[string]AgentConfig
 	}
 	entry.AccountHost = host
 
-	seen := map[string]struct{}{}
-	models := appendModels(nil, seen, harnessModelSourceStatic, harnessStaticModelsFor(id, entry.Version)...)
-	if hostExecModelRe.MatchString(stored.Model) {
-		models = appendModels(models, seen, harnessModelSourceConfigured, stored.Model)
-	}
-	entry.Models = appendModels(models, seen, harnessModelSourceObserved, observed...)
+	entry.Models = copilotModelsFor(entry.Version, stored.Model, observed)
 
 	if entry.SupportLevel != harnessSupportPresenceOnly {
 		if name := generatedProfileFor(id, d); name != "" {

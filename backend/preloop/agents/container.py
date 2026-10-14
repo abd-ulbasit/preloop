@@ -702,6 +702,30 @@ def _lookup_trigger_path(root: Any, path: str) -> Optional[str]:
     return str(value)
 
 
+def _git_config_payload(trigger: Dict[str, Any]) -> Dict[str, Any]:
+    """Payload with provider ``object_attributes`` filled in.
+
+    Pull-request title and body are rendered here, not by
+    ``TriggerEventResolver.resolve``, so a Jira issue webhook needs the same
+    normalization. Otherwise ``{{object_attributes.*}}`` stays unresolved and
+    the whole body is dropped.
+
+    ``repository.*`` is not filled here. The bound code-host name is resolved
+    on the prompt path, which has a database session. This renderer only has
+    the trigger payload, and preset 011 does not put ``repository.name`` in
+    the pull request title or body.
+    """
+    from preloop.services.prompt_resolvers.trigger_event import TriggerEventResolver
+
+    if isinstance(trigger.get("payload"), dict):
+        event: Dict[str, Any] = trigger
+    else:
+        event = {"payload": trigger, "source": trigger.get("source", "")}
+    normalized = TriggerEventResolver()._normalize_event_data(event)
+    payload = normalized.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
 def interpolate_git_config_text(
     text: Optional[str], trigger_data: Optional[Dict[str, Any]]
 ) -> str:
@@ -710,14 +734,14 @@ def interpolate_git_config_text(
     Unresolved placeholders (still containing ``{{``) are treated as empty so
     they cannot become a PR title. GitLab ``object_attributes.*`` paths also
     read GitHub ``issue.*`` so the shipped implementer preset works on both.
+    Jira issue webhooks are normalized to the same ``object_attributes`` keys
+    before lookup, including ``close_reference`` (``#N`` or a bare issue key).
     """
 
     if not text or not isinstance(text, str):
         return ""
     trigger = trigger_data if isinstance(trigger_data, dict) else {}
-    payload = trigger.get("payload", trigger)
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = _git_config_payload(trigger)
 
     def repl(match: re.Match) -> str:
         raw = match.group(1)
@@ -5078,8 +5102,26 @@ if [ -f /tmp/preloop-checkpoint-client.py ]; then
 fi
 """.strip()
 
+    @staticmethod
+    def _resume_repo_evidence(repo_index: int) -> tuple[str, str]:
+        """Marker and refusal log for one repository in a resume.
+
+        Several checkouts share ``EVIDENCE_DIR_PATH`` and one shell. A
+        single marker would let a later no-op rebase clear an earlier
+        rewrite, or let a repository whose rebase was skipped inherit
+        another repository's force-push.
+        """
+
+        if isinstance(repo_index, bool) or not isinstance(repo_index, int):
+            raise ValueError("repo_index must be a non-negative int")
+        if repo_index < 0:
+            raise ValueError("repo_index must be a non-negative int")
+        marker = f"{EVIDENCE_DIR_PATH}/resume-rebased-{repo_index}"
+        refused = f"{EVIDENCE_DIR_PATH}/push-refused-{repo_index}.txt"
+        return marker, refused
+
     def _build_git_resume_rebase_shell(
-        self, *, full_path: str, base_branch: str
+        self, *, full_path: str, base_branch: str, repo_index: int = 0
     ) -> str:
         """Fetch the flow base branch and rebase the cloned PR branch onto it.
 
@@ -5089,6 +5131,14 @@ fi
         the agent to inspect that file if it exists. ``PRELOOP_RESUME_REBASE_CONFLICT=1``
         is exported in the container for in-container processes. The block
         always exits 0 so a conflict does not abort init.
+
+        ``evidence/resume-rebased-<repo_index>`` and
+        ``PRELOOP_RESUME_REBASED_<repo_index>=1`` are recorded only when
+        ``HEAD`` changes. A no-op rebase leaves the same commit, so that
+        repository's marker stays unset and its later push cannot
+        force-with-lease over the reviewed pull request. Each repository
+        has its own marker, so one checkout cannot clear or inherit
+        another's.
         """
 
         safe_base = _validated_git_ref(base_branch)
@@ -5100,16 +5150,25 @@ fi
 
         q_path = shlex.quote(full_path)
         conflict_file = f"{EVIDENCE_DIR_PATH}/rebase-conflict.txt"
-        rebased_marker = f"{EVIDENCE_DIR_PATH}/resume-rebased"
+        rebased_marker, _refused_log = self._resume_repo_evidence(repo_index)
+        rebased_env = f"PRELOOP_RESUME_REBASED_{repo_index}"
         return f"""
 cd {q_path}
 echo "Resume rebase: fetching origin/{safe_base} and rebasing the PR branch onto it"
 if git fetch origin {safe_base}; then
+    _preloop_head_before=$(git rev-parse HEAD)
     if git rebase origin/{safe_base}; then
-        echo "Resume rebase onto origin/{safe_base} succeeded"
-        mkdir -p {EVIDENCE_DIR_PATH}
-        touch {rebased_marker}
-        export PRELOOP_RESUME_REBASED=1
+        _preloop_head_after=$(git rev-parse HEAD)
+        if [ "$_preloop_head_before" != "$_preloop_head_after" ]; then
+            echo "Resume rebase onto origin/{safe_base} moved HEAD"
+            mkdir -p {EVIDENCE_DIR_PATH}
+            touch {rebased_marker}
+            export {rebased_env}=1
+        else
+            echo "Resume rebase onto origin/{safe_base} left HEAD unchanged"
+            rm -f {rebased_marker}
+            unset {rebased_env}
+        fi
     else
         echo "Resume rebase onto origin/{safe_base} conflicted; leaving rebase aborted"
         mkdir -p {EVIDENCE_DIR_PATH}
@@ -5119,29 +5178,64 @@ if git fetch origin {safe_base}; then
             git diff --name-only --diff-filter=U 2>/dev/null || true
         }} > {conflict_file}
         git rebase --abort || true
+        rm -f {rebased_marker}
+        unset {rebased_env}
         export PRELOOP_RESUME_REBASE_CONFLICT=1
         echo "Wrote conflicting files to {conflict_file}"
     fi
 else
     echo "Resume rebase: could not fetch origin/{safe_base}; skipping rebase"
+    rm -f {rebased_marker}
+    unset {rebased_env}
 fi
 cd /workspace
 true
 """.strip()
 
-    def _build_git_push_shell(self, safe_target: str, *, resume_rebase: bool) -> str:
-        """Build the post-exec push. Force-with-lease only after a resume rebase."""
+    def _build_git_push_shell(
+        self, safe_target: str, *, resume_rebase: bool, repo_index: int = 0
+    ) -> str:
+        """Build the post-exec push.
+
+        ``--force-with-lease`` runs only after this repository's resume
+        rebase moved HEAD. A no-op rebase pushes fast-forward only. An
+        amended or squashed tip is refused, and the reason is written to
+        ``evidence/push-refused-<repo_index>.txt``.
+        """
 
         if not resume_rebase:
             return f"  git push origin {safe_target}"
-        rebased_marker = f"{EVIDENCE_DIR_PATH}/resume-rebased"
-        return (
-            f"  if [ -f {rebased_marker} ] || "
-            f'[ "${{PRELOOP_RESUME_REBASED:-}}" = "1" ]; then\n'
-            f"    git push --force-with-lease origin {safe_target}\n"
-            f"  else\n"
-            f"    git push origin {safe_target}\n"
-            f"  fi"
+        rebased_marker, refused_log = self._resume_repo_evidence(repo_index)
+        rebased_env = f"PRELOOP_RESUME_REBASED_{repo_index}"
+        remote_ref = f"origin/{safe_target}"
+        return "\n".join(
+            [
+                (
+                    f"  if [ -f {rebased_marker} ] || "
+                    f'[ "${{{rebased_env}:-}}" = "1" ]; then'
+                ),
+                f"    git push --force-with-lease origin {safe_target}",
+                f"  elif git merge-base --is-ancestor {remote_ref} HEAD; then",
+                f"    git push origin {safe_target}",
+                "  else",
+                f"    mkdir -p {EVIDENCE_DIR_PATH}",
+                "    {",
+                (f'      echo "Refusing non-fast-forward push of {safe_target}."'),
+                ('      echo "The resume rebase did not move HEAD, so an amended"'),
+                (
+                    '      echo "or squashed commit cannot replace the '
+                    'reviewed history."'
+                ),
+                (
+                    f'      echo "remote $(git rev-parse {remote_ref} '
+                    f'2>/dev/null || echo missing)"'
+                ),
+                '      echo "local $(git rev-parse HEAD)"',
+                f"    }} > {refused_log}",
+                (f'    echo "Refusing non-fast-forward push; wrote {refused_log}"'),
+                "    exit 1",
+                "  fi",
+            ]
         )
 
     def _build_repository_clone_command_block(
@@ -5234,7 +5328,9 @@ true
                     git_config = {}
                 base_branch = self._resolve_resume_base_branch(git_config, repo_config)
                 rebase_shell = self._build_git_resume_rebase_shell(
-                    full_path=full_path, base_branch=base_branch
+                    full_path=full_path,
+                    base_branch=base_branch,
+                    repo_index=repo_index,
                 )
                 if rebase_shell:
                     commands.append(rebase_shell)
@@ -6268,6 +6364,7 @@ export GIT_TERMINAL_PROMPT=0"""
                                 execution_context.get("_git_resume_rebase")
                                 or self._is_resume_execution(execution_context)
                             ),
+                            repo_index=idx,
                         ),
                     ]
                 )

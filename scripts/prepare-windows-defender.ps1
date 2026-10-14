@@ -13,6 +13,25 @@ function Enable-WindowsDefenderEventLog {
   } finally { $log.Dispose() }
 }
 
+function Update-GitHubHostedDefenderSignature {
+  # Defender can restart while protection is enabled on the hosted image.
+  # Retry only RPC failure or service-unavailable HRESULTs during startup;
+  # persistent disablement and unrelated policy errors still fail closed.
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      Update-MpSignature -ErrorAction Stop
+      return
+    } catch {
+      if ($_.FullyQualifiedErrorId -notmatch '^HRESULT 0x(?:800706be|800106ba)(?:,|$)' -or $attempt -eq 3) {
+        throw
+      }
+      Write-Warning "Defender signature update service is not ready; retrying ($attempt/3)."
+      Start-Service -Name WinDefend -ErrorAction Stop
+      Start-Sleep -Seconds (5 * $attempt)
+    }
+  }
+}
+
 function Initialize-GitHubHostedDefender {
   if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:OS -ne 'Windows_NT') {
     throw 'Protection setup is restricted to disposable GitHub-hosted Windows runners.'
@@ -33,7 +52,7 @@ function Initialize-GitHubHostedDefender {
     }
   }
   Enable-WindowsDefenderEventLog
-  Update-MpSignature -ErrorAction Stop
+  Update-GitHubHostedDefenderSignature
   Assert-DefenderCoverage | Format-List AMRunningMode, AMEngineVersion, AMProductVersion, AntivirusSignatureVersion, RealTimeProtectionEnabled
 }
 

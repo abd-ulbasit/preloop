@@ -349,6 +349,7 @@ type copilotStreamEvent struct {
 	ExitCode  *int   `json:"exitCode"`
 	Usage     *struct {
 		PremiumRequests *float64 `json:"premiumRequests"`
+		Model           string   `json:"model"`
 	} `json:"usage"`
 	Data json.RawMessage `json:"data"`
 }
@@ -384,6 +385,11 @@ func applyCopilotLine(capture *copilotCapture, line string) bool {
 		if event.Usage != nil && event.Usage.PremiumRequests != nil && *event.Usage.PremiumRequests >= 0 {
 			value := *event.Usage.PremiumRequests
 			capture.PremiumRequests = &value
+		}
+		if event.Usage != nil && hostExecModelRe.MatchString(strings.TrimSpace(event.Usage.Model)) {
+			capture.Model = strings.TrimSpace(event.Usage.Model)
+			// The id only. The next inventory refresh publishes it as observed.
+			noteHarnessRunSucceeded(hostExecHarnessCopilot, capture.Model)
 		}
 	case event.Type == "assistant.message":
 		var data struct {

@@ -9,7 +9,9 @@ package cmd
 // console's command box, addressed to the attached session. The server says
 // which mode applies (GET /runtime-sessions/{id}/control); every other
 // session stays in note mode and the attach says why. `/note <text>` sends a
-// plain note in either mode.
+// plain note in either mode. `a` and `d` still decide approvals; with nothing
+// pending in command mode they print a notice and send nothing. `/turn <text>`
+// sends that text as a turn.
 //
 // After a command is accepted its delivery state is followed until it is
 // terminal: queued, delivered, started, finished (or failed, expired,
@@ -37,6 +39,7 @@ const (
 	attachCommandSource = "cli_attach"
 
 	attachNotePrefix = "/note"
+	attachTurnPrefix = "/turn"
 	attachModeVerb   = "/mode"
 )
 
@@ -78,11 +81,12 @@ func (c attachControl) isCommand() bool {
 // indicator is the one line that says what a typed line will do.
 func (c attachControl) indicator() string {
 	if c.isCommand() {
+		tail := "a and d decide a pending approval (nothing is sent when none is), /note <text> sends a note, /turn <text> sends that text"
 		if c.runnerTurnPath() != "" {
-			return "mode: command. A line is the next turn of this runner session; /note <text> sends a note instead"
+			return "mode: command. A line is the next turn of this runner session; " + tail
 		}
-		return fmt.Sprintf("mode: command. A line starts a new turn for %s through Agent Control; /note <text> sends a note instead",
-			firstNonEmpty(c.AgentName, "the agent"))
+		return fmt.Sprintf("mode: command. A line starts a new turn for %s through Agent Control; %s",
+			firstNonEmpty(c.AgentName, "the agent"), tail)
 	}
 	reason := c.Reason
 	if reason == "" {

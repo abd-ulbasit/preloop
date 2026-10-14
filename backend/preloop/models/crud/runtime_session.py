@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -186,6 +187,15 @@ def _latest_gateway_usage_for_sessions(
             continue
         latest_by_session[session_id] = row
     return latest_by_session
+
+
+def _is_uuid(value: Optional[str]) -> bool:
+    """Return True when ``value`` parses as a UUID (a flow execution id)."""
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 class SpawnAliasConflictError(ValueError):
@@ -896,17 +906,24 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 )
 
         if min_requests is not None:
-            usage_count_subq = (
-                db.query(ApiUsage.runtime_session_id)
-                .filter(
-                    ApiUsage.account_id == account_id,
-                    ApiUsage.runtime_session_id.isnot(None),
-                    ApiUsage.action_type == "model_gateway",
-                )
-                .group_by(ApiUsage.runtime_session_id)
-                .having(func.count(ApiUsage.id) >= min_requests)
-                .subquery()
+            # Correlated per session, so the planner probes the session's own
+            # usage rows through ix_api_usage_runtime_session_id. A grouped
+            # subquery over the account's whole usage table cost seconds on
+            # every agent detail load once an account had a million requests.
+            usage_probe = db.query(ApiUsage.id).filter(
+                ApiUsage.runtime_session_id == self.model.id,
+                ApiUsage.account_id == account_id,
+                ApiUsage.action_type == "model_gateway",
             )
+            if min_requests <= 1:
+                has_usage = usage_probe.exists()
+            else:
+                has_usage = (
+                    usage_probe.with_entities(func.count(ApiUsage.id))
+                    .correlate(self.model)
+                    .scalar_subquery()
+                    >= min_requests
+                )
             # Keep historical empty "shell" sessions hidden, but a freshly
             # created session (e.g. a Hermes "/new") has zero requests for the
             # first few seconds before its first gateway call lands. Surface it
@@ -918,7 +935,7 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             )
             session_query = session_query.filter(
                 or_(
-                    self.model.id.in_(usage_count_subq.select()),
+                    has_usage,
                     and_(
                         self.model.started_at >= recent_cutoff,
                         self.model.ended_at.is_(None),
@@ -1283,7 +1300,26 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             )
         )
         if session_ids is not None:
-            legacy = legacy.filter(RuntimeSession.id.in_(session_ids))
+            # Resolve the page's legacy flow sessions first. Joining on the
+            # text cast cannot use the flow_execution_id index, so with the
+            # page known the branch reads only those executions' usage, and
+            # a page without flow sessions skips it. Otherwise the planner
+            # re-ran an account-wide scan of flow usage once per session row.
+            legacy_execution_ids = [
+                row.session_source_id
+                for row in db.query(RuntimeSession.session_source_id).filter(
+                    RuntimeSession.account_id == account_id,
+                    RuntimeSession.session_source_type == "flow_execution",
+                    RuntimeSession.id.in_(session_ids),
+                )
+                if _is_uuid(row.session_source_id)
+            ]
+            if not legacy_execution_ids:
+                return direct.subquery("session_usage_links")
+            legacy = legacy.filter(
+                RuntimeSession.id.in_(session_ids),
+                ApiUsage.flow_execution_id.in_(legacy_execution_ids),
+            )
         return direct.union_all(legacy).subquery("session_usage_links")
 
     def _account_sessions_query(

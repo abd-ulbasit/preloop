@@ -216,6 +216,11 @@ export class AgentDetailView extends LitElement {
     total: number;
   } | null = null;
   private notesPageAgentId = '';
+  /**
+   * Bumped when a note is sent so a notes read that started earlier cannot
+   * put the pre-send page back.
+   */
+  private notesSendEpoch = 0;
   /** The tab label's count; follows sends without replacing the page. */
   @state() private notesTotal: number | null = null;
 
@@ -1953,21 +1958,21 @@ export class AgentDetailView extends LitElement {
       this.notesPage = null;
       this.notesTotal = null;
     }
+    const epoch = this.notesSendEpoch;
     try {
       const page = await listOperatorNotesPage({
         agentId,
         limit: NOTES_FIRST_PAGE,
       });
-      if (agentId !== this.agentId) return;
+      if (epoch !== this.notesSendEpoch || agentId !== this.agentId) return;
       this.notesPageAgentId = agentId;
       this.notesPage = page;
       this.notesTotal = page.total;
     } catch {
       // No count is fine: the tab still opens and reads its own page.
-      if (agentId === this.agentId) {
-        this.notesPage = null;
-        this.notesTotal = null;
-      }
+      if (epoch !== this.notesSendEpoch || agentId !== this.agentId) return;
+      this.notesPage = null;
+      this.notesTotal = null;
     }
   }
 
@@ -1998,6 +2003,7 @@ export class AgentDetailView extends LitElement {
               // The page read at load is now stale: a tab mounted later
               // (after switching tabs) reads its own instead of seeding it.
               this.notesPage = null;
+              this.notesSendEpoch += 1;
             }}
           ></agent-notes-tab>
         </div>

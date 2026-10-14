@@ -1378,11 +1378,32 @@ describe('AgentDetailView', () => {
       total: number,
       agentPatch: Record<string, unknown> = {}
     ): void {
+      const posted: Array<Record<string, unknown>> = [];
       fetchStub.callsFake(
         async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = typeof input === 'string' ? input : input.toString();
           if (url.startsWith('/api/v1/operator-notes')) {
-            const notes = Array.from(
+            const method = (init?.method || 'GET').toUpperCase();
+            if (method === 'POST') {
+              const body = init?.body
+                ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+                : {};
+              const note = {
+                note_id: String(body.note_id || `posted-${posted.length}`),
+                state: 'pending',
+                text: String(body.text || ''),
+                author: body.author || {
+                  display: 'dimitris',
+                  auth_method: 'jwt',
+                },
+              };
+              posted.unshift(note);
+              return new Response(JSON.stringify(note), {
+                status: 201,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            const generated = Array.from(
               { length: Math.min(3, total) },
               (_, i) => ({
                 note_id: `note-${i}`,
@@ -1391,10 +1412,14 @@ describe('AgentDetailView', () => {
                 author: { display: 'dimitris', auth_method: 'jwt' },
               })
             );
-            return new Response(JSON.stringify({ notes, total }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            const notes = [...posted, ...generated].slice(0, 3);
+            return new Response(
+              JSON.stringify({ notes, total: total + posted.length }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
           }
           const response = await defaultFetch(input, init);
           if (
@@ -1498,6 +1523,10 @@ describe('AgentDetailView', () => {
       expect(label?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
         'Notes (6)'
       );
+      await fetch('/api/v1/operator-notes', {
+        method: 'POST',
+        body: JSON.stringify(sent),
+      });
       // Leaving the tab and coming back reads a fresh page, not the stale one.
       (element as any).activeTab = 'sessions';
       await element.updateComplete;
@@ -1509,11 +1538,68 @@ describe('AgentDetailView', () => {
       expect(label?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
         'Notes (6)'
       );
-      // Older notes continue after the four on screen, with none repeated.
+      await waitUntil(
+        () =>
+          remounted.shadowRoot!.querySelector(
+            '[data-testid="agent-note-note-new"]'
+          ) !== null
+      );
+      const freshRows = Array.from(
+        remounted.shadowRoot!.querySelectorAll('li')
+      );
+      expect(freshRows[0].getAttribute('data-testid')).to.equal(
+        'agent-note-note-new'
+      );
+      // A fresh first page is three rows of six, so three stay behind Older.
       expect(
-        tab.shadowRoot!.querySelector('[data-testid="notes-older"]')
+        remounted.shadowRoot!.querySelector('[data-testid="notes-older"]')
           ?.textContent
-      ).to.contain('(2)');
+      ).to.contain('(3)');
+    });
+
+    it('drops a notes page that arrives after a send', async () => {
+      withNotes(5);
+      const element = await mount();
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/operator-notes')) return pending;
+        return defaultFetch(input);
+      });
+      const loading = (element as any).loadNotesPage();
+      (element as any).activeTab = 'notes';
+      await element.updateComplete;
+      const tab = element.shadowRoot!.querySelector('agent-notes-tab')!;
+      tab.dispatchEvent(
+        new CustomEvent('notes-count-changed', {
+          detail: { total: 6 },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await element.updateComplete;
+      release(
+        new Response(
+          JSON.stringify({
+            notes: [
+              {
+                note_id: 'note-stale',
+                state: 'delivered',
+                text: 'stale',
+                author: { display: 'dimitris', auth_method: 'jwt' },
+              },
+            ],
+            total: 5,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+      await loading;
+      expect((element as any).notesPage).to.equal(null);
+      expect((element as any).notesTotal).to.equal(6);
     });
 
     it('offers no note box or tab to an agent no note can reach', async () => {
