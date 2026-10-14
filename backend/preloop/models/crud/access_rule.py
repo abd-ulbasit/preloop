@@ -17,10 +17,16 @@ from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.db.session import get_engine
-from preloop.schemas.access_rule import AccessRuleDefinition
+from preloop.models.models.access_values import SHARE_RESOURCE_TYPES
+from preloop.schemas.access_rule import (
+    AccessRuleDefinition,
+    ResourceAccessDocument,
+    ResourceAccessPolicy,
+    ResourceAccessUpdate,
+)
 
 RULE_FIELDS = tuple(AccessRuleDefinition.model_fields.keys())
-RESOURCE_MODELS = {
+RESOURCE_MODELS: dict[str, Any] = {
     "ai_model": models.AIModel,
     "mcp_server": models.MCPServer,
     "managed_agent": models.ManagedAgent,
@@ -31,6 +37,7 @@ RESOURCE_MODELS = {
     "policy_baseline": models.PolicySnapshot,
     "tracker": models.Tracker,
     "api_key": models.ApiKey,
+    "account": models.Account,
 }
 
 
@@ -66,6 +73,9 @@ def policy_section(db: Session, account_id: UUID) -> dict[str, Any]:
             )
             for row in rows
         ],
+        "resource_access": [
+            policy.model_dump(mode="json") for policy in _policies(account)
+        ],
         "access_rule_mode": dict(
             (account.meta_data or {}).get("access_rule_mode") or {}
         ),
@@ -93,7 +103,156 @@ def _references(
                 raise AccessReferenceError(f"subject_selector.{field}", reference)
             resolved.append(str(matches[0].id))
         value["subject_selector"][field] = resolved
+    selector = definition.subject_selector
+    if selector.ids:
+        subject_models = {
+            "user": models.User,
+            "agent": models.ManagedAgent,
+            "api_key": models.ApiKey,
+            "flow": models.Flow,
+        }
+        if selector.kind is None:
+            raise AccessReferenceError("subject_selector.kind", "required for IDs")
+        subject_model: Any = subject_models[selector.kind]
+        found = set(
+            db.scalars(
+                select(subject_model.id).where(
+                    subject_model.account_id == account.id,
+                    subject_model.id.in_(selector.ids),
+                )
+            )
+        )
+        if found != set(selector.ids):
+            raise AccessReferenceError("subject_selector.ids", "invalid subject IDs")
+    for resource_id in definition.resource_selector.ids:
+        _resource(db, account.id, definition.resource_type, resource_id)
     return AccessRuleDefinition.model_validate(value)
+
+
+def _resource(
+    db: Session, account_id: UUID, resource_type: str | None, resource_id: UUID
+) -> None:
+    """Resolve exact owner-local identity without exposing foreign resources."""
+    model = RESOURCE_MODELS.get(resource_type) if resource_type is not None else None
+    if model is None:
+        raise AccessReferenceError("resource_type", str(resource_type))
+    owner = model.id if resource_type == "account" else model.account_id
+    if (
+        db.scalar(select(model.id).where(model.id == resource_id, owner == account_id))
+        is None
+    ):
+        raise AccessReferenceError("resource_selector.ids", str(resource_id))
+
+
+def _policies(account: models.Account) -> list[ResourceAccessPolicy]:
+    return [
+        ResourceAccessPolicy.model_validate(
+            {k: v for k, v in item.items() if k != "version"}
+        )
+        for item in (account.meta_data or {}).get("resource_access", [])
+    ]
+
+
+def _managed_ids(account: models.Account) -> set[UUID]:
+    return {key for policy in _policies(account) for key in policy.rule_ids}
+
+
+def _supported_action(resource_type: str, action: str) -> bool:
+    if action == "resource:view":
+        return resource_type in RESOURCE_MODELS
+    if action == "resource:share":
+        return (
+            resource_type in SHARE_RESOURCE_TYPES and resource_type in RESOURCE_MODELS
+        )
+    return {
+        "model:invoke": "ai_model",
+        "tool:call": "mcp_tool",
+        "flow:run": "flow",
+        "runner:accept": "runner",
+    }.get(action) == resource_type
+
+
+def _validate_bindings(
+    db: Session,
+    account: models.Account,
+    policies: list[ResourceAccessPolicy],
+    rules: list[AccessRuleDefinition],
+) -> None:
+    by_id = {rule.id: rule for rule in rules if rule.id}
+    identities = [(policy.resource_type, policy.resource_id) for policy in policies]
+    ids = [key for policy in policies for key in policy.rule_ids]
+    if len(identities) != len(set(identities)) or len(ids) != len(set(ids)):
+        raise AccessRuleConflictError(
+            "duplicate resource identity or local rule binding"
+        )
+    for policy in policies:
+        _resource(db, account.id, policy.resource_type, policy.resource_id)
+        for rule_id in policy.rule_ids:
+            rule = by_id.get(rule_id)
+            if (
+                rule is None
+                or rule.effect != "permit"
+                or not rule.is_enabled
+                or rule.scope != "self"
+                or rule.resource_type != policy.resource_type
+                or rule.resource_selector.ids != [policy.resource_id]
+                or any(
+                    not _supported_action(policy.resource_type, action)
+                    for action in rule.actions
+                )
+            ):
+                raise AccessRuleConflictError(
+                    "local binding requires an enabled owner-local exact-resource permit"
+                )
+        for requirement in policy.requirements:
+            if not _supported_action(policy.resource_type, requirement.action):
+                raise AccessRuleConflictError(
+                    "unsupported resource action/type combination"
+                )
+            for rule_id in requirement.permit_rule_ids:
+                if (
+                    rule_id not in policy.rule_ids
+                    or requirement.action not in by_id[rule_id].actions
+                ):
+                    raise AccessRuleConflictError(
+                        "requirement has a dangling or mismatched local permit"
+                    )
+
+
+def _document(
+    db: Session, account: models.Account, resource_type: str, resource_id: UUID
+) -> ResourceAccessDocument:
+    db.flush()
+    db.refresh(account, attribute_names=["access_rule_generation"])
+    stored: dict[str, Any] = next(
+        (
+            item
+            for item in (account.meta_data or {}).get("resource_access", [])
+            if item["resource_type"] == resource_type
+            and item["resource_id"] == str(resource_id)
+        ),
+        {},
+    )
+    rule_ids = [UUID(key) for key in stored.get("rule_ids", [])]
+    rows = db.scalars(
+        select(models.AccessRule)
+        .where(
+            models.AccessRule.account_id == account.id,
+            models.AccessRule.id.in_(rule_ids),
+        )
+        .order_by(models.AccessRule.priority, models.AccessRule.id)
+    ).all()
+    return ResourceAccessDocument(
+        account_id=account.id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        version=stored.get("version", 0),
+        generation=account.access_rule_generation,
+        rules=[
+            AccessRuleDefinition.model_validate(rule_definition(row)) for row in rows
+        ],
+        requirements=stored.get("requirements", []),
+    )
 
 
 def _record_change(
@@ -200,6 +359,10 @@ class CRUDAccessRule:
             )
             if not account:
                 raise AccessRuleConflictError("account not found")
+            if rule_id in _managed_ids(account):
+                raise AccessRuleConflictError(
+                    "edit local rules through the resource access document"
+                )
             validated = _references(db, definition, account)
             value = validated.model_dump(mode="json", by_alias=True, exclude={"id"})
             if rule_id:
@@ -252,6 +415,10 @@ class CRUDAccessRule:
             )
             if account is None or row is None or row.version != expected_version:
                 raise AccessRuleConflictError("rule is missing, inherited or changed")
+            if rule_id in _managed_ids(account):
+                raise AccessRuleConflictError(
+                    "delete local rules through the resource access document"
+                )
             db.delete(row)
             _record_change(
                 db,
@@ -260,6 +427,132 @@ class CRUDAccessRule:
                 "access_rule_deleted",
                 {"rule_id": str(rule_id)},
             )
+
+    def resource_access(
+        self, *, account_id: UUID, resource_type: str, resource_id: UUID
+    ) -> ResourceAccessDocument:
+        """Read one owner-local resource with consistent version/generation tokens."""
+        with self.session() as db:
+            db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+            account = db.get(models.Account, account_id)
+            if account is None:
+                raise AccessRuleConflictError("account not found")
+            _resource(db, account_id, resource_type, resource_id)
+            return _document(db, account, resource_type, resource_id)
+
+    def write_resource_access(
+        self,
+        *,
+        account_id: UUID,
+        user_id: UUID,
+        resource_type: str,
+        resource_id: UUID,
+        document: ResourceAccessUpdate,
+        expected_version: int,
+        expected_generation: int,
+        losing_subjects: list[dict[str, Any]],
+    ) -> ResourceAccessDocument:
+        """Apply an EE-validated preview atomically; core does not authorize callers.
+
+        EE must validate preview ownership, inputs, generation and impact before
+        calling. Both optimistic tokens are mandatory and checked under owner lock.
+        Requirements add independent ceilings and never alter account modes.
+        """
+        with self.session() as db, db.begin():
+            account = db.scalar(
+                select(models.Account)
+                .where(models.Account.id == account_id)
+                .with_for_update()
+            )
+            if account is None or account.access_rule_generation != expected_generation:
+                raise AccessRuleConflictError("policy changed since preview")
+            _resource(db, account_id, resource_type, resource_id)
+            before = _document(db, account, resource_type, resource_id)
+            if before.version != expected_version:
+                raise AccessRuleConflictError("resource access document changed")
+            rules = [_references(db, rule, account) for rule in document.rules]
+            ids = [rule.id for rule in rules if rule.id is not None]
+            if len(ids) != len(rules) or len(ids) != len(set(ids)):
+                raise AccessRuleConflictError(
+                    "local rules require distinct explicit IDs"
+                )
+            policy = ResourceAccessPolicy(
+                resource_type=resource_type,
+                resource_id=resource_id,
+                rule_ids=ids,
+                requirements=document.requirements,
+            )
+            others = [
+                item
+                for item in _policies(account)
+                if (item.resource_type, item.resource_id)
+                != (resource_type, resource_id)
+            ]
+            existing = db.scalars(
+                select(models.AccessRule).where(
+                    models.AccessRule.account_id == account_id
+                )
+            ).all()
+            old_ids = {rule.id for rule in before.rules if rule.id is not None}
+            for rule in rules:
+                existing_rule = db.get(models.AccessRule, rule.id)
+                if existing_rule is not None and (
+                    existing_rule.account_id != account_id or rule.id not in old_ids
+                ):
+                    raise AccessRuleConflictError(
+                        "local rule identity is already in use"
+                    )
+            resulting = [
+                AccessRuleDefinition.model_validate(rule_definition(row))
+                for row in existing
+                if row.id not in old_ids
+            ] + rules
+            _validate_bindings(db, account, [*others, policy], resulting)
+            by_id = {row.id: row for row in existing}
+            for rule in rules:
+                value = rule.model_dump(mode="json", by_alias=True, exclude={"id"})
+                row = by_id.get(rule.id) if rule.id is not None else None
+                if row is None:
+                    db.add(
+                        models.AccessRule(
+                            id=rule.id,
+                            account_id=account_id,
+                            created_by=user_id,
+                            **value,
+                        )
+                    )
+                else:
+                    for key, field in value.items():
+                        setattr(row, key, field)
+                    row.version += 1
+            for rule_id in old_ids - set(ids):
+                db.delete(by_id[rule_id])
+            metadata = dict(account.meta_data or {})
+            stored = [
+                item
+                for item in metadata.get("resource_access", [])
+                if (item["resource_type"], item["resource_id"])
+                != (resource_type, str(resource_id))
+            ]
+            # Retain an empty tombstone so stale version tokens cannot replay.
+            stored.append(
+                {**policy.model_dump(mode="json"), "version": before.version + 1}
+            )
+            metadata["resource_access"] = stored
+            account.meta_data = metadata
+            _record_change(
+                db,
+                account_id,
+                user_id,
+                "resource_access_saved",
+                {
+                    "resource_type": resource_type,
+                    "resource_id": str(resource_id),
+                    "losing_subjects": losing_subjects,
+                },
+                resource_type="resource_access",
+            )
+            return _document(db, account, resource_type, resource_id)
 
     def set_mode(
         self,
@@ -457,6 +750,8 @@ class CRUDAccessRule:
                 }
             resources = {}
             for kind, model in RESOURCE_MODELS.items():
+                if kind == "account":
+                    continue
                 # Select identifiers only: owner tokens, agent system metadata and
                 # arbitrary customer config never enter this cache or explain DTOs.
                 columns = [model.id, model.account_id]
@@ -639,6 +934,11 @@ class CRUDAccessRule:
                 "rules": applicable,
                 "modes": modes,
                 "ancestor_require_permit": sorted(ancestor_require_permit),
+                "resource_access": [
+                    {**policy.model_dump(mode="json"), "account_id": str(owner.id)}
+                    for owner in account_rows
+                    for policy in _policies(owner)
+                ],
                 "subjects": subjects,
                 "resources": resources,
                 "key_agents": key_agents,
@@ -698,6 +998,7 @@ def validate_policy_section(
     account_id: UUID,
     rules: list[AccessRuleDefinition] | None,
     modes: dict[str, str] | None,
+    resource_access: list[ResourceAccessPolicy] | None = None,
 ) -> list[AccessRuleDefinition]:
     """Validate import without letting YAML bypass audited mode preview."""
     account = db.get(models.Account, account_id)
@@ -723,6 +1024,52 @@ def validate_policy_section(
                 raise AccessRuleConflictError(
                     "access rule identity belongs to another account"
                 )
+    current_policies = _policies(account)
+    incoming = current_policies if resource_access is None else resource_access
+    current_by_key = {
+        (item.resource_type, item.resource_id): item for item in current_policies
+    }
+    for item in incoming:
+        before = current_by_key.get((item.resource_type, item.resource_id))
+        if item.requirements and (
+            before is None or item.requirements != before.requirements
+        ):
+            raise AccessRuleConflictError(
+                "resource require_permit requires the resource access preview application path"
+            )
+    resulting = (
+        validated
+        if rules is not None
+        else [
+            AccessRuleDefinition.model_validate(rule_definition(row))
+            for row in db.scalars(
+                select(models.AccessRule).where(
+                    models.AccessRule.account_id == account_id
+                )
+            )
+        ]
+    )
+    _validate_bindings(db, account, incoming, resulting)
+    resulting_by_id = {rule.id: rule for rule in resulting}
+    incoming_ids = {key for item in incoming for key in item.rule_ids}
+    detached = _managed_ids(account) - incoming_ids
+    if detached.intersection(resulting_by_id):
+        raise AccessRuleConflictError(
+            "remove detached local permits with their resource binding"
+        )
+    # Editing permit subjects/conditions can tighten an existing local gate just
+    # as changing its links can. YAML roundtrips are allowed; edits use preview.
+    for item in incoming:
+        if not item.requirements:
+            continue
+        for rule_id in item.rule_ids:
+            stored = db.get(models.AccessRule, rule_id)
+            if stored is not None and resulting_by_id[
+                rule_id
+            ] != AccessRuleDefinition.model_validate(rule_definition(stored)):
+                raise AccessRuleConflictError(
+                    "local permit changes require the resource access preview application path"
+                )
     return validated
 
 
@@ -732,13 +1079,14 @@ def apply_policy_section(
     user_id: UUID | None,
     rules: list[AccessRuleDefinition] | None,
     modes: dict[str, str] | None,
+    resource_access: list[ResourceAccessPolicy] | None = None,
 ) -> None:
     account = db.scalar(
         select(models.Account).where(models.Account.id == account_id).with_for_update()
     )
     if not account:
         raise AccessRuleConflictError("account not found")
-    validated = validate_policy_section(db, account_id, rules, modes)
+    validated = validate_policy_section(db, account_id, rules, modes, resource_access)
     if rules is not None:
         existing = db.scalars(
             select(models.AccessRule).where(models.AccessRule.account_id == account_id)
@@ -768,5 +1116,20 @@ def apply_policy_section(
     if modes is not None:
         metadata = dict(account.meta_data or {})
         metadata["access_rule_mode"] = dict(modes)
+        account.meta_data = metadata
+    if resource_access is not None:
+        metadata = dict(account.meta_data or {})
+        versions = {
+            (item["resource_type"], item["resource_id"]): item.get("version", 0)
+            for item in metadata.get("resource_access", [])
+        }
+        metadata["resource_access"] = [
+            {
+                **item.model_dump(mode="json"),
+                "version": versions.get((item.resource_type, str(item.resource_id)), 0)
+                + 1,
+            }
+            for item in resource_access
+        ]
         account.meta_data = metadata
     _record_change(db, account_id, user_id, "access_rules_imported", {})
