@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/checkbox/checkbox.js';
 import '@shoelace-style/shoelace/dist/components/dialog/dialog.js';
+import type SlDialog from '@shoelace-style/shoelace/dist/components/dialog/dialog.component.js';
 import '@shoelace-style/shoelace/dist/components/popup/popup.js';
 import '@shoelace-style/shoelace/dist/components/radio/radio.js';
 import '@shoelace-style/shoelace/dist/components/radio-group/radio-group.js';
@@ -32,6 +33,14 @@ import {
   type Tags,
 } from '../../../hierarchy-api';
 import { formatTags, parseTags } from './tags';
+import {
+  getResourceAccess,
+  loadSubjectOptions,
+  RESOURCE_ACTIONS,
+  type ResourceSummary,
+  type SubjectOption,
+} from '../../../access-policy-api';
+import './resource-policy-editor';
 
 // Tag support is independent of sharing, notably for flows, policies and pools.
 const TAG_PERMISSIONS: Record<string, string> = {
@@ -188,6 +197,12 @@ export class ResourceAccessPanel extends LitElement {
   `;
   @property({ attribute: false }) context: Record<string, unknown> = {};
   @property({ attribute: false }) capabilities: CapabilitySet = NO_CAPABILITIES;
+  @state() private policyState: Section = 'off';
+  @state() private policy: ResourceSummary | null = null;
+  @state() private subjects: SubjectOption[] = [];
+  private profilePermissions: string[] | null = [];
+  @state() private policyError = '';
+  @state() private policyBusy = false;
   @state() private shareState: Section = 'off';
   @state() private tagState: Section = 'off';
   @state() private shares: Share[] = [];
@@ -278,6 +293,10 @@ export class ResourceAccessPanel extends LitElement {
     const id = this.resourceId,
       kind = this.kind;
     this.editor = null;
+    this.policyBusy = false;
+    this.policy = null;
+    this.subjects = [];
+    this.policyError = '';
     this.accessDraftReady = false;
     this.saving = false;
     this.shares = [];
@@ -293,18 +312,26 @@ export class ResourceAccessPanel extends LitElement {
       !this.readOnly &&
       this.capabilities.has('resource_sharing') &&
       SHAREABLE_KINDS.includes(kind as ShareableKind);
+    const wantPolicy =
+      Boolean(id) &&
+      this.capabilities.has('resource_access') &&
+      kind in RESOURCE_ACTIONS;
     const wantTags =
       Boolean(id) &&
       this.capabilities.has('abac_rules') &&
       kind in TAG_PERMISSIONS;
+    this.policyState = wantPolicy ? 'loading' : 'off';
     this.shareState = wantShares ? 'loading' : 'off';
     this.tagState = wantTags ? 'loading' : 'off';
     // A directly mounted OSS panel also makes zero API requests.
-    if (!wantShares && !wantTags) return;
+    if (!wantShares && !wantTags && !wantPolicy) return;
     try {
       const profile = await getUserProfile();
       if (generation !== this.generation) return;
       this.accountId = profile.account_id;
+      this.profilePermissions = profile.permissions ?? null;
+      if (wantPolicy && !hasPermission(profile.permissions, 'view_policies'))
+        this.policyState = 'off';
       this.canShare =
         !this.readOnly && hasPermission(profile.permissions, 'manage_account');
       this.canTag =
@@ -312,6 +339,10 @@ export class ResourceAccessPanel extends LitElement {
         hasPermission(profile.permissions, TAG_PERMISSIONS[kind]);
     } catch (error) {
       if (generation !== this.generation) return;
+      if (wantPolicy) {
+        this.policyState = 'error';
+        this.policyError = this.message(error);
+      }
       if (wantShares) {
         this.shareState = 'error';
         this.shareError = this.message(error);
@@ -325,11 +356,30 @@ export class ResourceAccessPanel extends LitElement {
     // The owner sharing collection requires manage_account; never probe as a viewer.
     if (wantShares && !this.canShare) this.shareState = 'off';
     await Promise.all([
+      wantPolicy && this.policyState !== 'off'
+        ? this.loadPolicy(generation, kind, id)
+        : null,
       wantShares && this.canShare
         ? this.loadShares(generation, kind, id)
         : null,
       wantTags ? this.loadTags(generation, kind, id) : null,
     ]);
+  }
+  private async loadPolicy(
+    generation: number,
+    kind: string,
+    id: string
+  ): Promise<void> {
+    try {
+      const value = await getResourceAccess(kind, id);
+      if (generation !== this.generation) return;
+      this.policy = value;
+      this.policyState = 'on';
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.policyState = 'error';
+      this.policyError = this.message(error);
+    }
   }
   private async loadShares(
     generation: number,
@@ -391,11 +441,33 @@ export class ResourceAccessPanel extends LitElement {
     );
     this.editor = editor;
     await this.updateComplete;
-    if (!this.narrow)
+    if (this.narrow) {
+      // Open after the dialog's first render so Shoelace runs its focus path.
+      const dialog = this.renderRoot.querySelector<SlDialog>('sl-dialog');
+      if (dialog) {
+        await dialog.updateComplete;
+        void dialog.show();
+      }
+    } else
       this.renderRoot
         .querySelector<HTMLElement>('[data-editor] [autofocus]')
         ?.focus();
-    if (editor === 'access' && this.capabilities.has('abac_rules')) {
+    if (editor === 'access' && this.policyState === 'on') {
+      const generation = this.generation;
+      try {
+        const subjects = await loadSubjectOptions(this.profilePermissions);
+        if (generation === this.generation) this.subjects = subjects;
+      } catch (error) {
+        if (generation === this.generation)
+          this.policyError = `Directory names unavailable: ${this.message(error)}`;
+      }
+    }
+    if (
+      editor === 'access' &&
+      this.capabilities.has('abac_rules') &&
+      this.canShare &&
+      this.shareState === 'on'
+    ) {
       const generation = this.generation;
       try {
         const rules = await listSharingRules();
@@ -437,7 +509,7 @@ export class ResourceAccessPanel extends LitElement {
     if (this.shareState === 'off') this.close();
   };
   private close(restoreFocus = true): void {
-    if (this.saving) return;
+    if (this.saving || this.policyBusy) return;
     this.editor = null;
     this.error = '';
     if (
@@ -602,6 +674,50 @@ export class ResourceAccessPanel extends LitElement {
     }
   };
   private renderAccess() {
+    return html`
+      ${
+        this.policyState === 'error'
+          ? html`<p class="error" role="alert">
+                Could not inspect resource access: ${this.policyError}
+              </p>
+              <sl-button
+                size="small"
+                @click=${() => this.loadPolicy(this.generation, this.kind, this.resourceId)}
+                >Retry access</sl-button
+              >`
+          : nothing
+      }
+      ${
+        this.policy
+          ? html`<resource-policy-editor
+              autofocus
+              tabindex="-1"
+              .summary=${this.policy}
+              .subjects=${this.subjects}
+              .readOnly=${this.readOnly}
+              .disabled=${this.saving && !this.policyBusy}
+              @resource-summary=${(event: CustomEvent<ResourceSummary>) => {
+                this.saving = false;
+                this.policyBusy = false;
+                this.policy = event.detail;
+                this.close();
+              }}
+              @resource-reloaded=${(event: CustomEvent<ResourceSummary>) => {
+                this.policy = event.detail;
+              }}
+              @resource-busy=${(event: CustomEvent<boolean>) => {
+                this.policyBusy = event.detail;
+                this.saving = event.detail;
+              }}
+              @access-close=${() => this.close()}
+            ></resource-policy-editor>`
+          : nothing
+      }
+      ${this.policyError && this.policyState === 'on' ? html`<p class="muted">${this.policyError}</p>` : nothing}
+      ${this.shareState === 'on' || this.shareState === 'error' ? this.renderSharing() : nothing}
+    `;
+  }
+  private renderSharing() {
     return html`<section aria-labelledby="subaccounts-heading">
       <p class="muted">
         Account defaults describe policy configuration. They do not mean
@@ -816,24 +932,38 @@ export class ResourceAccessPanel extends LitElement {
           @click=${() => this.close()}
           >${editable ? 'Cancel' : 'Close'}</sl-button
         >
-        ${editable ? html`<sl-button size="small" variant="primary" data-testid="editor-save" ?disabled=${this.editor === 'access' && this.shareState === 'error'} ?loading=${this.saving} @click=${this.editor === 'access' ? this.saveShares : this.saveTags}>Save</sl-button>` : nothing}
+        ${editable ? html`<sl-button size="small" variant="primary" data-testid="editor-save" ?disabled=${this.editor === 'access' && this.shareState === 'error'} ?loading=${this.saving} @click=${this.editor === 'access' ? this.saveShares : this.saveTags}>${this.editor === 'access' && this.policy ? 'Save subaccount sharing' : 'Save'}</sl-button>` : nothing}
       </div>
     </div>`;
   }
   render() {
-    const access = this.shareState === 'on' || this.shareState === 'error',
+    const access =
+        this.shareState === 'on' ||
+        this.shareState === 'error' ||
+        this.policyState === 'on' ||
+        this.policyState === 'error',
       tags = this.tagState === 'on' || this.tagState === 'error';
     const inherited =
       Boolean(this.context.sharedFrom) &&
       this.capabilities.has('resource_sharing');
     if (!access && !tags && !inherited) return nothing;
     const names = this.shareNames();
+    const policyLabel = this.policy?.document.requirements.length
+      ? 'Restricted'
+      : 'Account defaults';
+    const sharedCount = new Set(
+      this.shares.flatMap((share) => share.recipient_account_ids)
+    ).size;
     const summary =
-      this.shareState === 'error'
+      this.policyState === 'error'
         ? 'Unavailable'
-        : names.length
-          ? `Shared with ${names.slice(0, 2).join(', ')}`
-          : 'Account defaults';
+        : this.policyState === 'on'
+          ? `${policyLabel}${sharedCount ? ` · Shared with ${sharedCount} subaccounts` : ''}`
+          : this.shareState === 'error'
+            ? 'Unavailable'
+            : names.length
+              ? `Shared with ${names.slice(0, 2).join(', ')}`
+              : 'Account defaults';
     const tagNames = Object.entries(this.tags).map(
       ([key, value]) => `${key}=${value}`
     );
@@ -848,16 +978,9 @@ export class ResourceAccessPanel extends LitElement {
             ? html`<sl-dialog
                 id="resource-editor"
                 label=${this.editor === 'access' ? 'Resource access' : 'Tags'}
-                open
                 @sl-request-close=${(e: Event) => {
                   e.preventDefault();
                   this.close();
-                }}
-                @sl-initial-focus=${(e: Event) => {
-                  e.preventDefault();
-                  this.renderRoot
-                    .querySelector<HTMLElement>('[data-editor] [autofocus]')
-                    ?.focus();
                 }}
                 >${this.renderEditor()}</sl-dialog
               >`
