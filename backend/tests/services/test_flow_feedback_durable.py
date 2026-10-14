@@ -269,13 +269,17 @@ def database() -> Generator[Engine, None, None]:
     with engine.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         for name in (
-            "account",
+            "user",
             "tracker",
             "secret_reference",
             "ci_principal",
             "api_key",
         ):
             conn.execute(text(f'CREATE TABLE "{name}" (id UUID PRIMARY KEY)'))
+        # Flow deletion also cleans resource access in the same transaction.
+        # Keep its owning account and access-rule tables faithful to that path.
+        models.Account.__table__.create(conn)
+        models.AccessRule.__table__.create(conn)
         models.AIModel.__table__.create(conn)
         models.Flow.__table__.create(conn)
         models.FlowExecution.__table__.create(conn)
@@ -292,8 +296,8 @@ def database() -> Generator[Engine, None, None]:
 
 def create_thread(db: Session) -> models.FlowThread:
     account, tracker = uuid.uuid4(), uuid.uuid4()
-    for table, key in (("account", account), ("tracker", tracker)):
-        db.execute(text(f'INSERT INTO "{table}" (id) VALUES (:id)'), {"id": key})
+    db.add(models.Account(id=account, organization_name="Feedback test account"))
+    db.execute(text('INSERT INTO "tracker" (id) VALUES (:id)'), {"id": tracker})
     model = models.AIModel(
         id=uuid.uuid4(),
         account_id=account,
@@ -1451,7 +1455,6 @@ async def test_native_repair_resolves_encrypted_workspace_and_selected_session(
             quota_bytes: int,
             require_execution_open: bool = True,
         ) -> models.FlowArtifact:
-            # This fixture's minimal account table omits unrelated account fields.
             # Exercise real encrypted artifact service plus real scoped rows.
             row = models.FlowArtifact(**values)
             session.add(row)
