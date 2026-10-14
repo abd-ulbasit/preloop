@@ -189,6 +189,8 @@ export class AgentDetailView extends LitElement {
     total: number;
   } | null = null;
   private notesPageAgentId = '';
+  /** The tab label's count; follows sends without replacing the page. */
+  @state() private notesTotal: number | null = null;
 
   /**
    * Online desktop endpoints linked to this agent (#870). Empty while the
@@ -1669,7 +1671,10 @@ export class AgentDetailView extends LitElement {
   private async loadNotesPage(): Promise<void> {
     const agentId = this.agentId;
     if (!agentId) return;
-    if (this.notesPageAgentId !== agentId) this.notesPage = null;
+    if (this.notesPageAgentId !== agentId) {
+      this.notesPage = null;
+      this.notesTotal = null;
+    }
     try {
       const page = await listOperatorNotesPage({
         agentId,
@@ -1678,9 +1683,13 @@ export class AgentDetailView extends LitElement {
       if (agentId !== this.agentId) return;
       this.notesPageAgentId = agentId;
       this.notesPage = page;
+      this.notesTotal = page.total;
     } catch {
       // No count is fine: the tab still opens and reads its own page.
-      if (agentId === this.agentId) this.notesPage = null;
+      if (agentId === this.agentId) {
+        this.notesPage = null;
+        this.notesTotal = null;
+      }
     }
   }
 
@@ -1707,11 +1716,7 @@ export class AgentDetailView extends LitElement {
               this.notesPageAgentId === this.agentId ? this.notesPage : null
             }
             @notes-count-changed=${(event: CustomEvent<{ total: number }>) => {
-              if (this.notesPage)
-                this.notesPage = {
-                  ...this.notesPage,
-                  total: event.detail.total,
-                };
+              this.notesTotal = event.detail.total;
             }}
           ></agent-notes-tab>
         </div>
@@ -3338,14 +3343,16 @@ export class AgentDetailView extends LitElement {
                     : nothing
                 }
                 ${
-                  this.canSendNotes || (this.notesPage?.total ?? 0) > 0
+                  this.canSendNotes || (this.notesTotal ?? 0) > 0
                     ? html`<sl-tab
                         slot="nav"
                         panel="notes"
                         data-testid="notes-tab"
                         ?active=${this.activeTab === 'notes'}
                         >Notes${
-                          this.notesPage ? ` (${this.notesPage.total})` : ''
+                          this.notesTotal !== null
+                            ? ` (${this.notesTotal})`
+                            : ''
                         }</sl-tab
                       >`
                     : nothing

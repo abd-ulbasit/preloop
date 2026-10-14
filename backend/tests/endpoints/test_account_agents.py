@@ -1916,8 +1916,9 @@ def test_account_agent_detail_includes_credentials_and_enrollments(
     assert body["agent"]["onboarding_state"] == "mcp_proxy_only"
     assert body["agent"]["mcp_proxy_configured"] is True
     assert body["agent"]["model_gateway_configured"] is False
-    # MCP proxy only, no gateway traffic, no note hook: no note box.
-    assert body["agent"]["supports_operator_notes"] is False
+    # MCP proxy only and no gateway traffic, but OpenClaw's lifecycle plugin
+    # carries notes, so the box stays.
+    assert body["agent"]["supports_operator_notes"] is True
     assert (
         bootstrap_enrollment["managed_config"]["runtime_session_id"]
         == (token_response.json()["runtime_session_id"])

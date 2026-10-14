@@ -1172,6 +1172,48 @@ describe('AgentDetailView', () => {
       );
     });
 
+    it('keeps a sent note in the tab and counts it', async () => {
+      withNotes(5);
+      const element = await mount();
+      (element as any).activeTab = 'notes';
+      await element.updateComplete;
+      const tab = element.shadowRoot!.querySelector('agent-notes-tab')!;
+      await (tab as any).updateComplete;
+      expect(tab.shadowRoot!.querySelectorAll('li')).to.have.length(3);
+      const sent = {
+        note_id: 'note-new',
+        state: 'pending',
+        text: 'Rebase first.',
+        author: { display: 'dimitris', auth_method: 'jwt' },
+      };
+      const composer = tab.shadowRoot!.querySelector('operator-note-composer')!;
+      composer.dispatchEvent(
+        new CustomEvent('operator-note-sent', {
+          detail: sent,
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await element.updateComplete;
+      await (tab as any).updateComplete;
+      const rows = Array.from(tab.shadowRoot!.querySelectorAll('li'));
+      expect(rows).to.have.length(4);
+      expect(rows[0].getAttribute('data-testid')).to.equal(
+        'agent-note-note-new'
+      );
+      const label = element.shadowRoot!.querySelector(
+        '[data-testid="notes-tab"]'
+      );
+      expect(label?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
+        'Notes (6)'
+      );
+      // Older notes continue after the four on screen, with none repeated.
+      expect(
+        tab.shadowRoot!.querySelector('[data-testid="notes-older"]')
+          ?.textContent
+      ).to.contain('(2)');
+    });
+
     it('offers no note box or tab to an agent no note can reach', async () => {
       withNotes(0, { supports_operator_notes: false });
       const element = await mount();

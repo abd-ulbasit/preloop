@@ -159,7 +159,14 @@ export class AgentNotesTab extends LitElement {
   `;
 
   protected willUpdate(changed: Map<string, unknown>): void {
-    if (changed.has('initial') && this.initial) {
+    // Seed once per agent. A later page object from the host (for example
+    // its count after a send) must not replace notes this tab added, paged
+    // or expanded itself.
+    if (
+      changed.has('initial') &&
+      this.initial &&
+      this.loadedFor !== this.agentId
+    ) {
       this.notes = this.initial.notes;
       this.total = this.initial.total;
       this.loadedFor = this.agentId;

@@ -77,8 +77,14 @@ DELIVERY_CHANNELS = (
     CHANNEL_CLAUDE_MESSAGE,
 )
 
-#: Harnesses whose hook pulls notes when the agent bypasses the gateway.
-HOOK_NOTE_AGENT_KINDS = frozenset({"claude_code", "cursor", "opencode"})
+#: Harnesses with a native note carrier when the agent bypasses the gateway:
+#: the permission hook (Claude Code, Codex CLI, Cursor CLI) or a lifecycle
+#: plugin (OpenCode, Hermes, OpenClaw, DeepSeek Harness). Mirrors the carrier
+#: table in docs/guide/operator-notes.md. Kinds left out (Devin, Copilot CLI,
+#: Gemini, Windsurf, Pi, Nanobot) carry notes only on gateway model requests.
+HOOK_NOTE_AGENT_KINDS = frozenset(
+    {"claude_code", "codex", "cursor", "opencode", "hermes", "openclaw", "deepseek"}
+)
 
 
 def agent_supports_notes(
