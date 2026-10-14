@@ -20,10 +20,11 @@ import (
 const inventoryDetectorVersion = "1"
 
 type inventoryProbeResult struct {
-	AppID     string `json:"app_id"`
-	Kind      string `json:"kind"`
-	Status    string `json:"status"`
-	ErrorCode string `json:"error_code,omitempty"`
+	AppID      string `json:"app_id"`
+	ProfileRef string `json:"profile_ref,omitempty"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	ErrorCode  string `json:"error_code,omitempty"`
 }
 
 type inventoryMCPCounts struct {
@@ -33,6 +34,7 @@ type inventoryMCPCounts struct {
 
 type inventoryApp struct {
 	AppID         string             `json:"app_id"`
+	ProfileRef    string             `json:"profile_ref,omitempty"`
 	Presence      string             `json:"presence"`
 	EvidenceKinds []string           `json:"evidence_kinds"`
 	Usage         string             `json:"usage"`
@@ -48,25 +50,29 @@ type inventoryEnvelope struct {
 		DetectorVersion string `json:"detector_version"`
 	} `json:"collector"`
 	Scope struct {
-		User     string `json:"user"`
-		Coverage string `json:"coverage"`
+		User      string `json:"user"`
+		Coverage  string `json:"coverage"`
+		ErrorCode string `json:"error_code,omitempty"`
 	} `json:"scope"`
-	Completeness string                 `json:"completeness"`
-	ProbeResults []inventoryProbeResult `json:"probe_results"`
-	Apps         []inventoryApp         `json:"apps"`
+	Profiles     []inventoryProfileResult `json:"profiles,omitempty"`
+	Completeness string                   `json:"completeness"`
+	ProbeResults []inventoryProbeResult   `json:"probe_results"`
+	Apps         []inventoryApp           `json:"apps"`
 }
 
 // These are the collector's entire I/O surface. In particular there is no
 // credential resolver, auth/keychain probe, network client, writer, or process
 // runner. Runtime lookup resolves paths; it never executes the result.
 type inventoryProbeDependencies struct {
-	Home     func() (string, error)
-	Stat     func(string) (os.FileInfo, error)
-	ReadFile func(string) ([]byte, error)
-	LookPath func(string) (string, error)
-	Glob     func(string) ([]string, error)
-	Now      func() time.Time
-	GOOS     string
+	Home        func() (string, error)
+	Stat        func(string) (os.FileInfo, error)
+	ReadFile    func(string) ([]byte, error)
+	LookPath    func(string) (string, error)
+	Glob        func(string) ([]string, error)
+	Now         func() time.Time
+	ConfigPaths func(agentSpec) []string
+	ProfileOnly bool
+	GOOS        string
 }
 
 var inventoryProbes = inventoryProbeDependencies{
@@ -103,6 +109,10 @@ func runAgentsInventory(cmd *cobra.Command) error {
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
+	allUsers, _ := cmd.Flags().GetBool("all-users")
+	if allUsers {
+		return runAllUsersInventory(cmd.OutOrStdout(), false)
+	}
 	return enc.Encode(collectAgentInventory(inventoryProbes))
 }
 
@@ -122,7 +132,7 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 		}
 		app := inventoryApp{AppID: id, Presence: "absent", EvidenceKinds: []string{}, Usage: "unknown", Auth: "unknown"}
 		addProbe := func(kind, status, code string) {
-			result.ProbeResults = append(result.ProbeResults, inventoryProbeResult{id, kind, status, code})
+			result.ProbeResults = append(result.ProbeResults, inventoryProbeResult{AppID: id, Kind: kind, Status: status, ErrorCode: code})
 			if status == "error" || status == "unknown" {
 				result.Completeness = "partial"
 				if app.Presence == "absent" {
@@ -144,7 +154,11 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 			result.Apps = append(result.Apps, app)
 			continue
 		}
-		for _, path := range configPathsForAgentSpec(home, spec) {
+		paths := configPathsForAgentSpec
+		if deps.ConfigPaths != nil {
+			paths = func(_ string, s agentSpec) []string { return deps.ConfigPaths(s) }
+		}
+		for _, path := range paths(home, spec) {
 			status, code := inventoryStat(deps, path)
 			if status == "present" {
 				// Config existence is evidence even when its contents cannot be
@@ -168,7 +182,11 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 		}
 		for _, relative := range spec.DetectionPaths {
 			// Includes credential-artifact markers: stat only, never ReadFile.
-			status, code := inventoryStat(deps, expandAgentConfigPath(home, filepath.Join(home, relative)))
+			path := filepath.Join(home, relative)
+			if !deps.ProfileOnly {
+				path = expandAgentConfigPath(home, path)
+			}
+			status, code := inventoryStat(deps, path)
 			addProbe("install_marker", status, code)
 		}
 		status, code := inventoryRuntimePresence(deps, home, spec)
@@ -192,6 +210,9 @@ func inventoryStat(deps inventoryProbeDependencies, path string) (string, string
 }
 
 func inventoryRuntimePresence(deps inventoryProbeDependencies, home string, spec agentSpec) (string, string) {
+	if deps.ProfileOnly {
+		return "unknown", "runtime_profile_unverified"
+	}
 	probe, known := agentRuntimeProbes[strings.ToLower(spec.Name)]
 	if !known {
 		return "unknown", "runtime_unsupported"

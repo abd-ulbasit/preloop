@@ -608,6 +608,22 @@ def compute_policy_diff(
             )
         )
 
+    if current.resource_access != incoming.resource_access:
+        changes.append(
+            PolicyDiffItem(
+                path="$.resource_access",
+                operation="modify",
+                old_value=[
+                    item.model_dump(mode="json")
+                    for item in current.resource_access or []
+                ],
+                new_value=[
+                    item.model_dump(mode="json")
+                    for item in incoming.resource_access or []
+                ],
+            )
+        )
+
     # Compare model I/O rules by id
     def _model_io_name(item: Any) -> str:
         return item.id
@@ -846,7 +862,11 @@ class PolicyApplier:
                     self._result.errors.append(error)
                 return self._result
 
-            if policy.access_rules is not None or policy.access_rule_mode is not None:
+            if (
+                policy.access_rules is not None
+                or policy.access_rule_mode is not None
+                or policy.resource_access is not None
+            ):
                 from preloop.models.crud.access_rule import validate_policy_section
 
                 validate_policy_section(
@@ -854,6 +874,7 @@ class PolicyApplier:
                     UUID(self.account_id),
                     policy.access_rules,
                     policy.access_rule_mode,
+                    policy.resource_access,
                 )
 
             if policy.resource_shares is not None:
@@ -891,7 +912,9 @@ class PolicyApplier:
                 return self._result
 
             if not dry_run and (
-                policy.access_rules is not None or policy.access_rule_mode is not None
+                policy.access_rules is not None
+                or policy.access_rule_mode is not None
+                or policy.resource_access is not None
             ):
                 from preloop.models.crud.access_rule import apply_policy_section
 
@@ -901,6 +924,7 @@ class PolicyApplier:
                     UUID(self.actor_id) if self.actor_id else None,
                     policy.access_rules,
                     policy.access_rule_mode,
+                    policy.resource_access,
                 )
 
             if not dry_run and policy.resource_shares is not None:
@@ -1934,6 +1958,8 @@ def export_current_policy(
     account_access = policy_section(db, UUID(account_id_str)) if account else {}
     if account_access.get("access_rules"):
         document_fields["access_rules"] = account_access["access_rules"]
+    if account_access.get("resource_access"):
+        document_fields["resource_access"] = account_access["resource_access"]
     if account_access.get("access_rule_mode"):
         document_fields["access_rule_mode"] = account_access["access_rule_mode"]
     try:

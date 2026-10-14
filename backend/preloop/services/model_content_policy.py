@@ -30,9 +30,9 @@ import io
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from anyio import from_thread
 from sqlalchemy.exc import SQLAlchemyError
@@ -59,6 +59,7 @@ from preloop.services.policy.schema import (
 from preloop.services.policy_notices import (
     PolicyNotice,
     build_excerpt,
+    schedule_policy_match_hit,
     schedule_policy_notice,
 )
 from preloop.services.policy_evaluator import (
@@ -628,6 +629,56 @@ def _uuid_or_none(value: Any) -> Optional[UUID]:
         return None
 
 
+def _model_alias_from_ai_model(ai_model: Any) -> Optional[str]:
+    """Gateway model name from a resolved model, when it has one."""
+    if ai_model is None:
+        return None
+    for attr in ("model_identifier", "name"):
+        value = getattr(ai_model, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:255]
+    return None
+
+
+def _requested_model_alias(
+    payload: Optional[Dict[str, Any]], ai_model: Any
+) -> Optional[str]:
+    """Client-requested model, else the resolved model's own name."""
+    if isinstance(payload, dict):
+        model = payload.get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()[:255]
+    return _model_alias_from_ai_model(ai_model)
+
+
+def _agent_ref_from_gateway(gateway: Any) -> Optional[str]:
+    """Runtime principal as ``type:id``, or the managed agent id."""
+    auth = getattr(gateway, "auth_context", None)
+    api_key = getattr(auth, "api_key", None)
+    context = getattr(api_key, "context_data", None)
+    principal = context.get("runtime_principal") if isinstance(context, dict) else None
+    if isinstance(principal, dict):
+        raw_type = principal.get("type")
+        raw_id = principal.get("id")
+        type_text = raw_type.strip().lower() if isinstance(raw_type, str) else ""
+        if isinstance(raw_id, str):
+            id_text = raw_id.strip()
+        elif raw_id is None:
+            id_text = ""
+        else:
+            id_text = str(raw_id).strip()
+        if type_text and id_text:
+            return f"{type_text}:{id_text}"[:255]
+        if id_text:
+            return id_text[:255]
+        if type_text:
+            return type_text[:255]
+    managed = getattr(gateway, "_resolved_managed_agent_id", None)
+    if managed:
+        return str(managed)[:255]
+    return None
+
+
 def _build_notice(
     *,
     rule: ModelIORule,
@@ -637,6 +688,9 @@ def _build_notice(
     digest: str,
     account_id: Optional[Any],
     user_id: Optional[Any],
+    model_alias: Optional[str] = None,
+    agent_ref: Optional[str] = None,
+    runtime_session_id: Optional[Any] = None,
 ) -> Optional[PolicyNotice]:
     account_uuid = _uuid_or_none(account_id)
     if account_uuid is None:
@@ -650,6 +704,9 @@ def _build_notice(
         text_sha256=digest,
         excerpt=build_excerpt(text, condition.expression),
         approval_workflow=rule.approval_workflow,
+        model_alias=model_alias,
+        agent_ref=agent_ref,
+        runtime_session_id=_uuid_or_none(runtime_session_id),
     )
 
 
@@ -659,11 +716,12 @@ def _emit_notices(
 ) -> None:
     """Audit and record every notify hit. Never raises."""
     for notice in notices:
+        stamped = replace(notice, audit_event_id=notice.audit_event_id or uuid4())
         try:
-            _audit_notice(notice, rules_by_id.get(notice.rule_id))
+            _audit_notice(stamped, rules_by_id.get(stamped.rule_id))
         except Exception:  # noqa: BLE001 - notify must never fail the call
             logger.warning("Policy notice audit failed", exc_info=True)
-        schedule_policy_notice(notice)
+        schedule_policy_notice(stamped)
 
 
 def evaluate_model_io(
@@ -677,6 +735,9 @@ def evaluate_model_io(
     user_id: Optional[Any] = None,
     detector_config: Optional[DetectorConfig] = None,
     record: bool = True,
+    model_alias: Optional[str] = None,
+    agent_ref: Optional[str] = None,
+    runtime_session_id: Optional[Any] = None,
 ) -> ModelIODecision:
     """Evaluate model I/O rules for one target.
 
@@ -694,6 +755,8 @@ def evaluate_model_io(
     evaluate is skipped rather than denying.
     """
     digest = _text_privacy(text)
+    resolved_alias = model_alias or _model_alias_from_ai_model(ai_model)
+    resolved_session = _uuid_or_none(runtime_session_id)
     if not rules:
         return ModelIODecision(
             action="allow",
@@ -734,8 +797,19 @@ def evaluate_model_io(
                     detector_summary=summary.as_dict(),
                     text_sha256=digest,
                 )
-                if record:
-                    _audit_decision(account_id, user_id, target, decision, rule)
+                _record_blocking_hit(
+                    record=record,
+                    account_id=account_id,
+                    user_id=user_id,
+                    target=target,
+                    decision=decision,
+                    rule=rule,
+                    text=text,
+                    expression=None,
+                    model_alias=resolved_alias,
+                    agent_ref=agent_ref,
+                    runtime_session_id=resolved_session,
+                )
                 return finish(decision)
             continue
 
@@ -769,8 +843,19 @@ def evaluate_model_io(
                     detector_summary=summary.as_dict(),
                     text_sha256=digest,
                 )
-                if record:
-                    _audit_decision(account_id, user_id, target, decision, rule)
+                _record_blocking_hit(
+                    record=record,
+                    account_id=account_id,
+                    user_id=user_id,
+                    target=target,
+                    decision=decision,
+                    rule=rule,
+                    text=text,
+                    expression=None,
+                    model_alias=resolved_alias,
+                    agent_ref=agent_ref,
+                    runtime_session_id=resolved_session,
+                )
                 return finish(decision)
             if not matches:
                 continue
@@ -783,6 +868,9 @@ def evaluate_model_io(
                     digest=digest,
                     account_id=account_id,
                     user_id=user_id,
+                    model_alias=resolved_alias,
+                    agent_ref=agent_ref,
+                    runtime_session_id=resolved_session,
                 )
                 if notice is not None:
                     notices.append(notice)
@@ -806,8 +894,19 @@ def evaluate_model_io(
                 text_sha256=digest,
                 expression=condition.expression,
             )
-            if record:
-                _audit_decision(account_id, user_id, target, decision, rule)
+            _record_blocking_hit(
+                record=record,
+                account_id=account_id,
+                user_id=user_id,
+                target=target,
+                decision=decision,
+                rule=rule,
+                text=text,
+                expression=condition.expression,
+                model_alias=resolved_alias,
+                agent_ref=agent_ref,
+                runtime_session_id=resolved_session,
+            )
             return finish(decision)
 
     if notices:
@@ -955,17 +1054,70 @@ def redact_request_upstream(
     return totals
 
 
+_BLOCKING_HIT_ACTIONS = frozenset({"deny", "require_approval"})
+
+
+def _record_blocking_hit(
+    *,
+    record: bool,
+    account_id: Optional[Any],
+    user_id: Optional[Any],
+    target: str,
+    decision: ModelIODecision,
+    rule: ModelIORule,
+    text: str,
+    expression: Optional[str],
+    model_alias: Optional[str],
+    agent_ref: Optional[str],
+    runtime_session_id: Optional[UUID],
+) -> None:
+    """Audit a terminal match and store a hit for deny and approval.
+
+    A failing hit write does not change ``decision``. Allow matches are
+    audited exactly as before and are not stored as hits.
+    """
+    if not record:
+        return
+    if decision.action not in _BLOCKING_HIT_ACTIONS:
+        _audit_decision(account_id, user_id, target, decision, rule)
+        return
+    event_id: Optional[UUID] = None
+    try:
+        event_id = _audit_decision(account_id, user_id, target, decision, rule)
+    except Exception:  # noqa: BLE001 - audit must not change the decision
+        logger.warning("Policy decision audit failed", exc_info=True)
+    account_uuid = _uuid_or_none(account_id)
+    if account_uuid is None:
+        return
+    notice = PolicyNotice(
+        account_id=account_uuid,
+        user_id=_uuid_or_none(user_id),
+        target=target,
+        rule_id=decision.rule_id or rule.id,
+        rule_description=decision.rule_description,
+        text_sha256=decision.text_sha256 or "",
+        excerpt=build_excerpt(text, expression),
+        action=decision.action,
+        model_alias=model_alias,
+        agent_ref=agent_ref,
+        runtime_session_id=runtime_session_id,
+        audit_event_id=event_id or uuid4(),
+    )
+    schedule_policy_match_hit(notice)
+
+
 def _audit_decision(
     account_id: Optional[Any],
     user_id: Optional[Any],
     target: str,
     decision: ModelIODecision,
     rule: ModelIORule,
-) -> None:
+) -> Optional[UUID]:
+    """Write the audit row and return the id shared with the policy hit."""
     if account_id is None:
-        return
+        return None
     if decision.action == "allow":
-        return
+        return None
     try:
         account_uuid = (
             account_id if isinstance(account_id, UUID) else UUID(str(account_id))
@@ -974,11 +1126,13 @@ def _audit_decision(
         if user_id is not None:
             user_uuid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
     except (TypeError, ValueError):
-        return
+        return None
+    event_id = uuid4()
     extra = {
         "rule_id": decision.rule_id,
         "detector_summary": decision.detector_summary,
         "text_sha256": decision.text_sha256,
+        "audit_event_id": str(event_id),
     }
     _log_policy_decision_async(
         account_id=account_uuid,
@@ -992,6 +1146,7 @@ def _audit_decision(
         user_id=user_uuid,
         extra_details=extra,
     )
+    return event_id
 
 
 def _audit_notice(notice: PolicyNotice, rule: Optional[ModelIORule]) -> None:
@@ -1005,6 +1160,8 @@ def _audit_notice(notice: PolicyNotice, rule: Optional[ModelIORule]) -> None:
         "text_sha256": notice.text_sha256,
         "notify": True,
     }
+    if notice.audit_event_id is not None:
+        extra["audit_event_id"] = str(notice.audit_event_id)
     _log_policy_decision_async(
         account_id=notice.account_id,
         tool_name=notice.target,
@@ -1302,6 +1459,9 @@ def enforce_request_policy(
         account_id=account_id,
         user_id=getattr(gateway.auth_context.user, "id", None),
         detector_config=_gateway_detector_config(gateway),
+        model_alias=_requested_model_alias(payload, ai_model),
+        agent_ref=_agent_ref_from_gateway(gateway),
+        runtime_session_id=getattr(gateway, "_resolved_runtime_session_id", None),
     )
     _apply_decision(
         gateway=gateway,
@@ -1320,7 +1480,7 @@ def enforce_request_policy(
 def enforce_response_policy(
     gateway: Any,
     *,
-    payload: Dict[str, Any],  # noqa: ARG001 - kept for call-site symmetry
+    payload: Dict[str, Any],
     ai_model: Any,
     response_text: str,
     provider: str,
@@ -1339,6 +1499,9 @@ def enforce_response_policy(
         account_id=account_id,
         user_id=getattr(gateway.auth_context.user, "id", None),
         detector_config=_gateway_detector_config(gateway),
+        model_alias=_requested_model_alias(payload, ai_model),
+        agent_ref=_agent_ref_from_gateway(gateway),
+        runtime_session_id=getattr(gateway, "_resolved_runtime_session_id", None),
     )
     _apply_decision(
         gateway=gateway,
@@ -1486,6 +1649,7 @@ def _notify_only_stream(
     gateway: Any,
     rules: Sequence[ModelIORule],
     ai_model: Any,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Iterator[str]:
     """Pass events straight through, then evaluate notify rules on the text.
 
@@ -1514,6 +1678,11 @@ def _notify_only_stream(
                     account_id=gateway.auth_context.account_id,
                     user_id=getattr(gateway.auth_context.user, "id", None),
                     detector_config=_gateway_detector_config(gateway),
+                    model_alias=_requested_model_alias(payload, ai_model),
+                    agent_ref=_agent_ref_from_gateway(gateway),
+                    runtime_session_id=getattr(
+                        gateway, "_resolved_runtime_session_id", None
+                    ),
                 )
         except Exception:  # noqa: BLE001 - notify must never fail the call
             logger.warning("Notify-only response evaluation failed", exc_info=True)
@@ -1552,7 +1721,11 @@ def wrap_stream_for_response_policy(
     if all(is_notify_only(rule) for rule in response_rules):
         # Nothing here can block, so nothing is held back (#959).
         yield from _notify_only_stream(
-            events, gateway=gateway, rules=response_rules, ai_model=ai_model
+            events,
+            gateway=gateway,
+            rules=response_rules,
+            ai_model=ai_model,
+            payload=payload,
         )
         return
 

@@ -1,6 +1,7 @@
 """Tests for audit log CRUD operations."""
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import event
@@ -68,6 +69,24 @@ class TestAuditLogCRUD:
         assert log.user_agent == "Mozilla/5.0"
         assert log.details["permission"] == "view_issues"
         assert log.details["granted"] is True
+
+    def test_log_action_uses_audit_event_id_as_row_id(
+        self, db_session: Session, test_account, test_user_for_audit
+    ):
+        """A policy hit and its audit row share the id carried in details."""
+        event_id = uuid4()
+        log = crud_audit_log.log_action(
+            db_session,
+            account_id=test_account.id,
+            user_id=test_user_for_audit.id,
+            action="policy_deny",
+            resource_type="policy",
+            resource_id="model.request",
+            status="deny",
+            details={"audit_event_id": str(event_id), "rule_id": "deny-secret"},
+        )
+        assert log.id == event_id
+        assert log.details["audit_event_id"] == str(event_id)
         assert log.timestamp is not None
 
     def test_log_action_with_uuid_account_id(

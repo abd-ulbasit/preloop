@@ -93,13 +93,19 @@ def _get_account_ai_model(
     db: Session,
     model_id: uuid.UUID,
     current_user: User,
+    view: bool = False,
 ) -> AIModel:
-    """Return an account-owned AI model or raise 404."""
+    """Return an account-owned model; gate read-only credential access too."""
     db_model = crud_ai_model.get(db=db, id=model_id)
     if not db_model or db_model.account_id != current_user.account_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="AI Model not found"
         )
+    if view:
+        from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
+
+        if not filter_viewable(db, current_user, VISIBLE_AI_MODEL, [db_model]):
+            raise HTTPException(404, "AI Model not found")
     return db_model
 
 
@@ -119,6 +125,12 @@ def _get_readable_ai_model(
             )
         )
     ):
+        from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
+
+        if model.account_id is not None and not filter_viewable(
+            db, current_user, VISIBLE_AI_MODEL, [model]
+        ):
+            raise HTTPException(404, "AI Model not found")
         return model
     raise HTTPException(404, "AI Model not found")
 
@@ -401,6 +413,17 @@ def get_ai_models_overview(
         include_built_in=built_in_models_enabled(),
     )
     account_default_kinds = crud_ai_model.configured_account_default_kinds(models)
+    from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
+
+    models = [
+        *[model for model in models if model.account_id is None],
+        *filter_viewable(
+            db,
+            current_user,
+            VISIBLE_AI_MODEL,
+            [model for model in models if model.account_id is not None],
+        ),
+    ]
     models = [
         model
         for model in models
@@ -943,7 +966,7 @@ def read_ai_model_credential_marker(
     refused with 400.
     """
     db_model = _get_account_ai_model(
-        db=db, model_id=model_id, current_user=current_user
+        db=db, model_id=model_id, current_user=current_user, view=True
     )
     service = get_secret_service()
     resolved = service.resolve_ai_model_credentials(
@@ -997,7 +1020,7 @@ def export_ai_model_credentials(
     never exportable.
     """
     db_model = _get_account_ai_model(
-        db=db, model_id=model_id, current_user=current_user
+        db=db, model_id=model_id, current_user=current_user, view=True
     )
     service = get_secret_service()
     try:

@@ -558,7 +558,7 @@ def get_runner(
     row = crud_flow_runner.get(
         db, id=runner_id, account_id=str(current_user.account_id)
     )
-    if not row:
+    if not row or not filter_viewable(db, current_user, VISIBLE_RUNNER, [row]):
         raise HTTPException(status_code=404, detail="Runner not found")
     return _to_response(row, db, current_user)
 
