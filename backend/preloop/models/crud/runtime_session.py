@@ -910,16 +910,16 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             # usage rows through ix_api_usage_runtime_session_id. A grouped
             # subquery over the account's whole usage table cost seconds on
             # every agent detail load once an account had a million requests.
-            session_usage = db.query(ApiUsage.id).filter(
+            usage_probe = db.query(ApiUsage.id).filter(
                 ApiUsage.runtime_session_id == self.model.id,
                 ApiUsage.account_id == account_id,
                 ApiUsage.action_type == "model_gateway",
             )
             if min_requests <= 1:
-                has_usage = session_usage.exists()
+                has_usage = usage_probe.exists()
             else:
                 has_usage = (
-                    session_usage.with_entities(func.count(ApiUsage.id))
+                    usage_probe.with_entities(func.count(ApiUsage.id))
                     .correlate(self.model)
                     .scalar_subquery()
                     >= min_requests

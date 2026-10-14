@@ -1765,6 +1765,10 @@ def get_account_managed_agent(
     """Return one enrolled external agent for the current account."""
     from preloop.models.crud.resource_share import crud_resource_share
 
+    # Validated before the shared-resource branch, so a mistyped section is a
+    # 422 on every path (a shared read ignores the sections).
+    sections = _parse_detail_sections(include)
+
     shared = crud_resource_share.public_read(
         db, account_id=account.id, resource_type="managed_agent", resource_id=agent_id
     )
@@ -1774,7 +1778,6 @@ def get_account_managed_agent(
         if not filter_viewable(db, current_user, VISIBLE_MANAGED_AGENT, [shared]):
             raise HTTPException(404, "Resource not found")
         return shared
-    sections = _parse_detail_sections(include)
     response = _build_managed_agent_detail_response(
         db,
         account_id=str(account.id),
