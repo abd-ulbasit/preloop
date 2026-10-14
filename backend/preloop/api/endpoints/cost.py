@@ -511,6 +511,11 @@ _HEALTH_CACHE_LOCK = threading.Lock()
 
 
 def _forget_cost_health(account_id: str) -> None:
+    """Drop summary and health entries for an account's plain string id.
+
+    Removing in-flight summaries also prevents their old results from being
+    stored after an OSS reprice or CSV reconciliation.
+    """
     with _SUMMARY_CACHE_LOCK:
         for key in [key for key in _SUMMARY_CACHE if key[0] == account_id]:
             del _SUMMARY_CACHE[key]
@@ -647,6 +652,8 @@ async def backfill_from_provider_ledger_csv(
     )
     plan = plan_ledger_allocation(entries, rows)
     rows_updated = apply_ledger_backfill(db, plan) if apply else None
+    if rows_updated:
+        _forget_cost_health(str(current_user.account_id))
 
     return LedgerBackfillResponse(
         dry_run=not apply,

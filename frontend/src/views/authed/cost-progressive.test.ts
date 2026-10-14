@@ -80,15 +80,18 @@ describe('Cost progressive loading', () => {
     expect(
       element.shadowRoot!.querySelector('[aria-label="Cost summary metrics"]')
     ).to.exist;
-    expect(
-      urls
-        .filter(
-          (u) =>
-            u.pathname.endsWith('/cost/summary') &&
-            !u.searchParams.has('breakdown')
-        )
-        .every((u) => u.searchParams.get('include_breakdown') !== 'false')
-    ).to.equal(true);
+    const summaries = urls.filter((url) =>
+      url.pathname.endsWith('/cost/summary')
+    );
+    expect(summaries).to.have.length(1);
+    expect(summaries[0].searchParams.get('include_breakdown')).not.to.equal(
+      'false'
+    );
+    expect(summaries[0].searchParams.getAll('breakdown')).to.deep.equal([
+      'sessions',
+      'flows',
+      'imported',
+    ]);
     await waitUntil(() => element['loadedTabs'].has('agents'));
   });
 

@@ -44,8 +44,8 @@ entries. Keys include account, budget metadata, effective dates, principal,
 retry policy, selected breakdowns and session paging. Concurrent identical
 misses share one computation. Permission and current history policy checks run
 before cache hits; responses are copied before adding comparisons. Failures
-are not cached, and an OSS non-dry-run reprice invalidates the account's entries,
-including in-flight entries. Rolling windows with new timestamps still compute
+are not cached. An OSS non-dry-run reprice or applied CSV reconciliation
+invalidates the account's entries, including in-flight entries. Rolling windows with new timestamps still compute
 fresh answers; this cache does not introduce a daily rollup. Other ledger writes
 and EE repricing may take up to the TTL to appear in an exact repeat.
 
