@@ -209,6 +209,19 @@ from .spend_outlier import (
     crud_spend_outlier_finding,
     crud_spend_outlier_settings,
 )
+from .governance_review import (
+    CRUDGovernanceFinding,
+    CRUDGovernancePolicyDocument,
+    CRUDGovernanceReviewRun,
+    CRUDGovernanceReviewSettings,
+    CRUDGovernanceSessionDigest,
+    GovernanceReviewValidationError,
+    crud_governance_finding,
+    crud_governance_policy_document,
+    crud_governance_review_run,
+    crud_governance_review_settings,
+    crud_governance_session_digest,
+)
 from .team import CRUDTeam, crud_team
 from .tool_access_rule import CRUDToolAccessRule
 from .tool_configuration import CRUDToolConfiguration
@@ -478,6 +491,17 @@ __all__ = [
     "CRUDSpendOutlierSettings",
     "crud_spend_outlier_finding",
     "crud_spend_outlier_settings",
+    "CRUDGovernanceFinding",
+    "CRUDGovernancePolicyDocument",
+    "CRUDGovernanceReviewRun",
+    "CRUDGovernanceReviewSettings",
+    "CRUDGovernanceSessionDigest",
+    "GovernanceReviewValidationError",
+    "crud_governance_finding",
+    "crud_governance_policy_document",
+    "crud_governance_review_run",
+    "crud_governance_review_settings",
+    "crud_governance_session_digest",
     "CRUDOAuthAppInstallation",
     "crud_oauth_app_installation",
     "CRUDOAuthToken",
