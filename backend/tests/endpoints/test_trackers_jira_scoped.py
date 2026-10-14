@@ -22,6 +22,7 @@ from preloop.api.endpoints.trackers import (
     update_tracker,
 )
 from preloop.schemas.tracker import TrackerResponse, TrackerUpdate
+from preloop.sync.trackers.jira import pasted_gateway_site_detail
 
 CLOUD_ID = "11223344-aaaa-bbbb-cccc-556677889900"
 TOKEN = "scoped-token-value"
@@ -185,8 +186,9 @@ async def test_register_tracker_rejects_a_pasted_gateway_url():
             db=MagicMock(),
         )
     assert caught.value.status_code == 400
-    assert "atlassian.net" in caught.value.detail
-    assert "api.atlassian.com" in caught.value.detail
+    assert caught.value.detail == pasted_gateway_site_detail(
+        f"https://api.atlassian.com/ex/jira/{CLOUD_ID}"
+    )
 
 
 @pytest.mark.asyncio
