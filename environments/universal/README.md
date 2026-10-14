@@ -49,6 +49,12 @@ environments/universal/run-smoke.sh preloop-codex-universal:local \
 ```
 
 `run-smoke.sh` uses `docker run --network none` and `--entrypoint /opt/entrypoint.sh`.
+The build bakes `/opt/preloop-environment.json` as root. A later `--user`
+run reads that file and does not rewrite it, because `/opt` is not writable
+by the runtime user.
+The pinned upstream base keeps several toolchains under `/root`, so arbitrary
+non-root users may still fail the required-tool check. Reading the manifest
+does not make those toolchains accessible.
 A successful run prints one `PASS` line for each of Python, Java, Go, Rust,
 TypeScript, Perl, and Shell (7 lines) and exits 0. `--negative-tool` removes
 one required command in a throwaway layer and passes only if the smoke then

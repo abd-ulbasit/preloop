@@ -182,7 +182,11 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"preloop-environment: {exc}", file=sys.stderr)
         return 1
-    args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    try:
+        args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"preloop-environment: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

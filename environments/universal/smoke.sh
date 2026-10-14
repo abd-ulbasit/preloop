@@ -23,13 +23,22 @@ for tool in "${UNIVERSAL_TOOLS[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || fail "missing required tool: $tool"
 done
 
-if [ -z "${CODEX_BASE_IMAGE:-}" ]; then
-    fail "CODEX_BASE_IMAGE is unset; the manifest must name the digest-pinned base"
+# The build runs as root and bakes the manifest. A later non-root smoke
+# can read that file but cannot replace it: /opt is not user-writable.
+manifest=/opt/preloop-environment.json
+manifest_dir="$(dirname "$manifest")"
+if [ -w "$manifest" ] || { [ ! -e "$manifest" ] && [ -w "$manifest_dir" ]; }; then
+    if [ -z "${CODEX_BASE_IMAGE:-}" ]; then
+        fail "CODEX_BASE_IMAGE is unset; the manifest must name the digest-pinned base"
+    fi
+    python3 "$root/write_manifest.py" \
+        --output "$manifest" \
+        --base-image "$CODEX_BASE_IMAGE"
+    chmod a+r "$manifest"
 fi
-python3 "$root/write_manifest.py" \
-    --output /opt/preloop-environment.json \
-    --base-image "$CODEX_BASE_IMAGE"
-chmod a+r /opt/preloop-environment.json
+if [ ! -r "$manifest" ]; then
+    fail "manifest is not readable: $manifest"
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

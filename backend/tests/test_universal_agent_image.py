@@ -7,15 +7,18 @@ script against a stub toolchain, so they need only bash.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+from preloop.agents.images import DEFAULT_AGENT_IMAGES
 from tests.test_preloop_perl_toolchain import PACKAGES, _apt_install_packages
 
 REPO = Path(__file__).resolve().parents[2]
@@ -36,8 +39,23 @@ BASE = (
 PASS_LANGUAGES = ("python", "java", "go", "rust", "typescript", "perl", "shell")
 BASH = shutil.which("bash") or "/bin/bash"
 
-sys.path.insert(0, str(UNIVERSAL))
-import write_manifest  # noqa: E402
+
+def _load_write_manifest() -> ModuleType:
+    """Load this recipe's manifest writer under a name unique to this file.
+
+    ``test_scanner_agent_image.py`` loads a different ``write_manifest.py``.
+    Both used to import the top-level name ``write_manifest``, so one pytest
+    process kept whichever module was imported first.
+    """
+    path = UNIVERSAL / "write_manifest.py"
+    spec = importlib.util.spec_from_file_location("universal_write_manifest", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+write_manifest = _load_write_manifest()
 
 
 def _instructions(text: str) -> list[str]:
@@ -81,6 +99,9 @@ def test_recipe_pins_the_base_and_adds_perl_plus_shellcheck() -> None:
     assert "FROM ${CODEX_BASE_IMAGE}" in text
     assert text.count(f"ARG CODEX_BASE_IMAGE={BASE}") == 2
     assert "*@sha256:*" in text, "a mutable base tag must be refused"
+    name, _, digest = BASE.partition("@sha256:")
+    assert re.fullmatch(r"[a-f0-9]{64}", digest)
+    assert name == DEFAULT_AGENT_IMAGES["codex"].rsplit(":", 1)[0]
     assert _apt_install_packages(text) == [*PACKAGES, "shellcheck"]
     assert text.count("apt-get install") == 1
     assert all("=" not in package for package in _apt_install_packages(text))
@@ -141,6 +162,58 @@ def test_smoke_covers_seven_languages_and_perlver_blame() -> None:
 
 def test_tool_list_matches_the_manifest_commands() -> None:
     assert _tool_names() == [name for name, _argv in write_manifest.TOOL_COMMANDS]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write mode-0444 files")
+@pytest.mark.parametrize("manifest_exists", [True, False])
+def test_smoke_handles_a_read_only_runtime_manifest(
+    tmp_path: Path, manifest_exists: bool
+) -> None:
+    """A runtime user reads the baked manifest without invoking its writer."""
+    manifest_dir = tmp_path / "opt"
+    manifest_dir.mkdir()
+    manifest = manifest_dir / "preloop-environment.json"
+    if manifest_exists:
+        manifest.write_text('{"version": 1}\n')
+        manifest.chmod(0o444)
+    manifest_dir.chmod(0o555)
+    script = tmp_path / "smoke.sh"
+    script.write_text(
+        SMOKE.read_text().replace("/opt/preloop-environment.json", str(manifest))
+    )
+    shutil.copy(TOOLS_SH, tmp_path / "tools.sh")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in [*_tool_names(), "python3", "mktemp"]:
+        stub = bin_dir / tool
+        if tool == "python3":
+            stub.write_text(
+                '#!/bin/sh\necho "unexpected manifest rewrite" >&2\nexit 42\n'
+            )
+        elif tool == "mktemp":
+            stub.write_text('#!/bin/sh\necho "language checks reached" >&2\nexit 73\n')
+        else:
+            stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    try:
+        result = subprocess.run(
+            [BASH, str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={"PATH": f"{bin_dir}{os.pathsep}{os.defpath}"},
+        )
+        assert "unexpected manifest rewrite" not in result.stderr
+        if manifest_exists:
+            assert result.returncode == 73, result.stderr
+            assert "language checks reached" in result.stderr
+            assert manifest.read_text() == '{"version": 1}\n'
+        else:
+            assert result.returncode == 1, result.stderr
+            assert "manifest is not readable" in result.stderr
+            assert "language checks reached" not in result.stderr
+    finally:
+        manifest_dir.chmod(0o755)
 
 
 def test_fixtures_are_checked_in() -> None:
@@ -289,6 +362,22 @@ def test_manifest_cli_writes_sorted_json(
     assert parsed["harness"] == "codex"
     assert parsed["tools"]["shellcheck"] == "shellcheck 1.2.3"
     assert out.read_text().endswith("\n")
+
+
+def test_manifest_cli_exits_nonzero_when_the_output_is_not_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tools = {name: "1" for name in _tool_names()}
+    monkeypatch.setattr(write_manifest, "probe_versions", lambda _run: tools)
+
+    def _deny(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "write_text", _deny)
+    out = tmp_path / "preloop-environment.json"
+    code = write_manifest.main(["--base-image", BASE, "--output", str(out)])
+    assert code == 1
+    assert not out.exists()
 
 
 def test_manifest_cli_exits_nonzero_for_a_tag(
