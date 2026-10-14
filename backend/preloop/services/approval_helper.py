@@ -503,7 +503,7 @@ async def require_approval(
                         "creating config for approval tracking"
                     )
                     from preloop.models.crud.tool_configuration import (
-                        create_tool_configuration_async,
+                        get_or_create_tool_configuration_async,
                     )
                     from preloop.models.schemas.tool_configuration import (
                         ToolConfigurationCreate,
@@ -518,7 +518,7 @@ async def require_approval(
                         is_enabled=True,
                         custom_config={},
                     )
-                    config = await create_tool_configuration_async(
+                    config = await get_or_create_tool_configuration_async(
                         db, obj_in=config_create, account_id=account_id
                     )
                     logger.info(f"Created tool configuration {config.id} for approval")

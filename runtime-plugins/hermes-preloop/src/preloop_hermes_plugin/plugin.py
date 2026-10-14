@@ -28,6 +28,8 @@ from preloop.integrations.agent_control import (
     load_hermes_control_config,
 )
 
+from .notes import OperatorNotes
+
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
@@ -48,6 +50,7 @@ _T = TypeVar("_T")
 #   - Any other / empty return allows the call.
 # The handler below accepts both calling conventions defensively.
 HOOK_EVENT_PRE_TOOL_CALL = "pre_tool_call"
+
 PERMISSION_CHECK_PATH = "/api/v1/agents/permission-check"
 # Cover the supported workflow range, including unknown rule-selected workflows.
 MAX_APPROVAL_WAIT_SECONDS = 86_400
@@ -152,6 +155,9 @@ class HermesPreloopPlugin:
     def __init__(self, config_path: Path | None = None) -> None:
         self.config_path = config_path
         self.client: AgentControlClient | None = None
+        self._notes: OperatorNotes | None = None
+        self._notes_lock = threading.Lock()
+        self._notes_hooks_ready = False
         self._control_settings: tuple[AgentControlConfig, dict[str, Any]] | None = None
         # Outer deadline for the sync bridge; overridable in tests.
         self._bridge_timeout_seconds: float | None = None
@@ -257,6 +263,87 @@ class HermesPreloopPlugin:
         # the async method hands Hermes a coroutine it discards -- every tool
         # call would then run ungated.
         register_hook(HOOK_EVENT_PRE_TOOL_CALL, self.pre_tool_call_sync)
+        # Register only hooks the installed host actually declares. The native
+        # context and admitted-body contracts are paired; no fabricated hooks.
+        try:
+            from hermes_cli.plugins import VALID_HOOKS
+        except ImportError:
+            return
+        if {"pre_llm_call", "pre_api_request"}.issubset(VALID_HOOKS):
+            try:
+                register_hook("pre_llm_call", self.note_context)
+                register_hook("pre_api_request", self.note_admitted)
+            except Exception:
+                logger.warning(
+                    "Hermes note hooks unavailable; native approval remains installed"
+                )
+                return
+            self._notes_hooks_ready = True
+            for name, callback in (
+                ("on_session_end", self.note_turn_ended),
+                ("on_session_finalize", self.note_finalized),
+            ):
+                if name in VALID_HOOKS:
+                    try:
+                        register_hook(name, callback)
+                    except Exception:
+                        logger.warning(
+                            "Hermes note lifecycle hook %s unavailable", name
+                        )
+
+    def _note_carrier(self) -> OperatorNotes:
+        config, _ = self._load_control_settings()
+        base = _permission_check_url(config.control_ws_url).removesuffix(
+            PERMISSION_CHECK_PATH
+        )
+        with self._notes_lock:
+            if self._notes is None or (self._notes.base, self._notes.token) != (
+                base,
+                config.bearer_token,
+            ):
+                self._notes = OperatorNotes(base, config.bearer_token)
+            return self._notes
+
+    def note_context(self, **kwargs: Any) -> dict[str, str] | None:
+        """Return Hermes pre_llm_call context, failing open on note I/O."""
+        if not self._notes_hooks_ready:
+            return None
+        try:
+            return self._note_carrier().prepare(
+                str(kwargs.get("session_id") or ""), str(kwargs.get("turn_id") or "")
+            )
+        except Exception:
+            return None
+
+    def note_admitted(self, **kwargs: Any) -> None:
+        """Observe effective request messages after host context admission."""
+        try:
+            self._note_carrier().admitted(
+                str(kwargs.get("session_id") or ""),
+                str(kwargs.get("turn_id") or ""),
+                kwargs.get("request_messages"),
+            )
+        except Exception:
+            pass
+
+    def note_turn_ended(self, **kwargs: Any) -> None:
+        """Per-turn end only releases unadmitted context, never terminal notes."""
+        try:
+            self._note_carrier().turn_ended(
+                str(kwargs.get("session_id") or ""), str(kwargs.get("turn_id") or "")
+            )
+        except Exception:
+            pass
+
+    def note_finalized(self, **kwargs: Any) -> None:
+        """Authoritative host finalization, unlike per-turn on_session_end."""
+        try:
+            self._note_carrier().finalized(
+                str(kwargs.get("session_id") or ""),
+                str(kwargs.get("reason") or "finalized"),
+            )
+        except Exception:
+            pass
 
     def pre_tool_call_sync(
         self, payload: Any = None, /, **kwargs: Any
@@ -849,7 +936,10 @@ def _permission_check_url(control_ws_url: str) -> str:
     if parsed.scheme not in {"ws", "wss", "http", "https"} or not parsed.netloc:
         raise ValueError("Control endpoint must be an absolute HTTP(S) or WS(S) URL")
     scheme = "https" if parsed.scheme in {"wss", "https"} else "http"
-    return f"{scheme}://{parsed.netloc}{PERMISSION_CHECK_PATH}"
+    control_path = "/api/v1/agents/control/ws"
+    path = parsed.path.rstrip("/")
+    prefix = path.removesuffix(control_path) if path.endswith(control_path) else ""
+    return f"{scheme}://{parsed.netloc}{prefix}{PERMISSION_CHECK_PATH}"
 
 
 def _block(reason: str) -> dict[str, Any]:

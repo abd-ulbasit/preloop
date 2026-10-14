@@ -36,13 +36,17 @@ def runner(db_session: Session, test_user: models.User) -> models.FlowRunner:
 
 
 def _start(
-    db: Session, runner: models.FlowRunner, user: models.User
+    db: Session,
+    runner: models.FlowRunner,
+    user: models.User,
+    *,
+    harness: str = "copilot_cli",
 ) -> models.RunnerRemoteSession:
     return svc.request_session(
         db,
         runner=runner,
         actor=user,
-        harness="copilot_cli",
+        harness=harness,
         model="auto",
         workspace={"kind": "authorized_directory", "id": "dir_1"},
         workspace_label="ims",
@@ -245,13 +249,27 @@ def _identity(db: Session, user: models.User) -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("harness", "source", "hook_event_name", "carries_notes"),
+    [
+        ("copilot_cli", "copilot_cli", None, False),
+        ("cursor_cli", "cursor", "preToolUse", True),
+    ],
+)
 async def test_permission_hook_lands_on_runner_session(
-    endpoint_db, runner, test_user, monkeypatch
+    endpoint_db,
+    runner,
+    test_user,
+    monkeypatch,
+    harness,
+    source,
+    hook_event_name,
+    carries_notes,
 ):
     from preloop.api.endpoints import agent_permission
 
     db_session = endpoint_db
-    row = _start(db_session, runner, test_user)
+    row = _start(db_session, runner, test_user, harness=harness)
     hs = str(uuid.uuid4())
     _go_idle(db_session, runner, row, hs)
     identity = _identity(db_session, test_user)
@@ -263,7 +281,7 @@ async def test_permission_hook_lands_on_runner_session(
     from preloop.api.endpoints.approval_requests import list_approval_requests
     from preloop.models.crud import crud_agent_control_command
 
-    crud_agent_control_command.create_note(
+    note = crud_agent_control_command.create_note(
         db_session,
         account_id=test_user.account_id,
         managed_agent_id=None,
@@ -309,7 +327,8 @@ async def test_permission_hook_lands_on_runner_session(
 
     result = await agent_permission.agent_permission_check(
         agent_permission.AgentPermissionCheckRequest(
-            source="copilot_cli",
+            source=source,
+            hook_event_name=hook_event_name,
             tool_name="bash",
             tool_input={"command": "ls"},
             session_id=hs,
@@ -332,7 +351,21 @@ async def test_permission_hook_lands_on_runner_session(
         db=db_session,
     )
     assert [str(a.id) for a in listed] == [result.request_id]
-    assert result.operator_note and "check the tests first" in result.operator_note
+    db_session.refresh(note)
+    if carries_notes:
+        assert result.operator_note and "check the tests first" in result.operator_note
+        assert note.status == "delivered"
+        assert note.delivered_at is not None
+        assert note.delivery_channel == "hook"
+    else:
+        # Copilot's permission response has no model-visible note carrier.
+        # Keep the note available for a later carrying model transport.
+        assert result.operator_note is None
+        assert note.status == "pending"
+        assert note.claimed_at is None
+        assert note.delivered_at is None
+        assert note.acked_at is None
+        assert note.delivery_channel is None
     activity = (
         db_session.query(models.RuntimeSessionActivity)
         .filter(models.RuntimeSessionActivity.activity_type == "tool_call")

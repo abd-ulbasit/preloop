@@ -435,6 +435,8 @@ func hostExecHarnessEnvAllowed(harness, key string) bool {
 		return key == "DEVIN_API_KEY"
 	case hostExecHarnessCursor:
 		return strings.HasPrefix(key, "CURSOR_")
+	case hostExecHarnessClaude:
+		return claudeHostExecEnvAllowed(key)
 	case hostExecHarnessCopilot:
 		return strings.HasPrefix(key, "COPILOT_") ||
 			strings.HasPrefix(key, "GH_") ||

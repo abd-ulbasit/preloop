@@ -89,8 +89,81 @@ func (spec agentControlSidecarSpec) systemdUnit() string {
 	return "preloop-" + spec.ServiceSlug + ".service"
 }
 
-func renderAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string) string {
+// agentControlSidecarServiceEnv is what a service manager needs to run the
+// sidecar outside a login shell: launchd and systemd start jobs with a
+// minimal PATH that usually lacks node, and they discard output unless a log
+// file is named.
+type agentControlSidecarServiceEnv struct {
+	// Path is the PATH the service runs with. Empty leaves it unset.
+	Path string
+	// LogPath receives stdout and stderr. Empty leaves output unredirected.
+	LogPath string
+	// Home pins HOME to the enabling user's home, so the job reads the same
+	// control config and socket the enabling shell does (#1531).
+	Home string
+}
+
+// systemdLogPathUsable reports whether path can be written as a systemd
+// "append:" target, which takes no quoting.
+func systemdLogPathUsable(path string) bool {
+	return path != "" && !strings.ContainsAny(path, " \t\n\"\\%")
+}
+
+// agentControlSidecarServicePath returns the PATH to write into the service
+// file: the directories of the resolved plugin binary and node first, then
+// the enabling shell's PATH, without duplicates.
+func agentControlSidecarServicePath(spec agentControlSidecarSpec, shellPath string) string {
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || !filepath.IsAbs(dir) || seen[dir] {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	if invocation, err := resolveAgentControlSidecarInvocation(spec); err == nil {
+		add(filepath.Dir(invocation.bin))
+	}
+	if node, err := resolveRuntimeExecutable("node"); err == nil {
+		add(filepath.Dir(node))
+	}
+	for _, dir := range filepath.SplitList(shellPath) {
+		add(dir)
+	}
+	for _, dir := range []string{"/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
+		add(dir)
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
+}
+
+func agentControlSidecarServiceEnvFor(spec agentControlSidecarSpec) agentControlSidecarServiceEnv {
+	home, _ := os.UserHomeDir()
+	return agentControlSidecarServiceEnv{
+		Path:    agentControlSidecarServicePath(spec, os.Getenv("PATH")),
+		LogPath: spec.logPath(),
+		Home:    home,
+	}
+}
+
+func renderAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string, env agentControlSidecarServiceEnv) string {
 	escaped := xmlEscapeAttr(bin)
+	var extra strings.Builder
+	if env.Path != "" || env.Home != "" {
+		extra.WriteString("  <key>EnvironmentVariables</key>\n  <dict>")
+		if env.Home != "" {
+			fmt.Fprintf(&extra, "<key>HOME</key><string>%s</string>", xmlEscapeAttr(env.Home))
+		}
+		if env.Path != "" {
+			fmt.Fprintf(&extra, "<key>PATH</key><string>%s</string>", xmlEscapeAttr(env.Path))
+		}
+		extra.WriteString("</dict>\n")
+	}
+	if env.LogPath != "" {
+		logPath := xmlEscapeAttr(env.LogPath)
+		fmt.Fprintf(&extra, "  <key>StandardOutPath</key><string>%s</string>\n  <key>StandardErrorPath</key><string>%s</string>\n", logPath, logPath)
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -98,27 +171,44 @@ func renderAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string) 
   <key>Label</key><string>ai.preloop.%s</string>
   <key>ProgramArguments</key>
   <array><string>%s</string><string>%s</string><string>sidecar</string><string>run</string></array>
-  <key>RunAtLoad</key><true/>
+%s  <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict>
 </plist>
-`, spec.ServiceSlug, escaped, spec.Command)
+`, spec.ServiceSlug, escaped, spec.Command, extra.String())
 }
 
-func renderAgentControlSidecarSystemd(spec agentControlSidecarSpec, bin string) string {
+// systemdQuote quotes one value for a systemd unit line, escaping the
+// characters systemd treats specially inside double quotes.
+func systemdQuote(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "\n", " ")
+	return `"` + replacer.Replace(value) + `"`
+}
+
+func renderAgentControlSidecarSystemd(spec agentControlSidecarSpec, bin string, env agentControlSidecarServiceEnv) string {
 	quoted, _ := json.Marshal(bin)
+	var extra strings.Builder
+	if env.Home != "" {
+		fmt.Fprintf(&extra, "Environment=%s\n", systemdQuote("HOME="+env.Home))
+	}
+	if env.Path != "" {
+		fmt.Fprintf(&extra, "Environment=%s\n", systemdQuote("PATH="+env.Path))
+	}
+	if systemdLogPathUsable(env.LogPath) {
+		fmt.Fprintf(&extra, "StandardOutput=append:%s\nStandardError=append:%s\n", env.LogPath, env.LogPath)
+	}
 	return fmt.Sprintf(`[Unit]
 Description=%s
 After=network-online.target
 
 [Service]
 ExecStart=%s %s sidecar run
-Restart=always
+%sRestart=always
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, spec.Description, string(quoted), spec.Command)
+`, spec.Description, string(quoted), spec.Command, extra.String())
 }
 
 func ensureAgentControlSidecarRunning(spec agentControlSidecarSpec, out io.Writer) error {
@@ -283,8 +373,73 @@ func runAgentControlSidecarStatus(spec agentControlSidecarSpec, cmd *cobra.Comma
 		fmt.Fprintln(cmd.OutOrStdout(), "socket: listening")
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "socket: down")
+		if line := agentControlSidecarServiceExitStatus(spec); line != "" {
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "log: %s\n", spec.logPath())
 	}
 	return nil
+}
+
+// agentControlSidecarServiceManagerOutput runs the service manager query for
+// the sidecar job. Tests replace it.
+var agentControlSidecarServiceManagerOutput = func(spec agentControlSidecarSpec) (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("launchctl", "list", "ai.preloop."+spec.ServiceSlug).Output()
+		return string(out), err
+	case "linux":
+		out, err := exec.Command(
+			"systemctl", "--user", "show", spec.systemdUnit(),
+			"--property=ExecMainStatus,ActiveState",
+		).Output()
+		return string(out), err
+	default:
+		return "", fmt.Errorf("unsupported")
+	}
+}
+
+// agentControlSidecarServiceExitStatus reports the last exit status the
+// service manager recorded for the sidecar job, or "" when unknown.
+func agentControlSidecarServiceExitStatus(spec agentControlSidecarSpec) string {
+	out, err := agentControlSidecarServiceManagerOutput(spec)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		// launchctl list <label>: "LastExitStatus" = 256;
+		if strings.HasPrefix(line, `"LastExitStatus"`) {
+			_, value, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			value = strings.TrimSuffix(strings.TrimSpace(value), ";")
+			return "last exit status: " + launchdExitStatusText(value)
+		}
+		// systemctl show: ExecMainStatus=1
+		if value, ok := strings.CutPrefix(line, "ExecMainStatus="); ok {
+			return "last exit status: " + strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// launchdExitStatusText turns launchd's wait(2) status into text: a
+// non-zero low byte is the terminating signal, otherwise the high byte is
+// the exit code. A non-numeric value is returned as is.
+func launchdExitStatusText(raw string) string {
+	var status int
+	if _, err := fmt.Sscanf(raw, "%d", &status); err != nil {
+		return raw
+	}
+	if status < 0 {
+		return fmt.Sprintf("%d", status)
+	}
+	if signal := status & 0x7f; signal != 0 {
+		return fmt.Sprintf("terminated by signal %d", signal)
+	}
+	return fmt.Sprintf("%d", status>>8)
 }
 
 func runAgentControlSidecarForeground(spec agentControlSidecarSpec, cmd *cobra.Command, _ []string) error {
@@ -303,7 +458,11 @@ func writeAgentControlSidecarLaunchd(spec agentControlSidecarSpec, bin string, o
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := renderAgentControlSidecarLaunchd(spec, bin)
+	env := agentControlSidecarServiceEnvFor(spec)
+	if err := os.MkdirAll(filepath.Dir(env.LogPath), 0o700); err != nil {
+		return err
+	}
+	body := renderAgentControlSidecarLaunchd(spec, bin, env)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err
 	}
@@ -317,7 +476,14 @@ func writeAgentControlSidecarSystemd(spec agentControlSidecarSpec, bin string, o
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := renderAgentControlSidecarSystemd(spec, bin)
+	env := agentControlSidecarServiceEnvFor(spec)
+	if err := os.MkdirAll(filepath.Dir(env.LogPath), 0o700); err != nil {
+		return err
+	}
+	if !systemdLogPathUsable(env.LogPath) {
+		fmt.Fprintf(out, "Warning: %s cannot be a systemd log target (it has a space, quote or %%); read logs with: journalctl --user -u %s\n", env.LogPath, spec.systemdUnit())
+	}
+	body := renderAgentControlSidecarSystemd(spec, bin, env)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return err
 	}

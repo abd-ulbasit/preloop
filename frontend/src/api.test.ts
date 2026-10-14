@@ -13,6 +13,8 @@ import {
   getToolsSummary,
   getFlows,
   getAllFlows,
+  getAllFlowSummaries,
+  FLOW_SUMMARY_PAGE_SIZE,
   uniqueFlowsById,
   FLOW_LIST_MAX_PAGES,
   createFlow,
@@ -1065,6 +1067,104 @@ describe('api', () => {
       expect(
         result.flows.map((flow: { name: string }) => flow.name)
       ).to.deep.equal(['A', 'B', 'C']);
+    });
+  });
+
+  describe('getAllFlowSummaries', () => {
+    const ok = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    it('pages /flows/summary without stats until a short page', async () => {
+      fetchStub.onCall(0).resolves(
+        ok([
+          { id: '1', name: 'A' },
+          { id: '2', name: 'B' },
+        ])
+      );
+      fetchStub.onCall(1).resolves(ok([{ id: '3', name: 'C' }]));
+
+      const result = await getAllFlowSummaries({ pageSize: 2 });
+
+      expect(result.truncated).to.be.false;
+      expect(result.flows.map((flow) => flow.name)).to.deep.equal([
+        'A',
+        'B',
+        'C',
+      ]);
+      expect(fetchStub.callCount).to.equal(2);
+      const [first, second] = [fetchStub.firstCall, fetchStub.secondCall].map(
+        (call) => new URL(call.args[0], window.location.origin)
+      );
+      expect(first.pathname).to.equal('/api/v1/flows/summary');
+      expect(first.searchParams.get('include_stats')).to.equal('false');
+      expect(first.searchParams.get('skip')).to.equal('0');
+      expect(first.searchParams.get('limit')).to.equal('2');
+      expect(second.searchParams.get('skip')).to.equal('2');
+    });
+
+    it('asks for the server maximum by default', async () => {
+      fetchStub.resolves(ok([]));
+      await getAllFlowSummaries();
+      const url = new URL(fetchStub.firstCall.args[0], window.location.origin);
+      expect(url.searchParams.get('limit')).to.equal(
+        String(FLOW_SUMMARY_PAGE_SIZE)
+      );
+    });
+
+    it('does not treat a failed page as an empty account', async () => {
+      fetchStub.resolves(new Response('error', { status: 500 }));
+      let message = '';
+      try {
+        await getAllFlowSummaries({ pageSize: 2 });
+      } catch (e: unknown) {
+        message = (e as Error).message;
+      }
+      expect(message).to.equal('Failed to fetch flow summaries');
+    });
+
+    it('stops at the page cap and reports truncated', async () => {
+      let n = 0;
+      fetchStub.callsFake(async () => {
+        n += 1;
+        return ok([{ id: String(n), name: 'A' }]);
+      });
+
+      const result = await getAllFlowSummaries({ pageSize: 1 });
+
+      expect(result.truncated).to.be.true;
+      expect(result.flows).to.have.lengthOf(FLOW_LIST_MAX_PAGES);
+    });
+
+    it('keeps one row when the same id appears on two pages', async () => {
+      fetchStub.onCall(0).resolves(
+        ok([
+          { id: '1', name: 'A' },
+          { id: '2', name: 'B' },
+        ])
+      );
+      fetchStub.onCall(1).resolves(
+        ok([
+          { id: '2', name: 'B-renamed' },
+          { id: '3', name: 'C' },
+        ])
+      );
+      fetchStub.onCall(2).resolves(ok([]));
+
+      const result = await getAllFlowSummaries({ pageSize: 2 });
+
+      expect(result.flows.map((flow) => flow.id)).to.deep.equal([
+        '1',
+        '2',
+        '3',
+      ]);
+      expect(result.flows.map((flow) => flow.name)).to.deep.equal([
+        'A',
+        'B',
+        'C',
+      ]);
     });
   });
 

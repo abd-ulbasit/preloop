@@ -118,7 +118,10 @@ def test_call_litellm_allows_bedrock_ambient_credentials():
     )
 
 
-def test_call_litellm_passes_imported_bedrock_credentials():
+@pytest.mark.parametrize("metadata_region", ["us-east-1", None])
+def test_call_litellm_passes_imported_bedrock_credentials(
+    metadata_region: str | None,
+) -> None:
     auth_context = ModelGatewayAuthContext(
         token="token",
         user=SimpleNamespace(id="user-1", account_id="account-1"),
@@ -131,7 +134,7 @@ def test_call_litellm_passes_imported_bedrock_credentials():
         provider_name="bedrock",
         model_identifier="us.anthropic.claude-opus-4-6-v1",
         api_endpoint=None,
-        meta_data={"provider_runtime": {"region": "us-east-1"}},
+        meta_data={"provider_runtime": {"region": metadata_region}},
     )
 
     with patch(
@@ -164,7 +167,7 @@ def test_call_litellm_passes_imported_bedrock_credentials():
         aws_access_key_id="AKIA_TEST",
         aws_secret_access_key="secret-test",
         aws_session_token="session-test",
-        aws_region_name="eu-central-1",
+        aws_region_name=metadata_region or "eu-central-1",
         drop_params=True,
         extra_headers={"User-Agent": preloop_user_agent()},
     )
@@ -4724,7 +4727,7 @@ def test_call_litellm_passes_bedrock_api_key(stream: bool) -> None:
         messages=[{"role": "user", "content": "Hello"}],
         timeout=600,
         api_key="synthetic-bedrock-key",
-        aws_region_name="eu-central-1",
+        aws_region_name="us-east-1",
         drop_params=True,
         extra_headers={"User-Agent": preloop_user_agent()},
         **(
@@ -4807,3 +4810,36 @@ def test_real_litellm_bedrock_api_key_never_resolves_iam_credentials(
         assert request.url.host == f"bedrock-runtime.{region}.amazonaws.com"
         assert request.url.path.endswith("/converse-stream" if stream else "/converse")
     assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("metadata_region", ["us-west-2", None])
+def test_bedrock_embedding_region_metadata_overrides_secret(
+    metadata_region: str | None,
+) -> None:
+    auth_context = ModelGatewayAuthContext(
+        token="token", user=SimpleNamespace(id="user-1", account_id="account-1")
+    )
+    service = OpenAIGatewayService(
+        MagicMock(), auth_context, upstream_backend=MagicMock()
+    )
+    ai_model = SimpleNamespace(
+        provider_name="bedrock",
+        model_identifier="amazon.example-embed-v1:0",
+        api_endpoint=None,
+        meta_data={"provider_runtime": {"region": metadata_region}},
+    )
+    with patch("preloop.services.openai_gateway.get_secret_service") as secret_service:
+        secret_service.return_value.resolve_ai_model_credentials.return_value = (
+            SimpleNamespace(
+                credential_type="api_key",
+                value=json.dumps(
+                    {
+                        "aws_bearer_token_bedrock": "synthetic-key",
+                        "aws_region_name": "us-east-1",
+                    }
+                ),
+            )
+        )
+        kwargs = service._build_embedding_kwargs(ai_model, payload={"input": "hello"})
+    assert kwargs["aws_region_name"] == (metadata_region or "us-east-1")
+    assert kwargs["api_key"] == "synthetic-key"

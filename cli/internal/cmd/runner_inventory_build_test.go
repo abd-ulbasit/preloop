@@ -321,7 +321,8 @@ func TestDiscoveredHarnessMapping(t *testing.T) {
 		t.Fatalf("entries = %+v", inv.Entries)
 	}
 	claude := entryFor(t, inv, "claude_code")
-	if claude.Governance != "governed" || claude.Billing != "metered" || claude.SupportLevel != "flows_only" || claude.LoginState != "signed_in" {
+	// No claude executable on PATH: presence only, never a runner path.
+	if claude.Governance != "governed" || claude.Billing != "metered" || claude.SupportLevel != "presence_only" || claude.LoginState != "signed_in" || claude.GeneratedProfile != nil {
 		t.Fatalf("claude = %+v", claude)
 	}
 	opencode := entryFor(t, inv, "opencode")

@@ -1156,23 +1156,37 @@ export class DashboardView extends AuthedElement {
           );
         }
 
-        /* The floor is what makes the rail a list rather than a peephole:
-           at 240px the card showed three lines and an expanded row had to be
-           scrolled to be read. It is stated against the viewport as well as
-           in pixels so a short laptop window shrinks the feed instead of
-           pushing the Usage card off the rail.
-
-           360px still left three and a half rows at 1440x900, with the
-           fourth clipped mid-line, while the left column ended a screen
-           earlier: 480px (48dvh) uses the height the rail already has. */
+        /* The feed asks for 480px (48dvh on a short window) and grows into
+           whatever the rail has left, but it may also shrink: Usage keeps
+           its natural height, so a fixed floor plus Usage overflowed the
+           rail's own max-height at 1440x900 and hid the "View audit" footer
+           below the window (#1645). 160px still shows the header, two rows
+           and the footer. */
         .column-layout.dashboard > .side-column > activity-feed {
-          flex: 1 1 0;
-          min-height: min(480px, 48dvh);
+          flex: 1 1 min(480px, 48dvh);
+          min-height: 160px;
           /* The rail is bounded and stretched above, so here (and only
              here) the column decides the feed's height and the card's own
              360px stop would only make the list shorter than the space it
              has been given. */
           --activity-feed-list-max-height: none;
+        }
+      }
+
+      /* A window too short for Usage plus a 160px feed (1280x720 at 110%
+         zoom) gets no rail at all: the column flows with the page, so its
+         foot is reached by scrolling instead of being cut off. */
+      @media (min-width: 1200px) and (max-height: 700px) {
+        .column-layout.dashboard > .side-column {
+          position: static;
+          align-self: start;
+          max-height: none;
+        }
+
+        .column-layout.dashboard > .side-column > activity-feed {
+          flex: none;
+          min-height: 0;
+          --activity-feed-list-max-height: 360px;
         }
       }
 

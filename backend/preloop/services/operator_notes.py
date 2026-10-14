@@ -482,6 +482,18 @@ def claim_pending_notes(
         now=moment,
         limit=limit,
     )
+    if candidates and runtime_session_id is not None:
+        from preloop.models.crud import crud_runtime_session
+
+        # Only note-bearing requests lock the runtime row. Termination and
+        # reconciliation cannot race a delivery into a session that ended.
+        if (
+            crud_runtime_session.lock_active_note_target(
+                db, account_id=account_id, runtime_session_id=runtime_session_id
+            )
+            is None
+        ):
+            return []
     claimed: List[Any] = []
     for note in candidates:
         if not crud_agent_control_command.claim_note(
@@ -702,6 +714,7 @@ def undeliver_session_notes(
     account_id: str,
     runtime_session_id: Any,
     reason: Optional[str] = None,
+    commit: bool = True,
 ) -> int:
     """Mark every session-only pending or claimed note undeliverable, and audit it.
 
@@ -740,6 +753,35 @@ def undeliver_session_notes(
 
         for note in transitioned_notes:
             emit_agent_note_undeliverable(db, note)
+        if commit:
+            db.commit()
+    return changed
+
+
+def reconcile_ended_session_notes(db: Session, *, limit: int = 100) -> int:
+    """Settle receipts for ended runtime sessions, regardless of harness.
+
+    Only persisted terminal state is evidence of termination. Silence, idle
+    activity, sleep and disconnect do not change a live session here. Locks
+    and guarded note updates make receipt audit/webhooks idempotent across
+    replicas. The bounded batch commits together, releasing its row locks.
+    """
+    from preloop.models.crud import crud_runtime_session
+
+    sessions = crud_runtime_session.lock_ended_sessions_with_pending_notes(
+        db, limit=limit
+    )
+    changed = sum(
+        undeliver_session_notes(
+            db,
+            account_id=str(session.account_id),
+            runtime_session_id=session.id,
+            reason="runtime session ended",
+            commit=False,
+        )
+        for session in sessions
+    )
+    if sessions:
         db.commit()
     return changed
 
@@ -864,7 +906,11 @@ def resolve_note_target(
     Raises:
         NoteTargetError: when the target does not exist in this account.
     """
-    from preloop.models.crud import crud_managed_agent, crud_runtime_session
+    from preloop.models.crud import (
+        crud_managed_agent,
+        crud_managed_agent_enrollment,
+        crud_runtime_session,
+    )
 
     if runtime_session_id is not None:
         session = crud_runtime_session.get_account_session(
@@ -902,7 +948,27 @@ def resolve_note_target(
             db, account_id=account_id, runtime_session_id=agent.runtime_session_id
         )
         if session is not None and session.ended_at is None:
-            session_id = session.id
+            # Enrollment credentials name an identity row, not a harness run.
+            # Keep agent-addressed notes unbound until an actual carrying
+            # conversation claims them. An explicit session target above is
+            # always preserved, as are custom/live execution pointers.
+            enrollment = crud_managed_agent_enrollment.get_latest_for_agent_by_type(
+                db,
+                account_id=account_id,
+                agent_id=str(agent.id),
+                enrollment_type="runtime_session_bootstrap",
+            )
+            identity_pointer = (
+                session.session_source_type != "flow_execution"
+                and session.session_source_type == agent.session_source_type
+                and session.session_source_id == agent.session_source_id
+                and session.runtime_principal_id == agent.session_source_id
+                and enrollment is not None
+                and enrollment.managed_config.get("runtime_session_id")
+                == str(session.id)
+            )
+            if not identity_pointer:
+                session_id = session.id
     return (agent.id, session_id)
 
 

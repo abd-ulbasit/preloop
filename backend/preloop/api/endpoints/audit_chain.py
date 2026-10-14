@@ -46,6 +46,7 @@ from preloop.schemas.audit_chain import (
 )
 from preloop.services import audit_chain, record_signing
 from preloop.utils.permissions import require_permission
+from preloop.api.heavy_routes import heavy_route
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ SIGNED_BYTES_FORMAT = "preloop.signature/v1\\n<payload_type>\\n<digest>\\n<signe
 
 
 @router.get("/chain/status", response_model=ChainStatusRead)
+@heavy_route
 @require_permission(VIEW_PERMISSION)
 def get_chain_status(
     account: Annotated[Account, Depends(get_account_for_user)],

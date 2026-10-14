@@ -100,3 +100,34 @@ func TestClassifyMissingControlConfigSuggestsOnboarding(t *testing.T) {
 		t.Errorf("remediation should point at onboarding, got: %s", remediation)
 	}
 }
+
+func TestOpenClawOnboardingGrantsOwnedNoteHookCapabilities(t *testing.T) {
+	doc := map[string]interface{}{"plugins": map[string]interface{}{"entries": map[string]interface{}{"other-plugin": map[string]interface{}{"hooks": map[string]interface{}{"allowPromptInjection": false}}}}}
+	applyAgentControlConfigToDocument(AgentConfig{Name: "OpenClaw"}, doc, map[string]interface{}{"bearer_token": "synthetic"})
+	entry := ensureObjectPath(doc, "plugins", "entries", openClawPreloopPluginID)
+	hooks, ok := asObjectMap(entry["hooks"])
+	if !ok || hooks["allowPromptInjection"] != true || hooks["allowConversationAccess"] != true {
+		t.Fatalf("missing native carrier SDK permissions: %#v", entry)
+	}
+	control := ensureObjectPath(entry, "config")
+	if _, ok := control["hooks"]; ok {
+		t.Fatal("SDK permissions belong beside plugin config")
+	}
+	other := ensureObjectPath(doc, "plugins", "entries", "other-plugin", "hooks")
+	if other["allowPromptInjection"] != false {
+		t.Fatal("unrelated plugin permissions changed")
+	}
+}
+
+func TestOpenClawOnboardingPreservesExplicitHookRestrictions(t *testing.T) {
+	doc := map[string]interface{}{}
+	hooks := ensureObjectPath(doc, "plugins", "entries", openClawPreloopPluginID, "hooks")
+	hooks["allowPromptInjection"] = false
+	hooks["allowConversationAccess"] = false
+	hooks["custom-option"] = "retained"
+	applyAgentControlConfigToDocument(AgentConfig{Name: "OpenClaw"}, doc, map[string]interface{}{"bearer_token": "synthetic"})
+	hooks = ensureObjectPath(doc, "plugins", "entries", openClawPreloopPluginID, "hooks")
+	if hooks["allowPromptInjection"] != false || hooks["allowConversationAccess"] != false || hooks["custom-option"] != "retained" {
+		t.Fatalf("explicit hook restrictions overwritten: %#v", hooks)
+	}
+}

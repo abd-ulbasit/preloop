@@ -394,6 +394,32 @@ use conservative defaults: no repository checkout, no publication, no forced
 writes and no tool grants beyond the harness default. Models listed for the
 harness are offered as-is in the profile's model map.
 
+For **Claude Code** (`claude`) the runner generates a profile named
+`claude` when the executable is found and the login is verified, either
+because `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN` is **set** or because `claude auth status --json`
+reports `loggedIn: true` (only that field is kept). Otherwise Claude Code is
+reported as presence only and no flow is routed to it. A flow selects it with
+agent type `claude_code`, `agent_config.harness` set to `claude_code` and an
+optional `agent_config.claude_code_model` (`opus`, `sonnet`, `haiku` or a
+model id seen in an earlier run). The runner starts
+`claude -p --output-format stream-json --verbose [--model <alias>]` in a fresh
+execution directory and writes the prompt to its standard input. Every
+argument is runner-owned, so a hand-written Claude profile may set
+`model_map`, `workspace_root`, `timeout_seconds` and `pass_env`, but not
+`argv` or tool grants. Tool use is gated by the Preloop approval hook: run
+`preloop agents onboard "Claude Code" --approvals` as the runner user first,
+or the job fails with `claude_approval_hook_missing` before Claude starts.
+The flow's Preloop tools are passed with `--mcp-config` from a per-job file
+and allowed as `mcp__preloop-flow`. The runner never writes under
+`~/.claude`, and the job and its login probe never open a Claude credential
+file. (Agent discovery, which the inventory shares with `preloop agents discover`,
+still checks whether a Claude credential file or keychain entry exists; that
+check alone never makes Claude Code runnable.) The approval hook is found in `~/.claude/settings.json`,
+`~/.claude/settings.local.json` (or the same files under
+`$CLAUDE_CONFIG_DIR`) or the managed settings file. Claude Code also runs
+[remote sessions](remote-sessions.md).
+
 What the runner checks, and what it never reads:
 
 - **Login.** For Copilot CLI: whether `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or
@@ -590,6 +616,37 @@ branches or open pull requests unless a Copilot profile also sets
 `"allow_publish": true`; see
 [Copilot CLI publication](../copilot-cli.md#review-and-implementation-flows).
 Otherwise use the Docker harness for flows that publish.
+
+### Running a host flow in an authorized directory
+
+By default every host run gets a fresh execution directory. A flow can
+instead work in a directory the runner owner listed with
+`preloop runner dirs add` (the same list remote sessions use):
+
+```json
+{
+  "harness": "claude_code",
+  "workspace": {"kind": "authorized_directory", "id": "dir_9f2c", "allow_dirty": false}
+}
+```
+
+The control plane sends only the id. A run is leased only to a runner that
+advertises that directory as `write` for the flow's harness, and the runner
+re-checks the entry before the CLI starts: it refuses an unknown id, a
+`read_only` entry, a harness the entry does not allow, the filesystem root,
+the home directory, and a git work tree with uncommitted changes unless the
+flow sets `"allow_dirty": true`. The dirty check runs after the runner
+accepts the lease and before the CLI starts, so a slow `git status` never
+delays heartbeats. Such a flow cannot also clone repositories or use
+`"harness_fallback": "fallback_server"` (the directory does not exist on
+hosted compute); the API refuses both when the flow is saved. Per-job files
+(the MCP config) stay in the runner's own execution directory, so Cursor and
+Devin flows with Preloop tools are refused in an authorized directory: both
+read MCP configuration from their working directory. The CLI
+runs with the directory's own project configuration, so authorize only
+directories whose contents you trust. Two flows that name the same
+directory can run at the same time; give them separate directories or limit
+the runner's concurrency if that matters.
 
 ### Copilot CLI profiles
 

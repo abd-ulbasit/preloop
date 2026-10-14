@@ -556,3 +556,41 @@ def test_origin_gateway_principal_metadata_accepts_only_exact_binding() -> None:
             )
             is expected
         )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "opencode",
+        "pi",
+        "deepseek",
+        "hermes",
+        "openclaw",
+        "nanobot",
+        "devin_cli",
+        "copilot_cli",
+    ],
+)
+def test_non_carrying_tool_hook_does_not_claim_notes(client, source: str) -> None:
+    """Model context carries notes; these native tool gates cannot."""
+    token = _issue_opencode_runtime_token(client)
+    decide = AsyncMock(return_value=("allow", "Allowed.", None, False))
+    with (
+        patch(
+            "preloop.api.endpoints.agent_permission.request_agent_permission", decide
+        ),
+        patch("preloop.api.endpoints.agent_permission._claim_operator_note") as claim,
+    ):
+        response = _post_permission_check(
+            client,
+            token,
+            {
+                "source": source,
+                "tool_name": "Bash",
+                "tool_input": {"command": "npm test"},
+                "session_id": "ses_synthetic",
+            },
+        )
+    assert response.status_code == 200, response.text
+    claim.assert_not_called()
+    assert response.json()["operator_note"] is None

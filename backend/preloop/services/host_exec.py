@@ -19,14 +19,21 @@ HOST_EXEC_HARNESSES: Mapping[str, str] = {
     "cursor": "cursor_cli",
     "copilot": "copilot_cli",
     "devin": "devin_cli",
+    "claude_code": "claude_code",
 }
 HOST_EXEC_AGENT_TYPES = frozenset(HOST_EXEC_HARNESSES)
-_HOST_EXEC_LABELS = {"cursor": "Cursor", "copilot": "Copilot CLI", "devin": "Devin CLI"}
+_HOST_EXEC_LABELS = {
+    "cursor": "Cursor",
+    "copilot": "Copilot CLI",
+    "devin": "Devin CLI",
+    "claude_code": "Claude Code",
+}
 #: Agent config key holding the per-flow model alias for each host harness.
 HOST_EXEC_MODEL_KEYS: Mapping[str, str] = {
     "cursor": "cursor_model",
     "copilot": "copilot_model",
     "devin": "devin_model",
+    "claude_code": "claude_code_model",
 }
 HOST_EXEC_COMPLETION_PROTOCOL = "host_exec"
 #: Inverse of ``HOST_EXEC_HARNESSES``: harness inventory id -> agent type.
@@ -84,6 +91,7 @@ HOST_EXEC_CAPABILITIES = frozenset(
         "cursor_cli",
         "copilot_cli",
         "devin_cli",
+        "claude_code",
         "stdout",
         "cancel",
         "host_publication",
@@ -91,6 +99,12 @@ HOST_EXEC_CAPABILITIES = frozenset(
     }
 )
 HOST_EXEC_MAX_RESULT_BYTES = 256 * 1024
+#: Lease key naming the authorized directory a host run works in (#1669).
+HOST_EXEC_WORKSPACE_KEY = "host_exec_workspace"
+#: ``agent_config.workspace.kind`` a host-exec flow may select. The shape is
+#: shared with persistent flows; host runs accept only authorized directories.
+WORKSPACE_KIND_AUTHORIZED_DIRECTORY = "authorized_directory"
+_AUTHORIZED_DIR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _HOST_EXEC_TERMINAL = frozenset(
     {"SUCCEEDED", "FAILED", "STOPPED", "TIMEOUT", "CANCELLED"}
 )
@@ -107,7 +121,7 @@ def is_host_exec_agent_type(agent_type: Any) -> bool:
         agent_type: Flow or lease agent type.
 
     Returns:
-        True for ``cursor``, ``copilot`` and ``devin``.
+        True for ``cursor``, ``copilot``, ``devin`` and ``claude_code``.
     """
     return _normalized_agent_type(agent_type) in HOST_EXEC_AGENT_TYPES
 
@@ -119,8 +133,8 @@ def host_exec_harness(agent_type: Any) -> Optional[str]:
         agent_type: Flow or lease agent type.
 
     Returns:
-        ``cursor_cli``, ``copilot_cli`` or ``devin_cli``, or None for
-        other agent types.
+        ``cursor_cli``, ``copilot_cli``, ``devin_cli`` or ``claude_code``,
+        or None for other agent types.
     """
     return HOST_EXEC_HARNESSES.get(_normalized_agent_type(agent_type))
 
@@ -177,12 +191,13 @@ def host_exec_harness_selector(agent_type: Any, agent_config: Any) -> Optional[s
     route exactly as before).
 
     Args:
-        agent_type: Flow agent type (``copilot``, ``cursor`` or ``devin``).
+        agent_type: Flow agent type (``copilot``, ``cursor``, ``devin`` or
+            ``claude_code``).
         agent_config: Flow agent configuration.
 
     Returns:
-        ``copilot_cli`` / ``cursor_cli`` / ``devin_cli``, or None for
-        profile-pinned and non-host flows.
+        ``copilot_cli`` / ``cursor_cli`` / ``devin_cli`` / ``claude_code``,
+        or None for profile-pinned and non-host flows.
     """
     config = _unwrapped_config(agent_config)
     raw = config.get("harness")
@@ -201,6 +216,7 @@ HARNESS_GENERATED_PROFILES: Mapping[str, str] = {
     "copilot_cli": "copilot",
     "cursor_cli": "cursor",
     "devin_cli": "devin",
+    "claude_code": "claude",
 }
 
 
@@ -214,6 +230,91 @@ def host_exec_effective_profile(agent_type: Any, agent_config: Any) -> Optional[
         return pinned
     harness = host_exec_harness_selector(agent_type, agent_config)
     return HARNESS_GENERATED_PROFILES.get(harness) if harness else None
+
+
+def host_exec_workspace(agent_config: Any) -> Optional[Dict[str, Any]]:
+    """Return the validated authorized directory a host run works in.
+
+    ``agent_config.workspace`` uses the same shape as persistent flows:
+    ``{"kind": "authorized_directory", "id": ..., "allow_dirty": bool}``.
+    The runner resolves the id against its own ``preloop runner dirs`` list
+    and keeps refusing the filesystem root, the home directory, a
+    ``read_only`` entry, a harness the entry does not allow, and a git tree
+    with uncommitted changes unless ``allow_dirty`` is true.
+
+    Args:
+        agent_config: Flow agent configuration (wrapped or not).
+
+    Returns:
+        ``{"kind": "authorized_directory", "id": ..., "allow_dirty": bool}``,
+        or None when the flow names no workspace.
+
+    Raises:
+        ValueError: When ``agent_config.workspace`` is not that shape.
+    """
+    raw = _unwrapped_config(agent_config).get("workspace")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("agent_config.workspace must be an object")
+    unknown = sorted(
+        str(key) for key in raw if key not in {"kind", "id", "allow_dirty"}
+    )
+    if unknown:
+        raise ValueError(
+            "agent_config.workspace has unsupported keys for host execution: "
+            + ", ".join(unknown)
+        )
+    if raw.get("kind") != WORKSPACE_KIND_AUTHORIZED_DIRECTORY:
+        raise ValueError(
+            'host execution runs in an authorized directory: agent_config.workspace.kind must be "authorized_directory"'
+        )
+    directory_id = raw.get("id")
+    if not isinstance(directory_id, str) or not _AUTHORIZED_DIR_ID_RE.fullmatch(
+        directory_id
+    ):
+        raise ValueError(
+            "agent_config.workspace.id must be an authorized directory id "
+            "(see `preloop runner dirs list`)"
+        )
+    allow_dirty = raw.get("allow_dirty", False)
+    if not isinstance(allow_dirty, bool):
+        raise ValueError("agent_config.workspace.allow_dirty must be a boolean")
+    return {
+        "kind": WORKSPACE_KIND_AUTHORIZED_DIRECTORY,
+        "id": directory_id,
+        "allow_dirty": allow_dirty,
+    }
+
+
+def runner_offers_authorized_directory(
+    runner: Any, directory_id: str, harness: Optional[str]
+) -> bool:
+    """True when the runner advertises the directory for this harness.
+
+    Args:
+        runner: Runner row with ``capabilities``.
+        directory_id: ``agent_config.workspace.id``.
+        harness: Harness id of the lease (``claude_code``, ``copilot_cli``...).
+
+    Returns:
+        True when the directory is advertised, writable and allows the
+        harness. The runner re-checks everything locally.
+    """
+    from preloop.services.runner_workspace_credentials import (
+        runner_authorized_directories,
+    )
+
+    for item in runner_authorized_directories(runner):
+        if item.get("id") != directory_id:
+            continue
+        if item.get("mode") != "write":
+            return False
+        harnesses = item.get("harnesses")
+        return harnesses == "all" or (
+            harness is not None and isinstance(harnesses, list) and harness in harnesses
+        )
+    return False
 
 
 def harness_fallback_mode(agent_config: Any) -> str:
@@ -406,8 +507,8 @@ def runner_has_host_exec_profile(
         name: Profile name from the flow.
         model_identifier: Model alias the profile must advertise, if set.
         agent_type: Host-exec agent type. The profile must advertise the
-            matching harness capability (``cursor_cli``, ``copilot_cli``
-            or ``devin_cli``).
+            matching harness capability (``cursor_cli``, ``copilot_cli``,
+            ``devin_cli`` or ``claude_code``).
         require_publication: The lease publishes; the profile must also
             advertise ``host_publication``. Older runners never do.
         require_continuation: The lease resumes a Copilot session; the
@@ -450,8 +551,22 @@ def host_exec_flow_error(
     agent_type: Any = None,
     agent_config: Any = None,
     runner_pool: Any = None,
+    git_clone_config: Any = None,
+    uses_mcp: bool = False,
 ) -> Optional[str]:
-    """Return a validation error for invalid host-exec / hosted combinations."""
+    """Return a validation error for invalid host-exec / hosted combinations.
+
+    Args:
+        agent_type: Flow agent type.
+        agent_config: Flow agent configuration.
+        runner_pool: Flow runner pool.
+        git_clone_config: Flow checkout configuration.
+        uses_mcp: The flow grants Preloop MCP servers or tools, so a host
+            run receives a per-job MCP config.
+
+    Returns:
+        A validation message, or None when the combination is allowed.
+    """
     profile = host_exec_profile_name(agent_config)
     kind = _normalized_agent_type(agent_type)
     pool = (runner_pool or "").strip().lower() if isinstance(runner_pool, str) else ""
@@ -472,12 +587,55 @@ def host_exec_flow_error(
         return "harness routing cannot run on hosted compute"
     if profile and kind and kind not in HOST_EXEC_AGENT_TYPES:
         return (
-            "host_exec_profile requires agent_type cursor, copilot or devin; Docker "
+            "host_exec_profile requires agent_type cursor, copilot, devin or "
+            "claude_code; Docker "
             f"harnesses cannot use a host execution profile (got {kind})"
         )
     if profile and pool == "server":
         return "host execution profiles cannot run on hosted compute"
+    if profile or harness or kind in HOST_EXEC_AGENT_TYPES:
+        try:
+            workspace = host_exec_workspace(agent_config)
+        except ValueError as exc:
+            return str(exc)
+        if workspace is not None:
+            if _clone_enabled(git_clone_config):
+                return (
+                    "a host flow that runs in an authorized directory cannot "
+                    "also clone repositories; disable git_clone_config or "
+                    "remove agent_config.workspace"
+                )
+            if harness_fallback_mode(agent_config) == HARNESS_FALLBACK_SERVER:
+                return (
+                    "a host flow that runs in an authorized directory cannot "
+                    "fall back to hosted compute, where the directory does not "
+                    "exist; use harness_fallback queue or fail"
+                )
+            if uses_mcp and kind in _WORKSPACE_MCP_IN_CWD:
+                return (
+                    f"{_HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
+                    "working directory, so a flow with Preloop tools cannot run "
+                    "it in an authorized directory; remove the tools or "
+                    "agent_config.workspace"
+                )
     return None
+
+
+#: Host CLIs that read the per-job MCP config from their working directory.
+#: In an authorized directory the runner would have to write into the
+#: operator's project, so it refuses; the API refuses the flow up front.
+_WORKSPACE_MCP_IN_CWD = frozenset({"cursor", "devin"})
+
+
+def _clone_enabled(git_clone_config: Any) -> bool:
+    """Whether a flow's checkout config is turned on (mapping or model)."""
+    if git_clone_config is None:
+        return False
+    if hasattr(git_clone_config, "model_dump"):
+        git_clone_config = git_clone_config.model_dump()
+    if isinstance(git_clone_config, Mapping):
+        return bool(git_clone_config.get("enabled"))
+    return bool(getattr(git_clone_config, "enabled", False))
 
 
 PULL_REQUEST_UNAVAILABLE = (
