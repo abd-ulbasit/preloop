@@ -8,7 +8,8 @@ const STORAGE_PREFIX = 'preloop-collapsible:';
  * A section whose body opens on request, so a secondary block does not push
  * the page past three viewports by default (#1585).
  *
- * The heading is a real button with `aria-expanded` and `aria-controls`. The
+ * The heading is a real button with `aria-expanded`, and `aria-controls`
+ * while open (only then does the body exist). The
  * body is not rendered while closed, so a closed section costs no layout. A
  * `storage-key` remembers the reader's choice per browser; without one the
  * section starts at `open` every time.
@@ -125,7 +126,7 @@ export class CollapsibleSection extends LitElement {
         type="button"
         class="toggle"
         aria-expanded=${this.open ? 'true' : 'false'}
-        aria-controls="body"
+        aria-controls=${this.open ? 'body' : nothing}
         @click=${() => this.toggle()}
       >
         <sl-icon

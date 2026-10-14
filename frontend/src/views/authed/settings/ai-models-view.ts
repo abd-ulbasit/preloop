@@ -48,6 +48,7 @@ import {
 } from '../../../table';
 import '../../../table/data-table';
 import '../../../table/column-picker';
+import '../../../table/table-pagination';
 import '../../../components/resource-actions';
 import '../../../components/token-figures';
 import type { ResourceAction } from '../../../components/resource-actions';
@@ -1772,15 +1773,36 @@ export class AIModelsView extends LitElement {
     `;
   }
 
+  /**
+   * Cards share the list's page (#1585): the whole catalog as cards was as
+   * tall as the unpaged list, so a reader who prefers cards gets the same
+   * page and the same pager.
+   */
   private renderCardsView(models: AIModel[]) {
+    const table = this.modelTable;
+    table.data = models;
+    const rows = table.rows;
     return html`
       <div class="models-grid">
         ${repeat(
-          models,
+          rows,
           (model) => model.id,
           (model) => this.renderModelCard(model)
         )}
       </div>
+      <table-pagination
+        page-index=${table.pageIndex}
+        page-size=${table.pageSize}
+        .pageSizes=${table.pageSizes}
+        .total=${table.totalRows}
+        page-rows=${rows.length}
+        ?has-next=${table.canNextPage}
+        noun="models"
+        @page-change=${(event: CustomEvent) =>
+          table.setPageIndex(event.detail.pageIndex)}
+        @page-size-change=${(event: CustomEvent) =>
+          table.setPageSize(event.detail.pageSize)}
+      ></table-pagination>
     `;
   }
 

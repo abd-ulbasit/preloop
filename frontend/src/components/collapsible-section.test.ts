@@ -14,6 +14,8 @@ describe('collapsible-section', () => {
     );
     const toggle = el.shadowRoot!.querySelector('button')!;
     expect(toggle.getAttribute('aria-expanded')).to.equal('false');
+    // The body is not rendered while closed, so nothing to point at.
+    expect(toggle.hasAttribute('aria-controls')).to.equal(false);
     expect(toggle.textContent!.replace(/\s+/g, ' ').trim()).to.equal(
       'Show usage by flow'
     );
@@ -24,6 +26,9 @@ describe('collapsible-section', () => {
     toggle.click();
     await el.updateComplete;
     expect(toggle.getAttribute('aria-expanded')).to.equal('true');
+    const controlled = toggle.getAttribute('aria-controls');
+    expect(controlled).to.equal('body');
+    expect(el.shadowRoot!.getElementById(controlled!)).to.exist;
     expect(toggle.textContent!.replace(/\s+/g, ' ').trim()).to.equal(
       'Hide usage by flow'
     );
