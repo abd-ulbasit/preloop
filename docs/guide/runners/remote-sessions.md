@@ -58,6 +58,8 @@ preloop runner dirs add /path/to/project --harness cursor_cli
 
 Choose **New session** on the runner in the console, then **Cursor CLI**. A paused runner refuses new sessions. Native sessions do not require Docker.
 
+For each Cursor turn, the runner revalidates the host-authorized workspace and passes `--trust` to acknowledge Cursor's workspace-trust prompt in headless mode. Tool approvals still use the required Preloop hooks; the runner does not enable `--force` automatically.
+
 - One turn runs at a time. A second turn sent while one is running is refused
   with `turn_in_progress`.
 The following tool-grant and environment details describe Copilot sessions.

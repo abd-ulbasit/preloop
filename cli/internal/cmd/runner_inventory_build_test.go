@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -461,5 +462,72 @@ func TestCursorLoginFromStatus(t *testing.T) {
 	}
 	if parseHarnessVersion("GitHub Copilot CLI 1.0.95.\n") != "1.0.95" {
 		t.Fatal("version parse")
+	}
+}
+
+func TestCopilotLoginStatusFrames(t *testing.T) {
+	for _, tc := range []struct{ name, payload, want string }{
+		{"signed in", `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":true,"login":"jane-doe","token":"must-never-publish"}}`, harnessLoginSignedIn},
+		{"signed out", `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":false}}`, harnessLoginSignedOut},
+		{"missing verdict", `{"jsonrpc":"2.0","id":1,"result":{}}`, harnessLoginUnknown},
+		{"wrong response", `{"jsonrpc":"2.0","id":2,"result":{"isAuthenticated":true}}`, harnessLoginUnknown},
+		{"unsupported method", `{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}`, harnessLoginUnknown},
+		{"malformed", `{`, harnessLoginUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(tc.payload), tc.payload)
+			if got := readCopilotLoginStatus(strings.NewReader(frame)); got != tc.want {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+	for _, frame := range []string{"", "Content-Length: 65537\r\n\r\n", "Content-Length: -1\r\n\r\n", "Content-Length: nope\r\n\r\n", "Content-Length: 100\r\n\r\n{}", "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", strings.Repeat("x", 4097)} {
+		if got := readCopilotLoginStatus(strings.NewReader(frame)); got != harnessLoginUnknown {
+			t.Fatalf("invalid frame accepted: %s", got)
+		}
+	}
+}
+
+func TestBuildHarnessInventoryCopilotSDKLogin(t *testing.T) {
+	for _, tc := range []struct{ name, stored, verdict, want, source string }{
+		{"modern credential store", "// Settings moved to settings.json\n{\"firstLaunchAt\":\"2026-01-01\"}", harnessLoginSignedIn, harnessLoginSignedIn, "cli_status"},
+		{"signed out overrides stale record", `{"logged_in_users":[{"host":"https://github.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, "cli_status"},
+		{"old CLI fallback", `{"logged_in_users":[{"host":"https://github.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "stored"},
+		{"no login unknown", `{}`, harnessLoginUnknown, harnessLoginUnknown, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCopilotConfig(t, filepath.Join(home, ".copilot"), tc.stored)
+			deps := (fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{"copilot": true}}).deps("darwin")
+			deps.CopilotLogin = func(string) string { return tc.verdict }
+			entry := entryFor(t, buildHarnessInventory(deps), hostExecHarnessCopilot)
+			if entry.LoginState != tc.want || entry.LoginSource != tc.source {
+				t.Fatalf("login = %s/%s, want %s/%s", entry.LoginState, entry.LoginSource, tc.want, tc.source)
+			}
+		})
+	}
+}
+
+func TestProbeCopilotLoginSDKProcess(t *testing.T) {
+	skipNoShebangOnWindows(t, "fake Copilot SDK transport")
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "copilot")
+	payload := `{"jsonrpc":"2.0","id":1,"result":{"isAuthenticated":true,"login":"jane-doe"}}`
+	script := fmt.Sprintf("#!/bin/sh\nprintf 'Content-Length: %%s\\r\\n\\r\\n%%s' '%d' '%s'\nwhile :; do :; done\n", len(payload), payload)
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if got := probeCopilotLogin(executable); got != harnessLoginSignedIn {
+		t.Fatalf("got %s", got)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("status cleanup took %s", elapsed)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := probeCopilotLogin(executable); got != harnessLoginUnknown {
+		t.Fatalf("failed command got %s", got)
 	}
 }
