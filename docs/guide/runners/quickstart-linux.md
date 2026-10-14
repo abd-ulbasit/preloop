@@ -394,6 +394,32 @@ use conservative defaults: no repository checkout, no publication, no forced
 writes and no tool grants beyond the harness default. Models listed for the
 harness are offered as-is in the profile's model map.
 
+For **Claude Code** (`claude`) the runner generates a profile named
+`claude` when the executable is found and the login is verified, either
+because `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN` is **set** or because `claude auth status --json`
+reports `loggedIn: true` (only that field is kept). Otherwise Claude Code is
+reported as presence only and no flow is routed to it. A flow selects it with
+agent type `claude_code`, `agent_config.harness` set to `claude_code` and an
+optional `agent_config.claude_code_model` (`opus`, `sonnet`, `haiku` or a
+model id seen in an earlier run). The runner starts
+`claude -p --output-format stream-json --verbose [--model <alias>]` in a fresh
+execution directory and writes the prompt to its standard input. Every
+argument is runner-owned, so a hand-written Claude profile may set
+`model_map`, `workspace_root`, `timeout_seconds` and `pass_env`, but not
+`argv` or tool grants. Tool use is gated by the Preloop approval hook: run
+`preloop agents onboard "Claude Code" --approvals` as the runner user first,
+or the job fails with `claude_approval_hook_missing` before Claude starts.
+The flow's Preloop tools are passed with `--mcp-config` from a per-job file
+and allowed as `mcp__preloop-flow`. The runner never writes under
+`~/.claude`, and the job and its login probe never open a Claude credential
+file. (Agent discovery, which the inventory shares with `preloop agents discover`,
+still checks whether a Claude credential file or keychain entry exists; that
+check alone never makes Claude Code runnable.) The approval hook is found in `~/.claude/settings.json`,
+`~/.claude/settings.local.json` (or the same files under
+`$CLAUDE_CONFIG_DIR`) or the managed settings file. Runner sessions for Claude
+Code are not available yet.
+
 What the runner checks, and what it never reads:
 
 - **Login.** For Copilot CLI: whether `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or

@@ -398,6 +398,13 @@ func hostExecMCPConfig(harness, workspace, token string) ([]string, []string, er
 			"type": "http", "url": mcpURL, "headers": headers, "tools": []string{"*"},
 		}}}
 		args = []string{"--additional-mcp-config=@" + path}
+	case hostExecHarnessClaude:
+		// Passed with --mcp-config; never written where Claude Code reads
+		// project configuration (.mcp.json, .claude/).
+		path = filepath.Join(workspace, ".preloop", "claude-mcp-config.json")
+		doc = map[string]any{"mcpServers": map[string]any{hostExecMCPServerName: map[string]any{
+			"type": "http", "url": mcpURL, "headers": headers,
+		}}}
 	case hostExecHarnessDevin:
 		path = filepath.Join(workspace, ".devin", "mcp_config.local.json")
 		doc = map[string]any{"mcpServers": map[string]any{hostExecMCPServerName: map[string]any{"url": mcpURL, "headers": headers}}}

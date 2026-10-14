@@ -32,6 +32,11 @@ describe('PreloopFlowForm host execution profile', () => {
     expect(source).to.include('value="copilot"');
     expect(source).to.include('Copilot CLI (private runner host profile)');
   });
+
+  it('offers Claude Code as a private-runner host profile', () => {
+    expect(source).to.include('value="claude_code"');
+    expect(source).to.include('Claude Code (private runner host profile)');
+  });
 });
 
 describe('PreloopFlowForm host execution submit', () => {
@@ -157,6 +162,34 @@ describe('PreloopFlowForm host execution submit', () => {
       devin_model: 'swe-2-high',
     });
     expect(event.detail.flow.agent_config).not.to.have.property('cursor_model');
+    expect(
+      element.shadowRoot?.querySelector('sl-select[label="AI model"]')
+    ).to.equal(null);
+  });
+
+  it('submits a Claude Code harness flow and its model alias', async () => {
+    const element = await mount({
+      name: 'Claude task',
+      prompt_template: 'summarize',
+      agent_type: 'claude_code',
+      agent_config: { harness: 'claude_code', devin_model: 'old' },
+    });
+    const input = element.shadowRoot?.querySelector(
+      '[data-claude-code-model]'
+    ) as HTMLInputElement;
+    expect(input).to.exist;
+    input.value = 'opus';
+    input.dispatchEvent(new CustomEvent('sl-input'));
+    await element.updateComplete;
+    const submitted = oneEvent(element, 'flow-submit');
+    void (element as any).handleFormSubmit(new Event('submit'));
+    const event = await submitted;
+    expect(event.detail.flow.agent_type).to.equal('claude_code');
+    expect(event.detail.flow.agent_config).to.deep.include({
+      harness: 'claude_code',
+      claude_code_model: 'opus',
+    });
+    expect(event.detail.flow.agent_config).not.to.have.property('devin_model');
     expect(
       element.shadowRoot?.querySelector('sl-select[label="AI model"]')
     ).to.equal(null);
