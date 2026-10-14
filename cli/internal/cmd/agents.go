@@ -856,6 +856,7 @@ func init() {
 
 	agentsDiscoverCmd.Flags().Bool("add", false, "deprecated: use 'preloop agents onboard <agent>' instead")
 	agentsDiscoverCmd.Flags().Bool("json", false, "output safe discovery summaries as JSON (read-only, no prompts)")
+	agentsDiscoverCmd.Flags().Bool("all-users", false, "scan bounded local profiles with elevated rights; requires --inventory or --report")
 	agentsDiscoverCmd.Flags().Bool("inventory", false, "output offline known-app inventory JSON (no auth, network, prompts, or writes)")
 	agentsDiscoverCmd.Flags().Bool("no-onboard-prompt", false, "do not prompt to onboard discovered agents")
 	agentsDiscoverCmd.Flags().BoolP("yes", "y", false, "auto-approve interactive onboarding prompts")
@@ -902,6 +903,19 @@ func init() {
 func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 	if isOfflineInventoryCommand(cmd) {
 		return runAgentsInventory(cmd)
+	}
+	allUsers, _ := cmd.Flags().GetBool("all-users")
+	if allUsers {
+		report, _ := cmd.Flags().GetBool("report")
+		if !report {
+			return errors.New("--all-users requires --inventory or --report")
+		}
+		for _, name := range []string{"add", "yes", "force", "skip-live-validate"} {
+			if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+				return fmt.Errorf("--all-users cannot be combined with --%s", name)
+			}
+		}
+		return runAllUsersInventory(cmd.OutOrStdout(), true)
 	}
 	asJSON, _ := cmd.Flags().GetBool("json")
 	addServers, _ := cmd.Flags().GetBool("add")

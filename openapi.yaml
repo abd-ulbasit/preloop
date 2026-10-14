@@ -28355,9 +28355,17 @@ components:
       properties:
         schema_version:
           type: integer
-          const: 1
+          enum:
+          - 1
+          - 2
           title: Schema Version
           default: 1
+        profiles:
+          items:
+            $ref: '#/components/schemas/ObservedProfile'
+          type: array
+          maxItems: 64
+          title: Profiles
         observation_id:
           type: string
           format: uuid
@@ -36122,6 +36130,12 @@ components:
           type: string
           pattern: ^[0-9a-f]{64}$
           title: Config Path Hash
+        profile_ref:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Profile Ref
         app_version:
           anyOf:
           - type: string
@@ -36228,6 +36242,36 @@ components:
       - axis
       title: ObservedControl
       description: Independent collector assertions, with no effective/verified field.
+    ObservedProfile:
+      properties:
+        profile_ref:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+          title: Profile Ref
+        completeness:
+          type: string
+          enum:
+          - complete
+          - partial
+          - failed
+          title: Completeness
+        error_code:
+          anyOf:
+          - type: string
+            enum:
+            - profile_unavailable
+            - profile_unreadable
+            - probe_incomplete
+          - type: 'null'
+          title: Error Code
+      additionalProperties: false
+      type: object
+      required:
+      - profile_ref
+      - completeness
+      title: ObservedProfile
+      description: Keyed local profile scope with fixed failure codes and no clear
+        paths.
     OnboardingRequest:
       properties:
         email:
@@ -45414,7 +45458,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;

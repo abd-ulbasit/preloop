@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -78,6 +79,19 @@ func newDiscoveryServer(t *testing.T) (*httptest.Server, *discoveryRecorder) {
 func setupDiscoveryHome(t *testing.T) string {
 	t.Helper()
 	home := testenv.SetTempHome(t)
+	// The parity suite must never discover installed local harnesses or ask
+	// the OS credential store, even on a developer's macOS machine.
+	oldSpecs, oldRuntime, oldBundle := agentSpecs, runtimeExecutableProbe, appBundleProbe
+	oldClaude, oldCodex := claudeKeychainPresenceProbe, codexKeychainPresenceProbe
+	agentSpecs = []agentSpec{specByName(t, "Cursor")}
+	runtimeExecutableProbe = func(string) (string, error) { return "", exec.ErrNotFound }
+	appBundleProbe = func(string) (string, bool) { return "", false }
+	claudeKeychainPresenceProbe = func() bool { t.Fatal("unexpected credential probe"); return false }
+	codexKeychainPresenceProbe = func() bool { t.Fatal("unexpected credential probe"); return false }
+	t.Cleanup(func() {
+		agentSpecs, runtimeExecutableProbe, appBundleProbe = oldSpecs, oldRuntime, oldBundle
+		claudeKeychainPresenceProbe, codexKeychainPresenceProbe = oldClaude, oldCodex
+	})
 	dir := filepath.Join(home, ".cursor")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

@@ -1,5 +1,8 @@
 """Synthetic compatibility, privacy and immutable observation regressions."""
 
+import json
+from pathlib import Path
+
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -43,7 +46,7 @@ def envelope(**changes: object) -> dict:
         {"source_ref": str(uuid4())},
         {"last_used_at": NOW.isoformat()},
         {"errors": ["https://example.com"]},
-        {"schema_version": 2},
+        {"schema_version": 3},
     ],
 )
 def test_private_or_unknown_fields_rejected(extra: dict) -> None:
@@ -329,3 +332,71 @@ def test_background_retention_purges_inactive_sources(observation_db: Session) -
     record(db, uuid4(), source, envelope(), NOW)
     assert crud_discovery_observation.purge_all_expired(db, now=NOW) == 2
     assert len(list(db.scalars(select(models.DiscoveryObservation)))) == 1
+
+
+def test_profile_evidence_v2_and_legacy_compatibility() -> None:
+    """Profiles extend immutable evidence while v1 reports keep their shape."""
+    profiles = [
+        {"profile_ref": "a" * 64, "completeness": "complete"},
+        {
+            "profile_ref": "b" * 64,
+            "completeness": "failed",
+            "error_code": "profile_unreadable",
+        },
+    ]
+    payload = envelope(
+        schema_version=2,
+        profiles=profiles,
+        completeness="partial",
+        errors=["permission_denied"],
+        applications=[
+            {
+                "agent_kind": "cursor",
+                "config_path_hash": "c" * 64,
+                "profile_ref": "a" * 64,
+            }
+        ],
+    )
+    evidence = DiscoveryEvidence.model_validate(payload)
+    assert len(evidence.profiles) == 2
+    assert evidence.applications[0].profile_ref == "a" * 64
+    report = DiscoveryReportRequest(workstation_fingerprint="d" * 64, evidence=evidence)
+    assert report.evidence.schema_version == 2
+    for changes in (
+        {"schema_version": 1},
+        {"profiles": profiles[:1] * 2},
+        {"profiles": profiles[1:]},
+        {"completeness": "complete", "errors": []},
+        {"profiles": [{**profiles[0], "home": "/home/jane"}]},
+        {"profiles": [{**profiles[0], "profile_ref": "Jane Doe"}]},
+        {"profiles": [{**profiles[0], "error_code": "secret-token"}]},
+    ):
+        with pytest.raises(ValidationError):
+            DiscoveryEvidence.model_validate({**payload, **changes})
+    assert DiscoveryEvidence.model_validate(envelope()).schema_version == 1
+
+
+def test_v1_canonical_evidence_does_not_gain_profile_defaults() -> None:
+    """An upgrade must not change content hashes for replayed v1 evidence."""
+    evidence = DiscoveryEvidence.model_validate(
+        envelope(applications=[{"agent_kind": "cursor", "config_path_hash": "a" * 64}])
+    )
+    data = evidence.model_dump(mode="json")
+    assert "profiles" not in data
+    assert "profile_ref" not in data["applications"][0]
+    assert DiscoveryEvidence.model_validate(data).model_dump(mode="json") == data
+
+
+def test_go_profile_report_wire_contract() -> None:
+    """The exact Go serializer fixture must pass the server's privacy schema."""
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "cli/internal/cmd/testdata/profile-inventory/report-v2.json"
+    )
+    report = DiscoveryReportRequest.model_validate(json.loads(path.read_text()))
+    assert report.evidence is not None
+    assert report.evidence.schema_version == 2
+    assert report.evidence.profiles[2].completeness == "failed"
+    assert len(report.evidence.applications) == len(report.candidates) == 2
+    assert len({candidate.config_path_hash for candidate in report.candidates}) == 2
+    assert all(not candidate.enrolled for candidate in report.candidates)
