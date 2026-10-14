@@ -9,7 +9,7 @@ from preloop.services.prompt_resolvers.execution import (
     ExecutionResolver,
     RESUME_PUBLISHED_HISTORY_HINT,
     RESUME_REBASE_CONFLICT_HINT,
-    resume_rebase_conflict_hint,
+    resume_prompt_hints,
 )
 
 
@@ -54,7 +54,7 @@ class TestExecutionResolver:
         assert result is None
 
     def test_resume_prompt_tells_the_agent_to_inspect_rebase_conflicts(self):
-        hint = resume_rebase_conflict_hint({"_resume": {"execution_id": "prior"}})
+        hint = resume_prompt_hints({"_resume": {"execution_id": "prior"}})
         assert RESUME_PUBLISHED_HISTORY_HINT in hint
         assert "Never amend or squash" in hint
         assert hint.index(RESUME_PUBLISHED_HISTORY_HINT) < hint.index(
@@ -62,8 +62,8 @@ class TestExecutionResolver:
         )
         assert RESUME_REBASE_CONFLICT_HINT in hint
         assert "/workspace/evidence/rebase-conflict.txt" in hint
-        assert resume_rebase_conflict_hint({}) == ""
-        assert resume_rebase_conflict_hint(None) == ""
+        assert resume_prompt_hints({}) == ""
+        assert resume_prompt_hints(None) == ""
 
     @pytest.mark.asyncio
     async def test_rebase_conflict_is_not_a_prompt_placeholder(self, monkeypatch):

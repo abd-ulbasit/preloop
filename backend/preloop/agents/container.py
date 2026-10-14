@@ -5078,8 +5078,26 @@ if [ -f /tmp/preloop-checkpoint-client.py ]; then
 fi
 """.strip()
 
+    @staticmethod
+    def _resume_repo_evidence(repo_index: int) -> tuple[str, str]:
+        """Marker and refusal log for one repository in a resume.
+
+        Several checkouts share ``EVIDENCE_DIR_PATH`` and one shell. A
+        single marker would let a later no-op rebase clear an earlier
+        rewrite, or let a repository whose rebase was skipped inherit
+        another repository's force-push.
+        """
+
+        if isinstance(repo_index, bool) or not isinstance(repo_index, int):
+            raise ValueError("repo_index must be a non-negative int")
+        if repo_index < 0:
+            raise ValueError("repo_index must be a non-negative int")
+        marker = f"{EVIDENCE_DIR_PATH}/resume-rebased-{repo_index}"
+        refused = f"{EVIDENCE_DIR_PATH}/push-refused-{repo_index}.txt"
+        return marker, refused
+
     def _build_git_resume_rebase_shell(
-        self, *, full_path: str, base_branch: str
+        self, *, full_path: str, base_branch: str, repo_index: int = 0
     ) -> str:
         """Fetch the flow base branch and rebase the cloned PR branch onto it.
 
@@ -5090,10 +5108,13 @@ fi
         is exported in the container for in-container processes. The block
         always exits 0 so a conflict does not abort init.
 
-        ``evidence/resume-rebased`` and ``PRELOOP_RESUME_REBASED=1`` are
-        recorded only when ``HEAD`` changes. A no-op rebase leaves the same
-        commit, so the marker stays unset and the later push cannot
-        force-with-lease over the reviewed pull request.
+        ``evidence/resume-rebased-<repo_index>`` and
+        ``PRELOOP_RESUME_REBASED_<repo_index>=1`` are recorded only when
+        ``HEAD`` changes. A no-op rebase leaves the same commit, so that
+        repository's marker stays unset and its later push cannot
+        force-with-lease over the reviewed pull request. Each repository
+        has its own marker, so one checkout cannot clear or inherit
+        another's.
         """
 
         safe_base = _validated_git_ref(base_branch)
@@ -5105,7 +5126,8 @@ fi
 
         q_path = shlex.quote(full_path)
         conflict_file = f"{EVIDENCE_DIR_PATH}/rebase-conflict.txt"
-        rebased_marker = f"{EVIDENCE_DIR_PATH}/resume-rebased"
+        rebased_marker, _refused_log = self._resume_repo_evidence(repo_index)
+        rebased_env = f"PRELOOP_RESUME_REBASED_{repo_index}"
         return f"""
 cd {q_path}
 echo "Resume rebase: fetching origin/{safe_base} and rebasing the PR branch onto it"
@@ -5117,11 +5139,11 @@ if git fetch origin {safe_base}; then
             echo "Resume rebase onto origin/{safe_base} moved HEAD"
             mkdir -p {EVIDENCE_DIR_PATH}
             touch {rebased_marker}
-            export PRELOOP_RESUME_REBASED=1
+            export {rebased_env}=1
         else
             echo "Resume rebase onto origin/{safe_base} left HEAD unchanged"
             rm -f {rebased_marker}
-            unset PRELOOP_RESUME_REBASED
+            unset {rebased_env}
         fi
     else
         echo "Resume rebase onto origin/{safe_base} conflicted; leaving rebase aborted"
@@ -5133,38 +5155,40 @@ if git fetch origin {safe_base}; then
         }} > {conflict_file}
         git rebase --abort || true
         rm -f {rebased_marker}
-        unset PRELOOP_RESUME_REBASED
+        unset {rebased_env}
         export PRELOOP_RESUME_REBASE_CONFLICT=1
         echo "Wrote conflicting files to {conflict_file}"
     fi
 else
     echo "Resume rebase: could not fetch origin/{safe_base}; skipping rebase"
     rm -f {rebased_marker}
-    unset PRELOOP_RESUME_REBASED
+    unset {rebased_env}
 fi
 cd /workspace
 true
 """.strip()
 
-    def _build_git_push_shell(self, safe_target: str, *, resume_rebase: bool) -> str:
+    def _build_git_push_shell(
+        self, safe_target: str, *, resume_rebase: bool, repo_index: int = 0
+    ) -> str:
         """Build the post-exec push.
 
-        ``--force-with-lease`` runs only after a resume rebase that moved
-        HEAD. A no-op rebase pushes fast-forward only. An amended or
-        squashed tip is refused, and the reason is written to
-        ``evidence/push-refused.txt``.
+        ``--force-with-lease`` runs only after this repository's resume
+        rebase moved HEAD. A no-op rebase pushes fast-forward only. An
+        amended or squashed tip is refused, and the reason is written to
+        ``evidence/push-refused-<repo_index>.txt``.
         """
 
         if not resume_rebase:
             return f"  git push origin {safe_target}"
-        rebased_marker = f"{EVIDENCE_DIR_PATH}/resume-rebased"
-        refused_log = f"{EVIDENCE_DIR_PATH}/push-refused.txt"
+        rebased_marker, refused_log = self._resume_repo_evidence(repo_index)
+        rebased_env = f"PRELOOP_RESUME_REBASED_{repo_index}"
         remote_ref = f"origin/{safe_target}"
         return "\n".join(
             [
                 (
                     f"  if [ -f {rebased_marker} ] || "
-                    f'[ "${{PRELOOP_RESUME_REBASED:-}}" = "1" ]; then'
+                    f'[ "${{{rebased_env}:-}}" = "1" ]; then'
                 ),
                 f"    git push --force-with-lease origin {safe_target}",
                 f"  elif git merge-base --is-ancestor {remote_ref} HEAD; then",
@@ -5280,7 +5304,9 @@ true
                     git_config = {}
                 base_branch = self._resolve_resume_base_branch(git_config, repo_config)
                 rebase_shell = self._build_git_resume_rebase_shell(
-                    full_path=full_path, base_branch=base_branch
+                    full_path=full_path,
+                    base_branch=base_branch,
+                    repo_index=repo_index,
                 )
                 if rebase_shell:
                     commands.append(rebase_shell)
@@ -6314,6 +6340,7 @@ export GIT_TERMINAL_PROMPT=0"""
                                 execution_context.get("_git_resume_rebase")
                                 or self._is_resume_execution(execution_context)
                             ),
+                            repo_index=idx,
                         ),
                     ]
                 )

@@ -747,8 +747,10 @@ machine. The runner never reads, copies or forwards harness credentials. See
 - A feedback continuation no longer force-pushes a reviewed pull request
   when the resume rebase leaves HEAD unchanged. `--force-with-lease` is
   used only after that rebase moves HEAD. An amended or squashed tip is
-  refused and written to `evidence/push-refused.txt`, and the continuation
-  prompt says to add commits on top of the published history
+  refused and written to `evidence/push-refused-<repo>.txt`. Each
+  repository has its own marker, so one checkout cannot force-push or
+  block another. The continuation prompt says to add commits on top of
+  the published history
   ([#1659](https://github.com/preloop/preloop/issues/1659)).
 
 - The Claude sidecar reports a turn that ends on an error result (such as an

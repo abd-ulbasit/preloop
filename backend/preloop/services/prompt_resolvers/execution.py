@@ -41,7 +41,7 @@ def _render_ci_failure(failure: Optional[dict]) -> Optional[str]:
     return line
 
 
-def resume_rebase_conflict_hint(trigger_event_data: Optional[dict]) -> str:
+def resume_prompt_hints(trigger_event_data: Optional[dict]) -> str:
     """Instructions appended to resume prompts.
 
     The rebase runs inside the container after this prompt is resolved, so
