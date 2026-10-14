@@ -163,11 +163,17 @@ EnvironmentFile=-/home/jane/.preloop/copilot.env
 
 `EnvironmentFile=` is systemd's environment-file setting. The leading `-`
 lets the service start when the file is absent; Copilot stays signed out
-until the variable is set. The file is one `NAME=value` line, mode `0600`,
-owned by the runner user. Use the home directory `enable` pinned as `HOME`:
+until the variable is set. Create the file as the runner user, one
+`NAME=value` line, mode `0600`, under the home directory `enable` pinned
+as `HOME`. `umask` applies only when the shell creates the file, so set
+the mode again after writing:
 
-```text
+```sh
+umask 077
+cat > ~/.preloop/copilot.env <<'EOF'
 COPILOT_GITHUB_TOKEN=replace-with-token
+EOF
+chmod 600 ~/.preloop/copilot.env
 ```
 
 Reload the user manager, then restart, so the running process sees it:
@@ -178,8 +184,7 @@ preloop runner restart
 ```
 
 A foreground runner needs no drop-in. Export the variable in the shell that
-starts `preloop runner fg`. The same steps are in the
-[Linux quickstart](quickstart-linux.md#headless-hosts-no-keychain).
+starts `preloop runner fg`.
 
 On a host that has a keychain, `copilot login --device-code` stores the
 login for the runner user instead of an environment token. An environment

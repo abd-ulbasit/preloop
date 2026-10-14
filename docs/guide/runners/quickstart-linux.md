@@ -158,60 +158,10 @@ runs the service, since the unit does not inherit your shell exports.
 
 A host with no system credential store (a container or a minimal server)
 cannot keep a Copilot login from `copilot login --with-token`: Copilot
-reports that login succeeded but the token was not saved, and the
-plaintext prompt cannot be answered non-interactively. The runner then
-reports Copilot signed out.
-
-Start the runner with `COPILOT_GITHUB_TOKEN` or `GH_TOKEN` set
-(`GITHUB_TOKEN` is accepted the same way). Copilot CLI accepts a GitHub
-CLI (`gh`) OAuth token and a fine-grained personal access token with the
-Copilot Requests permission (verified with Copilot CLI 1.0.96). The
-host-exec allowlist forwards names starting with `COPILOT_` or `GH_`,
-plus `GITHUB_TOKEN`, to the Copilot process, and still removes
-`COPILOT_PROVIDER_*` and `COPILOT_ALLOW_ALL`. The inventory reports
-`login_state: signed_in` from the variable name alone and never reads
-the value, so the token never leaves the host. Session behaviour is
-described in
-[Remote sessions](remote-sessions.md#headless-hosts-no-keychain).
-
-`preloop runner enable` writes
-`~/.config/systemd/user/preloop-runner.service` with one `Environment=`
-line that pins `HOME`, and the next `enable` replaces that file. It does
-not copy your shell. Put the token in a drop-in, which `enable` does not
-touch. `systemctl --user edit preloop-runner.service` creates
-`~/.config/systemd/user/preloop-runner.service.d/override.conf`; writing
-the file yourself is the same mechanism:
-
-```text
-[Service]
-EnvironmentFile=-/home/jane/.preloop/copilot.env
-```
-
-`EnvironmentFile=` reads `NAME=value` lines from that file. The leading
-`-` means a missing file does not stop the service. Create the file as
-the runner user, mode `0600`, with an absolute path under the home
-`enable` pinned:
-
-```sh
-umask 077
-cat > ~/.preloop/copilot.env <<'EOF'
-COPILOT_GITHUB_TOKEN=replace-with-token
-EOF
-```
-
-Then reload and restart so the running unit picks it up. The variable
-survives logout and reboot with the unit; a shell export does not:
-
-```sh
-systemctl --user daemon-reload
-preloop runner restart
-```
-
-For a foreground test, export the variable in the shell that runs
-`preloop runner fg` instead. On a host that has a keychain,
-`copilot login --device-code` stores the login for the runner user and
-no environment token is required. An environment token is readable by
-any process of that user.
+reports that login succeeded but the token was not saved, and the runner
+then reports Copilot signed out. Start the runner with
+`COPILOT_GITHUB_TOKEN` set. The full procedure is in
+[Headless hosts (no keychain)](remote-sessions.md#headless-hosts-no-keychain).
 
 ### Rotate the token or retire the runner
 
