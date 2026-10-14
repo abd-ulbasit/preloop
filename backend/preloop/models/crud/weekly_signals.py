@@ -18,6 +18,18 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from preloop.models.crud.api_usage import REPLAY_VALIDATION_PURPOSE
+from preloop.models.crud.runtime_session_activity import TOOL_CALL_SUCCESS_STATUSES
+
+# Same predicate as ``cache_covered_condition``: a reported read or a
+# reported write means the provider sent a cache split.
+_CACHE_COVERED_SQL = (
+    "(cache_read_tokens IS NOT NULL OR cache_creation_tokens IS NOT NULL)"
+)
+# Non-NULL statuses outside ``TOOL_CALL_SUCCESS_STATUSES`` are failures,
+# including ``refused``. NULL stays neither success nor failure.
+_TOOL_SUCCESS_SQL = ", ".join(
+    "'" + status.replace("'", "") + "'" for status in TOOL_CALL_SUCCESS_STATUSES
+)
 
 
 class ApprovalProjection(NamedTuple):
@@ -324,6 +336,7 @@ def first_seen_signals(
                         WHERE account_id = CAST(:account_id AS uuid)
                           AND action_type = 'model_gateway'
                           AND COALESCE(elem ->> 'name', '') <> ''
+                          AND (timestamp AT TIME ZONE 'UTC') < :end
                           {_NOT_REPLAY}
                         GROUP BY elem ->> 'name'
                     ) tools
@@ -602,24 +615,24 @@ def session_efficiency_signals(
                         COUNT(*)::int AS request_count,
                         COALESCE(
                             SUM(cache_read_tokens) FILTER (
-                                WHERE cache_read_tokens IS NOT NULL
+                                WHERE {_CACHE_COVERED_SQL}
                             ),
                             0
                         )::int AS cache_read_tokens,
                         COALESCE(
                             SUM(prompt_tokens) FILTER (
-                                WHERE cache_read_tokens IS NOT NULL
+                                WHERE {_CACHE_COVERED_SQL}
                             ),
                             0
                         )::int AS cache_prompt_tokens,
                         COALESCE(
                             SUM(cache_creation_tokens) FILTER (
-                                WHERE cache_read_tokens IS NOT NULL
+                                WHERE {_CACHE_COVERED_SQL}
                             ),
                             0
                         )::int AS cache_creation_tokens,
                         COUNT(*) FILTER (
-                            WHERE cache_read_tokens IS NOT NULL
+                            WHERE {_CACHE_COVERED_SQL}
                         )::int AS cache_covered_requests,
                         SUM(churned)::int AS prefix_churn,
                         COUNT(*) FILTER (WHERE is_retry)::int AS retry_count,
@@ -742,7 +755,8 @@ def session_efficiency_signals(
                             COUNT(*)::int AS n
                         FROM marked
                         WHERE activity_type = 'tool_call'
-                          AND status IN ('error', 'failed', 'failure')
+                          AND status IS NOT NULL
+                          AND status NOT IN ({_TOOL_SUCCESS_SQL})
                           AND COALESCE(tool_name, '') <> ''
                         GROUP BY runtime_session_id, tool_name
                     ) per_tool

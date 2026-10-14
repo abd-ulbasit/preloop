@@ -109,6 +109,7 @@ def _usage(
     session_id: Optional[uuid.UUID] = None,
     prompt_tokens: Optional[int] = None,
     cache_read_tokens: Optional[int] = None,
+    cache_creation_tokens: Optional[int] = None,
     tools: Optional[list[str]] = None,
     is_retry: Optional[bool] = None,
     tool_call_count: Optional[int] = None,
@@ -136,6 +137,7 @@ def _usage(
             runtime_session_id=session_id,
             prompt_tokens=prompt_tokens,
             cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
             is_retry=is_retry,
             tool_call_count=tool_call_count,
             meta_data=meta or None,
@@ -620,7 +622,7 @@ def test_first_seen_is_limited_to_the_window(
         test_user,
         at=END + timedelta(hours=1),
         duration=0.2,
-        tools=["future_tool"],
+        tools=["future_tool", "new_tool"],
     )
     _usage(
         db_session,
@@ -826,6 +828,57 @@ def test_session_tier1_aggregates(db_session: Session, test_user: User) -> None:
     assert [item.rule for item in developer.spend_outliers] == ["daily_spend"]
 
 
+def test_mcp_advertised_name_matches_the_bare_invocation(
+    db_session: Session, test_user: User
+) -> None:
+    """An ``mcp__server__tool`` advertisement is the same tool as a bare call."""
+    session = _session(db_session, test_user.account_id)
+    _usage(
+        db_session,
+        test_user,
+        at=START + timedelta(minutes=1),
+        duration=0.4,
+        session_id=session.id,
+        prompt_tokens=100,
+        cache_read_tokens=None,
+        cache_creation_tokens=40,
+        tools=["mcp__docs__search"],
+    )
+    db_session.add(
+        models.RuntimeSessionActivity(
+            account_id=test_user.account_id,
+            runtime_session_id=session.id,
+            activity_type="tool_call",
+            tool_name="search",
+            status="success",
+            timestamp=START + timedelta(minutes=2),
+        )
+    )
+    db_session.add(
+        models.RuntimeSessionActivity(
+            account_id=test_user.account_id,
+            runtime_session_id=session.id,
+            activity_type="tool_call",
+            tool_name="search",
+            status="refused",
+            timestamp=START + timedelta(minutes=3),
+        )
+    )
+    db_session.flush()
+
+    signals = collect_weekly_signals(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    row = signals.sessions[0]
+    assert row.tools_attached == ("search",)
+    assert row.tools_used == ("search",)
+    assert row.unused_tools == ()
+    assert row.failed_tool_counts == (("search", 1),)
+    # A write with no cache read is still covered. uncached = 100 - 0 - 40.
+    assert row.cache_read_ratio == 0.0
+    assert row.cache_read_tokens == 0
+
+
 def _efficiency(**overrides: Any) -> SessionEfficiency:
     base: dict[str, Any] = {
         "runtime_session_id": uuid.uuid4(),
@@ -930,6 +983,15 @@ def test_tier1_highlights_use_the_spec_thresholds() -> None:
     assert highlights.unused_tools[0].tool_name == "shell"
     assert highlights.unused_tools[0].sessions_attached == UNUSED_TOOL_MIN_SESSIONS
     assert tier1_highlights([quiet]) == Tier1Highlights(0, 0, (), 0, 0, ())
+    prefixed = [
+        _efficiency(
+            user_id=user_id,
+            tools_attached=("mcp__docs__shell",),
+            tools_used=("shell",),
+        )
+        for _ in range(UNUSED_TOOL_MIN_SESSIONS)
+    ]
+    assert tier1_highlights(prefixed).unused_tools == ()
 
 
 def test_group_by_user_orders_developers_and_keeps_unattributed() -> None:

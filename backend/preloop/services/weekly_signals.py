@@ -32,6 +32,7 @@ from preloop.services.cache_accounting import (
     compute_cache_hit_ratio,
     uncached_input_tokens,
 )
+from preloop.services.tool_usage_stats import _normalize_tool_name
 
 #: Spec section 6. A session is a cache-miss pattern when its covered
 #: cache-read ratio is below this, the prompt prefix changed at least
@@ -430,8 +431,8 @@ def tier1_highlights(sessions: Sequence[SessionEfficiency]) -> Tier1Highlights:
             error_occurrences[error_class] = (
                 error_occurrences.get(error_class, 0) + count
             )
-        used_names = set(session.tools_used)
-        for name in session.tools_attached:
+        used_names = set(_tool_names(session.tools_used))
+        for name in _tool_names(session.tools_attached):
             key = (session.user_id, name)
             attached[key] = attached.get(key, 0) + 1
             if name in used_names:
@@ -485,8 +486,9 @@ def _session(row: SessionProjection) -> SessionEfficiency:
         creation=row.cache_creation_tokens,
         covered=row.cache_covered_requests,
     )
-    attached = row.tools_attached
-    used = set(row.tools_used)
+    attached = _tool_names(row.tools_attached)
+    used_names = _tool_names(row.tools_used)
+    used = set(used_names)
     return SessionEfficiency(
         runtime_session_id=row.runtime_session_id,
         user_id=row.user_id,
@@ -496,11 +498,11 @@ def _session(row: SessionProjection) -> SessionEfficiency:
         prefix_churn=row.prefix_churn,
         retry_count=row.retry_count,
         error_class_counts=_pairs(row.error_classes),
-        failed_tool_counts=_pairs(row.failed_tools),
+        failed_tool_counts=_tool_counts(row.failed_tools),
         max_tool_loop=max(row.max_tool_call_count, row.activity_tool_loop),
         max_context_tokens=row.max_context_tokens,
         tools_attached=attached,
-        tools_used=row.tools_used,
+        tools_used=used_names,
         unused_tools=tuple(name for name in attached if name not in used),
     )
 
@@ -520,6 +522,23 @@ def _cache_ratio(
 
 def _pairs(counts: Mapping[str, int]) -> tuple[tuple[str, int], ...]:
     return tuple(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _tool_names(names: Sequence[str]) -> tuple[str, ...]:
+    """Bare tool names, so an advertised ``mcp__server__tool`` matches a call."""
+    normalized = {_normalize_tool_name(name) for name in names if name}
+    normalized.discard("")
+    return tuple(sorted(normalized))
+
+
+def _tool_counts(counts: Mapping[str, int]) -> tuple[tuple[str, int], ...]:
+    merged: dict[str, int] = {}
+    for name, count in counts.items():
+        key = _normalize_tool_name(name)
+        if not key or count <= 0:
+            continue
+        merged[key] = merged.get(key, 0) + int(count)
+    return _pairs(merged)
 
 
 def _overall(rows: Sequence[LatencyProjection]) -> LatencyBucket:
