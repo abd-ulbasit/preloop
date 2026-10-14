@@ -246,10 +246,10 @@ _SUBCOMMAND_TOOLS = frozenset(
     {"git", "npm", "pnpm", "yarn", "docker", "cargo", "go", "make", "uv", "pip"}
 )
 
-#: git options that run other programs or change where git reads config.
 #: git remote subcommands that neither change nor contact remotes.
 _GIT_REMOTE_READ_ONLY = frozenset({"show", "get-url"})
 
+#: git options that run other programs or change where git reads config.
 _GIT_UNSAFE_LONG_OPTIONS = (
     "--config-env",
     "--exec-path",
