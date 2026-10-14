@@ -7,12 +7,14 @@ recipe's contract, the manifest writer and the profile registration.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import yaml
@@ -26,8 +28,23 @@ DOCKERFILE = SCANNER / "Dockerfile"
 WORKFLOW = REPO / ".github" / "workflows" / "publish-scanner-image.yml"
 DB = "ghcr.io/aquasecurity/trivy-db@sha256:" + "a" * 64
 
-sys.path.insert(0, str(SCANNER))
-import write_manifest  # noqa: E402
+
+def _load_write_manifest() -> ModuleType:
+    """Load the scanner manifest writer under a name unique to this file.
+
+    A second test module also has a ``write_manifest.py``. Importing both as
+    the top-level name ``write_manifest`` makes ``sys.modules`` keep whichever
+    loaded first.
+    """
+    path = SCANNER / "write_manifest.py"
+    spec = importlib.util.spec_from_file_location("scanner_write_manifest", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+write_manifest = _load_write_manifest()
 
 
 def _arg_default(name: str) -> str:
