@@ -335,18 +335,24 @@ export class CostView extends AuthedElement {
   private currentPeriod: DateRangeParams | null = null;
   private readyBreakdowns = new Set<CostUsageBreakdown>();
   private pendingBreakdowns = new Map<CostUsageBreakdown, Promise<void>>();
+  private initialSessionPage: CostAnalyticsSummaryResponse | null = null;
   // Per-tab sort state. Keys reference the column identifiers used in each tab.
   /**
    * Sessions in the period, paged on the server by session with the total
    * from the server (#1585); the table sorts and searches the page it shows.
    */
-  readonly sessionPages = new SessionPages(this, (sessionPage) =>
-    getCostAnalyticsSummary({
+  readonly sessionPages = new SessionPages(this, (sessionPage) => {
+    if (sessionPage.offset === 0 && this.initialSessionPage) {
+      const result = this.initialSessionPage;
+      this.initialSessionPage = null;
+      return Promise.resolve(result);
+    }
+    return getCostAnalyticsSummary({
       ...(this.currentPeriod ?? this.getDateParams()),
       breakdowns: ['sessions'],
       sessionPage,
-    })
-  );
+    });
+  });
 
   /** Spend by agent, model, tool and user: the same table as Sessions. */
   readonly agentTable = this.spendTable<AgentGroupRow>(
@@ -925,18 +931,22 @@ export class CostView extends AuthedElement {
    * Overview, API usage and the model detail page ask for.
    */
   private getDateParams(
-    range: DateRangePreset = this.selectedRange
+    range: DateRangePreset = this.selectedRange,
+    now: Date = new Date()
   ): DateRangeParams {
     if (this.digestPeriod) return { ...this.digestPeriod };
-    const window = resolveTimeRange(range);
+    const window = resolveTimeRange(range, now);
     return {
       startDate: window.startDate as string,
       endDate: window.endDate as string,
     };
   }
 
-  private getPreviousDateParams(range: DateRangePreset): DateRangeParams {
-    const window = resolvePreviousTimeRange(range);
+  private getPreviousDateParams(
+    range: DateRangePreset,
+    now: Date = new Date()
+  ): DateRangeParams {
+    const window = resolvePreviousTimeRange(range, now);
     return {
       startDate: window.startDate as string,
       endDate: window.endDate as string,
@@ -1053,7 +1063,9 @@ export class CostView extends AuthedElement {
   private async load() {
     const generation = ++this.loadGeneration;
     const range = this.selectedRange;
-    const period = this.getDateParams(range);
+    // Resolve both windows from one clock so their boundary agrees exactly.
+    const now = new Date();
+    const period = this.getDateParams(range, now);
     this.loading = true;
     this.error = null;
     this.previousRangeSummary = null;
@@ -1063,6 +1075,7 @@ export class CostView extends AuthedElement {
     this.sectionErrors = {};
     this.readyBreakdowns = new Set();
     this.pendingBreakdowns = new Map();
+    this.initialSessionPage = null;
     this.budgetContextReady = false;
     this.pricingContextReady = false;
     this.overrideRemoved = null;
@@ -1093,14 +1106,30 @@ export class CostView extends AuthedElement {
       }
       void this.loadContext(generation);
       void this.loadAccountingFindings(generation);
-      // The comparison range rides along in the same request (#1583): one
-      // summary call for the headline figures and their deltas.
+      // Share the first answer with the visible tab and imported usage. Separate
+      // detail requests repeat all totals and queue behind the headline (#1583).
+      const initialTab = this.activeTab;
+      const initialBreakdowns: CostUsageBreakdown[] = [
+        ...(initialTab === 'agents'
+          ? (['sessions', 'flows'] as const)
+          : initialTab === 'users' || initialTab === 'sessions'
+            ? (['sessions'] as const)
+            : initialTab === 'models'
+              ? (['models'] as const)
+              : initialTab === 'tools'
+                ? (['tools'] as const)
+                : []),
+        'imported',
+      ];
       const previousPeriod = this.digestPeriod
         ? null
-        : this.getPreviousDateParams(range);
+        : this.getPreviousDateParams(range, now);
       const summary = await getCostAnalyticsSummary({
         ...period,
-        includeBreakdown: false,
+        breakdowns: initialBreakdowns,
+        ...(initialTab === 'sessions'
+          ? { sessionPage: { limit: this.sessionPages.pageSize, offset: 0 } }
+          : {}),
         ...(previousPeriod
           ? {
               compareStartDate: previousPeriod.startDate,
@@ -1110,6 +1139,12 @@ export class CostView extends AuthedElement {
       });
       if (generation !== this.loadGeneration) return;
       this.summary = summary;
+      this.readyBreakdowns = new Set(initialBreakdowns);
+      if (initialTab === 'sessions') {
+        this.initialSessionPage = summary;
+        // A paged answer does not fill the recent-session window for Agents.
+        this.readyBreakdowns.delete('sessions');
+      }
       this.previousRangeSummary = summary.previous ?? null;
       this.currentPeriod = this.digestPeriod
         ? { ...period }

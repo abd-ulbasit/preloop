@@ -169,3 +169,243 @@ def test_compare_window_rides_along_as_previous(
     half = dict(params)
     del half["compare_end_date"]
     assert client.get("/api/v1/cost/summary", params=half).status_code == 422
+
+
+def test_summary_cache_reuses_queries_but_not_mutable_response(
+    client: Any, monkeypatch: Any
+) -> None:
+    """An exact repeat reads no aggregates and cannot mutate the cached answer."""
+    spy = Mock(wraps=crud_api_usage.get_gateway_usage_summary)
+    monkeypatch.setattr(crud_api_usage, "get_gateway_usage_summary", spy)
+    params = {
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T00:00:00Z",
+        "include_breakdown": "false",
+    }
+    first = client.get("/api/v1/cost/summary", params=params)
+    assert first.status_code == 200
+    assert spy.call_count == 1
+    second = client.get("/api/v1/cost/summary", params=params)
+    assert second.json() == first.json()
+    assert spy.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"runtime_principal_id": "other-agent"},
+        {"exclude_retries": "true"},
+        {"breakdown": "sessions", "include_breakdown": "true"},
+        {"end_date": "2026-02-01T00:00:00Z"},
+        {"session_limit": 25},
+        {"session_offset": 25},
+    ],
+)
+def test_summary_cache_separates_filters(
+    client: Any, monkeypatch: Any, change: dict[str, Any]
+) -> None:
+    """Filters and paging must not reuse a different aggregate answer."""
+    spy = Mock(wraps=crud_api_usage.get_gateway_usage_summary)
+    monkeypatch.setattr(crud_api_usage, "get_gateway_usage_summary", spy)
+    params = {
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T00:00:00Z",
+        "include_breakdown": "false",
+    }
+    assert client.get("/api/v1/cost/summary", params=params).status_code == 200
+    assert (
+        client.get("/api/v1/cost/summary", params={**params, **change}).status_code
+        == 200
+    )
+    assert spy.call_count == 2
+
+
+def test_summary_cache_expires_and_invalidates_on_reprice(
+    client: Any, test_user: Any, monkeypatch: Any
+) -> None:
+    """Expiry and repricing force fresh aggregates without wall-clock sleeps."""
+    from preloop.api.endpoints import cost
+
+    clock = Mock(return_value=1000.0)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(cost, "time", SimpleNamespace(monotonic=clock))
+    spy = Mock(wraps=crud_api_usage.get_gateway_usage_summary)
+    monkeypatch.setattr(crud_api_usage, "get_gateway_usage_summary", spy)
+    params = {
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T00:00:00Z",
+        "include_breakdown": "false",
+    }
+    for _ in range(2):
+        assert client.get("/api/v1/cost/summary", params=params).status_code == 200
+    assert spy.call_count == 1
+    clock.return_value += cost.SUMMARY_CACHE_TTL_SECONDS
+    assert client.get("/api/v1/cost/summary", params=params).status_code == 200
+    assert spy.call_count == 2
+    cost._forget_cost_health(str(test_user.account_id))
+    assert client.get("/api/v1/cost/summary", params=params).status_code == 200
+    assert spy.call_count == 3
+
+
+def test_summary_cache_copies_response_and_never_caches_errors(
+    db_session: Any, test_user: Any, monkeypatch: Any
+) -> None:
+    """An attached comparison cannot poison cache entries; failures can retry."""
+    from preloop.api.endpoints import cost
+    from preloop.models.crud import crud_account
+
+    kwargs = dict(
+        account=crud_account.get(db_session, id=test_user.account_id),
+        start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        end_date=datetime(2026, 1, 31, tzinfo=UTC),
+        runtime_principal_id=None,
+        exclude_retries=False,
+        include_breakdown=False,
+        breakdown=None,
+    )
+    build = Mock(wraps=cost._build_cost_summary)
+    monkeypatch.setattr(cost, "_build_cost_summary", build)
+    build.side_effect = RuntimeError("temporary failure")
+    with pytest.raises(RuntimeError, match="temporary failure"):
+        cost._cached_cost_summary(db_session, **kwargs)
+    build.side_effect = None
+    first = cost._cached_cost_summary(db_session, **kwargs)
+    first.estimated_cost = 999
+    first.previous = first.model_copy()
+    second = cost._cached_cost_summary(db_session, **kwargs)
+    assert second.estimated_cost == 0
+    assert second.previous is None
+    assert build.call_count == 2
+    cost._forget_cost_health(str(test_user.account_id))
+
+
+def test_summary_cache_checks_history_on_hits(client: Any, monkeypatch: Any) -> None:
+    """A cached answer must not bypass a changed history entitlement."""
+    from fastapi import HTTPException
+    from preloop.api.endpoints import cost
+
+    params = {
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T00:00:00Z",
+        "include_breakdown": "false",
+    }
+    assert client.get("/api/v1/cost/summary", params=params).status_code == 200
+    monkeypatch.setattr(
+        cost, "restrict_history_window", Mock(side_effect=HTTPException(403))
+    )
+    assert client.get("/api/v1/cost/summary", params=params).status_code == 403
+
+
+def test_summary_cache_coalesces_concurrent_reads(
+    db_session: Any, test_user: Any, monkeypatch: Any
+) -> None:
+    """Two identical misses run one builder, without sleeps or concurrent DB use."""
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from threading import Event
+    from preloop.api.endpoints import cost
+    from preloop.models.crud import crud_account
+
+    kwargs = dict(
+        account=crud_account.get(db_session, id=test_user.account_id),
+        start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        end_date=datetime(2026, 1, 31, tzinfo=UTC),
+        runtime_principal_id=None,
+        exclude_retries=False,
+        include_breakdown=False,
+        breakdown=None,
+    )
+    expected = cost._build_cost_summary(db_session, **kwargs)
+    entered, waiting, release = Event(), Event(), Event()
+
+    class TrackedFuture(Future):
+        def result(self, timeout: float | None = None) -> Any:
+            waiting.set()
+            return super().result(timeout=timeout)
+
+    def build(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert release.wait(5)
+        return expected
+
+    monkeypatch.setattr(cost, "Future", TrackedFuture)
+    monkeypatch.setattr(
+        cost,
+        "restrict_history_window",
+        lambda db, **kw: (kw["start_date"], kw["end_date"]),
+    )
+    builder = Mock(side_effect=build)
+    monkeypatch.setattr(cost, "_build_cost_summary", builder)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(cost._cached_cost_summary, None, **kwargs)
+        try:
+            assert entered.wait(5)
+            second = workers.submit(cost._cached_cost_summary, None, **kwargs)
+            assert waiting.wait(5)
+        finally:
+            release.set()
+        assert first.result(5) == second.result(5) == expected
+        assert first.result(5) is not second.result(5)
+    assert builder.call_count == 1
+    cost._forget_cost_health(str(test_user.account_id))
+
+
+def test_summary_cache_is_bounded_and_account_scoped(
+    db_session: Any, test_user: Any, monkeypatch: Any
+) -> None:
+    """A full cache evicts completed entries and cannot answer another account."""
+    from preloop.api.endpoints import cost
+    from preloop.models.crud import crud_account
+
+    monkeypatch.setattr(cost, "_SUMMARY_CACHE", {})
+    monkeypatch.setattr(cost, "_SUMMARY_CACHE_MAX_ENTRIES", 1)
+    kwargs = dict(
+        account=crud_account.get(db_session, id=test_user.account_id),
+        start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        end_date=datetime(2026, 1, 31, tzinfo=UTC),
+        runtime_principal_id=None,
+        exclude_retries=False,
+        include_breakdown=False,
+        breakdown=None,
+    )
+    builder = Mock(wraps=cost._build_cost_summary)
+    monkeypatch.setattr(cost, "_build_cost_summary", builder)
+    cost._cached_cost_summary(db_session, **kwargs)
+    other = crud_account.create(
+        db_session, obj_in={"organization_name": "Other example"}
+    )
+    cost._cached_cost_summary(db_session, **{**kwargs, "account": other})
+    assert builder.call_count == 2
+    assert len(cost._SUMMARY_CACHE) == 1
+    assert next(iter(cost._SUMMARY_CACHE))[0] == str(other.id)
+
+
+def test_summary_finishing_after_reprice_is_not_cached(
+    db_session: Any, test_user: Any, monkeypatch: Any
+) -> None:
+    """Invalidating an in-flight entry must not let its old answer repopulate it."""
+    from preloop.api.endpoints import cost
+    from preloop.models.crud import crud_account
+
+    kwargs = dict(
+        account=crud_account.get(db_session, id=test_user.account_id),
+        start_date=datetime(2026, 1, 1, tzinfo=UTC),
+        end_date=datetime(2026, 1, 31, tzinfo=UTC),
+        runtime_principal_id=None,
+        exclude_retries=False,
+        include_breakdown=False,
+        breakdown=None,
+    )
+    real = cost._build_cost_summary
+
+    def reprice_during_build(*args: Any, **kw: Any) -> Any:
+        result = real(*args, **kw)
+        cost._forget_cost_health(str(test_user.account_id))
+        return result
+
+    builder = Mock(side_effect=reprice_during_build)
+    monkeypatch.setattr(cost, "_build_cost_summary", builder)
+    cost._cached_cost_summary(db_session, **kwargs)
+    cost._cached_cost_summary(db_session, **kwargs)
+    assert builder.call_count == 2
+    assert not any(key[0] == str(test_user.account_id) for key in cost._SUMMARY_CACHE)
