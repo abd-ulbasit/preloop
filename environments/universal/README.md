@@ -7,9 +7,16 @@ one apt layer: `perl`, `cpanm`, `perlver` (`Perl::MinimumVersion`),
 TypeScript come from the base image. The image sets no `WORKDIR`,
 `ENTRYPOINT`, or `CMD`.
 
-This recipe does not publish the image, change the hosted default, or install
-the preflight script. Those are separate issues. The opt-in Perl image under
-`environments/perl/` stays available for private runners.
+`.github/workflows/publish-universal-image.yml` builds linux/amd64 and
+linux/arm64 and smokes amd64. A pull request and the weekly schedule do not
+push. A merge to main that changes this recipe, the Perl fixtures it copies,
+or the workflow publishes, as does `workflow_dispatch` on main and a `v*`
+tag. Published tags are `sha-<12 hex chars of the commit>` and, on a version
+tag, `vX.Y.Z`. The job summary prints
+`ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`. The hosted
+default image is unchanged. The preflight script is a separate issue. The
+opt-in Perl image under `environments/perl/` stays available for private
+runners.
 
 ## Build
 
