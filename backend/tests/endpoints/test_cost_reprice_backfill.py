@@ -9,6 +9,10 @@ content is synthetic fixture data in the Explore export's shape.
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from preloop.models import models
 
 from preloop.models.crud import crud_ai_model, crud_api_usage
 
@@ -244,3 +248,26 @@ def test_ledger_csv_unmatched_ledger_spend_is_reported_not_invented(
     assert body["unallocated_ledger"] == [
         {"day": "2026-08-05", "family": "acme-z9-mini-0731", "amount_usd": 0.30}
     ]
+
+
+def test_ledger_csv_apply_invalidates_cached_summary(
+    client: TestClient, db_session: Session, test_user: models.User
+) -> None:
+    """An exact repeat sees reconciled costs immediately after a CSV apply."""
+    model = _create_model(db_session, test_user)
+    _log_unpriced_row(db_session, test_user, model, tokens=1000)
+    params = {
+        "start_date": "2026-08-05T00:00:00Z",
+        "end_date": "2026-08-06T00:00:00Z",
+        "include_breakdown": "false",
+    }
+    before = client.get("/api/v1/cost/summary", params=params).json()
+    assert before["estimated_cost"] == 0
+    assert before["unpriced_requests"] == 1
+    assert _upload(client, apply=False).status_code == 200
+    assert client.get("/api/v1/cost/summary", params=params).json() == before
+    assert _upload(client, apply=True).status_code == 200
+    after = client.get("/api/v1/cost/summary", params=params).json()
+    assert after["estimated_cost"] == pytest.approx(0.30)
+    assert after["unpriced_requests"] == 0
+    assert after["unpriced_models"] == []

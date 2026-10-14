@@ -63,13 +63,10 @@ describe('Cost progressive loading', () => {
     invalidateApiCaches();
   });
 
-  it('renders totals while metadata and the first breakdown are still pending', async () => {
+  it('renders the shared summary while metadata is still pending', async () => {
     const fallback = handler;
     handler = (url) => {
-      if (
-        url.pathname.endsWith('/ai-models') ||
-        url.searchParams.has('breakdown')
-      ) {
+      if (url.pathname.endsWith('/ai-models')) {
         return new Promise(() => {});
       }
       return fallback(url);
@@ -83,18 +80,19 @@ describe('Cost progressive loading', () => {
     expect(
       element.shadowRoot!.querySelector('[aria-label="Cost summary metrics"]')
     ).to.exist;
-    expect(
-      urls
-        .filter(
-          (u) =>
-            u.pathname.endsWith('/cost/summary') &&
-            !u.searchParams.has('breakdown')
-        )
-        .every((u) => u.searchParams.get('include_breakdown') === 'false')
-    ).to.equal(true);
-    expect(
-      element.shadowRoot!.querySelector('[data-section="agents"]')!.textContent
-    ).to.include('Loading');
+    const summaries = urls.filter((url) =>
+      url.pathname.endsWith('/cost/summary')
+    );
+    expect(summaries).to.have.length(1);
+    expect(summaries[0].searchParams.get('include_breakdown')).not.to.equal(
+      'false'
+    );
+    expect(summaries[0].searchParams.getAll('breakdown')).to.deep.equal([
+      'sessions',
+      'flows',
+      'imported',
+    ]);
+    await waitUntil(() => element['loadedTabs'].has('agents'));
   });
 
   it('loads the default tab, shares session data, and defers tools until selected', async () => {
@@ -107,15 +105,20 @@ describe('Cost progressive loading', () => {
     expect(
       urls.filter((u) => u.searchParams.getAll('breakdown').includes('days'))
     ).to.have.length(0);
-    expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows']);
+    expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows', 'imported']);
     await element['handleTabShow'](
       new CustomEvent('sl-tab-show', { detail: { name: 'users' } })
     );
-    expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows']);
+    expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows', 'imported']);
     await element['handleTabShow'](
       new CustomEvent('sl-tab-show', { detail: { name: 'tools' } })
     );
-    expect(tabBreakdowns()).to.deep.equal(['sessions', 'flows', 'tools']);
+    expect(tabBreakdowns()).to.deep.equal([
+      'sessions',
+      'flows',
+      'imported',
+      'tools',
+    ]);
   });
 
   it('keeps totals visible after a breakdown failure and retries only that section', async () => {
@@ -160,7 +163,7 @@ describe('Cost progressive loading', () => {
     const pending: Array<(response: Response) => void> = [];
     handler = (url) =>
       url.pathname.endsWith('/cost/summary') &&
-      url.searchParams.get('include_breakdown') === 'false' &&
+      url.searchParams.has('compare_start_date') &&
       pending.length < 3
         ? new Promise((resolve) => pending.push(resolve))
         : fallback(url);
@@ -186,7 +189,7 @@ describe('Cost progressive loading', () => {
     const fallback = handler;
     const pending: Array<(response: Response) => void> = [];
     handler = (url) =>
-      url.searchParams.get('breakdown') === 'tools'
+      url.searchParams.getAll('breakdown').includes('tools')
         ? new Promise((resolve) => pending.push(resolve))
         : fallback(url);
     const first = element['handleTabShow'](
@@ -194,9 +197,10 @@ describe('Cost progressive loading', () => {
     );
     await waitUntil(() => pending.length === 1);
     element['selectedRange'] = 'last-7';
-    await element['load']();
+    const reload = element['load']();
     await waitUntil(() => pending.length === 2);
     pending[1](reply({ ...payload, usage_by_tool: [] }));
+    await reload;
     await waitUntil(() => element['loadedTabs'].has('tools'));
     pending[0](reply({ ...payload, usage_by_tool: [{ name: 'stale' }] }));
     await first;
@@ -205,20 +209,9 @@ describe('Cost progressive loading', () => {
     expect(element['sectionStates'].tools).to.equal('ready');
   });
 
-  it('pages the Sessions tab on its own request, not the shared window', async () => {
-    const fallback = handler;
-    let resolveBreakdown!: (response: Response) => void;
-    // The recent-session window (Agents, Users) hangs; the paged Sessions
-    // request must not wait for it.
-    handler = (url) =>
-      url.searchParams.getAll('breakdown').includes('sessions') &&
-      !url.searchParams.has('session_limit')
-        ? new Promise((resolve) => {
-            resolveBreakdown = resolve;
-          })
-        : fallback(url);
+  it('pages the Sessions tab after the shared recent-session window', async () => {
     const element = await fixture<CostView>(html`<cost-view></cost-view>`);
-    await waitUntil(() => !!resolveBreakdown);
+    await waitUntil(() => element['loadedTabs'].has('agents'));
     await element['handleTabShow'](
       new CustomEvent('sl-tab-show', { detail: { name: 'sessions' } })
     );
@@ -230,7 +223,6 @@ describe('Cost progressive loading', () => {
       'sessions',
     ]);
     expect(element['loadedTabs'].has('sessions')).to.equal(true);
-    resolveBreakdown(reply(payload));
   });
 
   it('does not publish totals after the view disconnects', async () => {
@@ -272,11 +264,9 @@ describe('Cost progressive loading', () => {
     expect(element['error']).to.equal(null);
   });
 
-  it('keeps imported totals separate and visible while imported detail is pending', async () => {
+  it('shares imported detail with the headline and keeps its spend separate', async () => {
     const fallback = handler;
     handler = async (url) => {
-      if (url.searchParams.get('breakdown') === 'imported')
-        return new Promise(() => {});
       if (url.pathname.endsWith('/cost/summary')) {
         const response = await fallback(url);
         return reply({
@@ -300,10 +290,10 @@ describe('Cost progressive loading', () => {
       element.shadowRoot!.querySelector('[aria-label="Imported usage totals"]')!
         .textContent
     ).to.include('$7.00');
+    await waitUntil(() => element['loadedTabs'].has('imported'));
     expect(
-      element.shadowRoot!.querySelector('[data-section="imported"]')!
-        .textContent
-    ).to.include('Loading');
+      urls.filter((url) => url.pathname.endsWith('/cost/summary'))
+    ).to.have.length(1);
     expect(
       element.shadowRoot!.querySelector(
         '[aria-label="Imported usage by model"]'
@@ -355,5 +345,110 @@ describe('Cost progressive loading', () => {
       element.shadowRoot!.querySelector('[aria-label="Cost summary metrics"]')
     ).to.exist;
     expect(element['contextError']).not.to.equal(null);
+  });
+});
+
+describe('Spend summary fan-out regression (#1583)', () => {
+  it('shares one summary across the headline, Agents and imported detail on load', async () => {
+    localStorage.setItem('accessToken', 'test-token');
+    const urls: URL[] = [];
+    const fetchStub = sinon.stub(window, 'fetch').callsFake(async (input) => {
+      const url = new URL(String(input), location.origin);
+      urls.push(url);
+      if (url.pathname.endsWith('/cost/summary'))
+        return reply({
+          ...payload,
+          period_start: url.searchParams.get('start_date'),
+          period_end: url.searchParams.get('end_date'),
+          previous: { ...payload, estimated_cost: 21 },
+          imported_usage: {
+            event_count: 2,
+            total_tokens: 100,
+            imported_cost: 7,
+            usage_by_model: [
+              {
+                model_alias: 'example',
+                event_count: 2,
+                total_tokens: 100,
+                imported_cost: 7,
+              },
+            ],
+            usage_by_conversation: [],
+          },
+        });
+      if (url.pathname.endsWith('/features')) return reply({ features: {} });
+      return reply([]);
+    });
+    try {
+      const element = await fixture<CostView>(html`<cost-view></cost-view>`);
+      await waitUntil(
+        () =>
+          element['loadedTabs'].has('agents') &&
+          element['loadedTabs'].has('imported')
+      );
+      expect(
+        urls.filter((url) => url.pathname.endsWith('/cost/summary'))
+      ).to.have.length(1);
+      expect(element['previousRangeSummary']!.estimated_cost).to.equal(21);
+      expect(element['summary']!.imported_usage!.usage_by_model).to.have.length(
+        1
+      );
+      await element['handleTabShow'](
+        new CustomEvent('sl-tab-show', { detail: { name: 'users' } })
+      );
+      expect(
+        urls.filter((url) => url.pathname.endsWith('/cost/summary'))
+      ).to.have.length(1);
+    } finally {
+      fetchStub.restore();
+      localStorage.clear();
+      invalidateApiCaches();
+    }
+  });
+});
+
+describe('Spend selected-tab reload (#1583)', () => {
+  it('includes the first session page in the single reload summary', async () => {
+    localStorage.setItem('accessToken', 'test-token');
+    const urls: URL[] = [];
+    const fetchStub = sinon.stub(window, 'fetch').callsFake(async (input) => {
+      const url = new URL(String(input), location.origin);
+      urls.push(url);
+      if (url.pathname.endsWith('/cost/summary'))
+        return reply({
+          ...payload,
+          total_sessions: 100,
+          period_start: url.searchParams.get('start_date'),
+          period_end: url.searchParams.get('end_date'),
+        });
+      if (url.pathname.endsWith('/features')) return reply({ features: {} });
+      return reply([]);
+    });
+    try {
+      const element = await fixture<CostView>(html`<cost-view></cost-view>`);
+      await waitUntil(() => element['loadedTabs'].has('agents'));
+      element['activeTab'] = 'sessions';
+      element['selectedRange'] = 'last-7';
+      urls.length = 0;
+      await element['load']();
+      await waitUntil(() => element['loadedTabs'].has('sessions'));
+      const summaries = urls.filter((url) =>
+        url.pathname.endsWith('/cost/summary')
+      );
+      expect(summaries).to.have.length(1);
+      expect(summaries[0].searchParams.get('session_limit')).to.equal('25');
+      expect(element.sessionPages.total).to.equal(100);
+      await element['handleTabShow'](
+        new CustomEvent('sl-tab-show', { detail: { name: 'users' } })
+      );
+      // The paged result cannot stand in for Users' recent-session window.
+      expect(
+        urls.filter((url) => url.pathname.endsWith('/cost/summary'))
+      ).to.have.length(2);
+    } finally {
+      fetchStub.restore();
+      localStorage.clear();
+      invalidateApiCaches();
+    }
   });
 });
