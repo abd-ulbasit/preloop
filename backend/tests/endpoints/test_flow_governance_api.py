@@ -115,4 +115,4 @@ def test_flow_governance_write_requires_edit_flows(client, db_session, test_user
     assert client.get(_url(flow.id)).status_code == 200
     assert client.put(_url(flow.id), json={}).status_code == 403
     assert client.delete(_url(flow.id)).status_code == 403
-    assert actions == ["view_flows", "edit_flows", "edit_flows"]
+    assert actions == ["view_flows", "resource:view", "edit_flows", "edit_flows"]

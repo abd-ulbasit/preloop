@@ -1010,6 +1010,7 @@ def _build_managed_agent_detail_response(
     sections: frozenset[str] = MANAGED_AGENT_DETAIL_SECTIONS,
     session_limit: int = 20,
     session_offset: int = 0,
+    current_user: Optional[UserModel] = None,
 ) -> Optional[ManagedAgentDetailResponse]:
     if start_date and start_date.tzinfo:
         start_date = start_date.astimezone(UTC).replace(tzinfo=None)
@@ -1020,6 +1021,10 @@ def _build_managed_agent_detail_response(
     )
     if summary is None:
         return None
+    if current_user is not None and not filter_viewable(
+        db, current_user, VISIBLE_MANAGED_AGENT, [summary]
+    ):
+        raise HTTPException(404, "Managed agent not found")
     summary = _enrich_managed_agent_summary(db, account_id=account_id, summary=summary)
     aggregate = crud_managed_agent.get_usage_aggregate_for_account(
         db,
@@ -1788,8 +1793,6 @@ def get_account_managed_agent(
         if not filter_viewable(db, current_user, VISIBLE_MANAGED_AGENT, [shared]):
             raise HTTPException(404, "Resource not found")
         return shared
-    if not filter_viewable(db, current_user, VISIBLE_MANAGED_AGENT, [{"id": agent_id}]):
-        raise HTTPException(404, "Managed agent not found")
     response = _build_managed_agent_detail_response(
         db,
         account_id=str(account.id),
@@ -1800,12 +1803,26 @@ def get_account_managed_agent(
         sections=sections,
         session_limit=session_limit,
         session_offset=session_offset,
+        current_user=current_user,
     )
     if response is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
         )
     return response
+
+
+def _require_managed_agent_view(
+    db: Session, current_user: UserModel, *, account_id: str, agent_id: str
+) -> None:
+    """Use the same raw summary fields as the agent inventory H4 check."""
+    summary = crud_managed_agent.get_summary_for_account(
+        db, account_id=account_id, agent_id=agent_id
+    )
+    if summary is None or not filter_viewable(
+        db, current_user, VISIBLE_MANAGED_AGENT, [summary]
+    ):
+        raise HTTPException(404, "Managed agent not found")
 
 
 @router.get("/agents/{agent_id}/shared-sessions")
@@ -1822,6 +1839,9 @@ def list_owned_agent_shared_sessions(
         crud_resource_share,
     )
 
+    _require_managed_agent_view(
+        db, current_user, account_id=str(account.id), agent_id=agent_id
+    )
     try:
         return crud_resource_share.owner_agent_sessions(
             db, owner_account_id=account.id, agent_id=agent_id
@@ -1842,13 +1862,9 @@ async def list_account_managed_agent_model_bindings(
     db: Session = Depends(get_db_session),
 ):
     """List explicit AI model bindings for one managed agent."""
-    agent = crud_managed_agent.get_for_account(
-        db, account_id=str(account.id), agent_id=agent_id
+    _require_managed_agent_view(
+        db, current_user, account_id=str(account.id), agent_id=agent_id
     )
-    if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
-        )
     return _managed_agent_configured_models(
         db,
         account_id=str(account.id),
@@ -1995,7 +2011,13 @@ def _validate_governance_workflow(
         )
 
 
-def _require_account_flow(db: Session, account: Account, flow_id: str) -> None:
+def _require_account_flow(
+    db: Session,
+    account: Account,
+    flow_id: str,
+    *,
+    current_user: Optional[UserModel] = None,
+) -> None:
     """404 unless ``flow_id`` names a flow owned by this account."""
     try:
         UUID(flow_id)
@@ -2003,7 +2025,11 @@ def _require_account_flow(db: Session, account: Account, flow_id: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Flow not found"
         )
-    if crud_flow.get(db, id=flow_id, account_id=str(account.id)) is None:
+    flow = crud_flow.get(db, id=flow_id, account_id=str(account.id))
+    if flow is None or (
+        current_user is not None
+        and not filter_viewable(db, current_user, "flow", [flow])
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Flow not found"
         )
@@ -2042,7 +2068,7 @@ def get_account_flow_governance(
     Sync on purpose: FastAPI runs it in the threadpool, so the sync DB
     session never blocks the event loop.
     """
-    _require_account_flow(db, account, flow_id)
+    _require_account_flow(db, account, flow_id, current_user=current_user)
     return _flow_governance_response(account, flow_id)
 
 
@@ -2118,6 +2144,9 @@ async def get_account_managed_agent_governance(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
         )
+    _require_managed_agent_view(
+        db, current_user, account_id=str(agent.account_id), agent_id=agent_id
+    )
     return SubjectGovernanceResponse(
         subject_type=SUBJECT_TYPE_MANAGED_AGENTS,
         subject_id=agent_id,
@@ -2262,13 +2291,9 @@ async def list_account_managed_agent_credentials(
     db: Session = Depends(get_db_session),
 ):
     """List durable credentials for one managed agent."""
-    agent = crud_managed_agent.get_for_account(
-        db, account_id=str(account.id), agent_id=agent_id
+    _require_managed_agent_view(
+        db, current_user, account_id=str(account.id), agent_id=agent_id
     )
-    if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
-        )
     return [
         ManagedAgentCredentialSummary(**item)
         for item in crud_managed_agent_credential.list_for_agent(
@@ -2435,13 +2460,9 @@ async def list_account_managed_agent_enrollments(
     db: Session = Depends(get_db_session),
 ):
     """List durable enrollment records for one managed agent."""
-    agent = crud_managed_agent.get_for_account(
-        db, account_id=str(account.id), agent_id=agent_id
+    _require_managed_agent_view(
+        db, current_user, account_id=str(account.id), agent_id=agent_id
     )
-    if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Managed agent not found"
-        )
     return [
         ManagedAgentEnrollmentSummary(**item)
         for item in crud_managed_agent_enrollment.list_for_agent(

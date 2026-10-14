@@ -83,9 +83,11 @@ CRUD-backed resource types; `resource:share` additionally requires a shareable
 type. `runner_pool` has no canonical model and is rejected for exact IDs.
 
 The H4 `resource:view` callers cover owner/shared details and their read-only
-model usage/session/interaction/pricing, MCP tool inventory and flow usage
-subroutes, as well as the normal inventories, model overview and agent control
-inventory. No authorizer means these checks preserve OSS behavior.
+model usage/session/interaction/pricing and credential marker/export reads,
+MCP tool inventory, flow usage/governance, and agent shared sessions, bindings,
+governance, credentials and enrollments, as well as the normal inventories,
+model overview and agent control inventory. Managed-agent owner checks receive
+the same raw summary attributes on list and detail paths. No authorizer means these checks preserve OSS behavior.
 
 Bundles include `account_modes`, keyed by source account UUID, so each ancestor
 and local `require_permit` gate can require an ordinary permit from that source.
