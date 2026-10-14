@@ -375,6 +375,33 @@ describe('PreloopSessionObserver', () => {
     for (const url of pageCalls) expect(url).to.contain('history=delta');
   });
 
+  it('bounds the full layout to the window so the page does not grow (#1585)', async () => {
+    const el = (await fixture(
+      html`<preloop-session-observer
+        layout="full"
+        .sessions=${[session]}
+      ></preloop-session-observer>`
+    )) as PreloopSessionObserver;
+    await el.updateComplete;
+    const panel = el.shadowRoot!.querySelector('.observer') as HTMLElement;
+    expect(panel.getAttribute('style')).to.contain(
+      'height: max(560px, calc(100dvh - 120px))'
+    );
+    expect(panel.getBoundingClientRect().height).to.be.at.most(
+      Math.max(560, window.innerHeight - 120) + 1
+    );
+
+    const embedded = (await fixture(
+      html`<preloop-session-observer
+        .sessions=${[session]}
+      ></preloop-session-observer>`
+    )) as PreloopSessionObserver;
+    await embedded.updateComplete;
+    expect(
+      embedded.shadowRoot!.querySelector('.observer')!.getAttribute('style')
+    ).to.contain('min-height: 520px');
+  });
+
   it('switches replay layout to chat transcript', async () => {
     const el = (await fixture(
       html`<preloop-session-observer

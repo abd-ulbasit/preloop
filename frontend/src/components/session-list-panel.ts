@@ -68,10 +68,12 @@ export class SessionListPanel extends LitElement {
         min-height: 0;
       }
 
+      /* Compact rows (#1585): three single lines per session, so a page of
+         20 fits in about two viewports instead of 50 tall cards in 30. */
       .list {
         display: flex;
         flex-direction: column;
-        gap: var(--sl-spacing-small);
+        gap: var(--sl-spacing-2x-small);
       }
 
       .session-card {
@@ -82,7 +84,7 @@ export class SessionListPanel extends LitElement {
         box-sizing: border-box;
         color: inherit;
         cursor: pointer;
-        padding: var(--sl-spacing-small) var(--sl-spacing-medium);
+        padding: var(--sl-spacing-x-small) var(--sl-spacing-small);
         text-align: left;
         transition:
           border-color 0.15s ease,
@@ -128,24 +130,49 @@ export class SessionListPanel extends LitElement {
         justify-content: space-between;
       }
 
+      .title,
+      .meta {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .title {
         color: var(--sl-color-neutral-900);
         font-weight: 600;
-        overflow-wrap: anywhere;
       }
 
       .meta {
         color: var(--sl-color-neutral-600);
         font-size: var(--sl-font-size-small);
-        margin-top: var(--sl-spacing-2x-small);
-        overflow-wrap: anywhere;
+      }
+
+      /* One line, never wrapped, so no separator is left dangling at a line
+         end. In a narrow column the token figures give way (their tooltip
+         has the full sentence); the request count and the cost do not. */
+      .metric-row {
+        column-gap: var(--sl-spacing-2x-small);
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        min-width: 0;
+      }
+
+      .metric {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .metric.tokens {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
       }
 
       .metric {
         color: var(--sl-color-primary-700);
         font-size: var(--sl-font-size-small);
         font-weight: 600;
-        margin-top: var(--sl-spacing-2x-small);
       }
 
       .empty {
@@ -363,11 +390,34 @@ export class SessionListPanel extends LitElement {
     return 'Idle';
   }
 
-  private formatDate(value: string | null): string {
+  /** "Oct 12, 7:45 PM": short enough to share a line with the subtitle. */
+  private formatShortDate(value: string | null): string {
     if (!value) return 'No activity yet';
     const parsed = parseUTCDate(value);
     if (Number.isNaN(parsed.getTime())) return value;
-    return parsed.toLocaleString();
+    return parsed.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
+  /**
+   * Subtitle and last activity on one line: "Gateway · m-2 · Oct 12, 7:45 PM".
+   * The title spells it out ("Last activity ..."), with the full timestamp.
+   */
+  private metaLine(session: ObservedSession, long = false): string {
+    const when = long
+      ? `Last activity ${this.formatLongDate(session.lastActivityAt)}`
+      : this.formatShortDate(session.lastActivityAt);
+    return session.subtitle ? `${session.subtitle} · ${when}` : when;
+  }
+
+  private formatLongDate(value: string | null): string {
+    if (!value) return 'none yet';
+    const parsed = parseUTCDate(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
   }
 
   /**
@@ -423,7 +473,9 @@ export class SessionListPanel extends LitElement {
                 }}
               >
                 <div class="title-row">
-                  <div class="title">${session.title}</div>
+                  <div class="title" title=${session.title}>
+                    ${session.title}
+                  </div>
                   <sl-badge
                     class="chip"
                     variant=${this.getVariant(session)}
@@ -432,22 +484,26 @@ export class SessionListPanel extends LitElement {
                     ${this.getLabel(session)}
                   </sl-badge>
                 </div>
-                ${
-                  session.subtitle
-                    ? html`<div class="meta">${session.subtitle}</div>`
-                    : ''
-                }
-                <div class="meta">
-                  Last activity ${this.formatDate(session.lastActivityAt)}
+                <!-- One line of context: what ran it and when. The full
+                     text is the tooltip when the row truncates it. -->
+                <div class="meta" title=${this.metaLine(session, true)}>
+                  ${this.metaLine(session)}
                 </div>
                 <div class="metric-row">
                   <div class="metric">
-                    ${formatNumber(session.totalRequests)} requests
+                    ${formatNumber(session.totalRequests)} requests ·
                   </div>
                   <!-- Tokens before cost: the split says whether a session is
-                     expensive because it reads a lot or writes a lot. -->
-                  <div class="metric">
-                    <token-figures .usage=${session.tokenUsage}></token-figures>
+                     expensive because it reads a lot or writes a lot. The
+                     cache rate is in the figures' tooltip, so the row stays
+                     one line in the list column. -->
+                  <div class="metric tokens">
+                    <token-figures
+                      hide-cache
+                      .usage=${session.tokenUsage}
+                    ></token-figures>
+                  </div>
+                  <div class="metric cost">
                     · ${formatCost(session.estimatedCost)}
                   </div>
                 </div>

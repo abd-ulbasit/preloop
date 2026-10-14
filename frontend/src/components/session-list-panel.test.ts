@@ -127,11 +127,18 @@ describe('session-list-panel figures', () => {
     );
     expect(tokenText).to.contain('12.4K in');
     expect(tokenText).to.contain('3.1K out');
-    expect(tokenText).to.contain('cache 68% hit');
+    // The row is one line in the list column: the cache rate moved to the
+    // figures' tooltip (#1585).
+    expect(tokenText).to.not.contain('cache 68% hit');
+    expect(
+      figures.shadowRoot?.querySelector('[title]')?.getAttribute('title')
+    ).to.contain('68% hit');
 
     // Cost follows the tokens in the same line, not the other way round.
-    const rowText = (metric?.textContent || '').replace(/\s+/g, ' ');
+    const row = el.shadowRoot?.querySelector('.metric-row') as HTMLElement;
+    const rowText = (row.textContent || '').replace(/\s+/g, ' ');
     expect(rowText.trim().endsWith('$0.42')).to.be.true;
+    expect(getComputedStyle(row).flexWrap).to.equal('nowrap');
   });
 });
 
@@ -266,5 +273,33 @@ describe('session-list-panel artifact cell (#1084)', () => {
       { sessionId: 'session-1', artifactKind: null },
       { sessionId: 'session-1', artifactKind: 'screenshot' },
     ]);
+  });
+});
+
+describe('session-list-panel compact rows (#1585)', () => {
+  it('puts the subtitle and last activity on one truncating line', async () => {
+    const el = await renderPanel([
+      makeSession({
+        subtitle: 'Gateway · m-2 · anthropic',
+        lastActivityAt: '2026-10-12T19:45:28Z',
+      }),
+    ]);
+    const metas = el.shadowRoot!.querySelectorAll('.session-select .meta');
+    expect(metas.length).to.equal(1);
+    const line = metas[0].textContent!.trim();
+    expect(line.startsWith('Gateway · m-2 · anthropic · ')).to.be.true;
+    expect(line).to.not.contain('Last activity');
+    expect(metas[0].getAttribute('title')).to.match(
+      /^Gateway · m-2 · anthropic · Last activity /
+    );
+    expect(getComputedStyle(metas[0]).whiteSpace).to.equal('nowrap');
+  });
+
+  it('keeps a plain row under 80 px tall', async () => {
+    const el = await renderPanel([
+      makeSession({ subtitle: 'Gateway · m-2 · anthropic' }),
+    ]);
+    const card = el.shadowRoot!.querySelector('.session-card') as HTMLElement;
+    expect(card.getBoundingClientRect().height).to.be.lessThan(80);
   });
 });

@@ -6,7 +6,7 @@ import { loadShoelaceTokens } from '../../utils/test-shoelace-theme';
 
 import './runtime-sessions-view';
 import type { RuntimeSessionsView } from './runtime-sessions-view';
-import { formatCueStart } from './runtime-sessions-view';
+import { SESSION_PAGE_SIZE, formatCueStart } from './runtime-sessions-view';
 
 const SESSION_OPTIONS = {
   runner_id: 'r',
@@ -2230,7 +2230,7 @@ describe('RuntimeSessionsView', () => {
     }
 
     it('pages the list with Load more and keeps the count label honest', async () => {
-      stubPagedSessions(120);
+      stubPagedSessions(50);
       const element = (await fixture(
         html`<runtime-sessions-view></runtime-sessions-view>`
       )) as RuntimeSessionsView;
@@ -2241,25 +2241,116 @@ describe('RuntimeSessionsView', () => {
       );
       await element.updateComplete;
 
-      expect(countLabel(element)).to.equal('Showing 50 of 120');
+      // 20 per page (#1585), so the default list fits in about two viewports.
+      const firstUrl = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .find((url) => url.startsWith('/api/v1/runtime-sessions?'));
+      expect(firstUrl).to.contain(`limit=${SESSION_PAGE_SIZE}`);
+      expect(SESSION_PAGE_SIZE).to.equal(20);
+      expect(countLabel(element)).to.equal('Showing 20 of 50');
       expect(loadMoreButton(element)).to.not.equal(null);
 
       loadMoreButton(element)!.click();
       await waitUntil(
-        () => (element as any).sessions.items.length === 100,
+        () => (element as any).sessions.items.length === 40,
         'Second page did not append'
       );
       await element.updateComplete;
-      expect(countLabel(element)).to.equal('Showing 100 of 120');
+      expect(countLabel(element)).to.equal('Showing 40 of 50');
 
       loadMoreButton(element)!.click();
       await waitUntil(
-        () => (element as any).sessions.items.length === 120,
+        () => (element as any).sessions.items.length === 50,
         'Final page did not append'
       );
       await element.updateComplete;
-      expect(countLabel(element)).to.equal('120 sessions');
+      expect(countLabel(element)).to.equal('50 sessions');
       expect(loadMoreButton(element)).to.equal(null);
+    });
+
+    it('keeps a linked session that is not on the first page (#1585)', async () => {
+      const linked = 'runtime-session-35';
+      window.history.replaceState(
+        {},
+        '',
+        `/console/runtime-sessions?sessionId=${linked}`
+      );
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/runtime-sessions?')) {
+          const params = new URL(url, window.location.origin).searchParams;
+          return listPage(
+            50,
+            Number(params.get('offset') ?? 0),
+            Number(params.get('limit') ?? 50)
+          );
+        }
+        if (url === `/api/v1/runtime-sessions/${linked}`) {
+          return new Response(
+            JSON.stringify({ session: sessionItem(linked) }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const element = (await fixture(
+        html`<runtime-sessions-view></runtime-sessions-view>`
+      )) as RuntimeSessionsView;
+      await waitUntil(
+        () => !(element as any).loading,
+        'Runtime sessions view did not finish loading'
+      );
+      await element.updateComplete;
+
+      expect((element as any).selectedSessionId).to.equal(linked);
+      expect(
+        new URLSearchParams(window.location.search).get('sessionId')
+      ).to.equal(linked);
+      const observer = element.shadowRoot!.querySelector(
+        'preloop-session-observer'
+      ) as HTMLElement & { sessions: Array<{ id: string }> };
+      expect(observer.sessions[0].id).to.equal(linked);
+      // The page and its count stay what the server said.
+      expect((element as any).sessions.items).to.have.length(SESSION_PAGE_SIZE);
+      expect(countLabel(element)).to.equal('Showing 20 of 50');
+
+      // A live refresh must not swap the pinned link for the newest session.
+      await (element as any).loadSessions(true);
+      await element.updateComplete;
+      expect((element as any).selectedSessionId).to.equal(linked);
+      expect(
+        new URLSearchParams(window.location.search).get('sessionId')
+      ).to.equal(linked);
+
+      // A filter change re-scopes the list: the pin goes, the new list's
+      // first row is selected.
+      (element as any).status = 'ended';
+      await (element as any).applyFilters();
+      await element.updateComplete;
+      expect((element as any).selectedSessionId).to.equal('runtime-session-0');
+      expect(observer.sessions[0].id).to.equal('runtime-session-0');
+    });
+
+    it('falls back to the newest session when a linked one cannot be read', async () => {
+      window.history.replaceState(
+        {},
+        '',
+        '/console/runtime-sessions?sessionId=gone'
+      );
+      stubPagedSessions(50);
+      const element = (await fixture(
+        html`<runtime-sessions-view></runtime-sessions-view>`
+      )) as RuntimeSessionsView;
+      await waitUntil(
+        () => !(element as any).loading,
+        'Runtime sessions view did not finish loading'
+      );
+      expect((element as any).selectedSessionId).to.equal('runtime-session-0');
     });
 
     it('keeps the loaded rows when loading more fails', async () => {
