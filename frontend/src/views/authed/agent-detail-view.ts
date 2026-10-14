@@ -874,6 +874,7 @@ export class AgentDetailView extends LitElement {
       }
       this.aggregate = null;
       this.usageByModel = [];
+      this.usageError = null;
       this.activityByServer = [];
       this.activityByTool = [];
       if (this.loadedSectionsAgentId !== this.agentId) {
@@ -1080,6 +1081,9 @@ export class AgentDetailView extends LitElement {
     if (!agentId || (!refresh && this.loadedSections.has('usage_by_model')))
       return;
     const generation = this.sectionGeneration;
+    // Drop the previous failure as the read starts, so Retry does not
+    // keep the old banner up while the new read is in flight.
+    this.usageError = null;
     try {
       const detail = await getAccountAgent(agentId, {
         start_date: this.rangeStartDate(),

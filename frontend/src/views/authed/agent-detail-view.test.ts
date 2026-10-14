@@ -1339,6 +1339,68 @@ describe('AgentDetailView', () => {
       );
     });
 
+    it('hides spend until the usage read resolves', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('include=usage_by_model')) await gate;
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      (element as any).activeTab = 'models';
+      await element.updateComplete;
+      const reading = (element as any).loadActiveTabData();
+      await waitUntil(() => (element as any).editorContextReady);
+      await element.updateComplete;
+      const modelsCard = [
+        ...element.shadowRoot!.querySelectorAll('sl-card'),
+      ].find((card) => getDeepText(card).includes('Models & spend'));
+      expect(modelsCard, 'models card while usage is in flight').to.exist;
+      const pending = getDeepText(modelsCard);
+      expect(pending).to.contain('openai/gpt-5');
+      expect(pending).to.not.contain('spent');
+      expect(pending).to.not.contain('$0.00');
+      release();
+      await reading;
+      await element.updateComplete;
+      expect(getDeepText(modelsCard)).to.contain('spent');
+    });
+
+    it('clears a usage error when the next read starts', async () => {
+      let fail = true;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('include=usage_by_model')) {
+            if (fail) return new Response('{}', { status: 500 });
+            await gate;
+          }
+          return defaultFetch(input, init);
+        }
+      );
+      const element = await mount();
+      await (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.be.a('string');
+      fail = false;
+      const retry = (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.equal(null);
+      release();
+      await retry;
+      expect((element as any).usageError).to.equal(null);
+      expect((element as any).loadedSections.has('usage_by_model')).to.equal(
+        true
+      );
+    });
+
     it('spaces live refreshes out on a busy agent', async () => {
       const element = await mount();
       const clock = sinon.useFakeTimers({
