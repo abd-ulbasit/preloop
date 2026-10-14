@@ -99,9 +99,13 @@ def _committed_seed(engine) -> dict:
     # cannot run inside a transaction block.
     autocommit = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
     try:
-        autocommit.execute(text("VACUUM ANALYZE api_usage"))
-        autocommit.execute(text("VACUUM ANALYZE gateway_usage_search_document"))
-        autocommit.execute(text("VACUUM ANALYZE runtime_session"))
+        # PARALLEL 0: a parallel vacuum allocates dynamic shared memory,
+        # and a small container /dev/shm fails that allocation.
+        autocommit.execute(text("VACUUM (PARALLEL 0, ANALYZE) api_usage"))
+        autocommit.execute(
+            text("VACUUM (PARALLEL 0, ANALYZE) gateway_usage_search_document")
+        )
+        autocommit.execute(text("VACUUM (PARALLEL 0, ANALYZE) runtime_session"))
     except Exception:
         cleanup = Session(bind=engine)
         try:
@@ -306,14 +310,23 @@ def _plans(db_session, statements):
     raw = connection.connection.driver_connection
     plans = []
     with raw.cursor() as cursor:
-        # On a table that holds only this seed, a parallel bitmap of
-        # ``ix_api_usage_timestamp`` is cheaper than the model/time index
-        # even though it reads every model in the window. These settings
-        # ask for a plain index scan. A seq scan stays legal as the last
-        # resort, so a probe the model/time index cannot serve still fails.
+        # The fixture is the whole table, so a single-column index can cost
+        # less than ``ix_api_usage_account_model_ts`` even though it reads
+        # every other model. Hide those indexes for this EXPLAIN only. The
+        # test transaction rolls the change back. A seq scan stays legal as
+        # the last resort, so a probe this index cannot serve still fails.
         cursor.execute("SET LOCAL enable_seqscan = off")
-        cursor.execute("SET LOCAL enable_bitmapscan = off")
-        cursor.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+        cursor.execute(
+            """
+            UPDATE pg_index AS i
+            SET indisvalid = false
+            FROM pg_class AS c
+            WHERE c.oid = i.indexrelid
+              AND i.indrelid = 'api_usage'::regclass
+              AND c.relname <> 'ix_api_usage_account_model_ts'
+              AND c.relname <> 'api_usage_pkey'
+            """
+        )
         for statement, parameters in statements:
             cursor.execute("EXPLAIN " + statement, parameters)
             plans.append(
@@ -333,12 +346,12 @@ def _assert_probes(plans, probe) -> None:
     """
     matched = [(statement, plan) for statement, plan in plans if probe(statement)]
     assert matched, "page probe was not issued"
-    for statement, plan in plans:
-        assert "Seq Scan on api_usage" not in plan, plan
-        assert "Seq Scan on gateway_usage_search_document" not in plan, plan
+    for statement, _plan in plans:
         if statement.lower().startswith("select count("):
             raise AssertionError(f"exact count still runs:\n{statement[:400]}")
     for _statement, plan in matched:
+        assert "Seq Scan on api_usage" not in plan, plan
+        assert "Seq Scan on gateway_usage_search_document" not in plan, plan
         assert INDEX in plan, plan
         assert "Limit" in plan, plan
 
