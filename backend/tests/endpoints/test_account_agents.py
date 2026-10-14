@@ -536,6 +536,8 @@ def test_account_agents_endpoint_lists_onboarded_agents(client, db_session, test
     assert item["onboarding_state"] == "incomplete"
     assert item["mcp_proxy_configured"] is False
     assert item["model_gateway_configured"] is False
+    # Its gateway traffic can carry a note.
+    assert item["supports_operator_notes"] is True
 
 
 def test_account_agents_activity_requires_traffic_not_registration(
@@ -1914,6 +1916,8 @@ def test_account_agent_detail_includes_credentials_and_enrollments(
     assert body["agent"]["onboarding_state"] == "mcp_proxy_only"
     assert body["agent"]["mcp_proxy_configured"] is True
     assert body["agent"]["model_gateway_configured"] is False
+    # MCP proxy only, no gateway traffic, no note hook: no note box.
+    assert body["agent"]["supports_operator_notes"] is False
     assert (
         bootstrap_enrollment["managed_config"]["runtime_session_id"]
         == (token_response.json()["runtime_session_id"])

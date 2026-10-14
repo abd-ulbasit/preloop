@@ -776,6 +776,8 @@ export interface ManagedAgentSummary {
   control_last_heartbeat_at?: string | null;
   supported_input_modes?: string[];
   supported_output_modes?: string[];
+  /** False for an MCP-only agent: no gateway or hook can carry a note. */
+  supports_operator_notes?: boolean;
 }
 
 export interface AgentControlCommandRequest {
@@ -865,6 +867,8 @@ export interface OperatorNoteCreateRequest {
 
 export interface OperatorNoteList {
   notes: OperatorNote[];
+  /** Every note matching the filter, across pages. */
+  total?: number;
 }
 
 export interface ManagedAgentModelBindingSummary {

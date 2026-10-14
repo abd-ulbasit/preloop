@@ -301,6 +301,23 @@ def test_list_notes_for_an_agent_newest_first(client, agent, runtime_session):
     assert all(note["state"] == "pending" for note in notes)
 
 
+def test_list_notes_pages_with_a_total(client, agent, runtime_session):
+    """The agent page shows the latest few and loads older notes on demand."""
+    for text in ("one", "two", "three", "four", "five"):
+        client.post(NOTES_URL, json={"agent_id": str(agent.id), "text": text})
+
+    first = client.get(NOTES_URL, params={"agent_id": str(agent.id), "limit": 3})
+    older = client.get(
+        NOTES_URL, params={"agent_id": str(agent.id), "limit": 3, "offset": 3}
+    )
+
+    assert first.status_code == 200, first.text
+    assert [n["text"] for n in first.json()["notes"]] == ["five", "four", "three"]
+    assert first.json()["total"] == 5
+    assert [n["text"] for n in older.json()["notes"]] == ["two", "one"]
+    assert older.json()["total"] == 5
+
+
 def test_send_and_list_by_execution_resolve_the_same_session(
     client, db_session, test_user, agent, runtime_session
 ):

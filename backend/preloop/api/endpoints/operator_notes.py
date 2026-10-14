@@ -316,7 +316,11 @@ def create_operator_note(
                     )
                 )
             )
-        return OperatorNoteList(notes=notes) if payload.children == "all" else notes[0]
+        return (
+            OperatorNoteList(notes=notes, total=len(notes))
+            if payload.children == "all"
+            else notes[0]
+        )
     note = _create_note(db, request=request, current_user=current_user, payload=payload)
     return _to_response(note)
 
@@ -332,15 +336,20 @@ def list_operator_notes(
     runtime_session_id: Optional[UUID] = Query(None),
     execution_id: Optional[UUID] = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     state: Optional[OperatorNoteState] = Query(None),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ) -> OperatorNoteList:
-    """List notes for one agent, session or execution, newest first."""
+    """List notes for one agent, session or execution, newest first.
+
+    Paged with ``limit``/``offset``; ``total`` counts every match, so a page
+    can say "Notes (N)" and load older ones on demand.
+    """
     ensure_permission_in_oss(db, current_user, CONTROL_PERMISSION)
     account_id = str(current_user.account_id)
 
-    def _load() -> list[Any]:
+    def _load() -> tuple[list[Any], int]:
         crud_agent_control_command.expire_notes(
             db, account_id=account_id, now=datetime.now(timezone.utc)
         )
@@ -351,23 +360,28 @@ def list_operator_notes(
                 db, account_id=account_id, execution_id=execution_id
             )
             if session is None:
-                return []
+                return [], 0
             session_id = session.id
         if agent_id is None and session_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Name an agent_id, runtime_session_id or execution_id",
             )
-        return crud_agent_control_command.list_notes(
-            db,
-            account_id=account_id,
-            managed_agent_id=agent_id,
-            runtime_session_id=session_id,
-            limit=limit,
-            state=state,
+        scope = {
+            "account_id": account_id,
+            "managed_agent_id": agent_id,
+            "runtime_session_id": session_id,
+            "state": state,
+        }
+        notes = crud_agent_control_command.list_notes(
+            db, limit=limit, offset=offset, **scope
         )
+        if offset == 0 and len(notes) < limit:
+            return notes, len(notes)
+        return notes, crud_agent_control_command.count_notes(db, **scope)
 
-    return OperatorNoteList(notes=[_to_response(note) for note in _load()])
+    notes, total = _load()
+    return OperatorNoteList(notes=[_to_response(note) for note in notes], total=total)
 
 
 @router.get(

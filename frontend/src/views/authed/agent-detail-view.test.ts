@@ -1082,6 +1082,117 @@ describe('AgentDetailView', () => {
     ).to.equal('Upstream refused, unverified');
   });
 
+  describe('notes', () => {
+    function withNotes(
+      total: number,
+      agentPatch: Record<string, unknown> = {}
+    ): void {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === 'string' ? input : input.toString();
+          if (url.startsWith('/api/v1/operator-notes')) {
+            const notes = Array.from(
+              { length: Math.min(3, total) },
+              (_, i) => ({
+                note_id: `note-${i}`,
+                state: 'delivered',
+                text: `Conductor note ${i} ${'x'.repeat(600)}`,
+                author: { display: 'dimitris', auth_method: 'jwt' },
+              })
+            );
+            return new Response(JSON.stringify({ notes, total }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          const response = await defaultFetch(input, init);
+          if (
+            url.startsWith('/api/v1/agents/agent-1') &&
+            !url.includes('/governance') &&
+            response.ok
+          ) {
+            const body = await response.json();
+            if (body.agent) Object.assign(body.agent, agentPatch);
+            return new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return response;
+        }
+      );
+    }
+
+    async function mount(): Promise<AgentDetailView> {
+      const element = await fixture<AgentDetailView>(
+        html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+      );
+      await waitUntil(
+        () => !(element as any).loading && (element as any).agent !== null,
+        'Agent detail view did not finish loading'
+      );
+      await waitUntil(
+        () => (element as any).notesPage !== null,
+        'notes count did not load'
+      );
+      await element.updateComplete;
+      return element;
+    }
+
+    it('keeps notes out of the page above the tabs, behind a counted tab', async () => {
+      withNotes(48);
+      const element = await mount();
+      const root = element.shadowRoot!;
+      // Nothing note-shaped renders until the tab is opened.
+      expect(root.querySelector('operator-note-composer')).to.be.null;
+      expect(root.querySelector('agent-notes-tab')).to.be.null;
+      const tab = root.querySelector('[data-testid="notes-tab"]');
+      expect(tab?.textContent?.replace(/\s+/g, ' ').trim()).to.equal(
+        'Notes (48)'
+      );
+      const ids = ((element as any).agentActions as Array<{ id: string }>).map(
+        (action) => action.id
+      );
+      expect(ids).to.include('note');
+    });
+
+    it('opens the Notes tab from the header Note action', async () => {
+      withNotes(2);
+      const element = await mount();
+      const note = ((element as any).agentActions as Array<any>).find(
+        (action) => action.id === 'note'
+      );
+      note.onClick();
+      await waitUntil(() =>
+        element.shadowRoot!.querySelector('agent-notes-tab')
+      );
+      expect((element as any).activeTab).to.equal('notes');
+      expect(new URL(window.location.href).searchParams.get('tab')).to.equal(
+        'notes'
+      );
+    });
+
+    it('offers no note box or tab to an agent no note can reach', async () => {
+      withNotes(0, { supports_operator_notes: false });
+      const element = await mount();
+      const root = element.shadowRoot!;
+      expect(root.querySelector('[data-testid="notes-tab"]')).to.be.null;
+      const ids = ((element as any).agentActions as Array<{ id: string }>).map(
+        (action) => action.id
+      );
+      expect(ids).not.to.include('note');
+    });
+
+    it('still lists earlier notes for an agent that can no longer receive one', async () => {
+      withNotes(4, { supports_operator_notes: false });
+      const element = await mount();
+      const tab = element.shadowRoot!.querySelector(
+        '[data-testid="notes-tab"]'
+      );
+      expect(tab, 'history stays reachable').to.exist;
+    });
+  });
+
   it('orders the action bar and keeps Remove last, outlined and set apart', async () => {
     const element = await fixture<AgentDetailView>(
       html`<agent-detail-view agentId="agent-1"></agent-detail-view>`

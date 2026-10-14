@@ -537,6 +537,9 @@ class ManagedAgentSummary(BaseModel):
     control_last_heartbeat_at: Optional[datetime] = None
     supported_input_modes: List[str] = Field(default_factory=list)
     supported_output_modes: List[str] = Field(default_factory=list)
+    #: Whether an operator note can reach this agent (gateway or a harness
+    #: hook). False for an MCP-only agent, which has no way to read one.
+    supports_operator_notes: bool = True
 
     @field_validator("control_session_mode", mode="before")
     @classmethod
