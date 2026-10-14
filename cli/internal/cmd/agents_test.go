@@ -3871,6 +3871,17 @@ func TestParseClaudeManagedGatewayUpstreamUsesShellExportsForBedrock(t *testing.
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
 	t.Setenv("ANTHROPIC_MODEL", "")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "")
+	// GitLab injects AWS_DEFAULT_REGION into every job. The parser prefers
+	// process env over .zshrc, then folds that region into the bearer secret.
+	// This test is about the shell export only.
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", "")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
 
 	configPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {

@@ -69,7 +69,9 @@ test('sensitive data tab: redact email, test, save, reload', async ({
     '[REDACTED:email]'
   );
 
-  await panel.getByLabel(/Sample text/).fill('mail a@example.com');
+  // The textarea's accessible name is its aria-label. The visible
+  // "Sample text" label does not win over that.
+  await panel.getByLabel('Sensitive data test text').fill('mail a@example.com');
   await panel.getByTestId('sensitive-test').click();
   await expect(panel.getByTestId('sensitive-stored')).toHaveText(
     'mail [REDACTED:email]'

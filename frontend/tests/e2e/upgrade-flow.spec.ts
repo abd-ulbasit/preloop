@@ -139,12 +139,15 @@ test.describe('T2 upgrade flow (mocked Stripe boundary)', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('AI session optimization');
 
-    // "Upgrade now" leaves for the plan page, carrying the capability that
-    // was refused. `session_optimization` is sold as `ai_optimization`, so
-    // that is the name the plan page can actually match against a plan.
+    // "Upgrade now" leaves for the plan page. The query keeps the name the
+    // 402 sent (`session_optimization`); the plan page maps that onto the
+    // `ai_optimization` capability itself.
     await dialog.locator('sl-button', { hasText: 'Upgrade now' }).click();
-    await page.waitForURL(/feature=ai_optimization/, { timeout: 15_000 });
-    expect(page.url()).toContain('/console/settings/account');
+    await page.waitForURL(
+      /\/console\/settings\/plan\?feature=session_optimization/,
+      { timeout: 15_000 }
+    );
+    expect(page.url()).toContain('/console/settings/plan');
     await expect(dialog).toBeHidden();
     expect(checkoutCalls, 'the dialog buys nothing by itself').toBe(0);
   });
