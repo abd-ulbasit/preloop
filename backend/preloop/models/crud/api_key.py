@@ -84,6 +84,22 @@ class CRUDApiKey(CRUDBase[ApiKey]):
         db.refresh(db_obj)
         return db_obj
 
+    def get_for_update(
+        self, db: Session, *, id: Any, account_id: Any
+    ) -> Optional[ApiKey]:
+        """Lock and reload one tenant's key until the caller ends its transaction.
+
+        Reloading defeats stale identity-map state after a concurrent rotation.
+        Callers must retain the transaction through validation, mutation and audit.
+        """
+        return (
+            db.query(ApiKey)
+            .filter(ApiKey.id == id, ApiKey.account_id == account_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+
     def create_runtime_key(
         self,
         db: Session,
