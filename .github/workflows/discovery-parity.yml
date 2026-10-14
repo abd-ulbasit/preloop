@@ -1,0 +1,43 @@
+name: Discovery platform parity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discovery-parity:
+    name: Discovery (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PRELOOP_DISABLE_TELEMETRY: 'true'
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Download dependencies before offline tests
+        run: go mod download
+      - name: Test offline discovery, inventory and report builders
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: go test ./internal/cmd -run 'Test(AllUsersInventory|Inventory|SafeDiscoveryJSON|DiscoverReport|DiscoverWithoutReport|DiscoverEnvOff|DiscoveryLinkFields|BuildDiscovery|DiscoveryKind|HomeRelative|ConfigPathHash|WorkstationFingerprint|LocalProfile|ParseMachineID|PersistedWorkstationID|ClaudeDesktopConfigPaths|ConfigPathsForOther|UserConfigDirs)' -count=1

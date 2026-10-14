@@ -70,6 +70,7 @@ type discoveryReportRequest struct {
 	CLIVersion             string                     `json:"cli_version,omitempty"`
 	OS                     string                     `json:"os"`
 	Candidates             []discoveryReportCandidate `json:"candidates"`
+	Evidence               *inventoryReportEvidence   `json:"evidence,omitempty"`
 }
 
 type discoveryReportResponse struct {
