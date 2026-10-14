@@ -203,9 +203,126 @@ func TestBuildHarnessInventorySignedOutHintWins(t *testing.T) {
 	if copilot.LoginState != "signed_out" {
 		t.Fatalf("login_state = %s", copilot.LoginState)
 	}
-	last := copilot.Models[len(copilot.Models)-1]
-	if last.ID != "gpt-5.3" || last.Source != "observed" {
+	if copilot.Models[0].ID != "auto" || copilot.Models[0].Source != "static" {
 		t.Fatalf("models = %+v", copilot.Models)
+	}
+	if copilot.Models[1].ID != "gpt-5.3" || copilot.Models[1].Source != "observed" {
+		t.Fatalf("most recent observed model must follow auto: %+v", copilot.Models)
+	}
+}
+
+func TestCopilotStaticModelsFor109xIncludeSonnet55(t *testing.T) {
+	got := harnessStaticModelsFor("copilot_cli", "1.0.96")
+	want := []string{
+		"auto",
+		"claude-sonnet-5.5",
+		"claude-sonnet-4.6",
+		"claude-sonnet-4.5",
+		"claude-haiku-4.5",
+		"gpt-5.2",
+		"gpt-5-mini",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("static models = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("static models = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestCopilotUsageModelObservedOnceAfterAuto(t *testing.T) {
+	saved := runnerHarnessHints
+	savedPublisher := runnerInventory
+	hints := &harnessRuntimeHints{}
+	runnerHarnessHints = hints
+	runnerInventory = newRunnerInventoryPublisher(func() harnessInventory { return harnessInventory{} })
+	t.Cleanup(func() {
+		runnerHarnessHints = saved
+		runnerInventory = savedPublisher
+	})
+
+	const usage = `{"type":"result","sessionId":"33810b72-1e9a-4a02-bbcb-a125d10b886c","exitCode":0,"usage":{"premiumRequests":1,"model":"gpt-5.4","cwd":"/tmp/secret-workspace","token":"` + fakeToken + `"}}`
+	capture := copilotCapture{}
+	kind, payload, ok := copilotSessionEvent(&capture, usage)
+	if !ok || kind != "usage" {
+		t.Fatalf("usage event: ok=%v kind=%s", ok, kind)
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken, "cwd", "token"} {
+		if strings.Contains(string(rawPayload), leak) {
+			t.Fatalf("usage payload leaks %q: %s", leak, rawPayload)
+		}
+	}
+	usageMap, _ := payload["usage"].(map[string]any)
+	if usageMap["model"] != "gpt-5.4" || usageMap["premiumRequests"] != float64(1) {
+		t.Fatalf("usage = %#v", usageMap)
+	}
+	for key := range usageMap {
+		switch key {
+		case "premiumRequests", "model", "totalApiDurationMs", "sessionDurationMs":
+		default:
+			t.Fatalf("usage key %q is not allowlisted: %#v", key, usageMap)
+		}
+	}
+
+	result, err := copilotRunnerResult(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range result {
+		switch key {
+		case "status", "harness", "session_id", "model", "premium_requests":
+		default:
+			t.Fatalf("result key %q is not allowlisted: %#v", key, result)
+		}
+	}
+	if result["model"] != "gpt-5.4" {
+		t.Fatalf("result = %#v", result)
+	}
+	rawResult, _ := json.Marshal(result)
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken} {
+		if strings.Contains(string(rawResult), leak) {
+			t.Fatalf("host-exec result leaks %q: %s", leak, rawResult)
+		}
+	}
+
+	capture2 := copilotCapture{}
+	applyCopilotLine(&capture2, `{"type":"result","sessionId":"33810b72-1e9a-4a02-bbcb-a125d10b886c","exitCode":0,"usage":{"premiumRequests":1,"model":"claude-sonnet-5.5"}}`)
+	if _, err := copilotRunnerResult(capture2); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	host := fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{"copilot": true}, hints: hints}
+	copilot := entryFor(t, buildHarnessInventory(host.deps("linux")), "copilot_cli")
+	counts := map[string]int{}
+	for _, model := range copilot.Models {
+		counts[model.ID]++
+	}
+	for _, id := range []string{"auto", "gpt-5.4", "claude-sonnet-5.5", "claude-sonnet-4.6", "claude-sonnet-4.5", "claude-haiku-4.5", "gpt-5.2", "gpt-5-mini"} {
+		if counts[id] != 1 {
+			t.Fatalf("%s published %d times: %+v", id, counts[id], copilot.Models)
+		}
+	}
+	if copilot.Models[0].ID != "auto" || copilot.Models[0].Source != "static" {
+		t.Fatalf("models = %+v", copilot.Models)
+	}
+	if copilot.Models[1].ID != "claude-sonnet-5.5" || copilot.Models[1].Source != "observed" {
+		t.Fatalf("most recent observed model must follow auto: %+v", copilot.Models)
+	}
+	if copilot.Models[2].ID != "gpt-5.4" || copilot.Models[2].Source != "observed" {
+		t.Fatalf("older observed model = %+v", copilot.Models[2])
+	}
+	raw, _ := json.Marshal(buildHarnessInventory(host.deps("linux")))
+	for _, leak := range []string{"/tmp/secret-workspace", fakeToken, "cwd", home, "GITHUB_TOKEN"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("inventory leaks %q: %s", leak, raw)
+		}
 	}
 }
 

@@ -4,10 +4,13 @@ package cmd
 // their models non-interactively (Copilot CLI has no `models` command). The
 // harness still decides: a model it does not offer fails fast with the
 // existing "--model ... not available" mapping. Inventory reports these with
-// source "static". Keep the lists short and update them by PR.
+// source "static". Keep the lists short and update them in a CLI release
+// when the harness's offered models change. The Copilot CLI 1.0.9x list
+// includes claude-sonnet-5.5 and the older ids.
 var harnessStaticModels = map[string][]string{
 	"copilot_cli": {
 		"auto",
+		"claude-sonnet-5.5",
 		"claude-sonnet-4.6",
 		"claude-sonnet-4.5",
 		"claude-haiku-4.5",

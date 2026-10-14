@@ -340,12 +340,49 @@ func copilotSessionEvent(capture *copilotCapture, line string) (string, map[stri
 		}
 		return kind, map[string]any{"event": event.Type, "data": event.Data}, true
 	case event.Type == "result":
-		if event.Usage == nil {
+		usage := copilotUsagePayload(event.Usage)
+		if usage == nil {
 			return "", nil, false
 		}
-		return "usage", map[string]any{"event": event.Type, "usage": event.Usage}, true
+		return "usage", map[string]any{"event": event.Type, "usage": usage}, true
 	default:
 		return "", nil, false
+	}
+}
+
+// copilotUsagePayload keeps the usage fields a session event may leave the
+// host with. Paths, tokens and environment values in the raw event are
+// dropped. model is kept only when it is a model id.
+func copilotUsagePayload(usage map[string]any) map[string]any {
+	if len(usage) == 0 {
+		return nil
+	}
+	out := map[string]any{}
+	if n, ok := copilotUsageNumber(usage["premiumRequests"]); ok && n >= 0 {
+		out["premiumRequests"] = n
+	}
+	if model, ok := usage["model"].(string); ok && hostExecModelRe.MatchString(strings.TrimSpace(model)) {
+		out["model"] = strings.TrimSpace(model)
+	}
+	for _, key := range []string{"totalApiDurationMs", "sessionDurationMs"} {
+		if n, ok := copilotUsageNumber(usage[key]); ok && n >= 0 {
+			out[key] = n
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func copilotUsageNumber(value any) (float64, bool) {
+	switch n := value.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	default:
+		return 0, false
 	}
 }
 

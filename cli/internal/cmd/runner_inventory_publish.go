@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,7 @@ func noteHarnessRunSucceeded(harness, model string) {
 	runnerHarnessHints.markSignedOut(harness, false)
 	runnerHarnessHints.noteModel(harness, model)
 	_, after := runnerHarnessHints.snapshot(harness)
-	if signedOut || len(after) != len(before) {
+	if signedOut || !slices.Equal(before, after) {
 		runnerInventory.invalidate()
 	}
 }

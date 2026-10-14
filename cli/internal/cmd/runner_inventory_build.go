@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -90,11 +89,13 @@ type harnessInventoryDeps struct {
 }
 
 // harnessRuntimeHints carries what the runner learned from real runs:
-// an explicit "not logged in" failure and models a harness reported.
+// an explicit "not logged in" failure and model ids a harness reported.
+// Observed ids are newest-first. Values, paths and environment never land
+// here.
 type harnessRuntimeHints struct {
 	mu        sync.Mutex
 	signedOut map[string]bool
-	observed  map[string]map[string]struct{}
+	observed  map[string][]string
 }
 
 var runnerHarnessHints = &harnessRuntimeHints{}
@@ -117,20 +118,25 @@ func (h *harnessRuntimeHints) markSignedOut(harness string, signedOut bool) {
 
 func (h *harnessRuntimeHints) noteModel(harness, model string) {
 	model = strings.TrimSpace(model)
-	if h == nil || model == "" || len(model) > maxHarnessModelIDLength || !hostExecModelRe.MatchString(model) {
+	if h == nil || harness == "" || model == "" || len(model) > maxHarnessModelIDLength || !hostExecModelRe.MatchString(model) {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.observed == nil {
-		h.observed = map[string]map[string]struct{}{}
+		h.observed = map[string][]string{}
 	}
-	if h.observed[harness] == nil {
-		h.observed[harness] = map[string]struct{}{}
+	next := make([]string, 0, len(h.observed[harness])+1)
+	next = append(next, model)
+	for _, id := range h.observed[harness] {
+		if id != model {
+			next = append(next, id)
+		}
 	}
-	if len(h.observed[harness]) < maxHarnessModels {
-		h.observed[harness][model] = struct{}{}
+	if len(next) > maxHarnessModels {
+		next = next[:maxHarnessModels]
 	}
+	h.observed[harness] = next
 }
 
 func (h *harnessRuntimeHints) snapshot(harness string) (bool, []string) {
@@ -139,12 +145,7 @@ func (h *harnessRuntimeHints) snapshot(harness string) (bool, []string) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	models := make([]string, 0, len(h.observed[harness]))
-	for model := range h.observed[harness] {
-		models = append(models, model)
-	}
-	sort.Strings(models)
-	return h.signedOut[harness], models
+	return h.signedOut[harness], append([]string(nil), h.observed[harness]...)
 }
 
 func defaultHarnessInventoryDeps() harnessInventoryDeps {
@@ -346,6 +347,30 @@ func discoveryLogin(agent AgentConfig) (string, string) {
 	}
 }
 
+// copilotModelsFor lists Copilot models with auto first, then ids the seat
+// reported in usage (newest first, source observed), then the rest of the
+// static table and a configured id. Each id is published once; an observed
+// id keeps source observed when the static table also names it.
+func copilotModelsFor(version, configured string, observed []string) []harnessModel {
+	static := harnessStaticModelsFor(hostExecHarnessCopilot, version)
+	seen := map[string]struct{}{}
+	var models []harnessModel
+	rest := make([]string, 0, len(static))
+	for _, id := range static {
+		if id == "auto" && len(models) == 0 {
+			models = appendModels(models, seen, harnessModelSourceStatic, id)
+			continue
+		}
+		rest = append(rest, id)
+	}
+	models = appendModels(models, seen, harnessModelSourceObserved, observed...)
+	models = appendModels(models, seen, harnessModelSourceStatic, rest...)
+	if hostExecModelRe.MatchString(strings.TrimSpace(configured)) {
+		models = appendModels(models, seen, harnessModelSourceConfigured, configured)
+	}
+	return models
+}
+
 func appendModels(models []harnessModel, seen map[string]struct{}, source string, ids ...string) []harnessModel {
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
@@ -534,12 +559,7 @@ func buildCopilotEntry(d harnessInventoryDeps, discovered map[string]AgentConfig
 	}
 	entry.AccountHost = host
 
-	seen := map[string]struct{}{}
-	models := appendModels(nil, seen, harnessModelSourceStatic, harnessStaticModelsFor(id, entry.Version)...)
-	if hostExecModelRe.MatchString(stored.Model) {
-		models = appendModels(models, seen, harnessModelSourceConfigured, stored.Model)
-	}
-	entry.Models = appendModels(models, seen, harnessModelSourceObserved, observed...)
+	entry.Models = copilotModelsFor(entry.Version, stored.Model, observed)
 
 	if entry.SupportLevel != harnessSupportPresenceOnly {
 		if name := generatedProfileFor(id, d); name != "" {
