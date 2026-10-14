@@ -739,6 +739,9 @@ class ManagedAgentDetailResponse(BaseModel):
         default_factory=list
     )
     sessions: List[RuntimeSessionSummary] = Field(default_factory=list)
+    #: Sessions across all pages (``session_limit``/``session_offset``);
+    #: null when the sessions section was not requested.
+    session_total: Optional[int] = None
     credentials: List[ManagedAgentCredentialSummary] = Field(default_factory=list)
     enrollments: List[ManagedAgentEnrollmentSummary] = Field(default_factory=list)
 

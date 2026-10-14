@@ -2387,6 +2387,23 @@ paths:
         description: 'Comma list of optional sections: usage_by_model, activity, sessions.
           Omitted returns all of them; an empty value returns the agent, its aggregate,
           credentials and enrollments only.'
+      - name: session_limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Session Limit
+      - name: session_offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Session Offset
       responses:
         '200':
           description: Successful Response
@@ -34829,6 +34846,11 @@ components:
             $ref: '#/components/schemas/RuntimeSessionSummary'
           type: array
           title: Sessions
+        session_total:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Session Total
         credentials:
           items:
             $ref: '#/components/schemas/ManagedAgentCredentialSummary'

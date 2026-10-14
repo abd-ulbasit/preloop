@@ -1443,6 +1443,17 @@ def test_account_agent_detail_endpoint_includes_session_history(
     assert len(models_tab.json()["sessions"]) == 2
     assert models_tab.json()["activity_by_tool"] == []
 
+    assert header_body["session_total"] is None
+    assert models_tab.json()["session_total"] == 2
+    second_page = client.get(
+        f"/api/v1/agents/{agent_id}",
+        params={"include": "sessions", "session_limit": 1, "session_offset": 1},
+    ).json()
+    assert [row["session_source_id"] for row in second_page["sessions"]] == [
+        "workspace-1"
+    ]
+    assert second_page["session_total"] == 2
+
     unknown = client.get(f"/api/v1/agents/{agent_id}", params={"include": "notes"})
     assert unknown.status_code == 422
 

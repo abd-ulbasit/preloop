@@ -1001,6 +1001,8 @@ def _build_managed_agent_detail_response(
     end_date: Optional[datetime] = None,
     background_tasks: Optional[BackgroundTasks] = None,
     sections: frozenset[str] = MANAGED_AGENT_DETAIL_SECTIONS,
+    session_limit: int = 20,
+    session_offset: int = 0,
 ) -> Optional[ManagedAgentDetailResponse]:
     if start_date and start_date.tzinfo:
         start_date = start_date.astimezone(UTC).replace(tzinfo=None)
@@ -1047,7 +1049,7 @@ def _build_managed_agent_detail_response(
             runtime_principal_type=summary["session_source_type"],
             runtime_principal_id=summary["session_source_id"],
         )
-    sessions: dict[str, Any] = {"items": []}
+    sessions: dict[str, Any] = {"items": [], "total": None}
     if "sessions" in sections:
         sessions = crud_runtime_session.list_account_sessions(
             db,
@@ -1056,8 +1058,8 @@ def _build_managed_agent_detail_response(
             runtime_principal_id=summary["session_source_id"],
             min_requests=1,
             status="all",
-            limit=20,
-            offset=0,
+            limit=session_limit,
+            offset=session_offset,
         )
         RuntimeSessionExplorerService(db).schedule_missing_session_titles(
             account_id=account_id,
@@ -1092,6 +1094,7 @@ def _build_managed_agent_detail_response(
             RuntimeSessionExplorerService._summary_row_to_schema(item)
             for item in sessions["items"]
         ],
+        session_total=sessions.get("total"),
         credentials=[
             ManagedAgentCredentialSummary(**item)
             for item in crud_managed_agent_credential.list_for_agent(
@@ -1756,6 +1759,8 @@ def get_account_managed_agent(
             "the agent, its aggregate, credentials and enrollments only."
         ),
     ),
+    session_limit: int = Query(20, ge=1, le=100),
+    session_offset: int = Query(0, ge=0),
 ):
     """Return one enrolled external agent for the current account."""
     from preloop.models.crud.resource_share import crud_resource_share
@@ -1778,6 +1783,8 @@ def get_account_managed_agent(
         end_date=end_date,
         background_tasks=background_tasks,
         sections=sections,
+        session_limit=session_limit,
+        session_offset=session_offset,
     )
     if response is None:
         raise HTTPException(
