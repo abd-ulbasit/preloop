@@ -554,6 +554,12 @@ describe('ApiUsageView', () => {
 
     // Provider snapshots get their own flexible row, not the 4-track grid
     // that squeezed the name to one letter per line.
+    const snapshotsSection = root.querySelector(
+      'collapsible-section[storage-key="api-usage:snapshots"]'
+    ) as HTMLElement & { open: boolean; updateComplete: Promise<unknown> };
+    expect(snapshotsSection.open).to.equal(false);
+    snapshotsSection.shadowRoot!.querySelector('button')!.click();
+    await snapshotsSection.updateComplete;
     const snapshot = root.querySelector('.snapshot-row')!;
     expect(snapshot).to.exist;
     expect(snapshot.classList.contains('breakdown-row')).to.equal(false);
@@ -1070,7 +1076,7 @@ describe('ApiUsageView', () => {
     );
     await element.updateComplete;
     const root = element.shadowRoot!;
-    for (const name of ['days', 'flows', 'interactions']) {
+    for (const name of ['days', 'flows', 'interactions', 'sessions']) {
       const section = root.querySelector(
         `collapsible-section.${name}-section`
       ) as HTMLElement & { open: boolean };

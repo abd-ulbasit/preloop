@@ -2221,6 +2221,7 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
   private _renderMcpEditor() {
     return html`
       <tools-editor-component
+        .pageSize=${10}
         ?inert=${this.toolsContextLoading || this.toolsSchemasLoading}
         @toggle-expand=${() => this.loadToolSchemas()}
         family="mcp"
@@ -2375,6 +2376,7 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
   private _renderNativeEditor() {
     return html`
       <tools-editor-component
+        .pageSize=${10}
         ?inert=${this.toolsContextLoading || this.toolsSchemasLoading}
         @toggle-expand=${() => this.loadToolSchemas()}
         family="native"

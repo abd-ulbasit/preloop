@@ -286,13 +286,13 @@ describe('AuditView', () => {
   });
 
   it('opens a linked page at its size and keeps paging in the URL', async () => {
-    window.history.replaceState(null, '', '?page=2&size=25');
+    window.history.replaceState(null, '', '?page=2&size=50');
     const requested: string[] = [];
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.startsWith('/api/v1/audit-logs/grouped?')) {
         requested.push(url);
-        return new Response(JSON.stringify({ groups: [], total: 120 }), {
+        return new Response(JSON.stringify({ groups: [], total: 240 }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -306,15 +306,15 @@ describe('AuditView', () => {
     document.body.appendChild(element);
     await waitUntil(() => requested.length > 0, 'no timeline request');
     const first = new URL(requested[0], window.location.origin).searchParams;
-    expect(first.get('skip')).to.equal('25');
-    expect(first.get('limit')).to.equal('25');
-    await waitUntil(() => (element as any)._total === 120, 'no total');
+    expect(first.get('skip')).to.equal('50');
+    expect(first.get('limit')).to.equal('50');
+    await waitUntil(() => (element as any)._total === 240, 'no total');
 
     (element as any)._goToPage(3);
     await waitUntil(() => requested.length > 1, 'no second request');
     const params = new URLSearchParams(window.location.search);
     expect(params.get('page')).to.equal('4');
-    expect(params.get('size')).to.equal('25');
+    expect(params.get('size')).to.equal('50');
     (element as any)._setPageSize(100);
     await waitUntil(() => requested.length > 2, 'no third request');
     expect(new URLSearchParams(window.location.search).get('page')).to.equal(
@@ -1844,17 +1844,17 @@ describe('AuditView', () => {
     };
 
     it('asks for a capped total and shows it as a lower bound', async () => {
-      const groups = Array.from({ length: 50 }, (_, i) => row(`row-${i}`));
+      const groups = Array.from({ length: 25 }, (_, i) => row(`row-${i}`));
       const urls = grouped({
         groups,
         total: 10000,
         skip: 0,
-        limit: 50,
+        limit: 25,
         total_capped: true,
       });
       const element = document.createElement('audit-view') as AuditView;
       document.body.appendChild(element);
-      await waitUntil(() => (element as any)._groups.length === 50);
+      await waitUntil(() => (element as any)._groups.length === 25);
       await element.updateComplete;
 
       expect(

@@ -1,3 +1,4 @@
+import '../table/table-pagination';
 import { LitElement, html, css, unsafeCSS, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import {
@@ -660,6 +661,10 @@ export class PreloopFlowForm extends LitElement {
 
   @state()
   private pickerCollapsed = false;
+
+  @state() private toolSearch = '';
+  @state() private toolPage = 0;
+  private readonly toolPageSize = 10;
 
   @state()
   private replaceEditsOpen = false;
@@ -4206,10 +4211,27 @@ export class PreloopFlowForm extends LitElement {
         );
       }
     }
-    const builtinTools = this.availableTools.filter(
-      (t) => t.source === 'builtin'
+    const query = this.toolSearch.trim().toLowerCase();
+    const matchingTools = this.availableTools.filter(
+      (tool) =>
+        (tool.source === 'builtin' || tool.source === 'mcp') &&
+        (!query ||
+          `${tool.name} ${tool.description || ''} ${tool.source_name || ''}`
+            .toLowerCase()
+            .includes(query))
     );
-    const mcpTools = this.availableTools.filter((t) => t.source === 'mcp');
+    const toolPage = Math.min(
+      this.toolPage,
+      Math.max(0, Math.ceil(matchingTools.length / this.toolPageSize) - 1)
+    );
+    const visibleTools = matchingTools.slice(
+      toolPage * this.toolPageSize,
+      (toolPage + 1) * this.toolPageSize
+    );
+    const builtinTools = visibleTools.filter(
+      (tool) => tool.source === 'builtin'
+    );
+    const mcpTools = visibleTools.filter((tool) => tool.source === 'mcp');
 
     return html`
       ${
@@ -4272,6 +4294,7 @@ export class PreloopFlowForm extends LitElement {
             ? html`
                 <preloop-flow-preset-picker
                   .presets=${this.presets}
+                  .pageSize=${5}
                   .selectedId=${this.pickerSelectedId}
                   ?collapsed=${this.pickerCollapsed}
                   ?persistent=${this.flowExecutionPath === 'persistent'}
@@ -4660,45 +4683,111 @@ export class PreloopFlowForm extends LitElement {
           ${this.renderReviewInstructionsField()}
         </sl-card>
 
-        <sl-card>
-          <div slot="header" class="card-header-title">
-            <sl-icon name="tools"></sl-icon> Allowed MCP tools
-          </div>
-          ${
-            this.flow.agent_type === 'cursor' ||
-            this.flow.agent_type === 'copilot' ||
-            this.flow.agent_type === 'devin' ||
-            this.flow.agent_type === 'claude_code'
-              ? html`<p data-host-exec-mcp-note>
-                  The runner adds these tools to the
-                  ${HOST_EXEC_LABELS[this.hostExecAgentType() as HostExecAgentType]}
-                  CLI as the <code>preloop-flow</code> MCP server, with a token
-                  scoped to this execution. The runner user's own MCP servers
-                  stay available.
-                </p>`
-              : nothing
-          }
-
-          <div
-            style="display: flex; flex-direction: column; gap: var(--sl-spacing-medium);"
-          >
+        <sl-details
+          data-advanced="tools"
+          summary=${`Allowed MCP tools: ${(this.flow.allowed_mcp_tools || []).length} selected`}
+        >
+          <sl-card>
+            <div slot="header" class="card-header-title">
+              <sl-icon name="tools"></sl-icon> Allowed MCP tools
+            </div>
             ${
-              builtinTools.length > 0
-                ? html`
-                    <div>
-                      <h5
-                        style="font-weight: 600; color: var(--sl-color-neutral-600); text-transform: uppercase; font-size: 0.8rem; margin: 0 0 0.5rem 0;"
-                      >
-                        Built-in Tools
-                      </h5>
-                      <div
-                        style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sl-spacing-medium);"
-                      >
-                        ${builtinTools.map(
-                          (t) => html`
-                            <div>
+              this.flow.agent_type === 'cursor' ||
+              this.flow.agent_type === 'copilot' ||
+              this.flow.agent_type === 'devin' ||
+              this.flow.agent_type === 'claude_code'
+                ? html`<p data-host-exec-mcp-note>
+                    The runner adds these tools to the
+                    ${HOST_EXEC_LABELS[this.hostExecAgentType() as HostExecAgentType]}
+                    CLI as the <code>preloop-flow</code> MCP server, with a
+                    token scoped to this execution. The runner user's own MCP
+                    servers stay available.
+                  </p>`
+                : nothing
+            }
+
+            <sl-input
+              label="Search allowed tools"
+              clearable
+              .value=${this.toolSearch}
+              @sl-input=${(e: Event) => {
+                this.toolSearch = (e.target as HTMLInputElement).value;
+                this.toolPage = 0;
+              }}
+              @sl-clear=${() => {
+                this.toolSearch = '';
+                this.toolPage = 0;
+              }}
+            ></sl-input>
+            <div
+              style="display: flex; flex-direction: column; gap: var(--sl-spacing-medium);"
+            >
+              ${
+                builtinTools.length > 0
+                  ? html`
+                      <div>
+                        <h5
+                          style="font-weight: 600; color: var(--sl-color-neutral-600); text-transform: uppercase; font-size: 0.8rem; margin: 0 0 0.5rem 0;"
+                        >
+                          Built-in Tools
+                        </h5>
+                        <div
+                          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sl-spacing-medium);"
+                        >
+                          ${builtinTools.map(
+                            (t) => html`
+                              <div>
+                                <sl-checkbox
+                                  data-builtin-tool=${t.name}
+                                  .checked=${this.isToolSelected(
+                                    'preloop-mcp',
+                                    t.name
+                                  )}
+                                  @sl-change=${(e: any) =>
+                                    this.handleToolToggle(
+                                      'preloop-mcp',
+                                      t.name,
+                                      e.target.checked
+                                    )}
+                                  ?disabled=${t.is_supported === false}
+                                >
+                                  ${t.name}
+                                </sl-checkbox>
+                                ${
+                                  t.name === DELEGATION_TOOL_NAME
+                                    ? html`<p
+                                        class="checkbox-help"
+                                        data-delegation-tool-help
+                                      >
+                                        Lets this flow run another flow. It may
+                                        call only the flows listed below, and an
+                                        empty list means it may call nothing.
+                                      </p>`
+                                    : nothing
+                                }
+                              </div>
+                            `
+                          )}
+                        </div>
+                      </div>
+                    `
+                  : nothing
+              }
+              ${
+                mcpTools.length > 0
+                  ? html`
+                      <div style="margin-top: var(--sl-spacing-medium);">
+                        <h5
+                          style="font-weight: 600; color: var(--sl-color-neutral-600); text-transform: uppercase; font-size: 0.8rem; margin: 0 0 0.5rem 0;"
+                        >
+                          MCP Server Tools
+                        </h5>
+                        <div
+                          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sl-spacing-medium);"
+                        >
+                          ${mcpTools.map(
+                            (t) => html`
                               <sl-checkbox
-                                data-builtin-tool=${t.name}
                                 .checked=${this.isToolSelected(
                                   'preloop-mcp',
                                   t.name
@@ -4712,70 +4801,32 @@ export class PreloopFlowForm extends LitElement {
                                 ?disabled=${t.is_supported === false}
                               >
                                 ${t.name}
+                                <sl-badge variant="neutral" size="small"
+                                  >${t.source_name || 'external'}</sl-badge
+                                >
                               </sl-checkbox>
-                              ${
-                                t.name === DELEGATION_TOOL_NAME
-                                  ? html`<p
-                                      class="checkbox-help"
-                                      data-delegation-tool-help
-                                    >
-                                      Lets this flow run another flow. It may
-                                      call only the flows listed below, and an
-                                      empty list means it may call nothing.
-                                    </p>`
-                                  : nothing
-                              }
-                            </div>
-                          `
-                        )}
+                            `
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  `
-                : nothing
-            }
-            ${
-              mcpTools.length > 0
-                ? html`
-                    <div style="margin-top: var(--sl-spacing-medium);">
-                      <h5
-                        style="font-weight: 600; color: var(--sl-color-neutral-600); text-transform: uppercase; font-size: 0.8rem; margin: 0 0 0.5rem 0;"
-                      >
-                        MCP Server Tools
-                      </h5>
-                      <div
-                        style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sl-spacing-medium);"
-                      >
-                        ${mcpTools.map(
-                          (t) => html`
-                            <sl-checkbox
-                              .checked=${this.isToolSelected(
-                                'preloop-mcp',
-                                t.name
-                              )}
-                              @sl-change=${(e: any) =>
-                                this.handleToolToggle(
-                                  'preloop-mcp',
-                                  t.name,
-                                  e.target.checked
-                                )}
-                              ?disabled=${t.is_supported === false}
-                            >
-                              ${t.name}
-                              <sl-badge variant="neutral" size="small"
-                                >${t.source_name || 'external'}</sl-badge
-                              >
-                            </sl-checkbox>
-                          `
-                        )}
-                      </div>
-                    </div>
-                  `
-                : nothing
-            }
-            ${this.delegationToolEnabled ? this.renderCallableFlows() : nothing}
-          </div>
-        </sl-card>
-
+                    `
+                  : nothing
+              }
+              <table-pagination
+                noun="tools"
+                .total=${matchingTools.length}
+                .pageSize=${this.toolPageSize}
+                .pageSizes=${[this.toolPageSize]}
+                .pageIndex=${toolPage}
+                .pageRows=${visibleTools.length}
+                @page-change=${(e: CustomEvent<{ pageIndex: number }>) => {
+                  this.toolPage = e.detail.pageIndex;
+                }}
+              ></table-pagination>
+              ${this.delegationToolEnabled ? this.renderCallableFlows() : nothing}
+            </div>
+          </sl-card>
+        </sl-details>
         <sl-details
           data-advanced="git"
           summary=${`Advanced Git workspace: ${this.flow.git_clone_config?.enabled ? 'cloning enabled' : 'off'}`}
