@@ -304,23 +304,35 @@ Evaluation order:
 - A matching notify condition records one hit for its rule and
   evaluation continues with the next rule. A rule records at most one
   hit per evaluation, even when several of its notify conditions match.
-- `deny`, `require_approval` and `allow` still use first match wins. A
-  notify rule listed before the terminal match still records its hit
-  (so a denied call can also produce a notice). Rules after the terminal
-  match are not evaluated.
+- `deny` and `require_approval` still use first match wins, and that
+  terminal match is stored as a hit with its action. `allow` is not
+  stored. A notify rule listed before the terminal match still records
+  its hit (so a denied call can also produce a notice). Rules after the
+  terminal match are not evaluated.
 - A notify condition whose expression fails to evaluate is skipped.
 - When only notify rules matched, the decision is `notify`, which
   proceeds like `allow`.
 
-Each hit is stored in the `policy_notice_hit` table with the account,
-user (when known), target, rule id and description, time, the SHA-256
-of the scanned text, and an excerpt of at most 280 characters around the
-match. The excerpt goes through the same secret redaction as the
-gateway logs. If redaction fails, only the hash and rule id are kept.
-The full text is never stored. When the EE audit plugin is installed,
-each hit also writes an audit row with action `notify`.
+Each notify, deny, and require_approval match is stored in the
+`policy_notice_hit` table with the account, user (when known), target,
+rule id and description, time, the SHA-256 of the scanned text, an
+excerpt of at most 280 characters around the match, the action
+(`notify`, `deny`, or `require_approval`), the model alias, the runtime
+principal (`agent_ref`), the runtime session id, and the audit event id.
+The excerpt goes through the same secret redaction as the gateway logs.
+If redaction fails, only the hash and rule id are kept. The full text
+is never stored. `redact` is reserved on the column. A redact match is
+audited as counts by type and is not stored as a hit, because an excerpt
+would keep the value the rule exists to remove.
 
-Policy owners are told about a hit through:
+When the EE audit plugin is installed, each stored hit also writes an
+audit row. Notify rows use action `notify`. Deny and require_approval
+rows use those actions. The hit's `audit_event_id` is that audit row's
+id. The plugin nests tool arguments under `details.tool_args` and then
+copies `extra_details` onto the top level of `details`, which is where
+`audit_event_id` has to sit.
+
+Policy owners are told about a notify hit through:
 
 - email, for owners whose notification preferences leave email on
 - mobile push, for owners with `enable_mobile_push` on
@@ -345,7 +357,14 @@ Where hits show up:
   digest is sent by the EE optimization plugin; without it, nothing is
   sent.
 - `GET /api/v1/policies/notices/summary?days=7` (requires
-  `view_policies`).
+  `view_policies`). `group_by` is `rule` (the default), `user`, or
+  `action`. The default rule list is notify hits only, which is what
+  the Attention cards use. `group_by=user` and `group_by=action` count
+  deny and require_approval hits as well. The response also includes
+  model and agent breakdowns of every stored action. The rule list, the
+  user list, and each breakdown are capped at 100 rows. Within that
+  cap, the per-user counts add up to the rule totals. Past it the lists
+  are truncated separately, so those two sums can diverge.
 
 Example:
 
