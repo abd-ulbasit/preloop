@@ -229,7 +229,15 @@ export class MCPServerForm extends LitElement {
           this.server?.id
             ? html`<capability-extension
                 name="resource-access"
-                .context=${{ kind: 'mcp_server', resourceId: this.server.id }}
+                style="display: contents;"
+                .context=${{
+                  kind: 'mcp_server',
+                  resourceId: this.server.id,
+                  sharedFrom: this.server.is_shared
+                    ? (this.server.owner_name ?? 'parent account')
+                    : undefined,
+                  readOnly: this.server.read_only || this.server.is_shared,
+                }}
               ></capability-extension>`
             : ''
         }

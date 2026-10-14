@@ -124,6 +124,7 @@ func newDiscoverTestCmd(t *testing.T, args ...string) *cobra.Command {
 	cmd.Flags().BoolP("yes", "y", false, "")
 	cmd.Flags().Bool("skip-live-validate", false, "")
 	cmd.Flags().Bool("report", false, "")
+	cmd.Flags().String("device-ref", "", "")
 	if err := cmd.Flags().Parse(args); err != nil {
 		t.Fatal(err)
 	}
@@ -335,5 +336,24 @@ func TestDiscoveryLinkFieldsUseTheSameHashes(t *testing.T) {
 	}
 	if fields["config_path_hash"] != report.Candidates[0].ConfigPathHash {
 		t.Fatalf("link path hash differs from report: %v", fields)
+	}
+}
+
+func TestDiscoveryExplicitDeviceRefIsHashedAndDoesNotReadMachineID(t *testing.T) {
+	home := setupDiscoveryHome(t)
+	server, rec := newDiscoveryServer(t)
+	defer server.Close()
+	useDiscoveryServer(t, server.URL)
+	readMachineID = func() (string, error) { t.Fatal("must not read OS identity"); return "", nil }
+	cmd := newDiscoverTestCmd(t, "--json", "--no-onboard-prompt", "--report", "--device-ref", "synthetic-roster-device")
+	if err := runAgentsDiscover(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	report := assertReportIsPrivate(t, home, rec.report)
+	if report.WorkstationFingerprint != workstationFingerprint(testDiscoverySalt, "synthetic-roster-device") {
+		t.Fatal("explicit reference not used")
+	}
+	if strings.Contains(string(rec.report), "synthetic-roster-device") {
+		t.Fatal("raw device reference leaked")
 	}
 }

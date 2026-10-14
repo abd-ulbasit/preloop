@@ -1,13 +1,14 @@
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
-import '@shoelace-style/shoelace/dist/components/card/card.js';
 import '@shoelace-style/shoelace/dist/components/checkbox/checkbox.js';
-import '@shoelace-style/shoelace/dist/components/input/input.js';
+import '@shoelace-style/shoelace/dist/components/dialog/dialog.js';
+import '@shoelace-style/shoelace/dist/components/popup/popup.js';
 import '@shoelace-style/shoelace/dist/components/radio/radio.js';
 import '@shoelace-style/shoelace/dist/components/radio-group/radio-group.js';
 import '@shoelace-style/shoelace/dist/components/switch/switch.js';
-import '@shoelace-style/shoelace/dist/components/tag/tag.js';
+import '@shoelace-style/shoelace/dist/components/textarea/textarea.js';
+import { getUserProfile, hasPermission } from '../../../api';
 import {
   NO_CAPABILITIES,
   isCapabilityOff,
@@ -15,114 +16,207 @@ import {
 } from '../../../capabilities';
 import {
   createShare,
-  currentAccountId,
   deleteShare,
   getTags,
   isConflict,
   listShares,
+  listSharingRules,
   listSubaccounts,
   setTags,
+  SHAREABLE_KINDS,
   type Share,
-  type ShareTarget,
+  type ShareWrite,
   type ShareableKind,
+  type SharingRule,
   type Subaccount,
   type Tags,
 } from '../../../hierarchy-api';
-import { parseTags } from './tags';
-import { confirmDialog } from '../../../components/confirm-dialog';
+import { formatTags, parseTags } from './tags';
 
-const SHAREABLE: readonly ShareableKind[] = [
-  'ai_model',
-  'mcp_server',
-  'managed_agent',
-  'flow',
-  'runner_pool',
-  'policy',
-];
+// Tag support is independent of sharing, notably for flows, policies and pools.
+const TAG_PERMISSIONS: Record<string, string> = {
+  ai_model: 'edit_ai_models',
+  mcp_server: 'edit_mcp_servers',
+  managed_agent: 'manage_agents',
+  flow: 'edit_flows',
+  runner_pool: 'manage_account',
+  policy_baseline: 'manage_policies',
+  policy: 'manage_policies',
+};
+type Section = 'loading' | 'on' | 'off' | 'error';
+type Editor = 'access' | 'tags';
 
-type Section = 'loading' | 'on' | 'off';
-
-/**
- * Whether two share targets reach the same subaccounts. Selected targets
- * compare as id sets, since names need not be unique and order is not
- * meaningful.
- */
-function sameTarget(a: ShareTarget, b: ShareTarget): boolean {
-  if (a.type === 'all' || b.type === 'all') return a.type === b.type;
-  if (a.type === 'tag' || b.type === 'tag') {
-    return (
-      a.type === 'tag' &&
-      b.type === 'tag' &&
-      a.key === b.key &&
-      a.value === b.value
-    );
-  }
-  const x = new Set(a.subaccount_ids);
-  const y = new Set(b.subaccount_ids);
-  return x.size === y.size && [...x].every((id) => y.has(id));
-}
-
-/**
- * Sharing and tags for one resource, mounted on its detail page through
- * `<capability-extension name="resource-access">`.
- *
- * Context: `kind` (resource type), `resourceId`, and `sharedFrom` when the
- * resource belongs to a parent (then nothing here is editable and sharing is
- * not offered). Each section hides on its own when its endpoint is missing,
- * and the panel reports `capability-off` when both are.
- */
+/** Compact resource metadata; drafts never write until the user saves. */
 @customElement('resource-access-panel')
 export class ResourceAccessPanel extends LitElement {
   static styles = css`
     :host {
-      display: block;
-      margin-top: var(--sl-spacing-medium);
+      display: contents;
     }
-    section + section {
-      margin-top: var(--sl-spacing-medium);
-      border-top: 1px solid var(--sl-color-neutral-200);
-      padding-top: var(--sl-spacing-medium);
+    .controls {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .control {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      min-width: 0;
+      max-width: 100%;
+      padding: 0.3rem 0.55rem;
+      border: 1px solid var(--sl-color-neutral-300);
+      border-radius: var(--sl-border-radius-medium);
+      background: var(--sl-color-neutral-0);
+      color: var(--sl-color-neutral-700);
+      font: inherit;
+      font-size: var(--sl-font-size-small, 0.8125rem);
+      line-height: 1.4;
+      cursor: pointer;
+    }
+    .control:hover {
+      background: var(--sl-color-neutral-100);
+    }
+    .control:focus-visible {
+      outline: 2px solid var(--sl-color-primary-600);
+      outline-offset: 2px;
+    }
+    .label {
+      flex-shrink: 0;
+      font-weight: 600;
+    }
+    .summary {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 20rem;
+    }
+    .inherited {
+      font-size: var(--sl-font-size-small);
+      overflow-wrap: anywhere;
+    }
+    .editor {
+      box-sizing: border-box;
+      width: min(28rem, calc(100vw - 2rem));
+      max-height: min(36rem, calc(100dvh - 3rem));
+      overflow-y: auto;
+      padding: 1rem;
+      border: 1px solid var(--sl-color-neutral-200);
+      border-radius: var(--sl-border-radius-large);
+      background: var(--sl-panel-background-color, var(--sl-color-neutral-0));
+      color: var(--sl-color-neutral-900);
+      box-shadow: var(--sl-shadow-large);
+      font-size: var(--sl-font-size-small);
+      text-align: start;
+    }
+    sl-popup {
+      z-index: 1000;
+    }
+    sl-dialog {
+      --width: min(28rem, calc(100vw - 2rem));
+    }
+    sl-dialog .editor {
+      width: 100%;
+      max-height: none;
+      padding: 0;
+      border: 0;
+      box-shadow: none;
+      overflow: visible;
+    }
+    h2 {
+      font-size: var(--sl-font-size-medium);
+      margin: 0 0 0.6rem;
     }
     h3 {
-      font-size: var(--sl-font-size-medium);
-      margin: 0 0 var(--sl-spacing-x-small);
+      font-size: var(--sl-font-size-small);
+      margin: 1rem 0 0.5rem;
     }
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--sl-spacing-x-small);
-      align-items: center;
-      margin: var(--sl-spacing-x-small) 0;
+    p {
+      margin: 0.5rem 0;
     }
     .muted {
       color: var(--sl-color-neutral-600);
-      font-size: var(--sl-font-size-small);
     }
     .error {
       color: var(--sl-color-danger-700);
+      overflow-wrap: anywhere;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      justify-content: flex-end;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--sl-color-neutral-200);
+    }
+    ul {
+      margin: 0.5rem 0;
+      padding-inline-start: 1.25rem;
+    }
+    li,
+    sl-checkbox {
+      overflow-wrap: anywhere;
+    }
+    .choices {
+      display: grid;
+      gap: 0.5rem;
+      margin: 0.75rem 0;
+    }
+    select {
+      max-width: 100%;
+      width: 100%;
+      padding: 0.5rem;
+      font: inherit;
+      color: inherit;
+      background: var(--sl-input-background-color);
+      border: 1px solid var(--sl-input-border-color);
+      border-radius: var(--sl-border-radius-medium);
+    }
+    a {
+      color: var(--sl-color-primary-700);
+    }
+    @media (max-width: 640px) {
+      .summary {
+        max-width: 11rem;
+      }
     }
   `;
-
   @property({ attribute: false }) context: Record<string, unknown> = {};
   @property({ attribute: false }) capabilities: CapabilitySet = NO_CAPABILITIES;
-
   @state() private shareState: Section = 'off';
   @state() private tagState: Section = 'off';
   @state() private shares: Share[] = [];
   @state() private subaccounts: Subaccount[] = [];
+  @state() private rules: SharingRule[] = [];
   @state() private tags: Tags = {};
   @state() private governed: string[] = [];
-  private tagsVersion: string | null = null;
+  @state() private editor: Editor | null = null;
+  @state() private narrow = false;
   @state() private draftShared = false;
-  @state() private draftTarget: ShareTarget['type'] = 'all';
+  @state() private accessDraftReady = false;
+  @state() private draftTarget: 'all' | 'selected' | 'rule' = 'all';
   @state() private draftSelected = new Set<string>();
-  @state() private draftTag = '';
+  @state() private draftRule = '';
+  @state() private draftTags = '';
+  @state() private draftTagValues: Tags = {};
+  private tagsStale = false;
   @state() private error = '';
+  @state() private shareError = '';
+  @state() private tagError = '';
+  @state() private ruleError = '';
   @state() private saving = false;
-
+  private draftRequireApproval = false;
+  private tagsVersion: string | null = null;
   private accountId = '';
+  private canShare = false;
+  private canTag = false;
   private generation = 0;
-
+  private trigger: HTMLButtonElement | null = null;
   private get kind(): string {
     return String(this.context.kind ?? '');
   }
@@ -130,392 +224,661 @@ export class ResourceAccessPanel extends LitElement {
     return String(this.context.resourceId ?? '');
   }
   private get readOnly(): boolean {
-    return Boolean(this.context.sharedFrom);
+    return Boolean(this.context.sharedFrom || this.context.readOnly);
   }
-
-  protected willUpdate(changed: PropertyValues) {
+  private get inheritedName(): string {
+    const from = this.context.sharedFrom;
+    return typeof from === 'string'
+      ? from
+      : String(
+          (from as { account_name?: string } | undefined)?.account_name ??
+            'parent account'
+        );
+  }
+  private get explicit(): Share | undefined {
+    return this.shares.find((s) => !s.is_automatic);
+  }
+  connectedCallback(): void {
+    super.connectedCallback();
+    document.addEventListener('pointerdown', this.outside);
+    document.addEventListener('focusin', this.outsideFocus);
+    document.addEventListener('keydown', this.keydown);
+  }
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    ++this.generation;
+    document.removeEventListener('pointerdown', this.outside);
+    document.removeEventListener('focusin', this.outsideFocus);
+    document.removeEventListener('keydown', this.keydown);
+  }
+  private outside = (event: Event): void => {
+    if (this.editor && !this.narrow && !event.composedPath().includes(this))
+      this.close(false);
+  };
+  private outsideFocus = (event: Event): void => {
+    if (this.editor && !this.narrow && !event.composedPath().includes(this))
+      this.close(false);
+  };
+  private keydown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && this.editor && !this.narrow) {
+      event.preventDefault();
+      this.close();
+    }
+  };
+  protected willUpdate(changed: PropertyValues): void {
     if (changed.has('context') || changed.has('capabilities')) void this.load();
   }
-
-  private async load() {
+  private message(error: unknown): string {
+    return error instanceof Error
+      ? error.message
+      : 'Request failed. Please try again.';
+  }
+  private async load(): Promise<void> {
     const generation = ++this.generation;
-    const id = this.resourceId;
-    if (!id || !this.kind) return;
+    const id = this.resourceId,
+      kind = this.kind;
+    this.editor = null;
+    this.accessDraftReady = false;
+    this.saving = false;
+    this.shares = [];
+    this.subaccounts = [];
+    this.rules = [];
+    this.tags = {};
+    this.governed = [];
+    this.tagsVersion = null;
+    this.tagsStale = false;
+    this.error = this.shareError = this.tagError = this.ruleError = '';
     const wantShares =
-      this.capabilities.has('account_hierarchy') &&
+      Boolean(id) &&
       !this.readOnly &&
-      SHAREABLE.includes(this.kind as ShareableKind);
-    const wantTags = this.capabilities.has('abac_rules');
+      this.capabilities.has('resource_sharing') &&
+      SHAREABLE_KINDS.includes(kind as ShareableKind);
+    const wantTags =
+      Boolean(id) &&
+      this.capabilities.has('abac_rules') &&
+      kind in TAG_PERMISSIONS;
     this.shareState = wantShares ? 'loading' : 'off';
     this.tagState = wantTags ? 'loading' : 'off';
-    this.error = '';
+    // A directly mounted OSS panel also makes zero API requests.
+    if (!wantShares && !wantTags) return;
     try {
-      this.accountId = await currentAccountId();
-    } catch {
-      this.shareState = this.tagState = 'off';
+      const profile = await getUserProfile();
+      if (generation !== this.generation) return;
+      this.accountId = profile.account_id;
+      this.canShare =
+        !this.readOnly && hasPermission(profile.permissions, 'manage_account');
+      this.canTag =
+        !this.readOnly &&
+        hasPermission(profile.permissions, TAG_PERMISSIONS[kind]);
+    } catch (error) {
+      if (generation !== this.generation) return;
+      if (wantShares) {
+        this.shareState = 'error';
+        this.shareError = this.message(error);
+      }
+      if (wantTags) {
+        this.tagState = 'error';
+        this.tagError = this.message(error);
+      }
       return;
     }
+    // The owner sharing collection requires manage_account; never probe as a viewer.
+    if (wantShares && !this.canShare) this.shareState = 'off';
     await Promise.all([
-      wantShares ? this.loadShares(generation, id) : null,
-      wantTags ? this.loadTags(generation, id) : null,
+      wantShares && this.canShare
+        ? this.loadShares(generation, kind, id)
+        : null,
+      wantTags ? this.loadTags(generation, kind, id) : null,
     ]);
-    if (
-      generation === this.generation &&
-      this.shareState === 'off' &&
-      this.tagState === 'off'
-    ) {
-      this.dispatchEvent(new CustomEvent('capability-off', { bubbles: true }));
-    }
   }
-
-  private async loadShares(generation: number, id: string) {
-    try {
-      const [shares, subaccounts] = await Promise.all([
-        listShares(this.accountId, this.kind as ShareableKind, id),
-        listSubaccounts(this.accountId),
-      ]);
-      if (generation !== this.generation) return;
-      // Only shares of this resource, whatever the server sends.
-      this.shares = shares.filter(
-        (s) => s.resource_id === id && s.resource_type === this.kind
-      );
-      this.subaccounts = subaccounts;
-      this.resetShareDraft();
-      this.shareState = 'on';
-    } catch {
-      if (generation === this.generation) this.shareState = 'off';
+  private async loadShares(
+    generation: number,
+    kind: string,
+    id: string
+  ): Promise<void> {
+    const [shares, subs] = await Promise.allSettled([
+      listShares(this.accountId, kind as ShareableKind, id),
+      listSubaccounts(this.accountId),
+    ]);
+    if (generation !== this.generation) return;
+    if (shares.status === 'fulfilled') this.shares = shares.value;
+    if (subs.status === 'fulfilled') this.subaccounts = subs.value;
+    const failure = [shares, subs].find((r) => r.status === 'rejected');
+    if (failure?.status === 'rejected') {
+      this.shareState = isCapabilityOff(failure.reason) ? 'off' : 'error';
+      this.shareError = this.message(failure.reason);
+      return;
     }
+    this.shareState =
+      this.shares.length || this.subaccounts.length || this.editor === 'access'
+        ? 'on'
+        : 'off';
   }
-
-  private async loadTags(generation: number, id: string) {
+  private async loadTags(
+    generation: number,
+    kind: string,
+    id: string
+  ): Promise<void> {
     try {
-      const result = await getTags(this.kind, id);
+      const result = await getTags(kind, id);
       if (generation !== this.generation) return;
       this.tags = result.tags;
       this.governed = result.governed_keys ?? [];
       this.tagsVersion = result.version ?? null;
       this.tagState = 'on';
-    } catch {
-      // Missing endpoint, or an id this account cannot see: show nothing.
-      if (generation === this.generation) this.tagState = 'off';
-    }
-  }
-
-  private resetShareDraft() {
-    this.draftShared = this.shares.length > 0;
-    this.draftTarget = 'all';
-    this.draftSelected = new Set();
-    this.draftTag = '';
-  }
-
-  private buildTarget(): ShareTarget | string {
-    if (this.draftTarget === 'all') return { type: 'all' };
-    if (this.draftTarget === 'selected') {
-      if (this.draftSelected.size === 0)
-        return 'Choose at least one subaccount.';
-      return { type: 'selected', subaccount_ids: [...this.draftSelected] };
-    }
-    const { tags, errors } = parseTags(this.draftTag);
-    const entries = Object.entries(tags);
-    if (errors.length || entries.length !== 1) {
-      return 'Enter one tag as key=value.';
-    }
-    const [key, value] = entries[0];
-    return { type: 'tag', key, value };
-  }
-
-  /**
-   * Runs one share change, then reads the shares back from the server
-   * whether it worked or not, so the list never shows a share that is gone
-   * or hides one that exists.
-   */
-  private async changeShares(change: () => Promise<void>) {
-    this.error = '';
-    this.saving = true;
-    try {
-      await change();
     } catch (error) {
-      if (isCapabilityOff(error)) this.shareState = 'off';
-      else this.error = error instanceof Error ? error.message : 'Failed';
-    } finally {
-      this.saving = false;
-    }
-    if (this.shareState !== 'off') {
-      const error = this.error;
-      await this.loadShares(this.generation, this.resourceId);
-      this.error = error;
+      if (generation !== this.generation) return;
+      this.tagState = isCapabilityOff(error) ? 'off' : 'error';
+      this.tagError = this.message(error);
     }
   }
-
-  /**
-   * Adds a share. Existing shares are left alone, and a target that is
-   * already shared is refused rather than posted twice.
-   */
-  private addShare = async () => {
-    const target = this.buildTarget();
-    if (typeof target === 'string') {
-      this.error = target;
-      return;
+  private async open(editor: Editor, event: Event): Promise<void> {
+    if (this.saving) return;
+    this.trigger = event.currentTarget as HTMLButtonElement;
+    this.narrow = window.matchMedia('(max-width: 640px)').matches;
+    this.error = '';
+    this.seedShareDraft();
+    this.accessDraftReady = editor === 'access' && this.shareState === 'on';
+    if (editor === 'tags' && this.tagsStale) {
+      const generation = this.generation;
+      await this.loadTags(generation, this.kind, this.resourceId);
+      if (generation !== this.generation) return;
+      this.tagsStale = this.tagState !== 'on';
     }
-    if (this.shares.some((share) => sameTarget(share.target, target))) {
-      this.error = `Already shared with ${this.targetLabel(target)}.`;
-      return;
-    }
-    await this.changeShares(async () => {
-      await createShare(this.accountId, {
-        resource_type: this.kind as ShareableKind,
-        resource_id: this.resourceId,
-        target,
-      });
-    });
-  };
-
-  private async removeShare(share: Share) {
-    const ok = await confirmDialog({
-      title: 'Stop sharing?',
-      message: `Stop sharing this resource with ${this.targetLabel(share.target)}?`,
-      detail: 'Those subaccounts lose access to it right away.',
-      confirmLabel: 'Stop sharing',
-      variant: 'danger',
-    });
-    if (!ok) return;
-    return this.changeShares(() => deleteShare(this.accountId, share.id));
-  }
-
-  /** Stops every share listed, and only those. */
-  private stopSharing = async () => {
-    const listed = [...this.shares];
-    const ok = await confirmDialog({
-      title: 'Stop sharing?',
-      message: `Stop all ${listed.length} share${listed.length === 1 ? '' : 's'} of this resource?`,
-      detail: listed.map((share) => this.targetLabel(share.target)).join('\n'),
-      confirmLabel: 'Stop sharing',
-      variant: 'danger',
-    });
-    if (!ok) return;
-    await this.changeShares(async () => {
-      for (const share of listed) await deleteShare(this.accountId, share.id);
-    });
-  };
-
-  private targetLabel(target: ShareTarget): string {
-    if (target.type === 'all') return 'All subaccounts';
-    if (target.type === 'tag')
-      return `Subaccounts tagged ${target.key}=${target.value}`;
-    const names = target.subaccount_ids.map(
-      (id) => this.subaccounts.find((sub) => sub.id === id)?.name ?? id
+    this.draftTags = '';
+    this.draftTagValues = Object.fromEntries(
+      Object.entries(this.tags).filter(([key]) => !this.governed.includes(key))
     );
-    return names.join(', ') || 'No subaccounts';
+    this.editor = editor;
+    await this.updateComplete;
+    if (!this.narrow)
+      this.renderRoot
+        .querySelector<HTMLElement>('[data-editor] [autofocus]')
+        ?.focus();
+    if (editor === 'access' && this.capabilities.has('abac_rules')) {
+      const generation = this.generation;
+      try {
+        const rules = await listSharingRules();
+        if (generation !== this.generation) return;
+        this.rules = rules.filter(
+          (r) =>
+            r.effect === 'permit' &&
+            r.actions.includes('resource:share') &&
+            r.is_enabled &&
+            (!r.resource_type || r.resource_type === this.kind)
+        );
+        this.ruleError = '';
+      } catch (error) {
+        if (generation === this.generation)
+          this.ruleError = `Could not load sharing rules: ${this.message(error)}`;
+      }
+    }
   }
-
-  private async writeTags(next: Tags) {
+  private seedShareDraft(): void {
+    const share = this.explicit;
+    this.draftShared = Boolean(share);
+    this.draftTarget = share?.target_mode ?? 'all';
+    this.draftSelected = new Set(share?.selected_account_ids ?? []);
+    this.draftRule = share?.access_rule_id ?? '';
+    this.draftRequireApproval = share?.require_approval ?? false;
+  }
+  private retrySharing = async (): Promise<void> => {
+    if (this.saving) return;
+    if (!this.accessDraftReady) return this.load();
+    const generation = this.generation;
+    this.saving = true;
+    await this.loadShares(generation, this.kind, this.resourceId);
+    if (generation !== this.generation) return;
+    this.saving = false;
+    if (this.shareState === 'on' && !this.accessDraftReady) {
+      this.seedShareDraft();
+      this.accessDraftReady = true;
+    }
+    if (this.shareState === 'off') this.close();
+  };
+  private close(restoreFocus = true): void {
+    if (this.saving) return;
+    this.editor = null;
+    this.error = '';
+    if (
+      this.shareState === 'on' &&
+      !this.shares.length &&
+      !this.subaccounts.length
+    )
+      this.shareState = 'off';
+    // Disconnect the modal's focus trap before restoring its trigger.
+    const trigger = this.trigger;
+    if (restoreFocus) void this.updateComplete.then(() => trigger?.focus());
+  }
+  private shareNames(): string[] {
+    return [
+      ...new Set(
+        this.shares.flatMap((share) => {
+          if (share.target_mode === 'all') return ['All subaccounts'];
+          if (share.target_mode === 'selected')
+            return share.selected_account_ids.map(
+              (id) =>
+                this.subaccounts.find((s) => s.id === id)?.name ??
+                `Unavailable subaccount (${id})`
+            );
+          const rule = this.rules.find((r) => r.id === share.access_rule_id);
+          return [
+            rule ? this.ruleLabel(rule) : 'Subaccounts selected by a rule',
+          ];
+        })
+      ),
+    ];
+  }
+  private ruleLabel(rule: SharingRule): string {
+    const selector = rule.subject_selector?.account;
+    const tags = selector?.match_labels ?? selector?.matchLabels;
+    return tags && Object.keys(tags).length
+      ? `${rule.name} (${formatTags(tags)})`
+      : rule.name;
+  }
+  private buildShare(): ShareWrite | string {
+    if (this.draftTarget === 'selected' && !this.draftSelected.size)
+      return 'Choose at least one subaccount.';
+    if (this.draftTarget === 'rule' && !this.draftRule)
+      return 'Choose an existing sharing rule.';
+    return {
+      resource_type: this.kind as ShareableKind,
+      resource_id: this.resourceId,
+      target_mode: this.draftTarget,
+      selected_account_ids:
+        this.draftTarget === 'selected' ? [...this.draftSelected] : [],
+      access_rule_id: this.draftTarget === 'rule' ? this.draftRule : null,
+      require_approval:
+        this.draftRequireApproval || (this.explicit?.require_approval ?? false),
+    };
+  }
+  private sameShare(share: Share, draft: ShareWrite): boolean {
+    return (
+      share.target_mode === draft.target_mode &&
+      share.access_rule_id === draft.access_rule_id &&
+      share.selected_account_ids.length === draft.selected_account_ids.length &&
+      share.selected_account_ids.every((id) =>
+        draft.selected_account_ids.includes(id)
+      )
+    );
+  }
+  private saveShares = async (): Promise<void> => {
+    if (
+      !this.canShare ||
+      this.readOnly ||
+      this.saving ||
+      this.shareState !== 'on'
+    )
+      return;
+    const draft = this.draftShared ? this.buildShare() : null;
+    if (typeof draft === 'string') {
+      this.error = draft;
+      return;
+    }
+    const old = this.explicit;
+    if ((!old && !draft) || (old && draft && this.sameShare(old, draft))) {
+      this.close();
+      return;
+    }
+    const generation = this.generation,
+      accountId = this.accountId,
+      kind = this.kind,
+      id = this.resourceId;
+    this.saving = true;
+    this.error = '';
+    let revoked = false;
+    try {
+      // One explicit intent is allowed. A failed replacement must report its
+      // partial revocation, rather than pretending that it was atomic.
+      if (old) {
+        await deleteShare(accountId, old.id);
+        revoked = true;
+      }
+      if (draft) {
+        if (generation !== this.generation) return;
+        await createShare(accountId, draft);
+      }
+      if (generation !== this.generation) return;
+      await this.loadShares(generation, kind, id);
+      if (generation !== this.generation) return;
+      if ((this.shareState as Section) === 'error')
+        throw new Error(
+          'Saved, but could not reload sharing. Retry to confirm the persisted state.'
+        );
+      this.saving = false;
+      this.close();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      // Reconcile persisted state without overwriting the editor's draft.
+      await this.loadShares(generation, kind, id);
+      if (generation !== this.generation) return;
+      this.error = `${revoked ? 'The previous share was revoked. Your new share was not confirmed. ' : ''}${this.message(error)} Your draft is kept.`;
+    } finally {
+      if (generation === this.generation) this.saving = false;
+    }
+  };
+  private saveTags = async (): Promise<void> => {
+    if (!this.canTag || this.readOnly || this.saving || this.tagState !== 'on')
+      return;
+    const { tags, errors } = parseTags(this.draftTags);
+    if (errors.length) {
+      this.error = errors.join('. ');
+      return;
+    }
+    const blocked = Object.keys(tags).filter((key) =>
+      this.governed.includes(key)
+    );
+    if (blocked.length) {
+      this.error = `Only the parent account sets ${blocked.join(', ')}.`;
+      return;
+    }
+    const locked = Object.fromEntries(
+      Object.entries(this.tags).filter(([key]) => this.governed.includes(key))
+    );
+    const generation = this.generation;
+    this.saving = true;
     this.error = '';
     try {
       const result = await setTags(
         this.kind,
         this.resourceId,
-        next,
+        { ...this.draftTagValues, ...tags, ...locked },
         this.tagsVersion
       );
+      if (generation !== this.generation) return;
       this.tags = result.tags;
       this.governed = result.governed_keys ?? this.governed;
       this.tagsVersion = result.version ?? null;
+      this.saving = false;
+      this.close();
     } catch (error) {
-      if (isCapabilityOff(error)) this.tagState = 'off';
-      else if (isConflict(error)) {
-        // Someone else changed the tags first: show theirs, keep nothing.
-        await this.loadTags(this.generation, this.resourceId);
-        this.error =
-          'The tags changed while you were editing. They have been reloaded; make your change again.';
-      } else this.error = error instanceof Error ? error.message : 'Failed';
+      if (generation !== this.generation) return;
+      if (isConflict(error)) this.tagsStale = true;
+      this.error = isConflict(error)
+        ? 'The tags changed while you were editing. Your draft is kept. Cancel and reopen Tags to load the latest version before saving.'
+        : `${this.message(error)} Your draft is kept.`;
+    } finally {
+      if (generation === this.generation) this.saving = false;
     }
-  }
-
-  private addTag = () => {
-    const input = this.renderRoot.querySelector<HTMLInputElement>('#new-tag');
-    const { tags, errors } = parseTags(input?.value ?? '');
-    if (errors.length) {
-      this.error = errors.join('. ');
-      return;
-    }
-    const blocked = Object.keys(tags).filter((k) => this.governed.includes(k));
-    if (blocked.length) {
-      this.error = `Only the parent account sets ${blocked.join(', ')}.`;
-      return;
-    }
-    if (input) input.value = '';
-    void this.writeTags({ ...this.tags, ...tags });
   };
-
-  private removeTag(key: string) {
-    const next = { ...this.tags };
-    delete next[key];
-    void this.writeTags(next);
-  }
-
-  private renderShare() {
-    const pickTarget = (e: Event) =>
-      (this.draftTarget = (e.target as HTMLInputElement)
-        .value as ShareTarget['type']);
-    return html`<section data-testid="share-section">
-      <h3>Sharing</h3>
+  private renderAccess() {
+    return html`<section aria-labelledby="subaccounts-heading">
+      <p class="muted">
+        Account defaults describe policy configuration. They do not mean
+        everyone can access this resource.
+      </p>
+      <h3 id="subaccounts-heading">Subaccounts</h3>
       ${
-        this.shares.length
-          ? html`<ul data-testid="share-list">
-              ${this.shares.map(
-                (share) =>
-                  html`<li data-share=${share.id}>
-                    ${this.targetLabel(share.target)}
-                    <sl-button
-                      size="small"
-                      variant="text"
-                      ?disabled=${this.saving}
-                      @click=${() => this.removeShare(share)}
-                      >Stop</sl-button
-                    >
-                  </li>`
-              )}
-            </ul>`
-          : nothing
-      }
-      <sl-switch
-        data-testid="share-toggle"
-        ?checked=${this.draftShared}
-        @sl-change=${(e: Event) =>
-          (this.draftShared = (e.target as HTMLInputElement).checked)}
-        >Share with subaccounts</sl-switch
-      >
-      ${
-        this.draftShared
-          ? html`<sl-radio-group
-                size="small"
-                label=${this.shares.length ? 'Also share with' : 'With'}
-                data-testid="share-target"
-                .value=${this.draftTarget}
-                @sl-change=${pickTarget}
-              >
-                <sl-radio value="all">All subaccounts</sl-radio>
-                <sl-radio value="selected">Selected subaccounts</sl-radio>
-                <sl-radio value="tag">Subaccounts with a tag</sl-radio>
-              </sl-radio-group>
-              ${
-                this.draftTarget === 'selected'
-                  ? html`<div class="row">
-                      ${this.subaccounts.map(
-                        (sub) =>
-                          html`<sl-checkbox
-                            size="small"
-                            data-subaccount=${sub.id}
-                            ?checked=${this.draftSelected.has(sub.id)}
-                            @sl-change=${(e: Event) => {
-                              const next = new Set(this.draftSelected);
-                              if ((e.target as HTMLInputElement).checked)
-                                next.add(sub.id);
-                              else next.delete(sub.id);
-                              this.draftSelected = next;
-                            }}
-                            >${sub.name}</sl-checkbox
-                          >`
-                      )}
-                    </div>`
-                  : nothing
-              }
-              ${
-                this.draftTarget === 'tag'
-                  ? html`<sl-input
-                      aria-label="Share tag"
-                      size="small"
-                      data-testid="share-tag"
-                      placeholder="customer=acme"
-                      .value=${this.draftTag}
-                      @sl-input=${(e: Event) =>
-                        (this.draftTag = (e.target as HTMLInputElement).value)}
-                    ></sl-input>`
-                  : nothing
-              }
-              <div class="row">
-                <sl-button
-                  size="small"
-                  variant="primary"
-                  data-testid="share-save"
-                  ?loading=${this.saving}
-                  @click=${this.addShare}
-                  >${this.shares.length ? 'Add share' : 'Share'}</sl-button
-                >
-              </div>`
-          : this.shares.length
-            ? html`<div class="row">
-                <sl-button
-                  size="small"
-                  variant="danger"
-                  outline
-                  data-testid="share-stop"
-                  ?loading=${this.saving}
-                  @click=${this.stopSharing}
-                  >Stop all ${this.shares.length} shown</sl-button
-                >
-              </div>`
-            : nothing
-      }
-    </section>`;
-  }
-
-  private renderTags() {
-    const entries = Object.entries(this.tags);
-    return html`<section data-testid="tag-section">
-      <h3>Tags</h3>
-      <div class="row">
-        ${
-          entries.length === 0
-            ? html`<span class="muted">No tags.</span>`
-            : entries.map(([key, value]) => {
-                const locked = this.readOnly || this.governed.includes(key);
-                return html`<sl-tag
-                  size="small"
-                  data-key=${key}
-                  ?removable=${!locked}
-                  @sl-remove=${() => this.removeTag(key)}
-                  >${key}=${value}${
-                    locked && !this.readOnly ? ' (set by parent)' : ''
-                  }</sl-tag
-                >`;
-              })
-        }
-      </div>
-      ${
-        this.readOnly
-          ? nothing
-          : html`<div class="row">
-              <sl-input
-                aria-label="New resource tag"
-                id="new-tag"
-                size="small"
-                placeholder="key=value"
-              ></sl-input>
+        this.shareState === 'error'
+          ? html`<p class="error" role="alert">
+                Could not load sharing: ${this.shareError}. Reload sharing
+                before saving again; your draft is kept.
+              </p>
               <sl-button
                 size="small"
-                data-testid="tag-add"
-                @click=${this.addTag}
-                >Add tag</sl-button
-              >
-            </div>`
+                data-testid="share-retry"
+                ?loading=${this.saving}
+                @click=${this.retrySharing}
+                >Retry</sl-button
+              >`
+          : nothing
+      }
+      ${
+        this.shareState !== 'error' || this.accessDraftReady
+          ? html`
+              ${
+                this.shares.length
+                  ? html`<ul data-testid="share-list">
+                      ${this.shareNames().map((name) => html`<li>${name}</li>`)}
+                    </ul>`
+                  : nothing
+              }
+              ${this.shares.some((s) => s.is_automatic) ? html`<p class="muted">Applied sharing rules also manage this resource. Change these rules in <a href="/console/policies">Policies</a>.</p>` : nothing}
+              ${
+                this.canShare
+                  ? html`
+                      <sl-switch
+                        autofocus
+                        data-testid="share-toggle"
+                        .checked=${this.draftShared}
+                        ?disabled=${this.saving}
+                        @sl-change=${(e: Event) => (this.draftShared = (e.target as HTMLInputElement).checked)}
+                        >Share with subaccounts</sl-switch
+                      >
+                      ${
+                        this.draftShared
+                          ? html`
+                              <sl-radio-group
+                                label="Share with"
+                                data-testid="share-target"
+                                .value=${this.draftTarget}
+                                @sl-change=${(e: Event) => (this.draftTarget = (e.target as HTMLInputElement).value as typeof this.draftTarget)}
+                              >
+                                <sl-radio value="all" ?disabled=${this.saving}
+                                  >All subaccounts</sl-radio
+                                >
+                                <sl-radio
+                                  value="selected"
+                                  ?disabled=${this.saving}
+                                  >Selected subaccounts</sl-radio
+                                >
+                                ${this.capabilities.has('abac_rules') || this.draftTarget === 'rule' ? html`<sl-radio value="rule" ?disabled=${this.saving}>Subaccounts with a tag / sharing rule</sl-radio>` : nothing}
+                              </sl-radio-group>
+                              ${
+                                this.draftTarget === 'selected'
+                                  ? html`<div class="choices">
+                                      ${[
+                                        ...new Set([
+                                          ...this.subaccounts.map((s) => s.id),
+                                          ...this.draftSelected,
+                                        ]),
+                                      ].map(
+                                        (id) =>
+                                          html`<sl-checkbox
+                                            size="small"
+                                            data-subaccount=${id}
+                                            .checked=${this.draftSelected.has(id)}
+                                            ?disabled=${this.saving}
+                                            @sl-change=${(e: Event) => {
+                                              const next = new Set(
+                                                this.draftSelected
+                                              );
+                                              if (
+                                                (e.target as HTMLInputElement)
+                                                  .checked
+                                              )
+                                                next.add(id);
+                                              else next.delete(id);
+                                              this.draftSelected = next;
+                                            }}
+                                            >${this.subaccounts.find((s) => s.id === id)?.name ?? `Unavailable subaccount (${id})`}</sl-checkbox
+                                          >`
+                                      )}
+                                    </div>`
+                                  : nothing
+                              }
+                              ${
+                                this.draftTarget === 'rule'
+                                  ? html`<div class="choices">
+                                      <label for="sharing-rule"
+                                        >Existing sharing rule</label
+                                      ><select
+                                        id="sharing-rule"
+                                        data-testid="share-rule"
+                                        .value=${this.draftRule}
+                                        ?disabled=${this.saving}
+                                        @change=${(e: Event) => (this.draftRule = (e.target as HTMLSelectElement).value)}
+                                      >
+                                        <option value="">Choose a rule</option>
+                                        ${this.rules.map((rule) => html`<option value=${rule.id}>${this.ruleLabel(rule)}</option>`)}${this.draftRule && !this.rules.some((r) => r.id === this.draftRule) ? html`<option value=${this.draftRule}>Current rule (${this.draftRule})</option>` : nothing}
+                                      </select>
+                                      <p class="muted">
+                                        Tag targets use a persisted sharing
+                                        rule. Manage rules in
+                                        <a href="/console/policies">Policies</a
+                                        >.
+                                      </p>
+                                      ${this.ruleError ? html`<p class="error" role="alert">${this.ruleError}</p>` : nothing}
+                                    </div>`
+                                  : nothing
+                              }
+                            `
+                          : this.explicit
+                            ? html`<p>
+                                Save to revoke this explicit share. Applied
+                                rules remain in force.
+                              </p>`
+                            : nothing
+                      }
+                    `
+                  : nothing
+              }
+            `
+          : nothing
       }
     </section>`;
   }
-
-  render() {
-    const share = this.shareState === 'on';
-    const tags = this.tagState === 'on';
-    if (!share && !tags) return nothing;
-    return html`<sl-card>
-      ${share ? this.renderShare() : nothing}
-      ${tags ? this.renderTags() : nothing}
+  private renderTags() {
+    return html`<section aria-labelledby="tags-heading">
+      <h3 id="tags-heading">Resource tags</h3>
       ${
-        this.error
-          ? html`<p class="error" role="alert">${this.error}</p>`
-          : nothing
+        this.tagState === 'error'
+          ? html`<p class="error" role="alert">
+                Could not load tags: ${this.tagError}
+              </p>
+              <sl-button size="small" @click=${() => this.load()}
+                >Retry</sl-button
+              >`
+          : html`
+              ${
+                this.canTag
+                  ? html`<ul data-testid="tag-list">
+                        ${Object.entries(this.draftTagValues).map(
+                          ([key, value]) =>
+                            html`<li data-key=${key}>
+                              ${key}=${value}
+                              <sl-button
+                                size="small"
+                                variant="text"
+                                aria-label=${`Remove tag ${key}`}
+                                ?disabled=${this.saving}
+                                @click=${() => {
+                                  const next = { ...this.draftTagValues };
+                                  delete next[key];
+                                  this.draftTagValues = next;
+                                }}
+                                >Remove</sl-button
+                              >
+                            </li>`
+                        )}
+                      </ul>
+                      <sl-textarea
+                        autofocus
+                        label="Add or update tags (key=value)"
+                        data-testid="tag-draft"
+                        .value=${this.draftTags}
+                        ?disabled=${this.saving}
+                        @sl-input=${(e: Event) => (this.draftTags = (e.target as HTMLTextAreaElement).value)}
+                      ></sl-textarea>`
+                  : nothing
+              }
+              <ul>
+                ${Object.entries(this.tags)
+                  .filter(
+                    ([key]) => !this.canTag || this.governed.includes(key)
+                  )
+                  .map(
+                    ([key, value]) =>
+                      html`<li>
+                        ${key}=${value}${this.governed.includes(key) ? ' (set by parent)' : ''}
+                      </li>`
+                  )}
+              </ul>
+              ${!this.canTag && !Object.keys(this.tags).length ? html`<p class="muted">No tags.</p>` : nothing}
+            `
       }
-    </sl-card>`;
+    </section>`;
+  }
+  private renderEditor() {
+    const editable =
+      this.editor === 'access'
+        ? this.canShare && (this.shareState === 'on' || this.accessDraftReady)
+        : this.canTag && this.tagState === 'on';
+    return html`<div class="editor" data-editor>
+      ${this.narrow ? nothing : html`<h2 id="editor-title">${this.editor === 'access' ? 'Resource access' : 'Tags'}</h2>`}
+      ${this.editor === 'access' ? this.renderAccess() : this.renderTags()}
+      ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
+      <div class="actions">
+        <sl-button
+          size="small"
+          data-testid="editor-cancel"
+          ?disabled=${this.saving}
+          @click=${() => this.close()}
+          >${editable ? 'Cancel' : 'Close'}</sl-button
+        >
+        ${editable ? html`<sl-button size="small" variant="primary" data-testid="editor-save" ?disabled=${this.editor === 'access' && this.shareState === 'error'} ?loading=${this.saving} @click=${this.editor === 'access' ? this.saveShares : this.saveTags}>Save</sl-button>` : nothing}
+      </div>
+    </div>`;
+  }
+  render() {
+    const access = this.shareState === 'on' || this.shareState === 'error',
+      tags = this.tagState === 'on' || this.tagState === 'error';
+    const inherited =
+      Boolean(this.context.sharedFrom) &&
+      this.capabilities.has('resource_sharing');
+    if (!access && !tags && !inherited) return nothing;
+    const names = this.shareNames();
+    const summary =
+      this.shareState === 'error'
+        ? 'Unavailable'
+        : names.length
+          ? `Shared with ${names.slice(0, 2).join(', ')}`
+          : 'Account defaults';
+    const tagNames = Object.entries(this.tags).map(
+      ([key, value]) => `${key}=${value}`
+    );
+    return html`<div class="controls">
+        ${inherited ? html`<span class="inherited" data-testid="shared-from">Shared from ${this.inheritedName}</span>` : nothing}
+        ${access ? html`<button class="control" data-testid="access-control" aria-haspopup="dialog" aria-expanded=${this.editor === 'access'} aria-controls="resource-editor" aria-label=${`Access: ${summary}${names.length > 2 ? `, ${names.slice(2).join(', ')}` : ''}`} title=${`Access: ${names.length ? `Shared with ${names.join(', ')}` : summary}`} @click=${(e: Event) => this.open('access', e)}><span class="label">Access:</span><span class="summary">${summary}</span>${names.length > 2 ? html`<span>+${names.length - 2}</span>` : nothing}</button>` : nothing}
+        ${tags ? html`<button class="control" data-testid="tags-control" aria-haspopup="dialog" aria-expanded=${this.editor === 'tags'} aria-controls="resource-editor" title=${`Tags: ${tagNames.join(', ') || 'None'}`} @click=${(e: Event) => this.open('tags', e)}><span class="label">Tags:</span><span class="summary">${this.tagState === 'error' ? 'Unavailable' : tagNames.slice(0, 2).join(', ') || 'None'}</span>${tagNames.length > 2 ? html`<span>+${tagNames.length - 2}</span>` : nothing}</button>` : nothing}
+      </div>
+      ${
+        this.editor
+          ? this.narrow
+            ? html`<sl-dialog
+                id="resource-editor"
+                label=${this.editor === 'access' ? 'Resource access' : 'Tags'}
+                open
+                @sl-request-close=${(e: Event) => {
+                  e.preventDefault();
+                  this.close();
+                }}
+                @sl-initial-focus=${(e: Event) => {
+                  e.preventDefault();
+                  this.renderRoot
+                    .querySelector<HTMLElement>('[data-editor] [autofocus]')
+                    ?.focus();
+                }}
+                >${this.renderEditor()}</sl-dialog
+              >`
+            : html`<sl-popup
+                .anchor=${this.trigger}
+                active
+                placement="bottom-end"
+                distance="8"
+                flip
+                shift
+                strategy="fixed"
+                ><div
+                  id="resource-editor"
+                  role="dialog"
+                  aria-labelledby="editor-title"
+                >
+                  ${this.renderEditor()}
+                </div></sl-popup
+              >`
+          : nothing
+      }`;
   }
 }
 

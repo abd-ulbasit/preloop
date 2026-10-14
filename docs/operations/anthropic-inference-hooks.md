@@ -34,6 +34,23 @@ also starts disabled. The adapter's proposed base path is
 `/api/v1/anthropic/inference-hooks`; use the deployed OpenAPI contract when
 creating an integration, not a guessed CLI command.
 
+### Console setup and health
+
+When the server reports the capability, the console adds **Settings >
+Inference hooks** for users with the `manage_policies` permission. The page
+creates a disabled integration bound to an expected tenant and an existing
+policy snapshot, updates the full declared configuration, disables an
+integration and rotates its signing secret with a bounded overlap. Open an
+existing integration by its UUID; the page does not list integrations.
+
+The signing secret field is write-only. It is cleared after every submit,
+rotation, error and page exit, and no administrative read returns it.
+
+The health panel always shows **Coverage unverified** and **Pilot pending**,
+and shows **Vendor settings** as *unknown* or *declared*. Callback and
+unsupported-event counters are content-free activity counts. They do not show
+that the vendor settings are effective or that an application was blocked.
+
 ## Configure and tune in a test organization
 
 Use the vendor's current [configuration instructions](https://platform.claude.com/docs/en/manage-claude/inference-hooks-configuration)
@@ -151,6 +168,17 @@ revoke its signing secret when retired, and rerun the rollback case with harmles
 fixtures. Preserve unrelated organization policies.
 
 ## Screenshots and next steps
+
+The captures below are **local synthetic UI captures**: the console rendered in
+a local browser with every API response replaced by a synthetic fixture. They
+show the page only, not a deployed backend, a tenant or vendor behavior.
+Provenance (source commit, fixture and image hashes, browser version and
+capture time) is in
+[local-captures.json](../assets/screenshots/anthropic/local-captures.json).
+
+![Inference hook setup form with disabled defaults, an empty write-only signing secret field and links to vendor and acceptance instructions](../assets/screenshots/anthropic/preloop-inference-hook-setup.png)
+
+![A loaded synthetic integration with its configuration and health badges reading Coverage unverified, Pilot pending and Vendor settings unknown](../assets/screenshots/anthropic/preloop-inference-hook-health.png)
 
 No vendor screenshot is available: a designated Enterprise sandbox or agreed
 pilot is awaited. Capture the effective endpoint, 100% inspection, empty exclusions,

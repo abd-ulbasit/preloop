@@ -26,8 +26,10 @@ export function editionOf(
 export const CAPABILITIES = [
   'multi_account',
   'account_hierarchy',
+  'resource_sharing',
   'abac_rules',
   'chat_connections',
+  'anthropic_inference_hooks',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

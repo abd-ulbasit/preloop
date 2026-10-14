@@ -106,9 +106,12 @@ def test_legacy_report_and_disabled_extension() -> None:
         ),
         patch("preloop.api.endpoints.agent_discovery.get_plugin_manager") as manager,
     ):
+        manager.return_value.get_service.return_value = None
         result = create_discovery_report(payload, SimpleNamespace(id=uuid4()), user, db)
         assert result.received == 0
-        manager.assert_not_called()
+        manager.return_value.get_service.assert_called_once_with(
+            "discovery_report_authorizer"
+        )
         payload.evidence = DiscoveryEvidence.model_validate(envelope())
         manager.return_value.get_service.return_value = None
         with pytest.raises(HTTPException) as exc:
@@ -127,7 +130,15 @@ def observation_db() -> Generator[Session, None, None]:
     """Fresh in-memory storage never connects to a configured database."""
     engine = create_engine("sqlite://")
     models.DiscoveryObservation.__table__.create(engine)
-    with Session(engine) as db:
+    # This fixture deliberately contains only the observation table. Receipt
+    # locks and history use PostgreSQL and are covered by test_expected_device.
+    with (
+        Session(engine) as db,
+        patch("preloop.models.crud.expected_device.crud_expected_device.lock_account"),
+        patch(
+            "preloop.models.crud.expected_device.crud_expected_device.touch_last_reported_at"
+        ),
+    ):
         yield db
     engine.dispose()
 

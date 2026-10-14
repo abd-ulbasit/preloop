@@ -116,6 +116,9 @@ def get_features(db: Session = Depends(get_db_session)) -> Dict[str, Any]:
     # flags, so they default to off; setdefault keeps a plugin's value.
     for capability in ("multi_account", "account_hierarchy", "abac_rules"):
         result["features"].setdefault(capability, False)
+    # Provider inference-hook setup is served by a commercial plugin; the
+    # console shows its settings page only when the plugin turns this on.
+    result["features"].setdefault("anthropic_inference_hooks", False)
 
     # Passkey (WebAuthn) support: PASSKEYS_ENABLED env, default true. The
     # login page uses this to decide whether to render "Sign in with passkey".

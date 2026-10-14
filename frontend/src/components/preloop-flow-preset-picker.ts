@@ -8,6 +8,7 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
 
 import consoleStyles from '../styles/console-styles.css?inline';
+import '../table/table-pagination';
 
 export const BLANK_PRESET_ID = 'blank';
 
@@ -424,6 +425,10 @@ export class PreloopFlowPresetPicker extends LitElement {
   @property({ type: Boolean })
   persistent = false;
 
+  /** Maximum catalog presets on a page; zero keeps the full catalog. */
+  @property({ type: Number }) pageSize = 0;
+  @state() private pageIndex = 0;
+
   @state()
   private search = '';
 
@@ -431,6 +436,16 @@ export class PreloopFlowPresetPicker extends LitElement {
   private activeId: string = BLANK_PRESET_ID;
 
   willUpdate(changedProperties: Map<string | number | symbol, unknown>): void {
+    if (changedProperties.has('search') || changedProperties.has('presets')) {
+      this.pageIndex = 0;
+      this.activeId = BLANK_PRESET_ID;
+    }
+    if (changedProperties.has('selectedId') && this.pageSize > 0) {
+      const index = this.filteredGroups()
+        .flatMap((g) => g.presets)
+        .findIndex((p) => p.id === this.selectedId);
+      if (index >= 0) this.pageIndex = Math.floor(index / this.pageSize);
+    }
     if (
       changedProperties.has('selectedId') &&
       this.selectedId &&
@@ -458,9 +473,24 @@ export class PreloopFlowPresetPicker extends LitElement {
       .filter((group) => group.presets.length > 0);
   }
 
+  private pagedGroups(): PresetGroup[] {
+    if (this.pageSize <= 0) return this.filteredGroups();
+    let offset = 0;
+    const start = this.pageIndex * this.pageSize;
+    return this.filteredGroups()
+      .map((group) => {
+        const presets = group.presets.filter(
+          (_, i) => offset + i >= start && offset + i < start + this.pageSize
+        );
+        offset += group.presets.length;
+        return { ...group, presets };
+      })
+      .filter((group) => group.presets.length > 0);
+  }
+
   private visibleOptionIds(): string[] {
     const ids = [BLANK_PRESET_ID];
-    for (const group of this.filteredGroups()) {
+    for (const group of this.pagedGroups()) {
       for (const preset of group.presets) {
         if (preset.id) {
           ids.push(preset.id);
@@ -658,7 +688,11 @@ export class PreloopFlowPresetPicker extends LitElement {
   }
 
   private renderList() {
-    const groups = this.filteredGroups();
+    const groups = this.pagedGroups();
+    const total = this.filteredGroups().reduce(
+      (n, group) => n + group.presets.length,
+      0
+    );
     const origins = presetOrigins(this.presets);
     const activeId = this.visibleOptionIds().includes(this.activeId)
       ? this.activeId
@@ -715,6 +749,22 @@ export class PreloopFlowPresetPicker extends LitElement {
           `
         )}
       </div>
+      ${
+        this.pageSize > 0
+          ? html`<table-pagination
+              noun="presets"
+              .total=${total}
+              .pageSize=${this.pageSize}
+              .pageSizes=${[this.pageSize]}
+              .pageIndex=${this.pageIndex}
+              .pageRows=${groups.reduce((n, group) => n + group.presets.length, 0)}
+              @page-change=${(e: CustomEvent<{ pageIndex: number }>) => {
+                this.pageIndex = e.detail.pageIndex;
+                this.activeId = BLANK_PRESET_ID;
+              }}
+            ></table-pagination>`
+          : nothing
+      }
     `;
   }
 

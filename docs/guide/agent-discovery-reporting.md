@@ -187,3 +187,15 @@ is later enrolled, and their emitted `enrolled: false` means enrollment was
 not observed. Automatic linking requires a future profile-aware enrollment
 contract. App presence and configuration observations do not prove runtime
 enforcement or use.
+
+## Administrative device identifiers
+
+For a fleet roster with an explicit administrative identifier, use
+`preloop agents discover --report --device-ref synthetic-device`. This replaces
+OS machine-id discovery for the report fingerprint. The identifier is stripped
+of surrounding whitespace, then hashed with the same account salt and
+`preloop-workstation:v1:` namespace; the raw value is never sent. It does not
+turn reporting on without `--report` or the existing opt-in environment flag.
+Matching hashes correlate administrative identifiers and do not attest a device,
+its executable identity or effective governance. Candidate-only reports establish
+receipt history, not collection completeness or trusted control verification.

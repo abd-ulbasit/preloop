@@ -981,8 +981,13 @@ export class FlowView extends LitElement {
         </div>
         <div
           slot="main-column"
-          style="display: flex; justify-content: flex-end; flex: 1; min-width: 0;"
+          style="display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sl-spacing-small); flex: 1; min-width: 0;"
         >
+          <capability-extension
+            name="resource-access"
+            style="display: contents;"
+            .context=${{ kind: 'flow', resourceId: this.flowId ?? '' }}
+          ></capability-extension>
           <resource-actions
             .actions=${this.getFlowActions()}
           ></resource-actions>
@@ -1088,10 +1093,6 @@ export class FlowView extends LitElement {
               }
             </div>
           </sl-card>
-          <capability-extension
-            name="resource-access"
-            .context=${{ kind: 'flow', resourceId: this.flowId ?? '' }}
-          ></capability-extension>
 
           ${
             this.flow.prompt_template

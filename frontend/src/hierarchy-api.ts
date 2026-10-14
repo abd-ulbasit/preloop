@@ -404,24 +404,53 @@ export async function deleteAccessGrant(
 // ---------------------------------------------------------------------------
 // Sharing (account_hierarchy)
 
-export type ShareableKind =
-  | 'ai_model'
-  | 'mcp_server'
-  | 'managed_agent'
-  | 'flow'
-  | 'runner_pool'
-  | 'policy';
-
-export type ShareTarget =
-  | { type: 'all' }
-  | { type: 'selected'; subaccount_ids: string[] }
-  | { type: 'tag'; key: string; value: string };
+/** Resource kinds accepted by ResourceShareDefinition, not the schema superset. */
+export const SHAREABLE_KINDS = [
+  'ai_model',
+  'mcp_server',
+  'managed_agent',
+] as const;
+export type ShareableKind = (typeof SHAREABLE_KINDS)[number];
 
 export interface Share {
   id: string;
   resource_type: ShareableKind;
   resource_id: string;
-  target: ShareTarget;
+  target_mode: 'all' | 'selected' | 'rule';
+  selected_account_ids: string[];
+  access_rule_id: string | null;
+  recipient_account_ids: string[];
+  is_automatic: boolean;
+  require_approval: boolean;
+}
+
+export type ShareWrite = Pick<
+  Share,
+  | 'resource_type'
+  | 'resource_id'
+  | 'target_mode'
+  | 'selected_account_ids'
+  | 'access_rule_id'
+  | 'require_approval'
+>;
+
+/** Only persisted permits may be referenced by a rule-targeted share. */
+export interface SharingRule {
+  id: string;
+  name: string;
+  effect: 'permit' | 'forbid';
+  actions: string[];
+  resource_type?: string | null;
+  subject_selector?: { account?: { match_labels?: Tags; matchLabels?: Tags } };
+  is_enabled: boolean;
+}
+
+export async function listSharingRules(): Promise<SharingRule[]> {
+  // Current EE serves a bare list; earlier console contracts use an envelope.
+  const body = await request<SharingRule[] | { rules?: SharingRule[] }>(
+    '/api/v1/access/rules'
+  );
+  return Array.isArray(body) ? body : (body?.rules ?? []);
 }
 
 const sharesPath = (accountId: string) =>
@@ -432,13 +461,18 @@ export async function listShares(
   resourceType: ShareableKind,
   resourceId: string
 ): Promise<Share[]> {
+  // The endpoint lists all owner intents; filter locally as well as passing
+  // the query for servers that support it.
   const query = `?resource_type=${enc(resourceType)}&resource_id=${enc(resourceId)}`;
-  return items<Share>(await request(sharesPath(accountId) + query));
+  return items<Share>(await request(sharesPath(accountId) + query)).filter(
+    (share) =>
+      share.resource_type === resourceType && share.resource_id === resourceId
+  );
 }
 
 export async function createShare(
   accountId: string,
-  body: Omit<Share, 'id'>
+  body: ShareWrite
 ): Promise<Share> {
   return request(
     sharesPath(accountId),

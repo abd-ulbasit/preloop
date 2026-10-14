@@ -1197,33 +1197,38 @@ export class ApiUsageView extends LitElement {
           ${
             snapshots.length > 0
               ? html`
-                  <div class="breakdown-list">
-                    ${snapshots.map(
-                      (snapshot) => html`
-                        <div class="snapshot-row">
-                          <div class="breakdown-primary">
-                            <div class="breakdown-name">
-                              ${snapshot.model_alias || 'Unknown model'}
+                  <collapsible-section
+                    heading="provider headroom snapshots"
+                    storage-key="api-usage:snapshots"
+                  >
+                    <div class="breakdown-list">
+                      ${snapshots.map(
+                        (snapshot) => html`
+                          <div class="snapshot-row">
+                            <div class="breakdown-primary">
+                              <div class="breakdown-name">
+                                ${snapshot.model_alias || 'Unknown model'}
+                              </div>
+                              <div class="breakdown-secondary">
+                                ${snapshot.provider_name || 'Unknown provider'}
+                                ${
+                                  snapshot.upstream_credential_type === 'oauth'
+                                    ? html`· subscription`
+                                    : ''
+                                }
+                              </div>
                             </div>
                             <div class="breakdown-secondary">
-                              ${snapshot.provider_name || 'Unknown provider'}
-                              ${
-                                snapshot.upstream_credential_type === 'oauth'
-                                  ? html`· subscription`
-                                  : ''
-                              }
+                              ${this.describeSnapshotHeadroom(snapshot)}
+                              <br />
+                              observed
+                              ${this.formatDateTimeLabel(snapshot.observed_at)}
                             </div>
                           </div>
-                          <div class="breakdown-secondary">
-                            ${this.describeSnapshotHeadroom(snapshot)}
-                            <br />
-                            observed
-                            ${this.formatDateTimeLabel(snapshot.observed_at)}
-                          </div>
-                        </div>
-                      `
-                    )}
-                  </div>
+                        `
+                      )}
+                    </div>
+                  </collapsible-section>
                 `
               : html`
                   <div class="section-subtitle">
@@ -1854,7 +1859,12 @@ export class ApiUsageView extends LitElement {
                           Recent gateway activity grouped by runtime session
                         </span>
                       </div>
-                      ${this.renderSessionBreakdown()}
+                      <collapsible-section
+                        class="sessions-section"
+                        heading="runtime session usage"
+                        storage-key="api-usage:sessions"
+                        >${this.renderSessionBreakdown()}</collapsible-section
+                      >
                     </sl-card>
 
                     <sl-card

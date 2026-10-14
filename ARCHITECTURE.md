@@ -59,8 +59,10 @@ records were true when written; the signing key lives beside the records.
 
 Cloud analytics history is resolved through a billing plugin service at reporting boundaries. Physical retention preserves longer subscription promises through account-locked CRUD updates and remains separate from audit/evidence policy and live governance. See [Cloud analytics history and stored records](docs/guide/flows/evidence-storage.md#cloud-analytics-history-and-stored-records).
 
-The Cost console loads totals independently of settings and tab breakdowns.
-Selective reporting queries and per-section loading states are described in
+The Cost console shares one summary between totals, the initially selected
+tab and imported usage; settings and later tabs load independently. Exact-window
+summary aggregates use a bounded 60-second cache per worker. Selective reporting
+queries and per-section loading states are described in
 [Progressive reporting](docs/architecture/cost.md#progressive-reporting).
 Console catalogue lists use typed `/tools/summary` and `/flows/summary` views
 instead of downloading tool schemas and flow prompts/configuration. Full
@@ -499,6 +501,13 @@ Feature flags remain the authority for individual capability gates. The console
 reuses its cached features payload for the header help menu; documentation,
 release notes, and issue/support destinations come from brand URL configuration.
 
+Provider inference-hook setup and health use an OSS Lit lazy view gated by
+`anthropic_inference_hooks` and the existing `manage_policies` permission.
+Commercial plugins own tenant authorization, encrypted secret custody and
+callback evaluation. The console accepts write-only secrets, clears them after
+submission/disconnection, and preserves unverified coverage and pending pilot
+states even when callbacks are observed. It creates no grants or policy DSL.
+
 
 ### Hosted model visibility and request billing attribution
 
@@ -525,6 +534,17 @@ create/edit/delete grants; user actions use `manage_users`, invitations use
 `invite_users`, and team actions mirror the endpoint's create/edit/delete/manage
 permissions. Backend authorization remains the enforcement boundary.
 
+
+### Console list defaults
+
+At 1440x900, the default content of the five remaining list pages in #1585
+fits within three viewports. Audit requests 25 events per page, retaining
+explicit URL and saved size choices. Tools shows ten tool rows or collapsed/empty server
+headers per page across MCP and native groups. New Flow shows five catalog
+presets and ten searchable allowed tools per page, preserving selections
+across pages. Its allowed-tool section starts closed. Gateway session usage,
+provider headroom snapshots, and the Plan feature comparison open on request;
+the Gateway and Plan disclosures remember the reader's choice.
 
 ### Console list filter URLs
 
@@ -574,6 +594,17 @@ focus. The shared `ConsoleStatus` controller supplies hidden polite status regio
 for asynchronous authenticated views, and the approvals view announces new live
 requests without moving keyboard focus. Empty capability-gated views stay silent.
 
+Resource detail headers use the shared `resource-access-panel` for compact Access
+and Tags controls. Sharing requires the server's `resource_sharing` capability
+and a supported model, MCP server, or managed-agent kind; hierarchy alone never
+advertises sharing. Flows, policy baselines, and runner pools retain independent
+`abac_rules` tag controls. Editors use persisted drafts with explicit Save/Cancel,
+an anchored desktop popover, and a phone dialog. Account defaults describe policy
+configuration, and sharing summaries describe intent rather than effective access.
+Rule targets reference existing sharing permits; the component never creates
+standing rules or changes RBAC/ABAC enforcement.
+
+
 The optional ticket-readiness observer uses account-scoped immutable policy and gate-evidence records, historical first-ready series, durable per-PR leases and round-robin reconciliation. Its credentialed fetch and offline object-only Git probe run in separate constrained containers. Reporting labels configured-policy coverage explicitly and preserves existing cycle-time intervals; see [sampled ticket readiness](docs/guide/ticket-readiness.md).
 
 ### Discovery source observations
@@ -584,6 +615,15 @@ tenant-scoped CRUD live in `preloop.models`; commercial correlation/read policy
 lives in the optional plugin. Candidate deduplication and discovered events
 remain unchanged. Collector assertions preserve provenance and scan gaps, and
 do not establish runtime verification or device attestation.
+
+Expected-device inventory uses the shared `ExpectedDevice` model and
+`crud_expected_device` persistence boundary. An account-local roster is separate
+from reported discovery candidates, immutable source observations and device
+credentials. Atomic roster replacement serializes on the account, preserves
+receipt history for retained entries and never grants a credential or enrollment.
+Latest collection windows remain independent per authenticated reporting source;
+commercial import policy and coverage endpoints are provided by the optional
+fleet service.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
@@ -618,6 +658,9 @@ with `meta_data.ingest_degraded`, and omits content search, content-derived
 summaries and tool enrichment. LLM session optimization falls back to its
 deterministic analyzers. With no registered policy, OSS retains full detail.
 The policy never changes forwarded requests or governance decisions.
+
+
+
 ## Canonical person identities
 
 `Person` owns the chosen username, address and verification, shared name/avatar,
