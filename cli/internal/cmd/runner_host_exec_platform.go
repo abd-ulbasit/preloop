@@ -114,6 +114,9 @@ func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, localAppData, com
 			filepath.Join(homeDir, ".local", "bin", command),
 			filepath.Join(homeDir, "scoop", "shims", command),
 		)
+		if hostExecBinaryBase(command) == "opencode" {
+			bases = append(bases, filepath.Join(homeDir, ".opencode", "bin", command))
+		}
 		out := make([]string, 0, len(bases)*len(windowsExecutableExtensions))
 		for _, base := range bases {
 			if isWindowsExecutableName(base) {
@@ -126,13 +129,17 @@ func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, localAppData, com
 		}
 		return out
 	}
-	return []string{
+	paths := []string{
 		filepath.Join(homeDir, ".local", "bin", command),
 		filepath.Join(homeDir, ".npm-global", "bin", command),
 		filepath.Join(homeDir, ".openclaw", "bin", command),
 		filepath.Join(homeDir, ".copilot", "bin", command),
 		filepath.Join(homeDir, "Library", "pnpm", command),
 	}
+	if hostExecBinaryBase(command) == "opencode" {
+		paths = append(paths, filepath.Join(homeDir, ".opencode", "bin", command))
+	}
+	return paths
 }
 
 // hostExecSystemSearchDirs are system-wide locations searched only when
