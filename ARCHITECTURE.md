@@ -594,6 +594,17 @@ focus. The shared `ConsoleStatus` controller supplies hidden polite status regio
 for asynchronous authenticated views, and the approvals view announces new live
 requests without moving keyboard focus. Empty capability-gated views stay silent.
 
+Resource detail headers use the shared `resource-access-panel` for compact Access
+and Tags controls. Sharing requires the server's `resource_sharing` capability
+and a supported model, MCP server, or managed-agent kind; hierarchy alone never
+advertises sharing. Flows, policy baselines, and runner pools retain independent
+`abac_rules` tag controls. Editors use persisted drafts with explicit Save/Cancel,
+an anchored desktop popover, and a phone dialog. Account defaults describe policy
+configuration, and sharing summaries describe intent rather than effective access.
+Rule targets reference existing sharing permits; the component never creates
+standing rules or changes RBAC/ABAC enforcement.
+
+
 The optional ticket-readiness observer uses account-scoped immutable policy and gate-evidence records, historical first-ready series, durable per-PR leases and round-robin reconciliation. Its credentialed fetch and offline object-only Git probe run in separate constrained containers. Reporting labels configured-policy coverage explicitly and preserves existing cycle-time intervals; see [sampled ticket readiness](docs/guide/ticket-readiness.md).
 
 ### Discovery source observations
