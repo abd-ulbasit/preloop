@@ -197,7 +197,7 @@ export class AuditView extends AuthedElement {
     readTablePreferences(AUDIT_LIST_ID)?.pageSize ?? 0
   )
     ? readTablePreferences(AUDIT_LIST_ID)!.pageSize!
-    : 50;
+    : 25;
 
   // Filters
   @state() private _eventTypeFilters: string[] = [];
@@ -694,7 +694,7 @@ export class AuditView extends AuthedElement {
   private _syncPageLocation(): void {
     replaceListFilters({
       page: this._page > 0 ? String(this._page + 1) : null,
-      size: this._pageSize !== 50 ? String(this._pageSize) : null,
+      size: this._pageSize !== 25 ? String(this._pageSize) : null,
     });
   }
 

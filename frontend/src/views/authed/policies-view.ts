@@ -2689,16 +2689,18 @@ export class PoliciesView extends LitElement {
         null
       );
     return html`
-      ${
-        baseline
-          ? html`<capability-extension
-              name="resource-access"
-              .context=${{ kind: 'policy', resourceId: baseline.id }}
-            ></capability-extension>`
-          : ''
-      }
       <div class="policy-files-container">
         <div class="yaml-editor-header">
+          ${
+            baseline
+              ? html`<capability-extension
+                  name="resource-access"
+                  style="display: contents;"
+                  .context=${{ kind: 'policy_baseline', resourceId: baseline.id }}
+                ></capability-extension>`
+              : ''
+          }
+
           <div class="yaml-editor-intro">
             <h3 class="yaml-editor-title">Active policy</h3>
             <p class="model-io-hint">

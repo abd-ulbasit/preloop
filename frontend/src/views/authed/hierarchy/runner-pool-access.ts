@@ -7,7 +7,8 @@ import './resource-access-panel';
 
 /**
  * Runner pools are runner labels, so they have no page of their own. This
- * picks one of the account's pools and shows its sharing and tags.
+ * picks one of the account's pools and shows its tags. The served API does
+ * not support sharing pools.
  * Context: `pools`, the pool names joined by commas.
  */
 @customElement('runner-pool-access')
@@ -37,7 +38,7 @@ export class RunnerPoolAccess extends LitElement {
   render() {
     const pools = this.pools();
     if (pools.length === 0) return nothing;
-    return html`<h3>Runner pool access</h3>
+    return html`<h3>Runner pool tags</h3>
       <sl-select
         size="small"
         label="Pool"

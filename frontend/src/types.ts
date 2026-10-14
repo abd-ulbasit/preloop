@@ -179,6 +179,11 @@ export interface Flow {
 }
 
 export interface AIModel {
+  /** Recipient projections are owned and edited by the sharing account. */
+  is_shared?: boolean;
+  read_only?: boolean;
+  owner_name?: string;
+
   is_built_in?: boolean;
   id: string;
   name: string;
@@ -700,6 +705,11 @@ export interface SessionSearchResponse {
 }
 
 export interface ManagedAgentSummary {
+  /** Recipient projections are owned and edited by the sharing account. */
+  is_shared?: boolean;
+  read_only?: boolean;
+  owner_name?: string;
+
   id: string;
   runtime_session_id: string | null;
   owner_user_id: string | null;

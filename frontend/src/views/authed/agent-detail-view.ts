@@ -378,6 +378,7 @@ export class AgentDetailView extends LitElement {
 
       .header-actions {
         display: flex;
+        flex-wrap: wrap;
         justify-content: flex-end;
         align-items: center;
         gap: var(--sl-spacing-small);
@@ -3529,15 +3530,23 @@ export class AgentDetailView extends LitElement {
           )}
         </div>
         <div slot="main-column" class="header-actions">
+          <capability-extension
+            name="resource-access"
+            style="display: contents;"
+            .context=${{
+              kind: 'managed_agent',
+              resourceId: this.agent.id,
+              sharedFrom: this.agent.is_shared
+                ? this.agent.owner_name
+                : undefined,
+              readOnly: this.agent.read_only || this.agent.is_shared,
+            }}
+          ></capability-extension>
           <resource-actions .actions=${this.agentActions}></resource-actions>
         </div>
       </view-header>
       <div class="page" style="padding-top: 0;">
         ${this.renderSummaryStrip(aggregate)} ${this.renderIdentityHistory()}
-        <capability-extension
-          name="resource-access"
-          .context=${{ kind: 'managed_agent', resourceId: this.agent.id }}
-        ></capability-extension>
 
         <!-- Sub-view Tab Navigation -->
         ${(() => {

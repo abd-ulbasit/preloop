@@ -77,6 +77,7 @@ from .legal_hold import (
     LegalHold,
 )
 from .discovery_observation import DiscoveryObservation
+from .expected_device import ExpectedDevice
 from .discovered_agent_candidate import (
     AccountDiscoverySalt,
     DiscoveredAgentCandidate,
@@ -270,6 +271,7 @@ __all__ = [
     "AccountDiscoverySalt",
     "DiscoveredAgentCandidate",
     "DiscoveryObservation",
+    "ExpectedDevice",
     "ManagedAgent",
     "ManagedAgentAIModelBinding",
     "ManagedAgentCredential",

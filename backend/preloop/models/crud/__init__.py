@@ -47,6 +47,7 @@ from . import runtime_session_artifact as crud_runtime_session_artifact
 from . import tool_approval_condition
 from .account import CRUDAccount
 from .account_halt import CRUDAccountHalt, crud_account_halt
+from .expected_device import crud_expected_device
 from .account_milestone import CRUDAccountMilestone, crud_account_milestone
 from .agent_control_command import CRUDAgentControlCommand
 from .ai_model import CRUDAIModel
@@ -325,6 +326,7 @@ __all__ = [
     "CRUDAccount",
     "CRUDAccountHalt",
     "crud_account_halt",
+    "crud_expected_device",
     "CRUDAgentControlCommand",
     "crud_agent_control_command",
     "CRUDTracker",

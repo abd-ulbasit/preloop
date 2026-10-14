@@ -122,6 +122,18 @@ def create_discovery_report(
     known rows only get a fresh ``last_seen_at``.
     """
     _require_report_access(db, current_user)
+    manager = get_plugin_manager()
+    authorizer = manager.get_service("discovery_report_authorizer")
+    key = getattr(current_user, "_auth_api_key", None)
+    context = getattr(key, "context_data", None)
+    if authorizer is None and isinstance(context, dict) and "device_report" in context:
+        # A credential with persisted identity restrictions must not silently
+        # become an unrestricted reporter if its authorization plugin is absent.
+        raise HTTPException(status_code=503, detail="Report authorization unavailable")
+    if authorizer is not None:
+        authorizer.authorize_report(
+            db, account_id=account.id, current_user=current_user, payload=payload
+        )
     if payload.evidence is not None:
         service = get_plugin_manager().get_service("discovery_evidence")
         if service is None:

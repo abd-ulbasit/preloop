@@ -1,7 +1,7 @@
 """Add governance review tables (#1709).
 
 Revision ID: 20261016_governance_review
-Revises: 20261014_tool_config_scope_nulls
+Revises: 20261014_expected_devices
 Create Date: 2026-10-14
 
 Account-scoped store for the weekly governance review: the prose policy
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
 revision = "20261016_governance_review"
-down_revision = "20261014_tool_config_scope_nulls"
+down_revision = "20261014_expected_devices"
 branch_labels = None
 depends_on = None
 

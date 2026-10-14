@@ -723,9 +723,8 @@ describe('CostView', () => {
       .getCalls()
       .map((call) => String(call.args[0]))
       .filter((url) => url.includes('/api/v1/cost/summary'))
-      .map((url) => new URL(url, window.location.origin).searchParams)
-      .filter((params) => params.get('include_breakdown') === 'false');
-    // One totals request, carrying the comparison window; no second one.
+      .map((url) => new URL(url, window.location.origin).searchParams);
+    // One shared summary carries both windows and the initially visible detail.
     expect(totalsCalls.length).to.equal(1);
     expect(totalsCalls[0].get('compare_start_date')).to.be.a('string');
     expect(totalsCalls[0].get('compare_end_date')).to.be.a('string');

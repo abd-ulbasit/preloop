@@ -43,6 +43,11 @@ export interface CapabilityRoute {
  */
 export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
   {
+    capability: 'anthropic_inference_hooks',
+    path: 'settings/inference-hooks',
+    component: 'inference-hooks-view',
+  },
+  {
     capability: 'chat_connections',
     path: 'settings/chat',
     component: 'chat-connections-view',
@@ -65,6 +70,8 @@ export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
 ];
 
 export const capabilityRouteLoaders: ComponentLoaders = {
+  'inference-hooks-view': () =>
+    import('./views/authed/settings/inference-hooks-view'),
   'chat-connections-view': () =>
     import('./views/authed/settings/chat-connections-view'),
   'subaccounts-view': () => import('./views/authed/hierarchy/subaccounts-view'),
