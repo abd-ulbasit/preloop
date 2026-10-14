@@ -49,7 +49,11 @@ from preloop.models.db.session import get_db_session
 from preloop.models.models.account import Account
 from preloop.models.models.attention_dismissal import AttentionDismissal
 from preloop.models.models.user import User as UserModel
-from preloop.plugins.account_hooks import VISIBLE_MANAGED_AGENT, filter_viewable
+from preloop.plugins.account_hooks import (
+    VISIBLE_FLOW,
+    VISIBLE_MANAGED_AGENT,
+    filter_viewable,
+)
 from preloop.schemas.attention import (
     AttentionDismissalListResponse,
     AttentionDismissalResponse,
@@ -2028,7 +2032,7 @@ def _require_account_flow(
     flow = crud_flow.get(db, id=flow_id, account_id=str(account.id))
     if flow is None or (
         current_user is not None
-        and not filter_viewable(db, current_user, "flow", [flow])
+        and not filter_viewable(db, current_user, VISIBLE_FLOW, [flow])
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Flow not found"
