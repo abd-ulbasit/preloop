@@ -2,6 +2,8 @@ import { expect } from '@open-wc/testing';
 import sinon from 'sinon';
 import {
   getKillSwitchSnapshot,
+  holdKillSwitchPoll,
+  KILL_SWITCH_POLL_MS,
   refreshKillSwitch,
   resetKillSwitchStore,
   setKillSwitchStatus,
@@ -104,6 +106,52 @@ describe('kill-switch-store', () => {
     expect(getKillSwitchSnapshot()).to.equal(HALTED);
     expect(failures[failures.length - 1]).to.equal(true);
     off();
+  });
+
+  it('skips the banner poll while a cold load is still reading', async () => {
+    const clock = sinon.useFakeTimers();
+    const release = holdKillSwitchPoll();
+    const off = subscribeKillSwitch(() => undefined);
+    try {
+      await clock.tickAsync(0);
+      expect(statusCalls(), 'the initial read still happens').to.equal(1);
+
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(
+        statusCalls(),
+        'the poll waits until the load releases it'
+      ).to.equal(1);
+
+      release();
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(statusCalls(), 'the following interval asks again').to.equal(2);
+    } finally {
+      off();
+      release();
+      clock.restore();
+    }
+  });
+
+  it('asks again on the second tick if the cold load never finishes', async () => {
+    const clock = sinon.useFakeTimers();
+    const release = holdKillSwitchPoll();
+    const off = subscribeKillSwitch(() => undefined);
+    try {
+      await clock.tickAsync(0);
+      expect(statusCalls()).to.equal(1);
+
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(statusCalls(), 'the first held tick is the cold load').to.equal(1);
+
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(statusCalls(), 'a hung load cannot skip a second tick').to.equal(
+        2
+      );
+    } finally {
+      off();
+      release();
+      clock.restore();
+    }
   });
 
   it('drops a read that started before a reset', async () => {

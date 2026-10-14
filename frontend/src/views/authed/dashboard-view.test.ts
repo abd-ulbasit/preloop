@@ -2929,15 +2929,93 @@ describe('DashboardView', () => {
         expect(element['pendingTopicRefreshes'].has('gateway')).to.be.true;
         expect(ran, 'event must wait for the current refresh').to.equal(0);
       } finally {
-        // Remove only the throttle floor; keep the queued debounce/callback.
-        element['lastFetchStartedAt'] = Date.now() - 60000;
+        // A load that has already outlasted the topic floor. The queued
+        // refresh is kept, and it does not run on the debounce: that
+        // second wave is the cold-load duplicate.
+        element['lastFetchStartedAt'] = Date.now() - 23000;
         summaryGate = null;
         releaseSummary();
         await refresh;
       }
-      expect(element['refreshTimers']['gateway']).to.not.equal(undefined);
-      await waitUntil(() => ran === 1, 'queued refresh never ran');
       expect(element['pendingTopicRefreshes'].has('gateway')).to.be.false;
+      expect(element['refreshTimers']['gateway']).to.not.equal(undefined);
+      expect(ran, 'trailing refresh waits out the topic floor').to.equal(0);
+      window.clearTimeout(element['refreshTimers']['gateway']);
+      delete element['refreshTimers']['gateway'];
+    });
+
+    it('does not repeat cold-load GETs when realtime events arrive during a slow audit read', async () => {
+      // Prod shape from #1646: audit overview holds the load open, and
+      // gateway_activity / budget_health / runtime_sessions land while it
+      // is in flight. The queued refresh used to start the moment the
+      // load ended, after each first GET had already finished.
+      let releaseAudit = () => {};
+      auditCountGate = new Promise<void>((resolve) => {
+        releaseAudit = resolve;
+      });
+      const element = await mountDashboard();
+      const duplicatePrefixes = [
+        '/api/v1/account/gateway-usage/summary',
+        '/api/v1/account/gateway-usage/rate-limits',
+        '/api/v1/cost/timeseries',
+        '/api/v1/agents',
+        '/api/v1/runtime-sessions',
+        '/api/v1/budget/policies',
+      ];
+      const counts = () => {
+        const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+        return Object.fromEntries(
+          duplicatePrefixes.map((prefix) => [
+            prefix,
+            urls.filter((url) => url.startsWith(prefix)).length,
+          ])
+        );
+      };
+      try {
+        await waitUntil(
+          () => !element['fetchingAgents'] && element['refreshInFlight'],
+          'fold never started'
+        );
+        const fire = (topic: string) => {
+          const handler = subscribeStub
+            .getCalls()
+            .find((call) => call.args[0] === topic)?.args[1] as
+            ((message: unknown) => void) | undefined;
+          expect(handler, topic).to.be.a('function');
+          handler?.({ type: topic });
+        };
+        fire('gateway_activity');
+        fire('gateway_activity');
+        fire('runtime_sessions');
+        fire('budget_health');
+        expect(element['pendingTopicRefreshes'].size).to.equal(3);
+        element['lastFetchStartedAt'] = Date.now() - 23000;
+      } finally {
+        auditCountGate = null;
+        releaseAudit();
+      }
+
+      await waitUntil(
+        () => !element['refreshInFlight'],
+        'slow load never finished'
+      );
+      const atIdle = counts();
+      for (const [prefix, count] of Object.entries(atIdle)) {
+        expect(count, `${prefix} was read during the load`).to.be.greaterThan(
+          0
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(counts(), 'no second GET in the debounce after the load').to.eql(
+        atIdle
+      );
+      expect(element['refreshTimers']['gateway']).to.not.equal(undefined);
+      expect(element['refreshTimers']['fleet']).to.not.equal(undefined);
+      expect(element['refreshTimers']['budget']).to.not.equal(undefined);
+      for (const timer of Object.values(element['refreshTimers'])) {
+        window.clearTimeout(timer);
+      }
+      element['refreshTimers'] = {};
     });
 
     it('ignores the first-wave response after disconnect and skips deferred work', async () => {
