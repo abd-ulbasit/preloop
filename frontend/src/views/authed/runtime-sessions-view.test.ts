@@ -2326,6 +2326,14 @@ describe('RuntimeSessionsView', () => {
       expect(
         new URLSearchParams(window.location.search).get('sessionId')
       ).to.equal(linked);
+
+      // A filter change re-scopes the list: the pin goes, the new list's
+      // first row is selected.
+      (element as any).status = 'ended';
+      await (element as any).applyFilters();
+      await element.updateComplete;
+      expect((element as any).selectedSessionId).to.equal('runtime-session-0');
+      expect(observer.sessions[0].id).to.equal('runtime-session-0');
     });
 
     it('falls back to the newest session when a linked one cannot be read', async () => {

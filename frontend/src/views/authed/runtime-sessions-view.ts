@@ -1179,10 +1179,10 @@ export class RuntimeSessionsView extends LitElement {
       ) {
         // A linked session that is not on this page (the page is 20 rows)
         // is pinned above the list instead of being swapped for the newest.
-        // Only a session the location named: after a filter change the
-        // selection belongs to the new list, as before.
-        // A live refresh keeps the pin: the linked id is cleared after the
-        // first load, but the pinned row still names the selection.
+        // Only a session the location named. A live refresh keeps the pin:
+        // the linked id is cleared after the first load, but the pinned row
+        // still names the selection. A filter change drops the pin
+        // (`dropPin()`), so the selection then belongs to the new list.
         const linked =
           this.linkedSessionId ??
           (this.pinnedSession?.id === this.selectedSessionId
@@ -1562,8 +1562,15 @@ export class RuntimeSessionsView extends LitElement {
     ).value;
   }
 
+  /** A filter change re-scopes the list: a linked session is no longer pinned. */
+  private dropPin(): void {
+    this.pinnedSession = null;
+    this.linkedSessionId = null;
+  }
+
   private async applyFilters() {
     this.cancelSearchDebounce();
+    this.dropPin();
     await this.runQuery();
     if (this.isSearching) {
       // The filters bound the list as well, so it stays in step for the
@@ -1574,6 +1581,7 @@ export class RuntimeSessionsView extends LitElement {
 
   private async clearFilters() {
     this.cancelSearchDebounce();
+    this.dropPin();
     this.selectedRange = 'last-30';
     this.applyPresetDates('last-30');
     this.searchQuery = '';
