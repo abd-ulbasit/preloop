@@ -5,8 +5,10 @@
 # smoke amd64. They never push. A README-only edit does not build.
 #
 # A push publishes when it is a v* tag, a workflow_dispatch on main, or a
-# push to main that changes environments/universal, environments/perl, or
-# this workflow. The merge of a recipe change is that main push. Tags are
+# push to main that changes the Dockerfile, the top-level shell and Python
+# scripts, either fixtures tree, environments/perl/perl-toolchain-smoke.sh,
+# or this workflow. The merge of one of those changes is that main push.
+# Tags are
 # sha-<12 hex chars of the commit> and, on a version tag, the tag name.
 # The job summary prints the index digest. actions/attest-build-provenance
 # attests that digest and pushes the attestation to GHCR.
