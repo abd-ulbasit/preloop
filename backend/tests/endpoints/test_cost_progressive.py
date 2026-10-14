@@ -255,7 +255,7 @@ def test_summary_cache_copies_response_and_never_caches_errors(
     from preloop.api.endpoints import cost
     from preloop.models.crud import crud_account
 
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         account=crud_account.get(db_session, id=test_user.account_id),
         start_date=datetime(2026, 1, 1, tzinfo=UTC),
         end_date=datetime(2026, 1, 31, tzinfo=UTC),
@@ -306,7 +306,7 @@ def test_summary_cache_coalesces_concurrent_reads(
     from preloop.api.endpoints import cost
     from preloop.models.crud import crud_account
 
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         account=crud_account.get(db_session, id=test_user.account_id),
         start_date=datetime(2026, 1, 1, tzinfo=UTC),
         end_date=datetime(2026, 1, 31, tzinfo=UTC),
@@ -337,10 +337,10 @@ def test_summary_cache_coalesces_concurrent_reads(
     builder = Mock(side_effect=build)
     monkeypatch.setattr(cost, "_build_cost_summary", builder)
     with ThreadPoolExecutor(max_workers=2) as workers:
-        first = workers.submit(cost._cached_cost_summary, None, **kwargs)
+        first = workers.submit(cost._cached_cost_summary, Mock(), **kwargs)
         try:
             assert entered.wait(5)
-            second = workers.submit(cost._cached_cost_summary, None, **kwargs)
+            second = workers.submit(cost._cached_cost_summary, Mock(), **kwargs)
             assert waiting.wait(5)
         finally:
             release.set()
@@ -359,7 +359,7 @@ def test_summary_cache_is_bounded_and_account_scoped(
 
     monkeypatch.setattr(cost, "_SUMMARY_CACHE", {})
     monkeypatch.setattr(cost, "_SUMMARY_CACHE_MAX_ENTRIES", 1)
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         account=crud_account.get(db_session, id=test_user.account_id),
         start_date=datetime(2026, 1, 1, tzinfo=UTC),
         end_date=datetime(2026, 1, 31, tzinfo=UTC),
@@ -387,7 +387,7 @@ def test_summary_finishing_after_reprice_is_not_cached(
     from preloop.api.endpoints import cost
     from preloop.models.crud import crud_account
 
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         account=crud_account.get(db_session, id=test_user.account_id),
         start_date=datetime(2026, 1, 1, tzinfo=UTC),
         end_date=datetime(2026, 1, 31, tzinfo=UTC),
