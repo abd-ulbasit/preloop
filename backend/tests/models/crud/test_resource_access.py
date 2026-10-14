@@ -920,3 +920,29 @@ def test_savepoint_rollback_preserves_live_gate_but_cleans_outer_deleted_target(
     finally:
         with crud.session() as db, db.begin():
             db.delete(db.get(models.AIModel, other_id))
+
+
+def test_legacy_subject_ids_without_kind_remain_owner_scoped(resource: Any) -> None:
+    crud, owners, _ = resource
+    account, user = owners[0]
+    legacy = AccessRuleDefinition(
+        name="Legacy kind-less subject",
+        effect="permit",
+        actions=["resource:view"],
+        subject_selector={"ids": [str(user)]},
+    )
+    saved = crud.write(account_id=account, user_id=user, definition=legacy)
+    assert saved["subject_selector"]["ids"] == [str(user)]
+    assert saved["subject_selector"]["kind"] is None
+    with pytest.raises(AccessReferenceError):
+        crud.write(
+            account_id=account,
+            user_id=user,
+            definition=legacy.model_copy(
+                update={
+                    "subject_selector": legacy.subject_selector.model_copy(
+                        update={"ids": [owners[1][1]]}
+                    )
+                }
+            ),
+        )

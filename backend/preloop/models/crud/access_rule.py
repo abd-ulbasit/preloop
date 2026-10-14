@@ -112,23 +112,27 @@ def _references(
         value["subject_selector"][field] = resolved
     selector = definition.subject_selector
     if selector.ids:
-        subject_models = {
+        subject_models: dict[str, Any] = {
             "user": models.User,
             "agent": models.ManagedAgent,
             "api_key": models.ApiKey,
             "flow": models.Flow,
         }
-        if selector.kind is None:
-            raise AccessReferenceError("subject_selector.kind", "required for IDs")
-        subject_model: Any = subject_models[selector.kind]
-        found = set(
-            db.scalars(
-                select(subject_model.id).where(
-                    subject_model.account_id == account.id,
-                    subject_model.id.in_(selector.ids),
+        selected_models = (
+            [subject_models[selector.kind]]
+            if selector.kind
+            else subject_models.values()
+        )
+        found: set[UUID] = set()
+        for subject_model in selected_models:
+            found.update(
+                db.scalars(
+                    select(subject_model.id).where(
+                        subject_model.account_id == account.id,
+                        subject_model.id.in_(selector.ids),
+                    )
                 )
             )
-        )
         if found != set(selector.ids):
             raise AccessReferenceError("subject_selector.ids", "invalid subject IDs")
     if not resource_ids_validated:
