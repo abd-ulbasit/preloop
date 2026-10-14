@@ -85,7 +85,8 @@ interface TrackerDetail {
   jira_manual_webhook?: {
     organization_id: string;
     url: string;
-    secret: string;
+    /** Present only for callers who can manage trackers. */
+    secret?: string | null;
     events: string[];
   } | null;
   /** When the stored token expires, if recorded (Bitbucket). */
@@ -1069,13 +1070,21 @@ export class TrackerDetailView extends LitElement {
     }
   }
 
-  /** Managed Jira panel: actor, site, actual expiry, state; no token fields. */
+  /** Steps for an admin when a pasted token cannot register Jira webhooks. */
   private _renderManualJiraWebhook() {
     const manual = this._tracker?.jira_manual_webhook;
-    if (!manual?.url || !manual.secret || !manual.organization_id) {
+    if (!manual?.url || !manual.organization_id) {
       return nothing;
     }
     const events = (manual.events || []).join(', ');
+    const secret = manual.secret
+      ? html`<dd class="jira-manual-webhook-secret">
+          <code>${manual.secret}</code>
+        </dd>`
+      : html`<dd class="jira-manual-webhook-secret">
+          A member who can manage trackers can read the organization webhook
+          secret and paste it into Jira.
+        </dd>`;
     return html`
       <sl-alert variant="warning" open class="jira-manual-webhook">
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
@@ -1089,9 +1098,7 @@ export class TrackerDetailView extends LitElement {
           <dt>URL</dt>
           <dd class="jira-manual-webhook-url"><code>${manual.url}</code></dd>
           <dt>Secret</dt>
-          <dd class="jira-manual-webhook-secret">
-            <code>${manual.secret}</code>
-          </dd>
+          ${secret}
           <dt>Events</dt>
           <dd class="jira-manual-webhook-events">${events}</dd>
         </dl>
@@ -1099,6 +1106,7 @@ export class TrackerDetailView extends LitElement {
     `;
   }
 
+  /** Managed Jira panel: actor, site, actual expiry, state; no token fields. */
   private _renderJiraConnection() {
     if (!this._isManagedJira()) {
       return nothing;

@@ -170,6 +170,63 @@ def _webhook_status_blocked(status_code: Any) -> bool:
     return isinstance(status_code, int) and status_code in _WEBHOOK_BLOCKED_STATUSES
 
 
+def pasted_gateway_site_detail(url: object) -> Optional[str]:
+    """Reject a pasted Atlassian API gateway URL used as a Jira site.
+
+    A scoped token is accepted at ``https://api.atlassian.com/ex/jira/<cloudId>``,
+    but that host is not a site. Storing it names the organization
+    ``api.atlassian.com`` and builds browse links on the gateway. The site
+    URL is ``https://<site>.atlassian.net``.
+
+    Args:
+        url: Candidate site URL from the tracker row or connection details.
+
+    Returns:
+        A message for the caller, or None when the value is not the gateway.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return None
+    host = (urllib.parse.urlsplit(url.strip()).hostname or "").lower()
+    if host != "api.atlassian.com":
+        return None
+    return (
+        "Paste the Jira site URL (https://<site>.atlassian.net), "
+        "not the Atlassian API gateway (https://api.atlassian.com)."
+    )
+
+
+def _webhook_id_from_registration(webhook_data: Any) -> Optional[str]:
+    """Read a webhook id from a classic or dynamic registration body.
+
+    Classic cloud returns ``self`` (and sometimes ``id``). The dynamic API
+    returns ``webhookRegistrationResult[].createdWebhookId``.
+
+    Args:
+        webhook_data: Parsed JSON body.
+
+    Returns:
+        The id as a string, or None when the body has no created webhook.
+    """
+    if not isinstance(webhook_data, dict):
+        return None
+    webhook_id = webhook_data.get("id")
+    self_url = webhook_data.get("self")
+    if not webhook_id and isinstance(self_url, str) and self_url.strip():
+        webhook_id = self_url.rstrip("/").split("/")[-1]
+    results = webhook_data.get("webhookRegistrationResult")
+    if not webhook_id and isinstance(results, list):
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            created = item.get("createdWebhookId")
+            if created is not None and str(created).strip():
+                webhook_id = created
+                break
+    if webhook_id is None or not str(webhook_id).strip():
+        return None
+    return str(webhook_id)
+
+
 def manual_webhook_record(webhook_url: str) -> Dict[str, Any]:
     """Organization callback instructions. The secret stays on the organization.
 
@@ -275,7 +332,20 @@ class JiraTracker(BaseTracker):
                     max_retries=3,
                 )
             except JIRAError as e:
-                if e.status_code == HTTP_STATUS_UNAUTHORIZED:
+                # A scoped token is rejected by the site during the library
+                # client's serverInfo call. Leave the client unset so
+                # test_connection can promote REST to the gateway. A classic
+                # token that the site accepts still builds the client here.
+                if (
+                    e.status_code == HTTP_STATUS_UNAUTHORIZED
+                    and self._site_is_atlassian_cloud()
+                ):
+                    logger.info(
+                        "Jira site rejected the API token for tracker %s; "
+                        "the gateway probe runs on the next request.",
+                        self.tracker_id,
+                    )
+                elif e.status_code == HTTP_STATUS_UNAUTHORIZED:
                     raise TrackerAuthenticationError(
                         f"Jira client authentication failed: {e.text}"
                     )
@@ -289,8 +359,15 @@ class JiraTracker(BaseTracker):
                 )
 
     def _site_host(self) -> str:
-        """Hostname of the human-facing Jira site, without a port."""
-        return (urllib.parse.urlsplit(self.jira_url).hostname or "").lower()
+        """Hostname of the human-facing Jira site, without a port.
+
+        A non-string URL (a test double, or a row that never stored one) is
+        not a cloud site. ``urlsplit`` cannot parse those values.
+        """
+        url = self.jira_url
+        if not isinstance(url, str) or not url.strip():
+            return ""
+        return (urllib.parse.urlsplit(url).hostname or "").lower()
 
     def _site_is_atlassian_cloud(self) -> bool:
         """True for ``<site>.atlassian.net``, never for the API gateway."""
@@ -2304,7 +2381,10 @@ class JiraTracker(BaseTracker):
         events: Optional[List[str]] = None,
     ) -> bool:
         """Register a webhook for the Jira project."""
-        if not self.jira_client:
+        # A scoped token never gets a site-bound library client (the site
+        # returns 401 from serverInfo). Cloud registration still posts with
+        # Basic auth and records manual setup when Jira refuses.
+        if not self.jira_client and not self._site_is_atlassian_cloud():
             return False
         if db is None or project is None or not webhook_url or not secret:
             logger.error(
@@ -2351,10 +2431,14 @@ class JiraTracker(BaseTracker):
                 f"Webhook payload (secret redacted): {webhook_payload.copy() | {'secret': '***'}}"
             )
 
-            response = self.jira_client._session.post(
-                f"{self.jira_url}/rest/webhooks/1.0/webhook",
-                json=webhook_payload,
-            )
+            classic_url = f"{self.jira_url}/rest/webhooks/1.0/webhook"
+            if self.jira_client is not None:
+                response = self.jira_client._session.post(
+                    classic_url,
+                    json=webhook_payload,
+                )
+            else:
+                response = self._post_webhook(classic_url, webhook_payload)
             if _webhook_status_blocked(response.status_code):
                 alternate = self._register_webhook_alternate(webhook_payload)
                 if alternate is None:
@@ -2376,15 +2460,9 @@ class JiraTracker(BaseTracker):
             response.raise_for_status()
             webhook_data = response.json()
 
-            # Extract webhook ID - Jira API returns it in the 'self' URL, not as an 'id' field
-            # The 'self' URL looks like: https://example.atlassian.net/rest/webhooks/1.0/webhook/123
-            webhook_id = webhook_data.get(
-                "id"
-            )  # Try id first (for tests/older API versions)
-            if not webhook_id and "self" in webhook_data:
-                # Extract from self URL (actual Jira Cloud API behavior)
-                self_url = webhook_data["self"]
-                webhook_id = self_url.split("/")[-1]
+            # Classic cloud puts the id in ``self``. The dynamic API puts it
+            # in webhookRegistrationResult[].createdWebhookId.
+            webhook_id = _webhook_id_from_registration(webhook_data)
 
             if not webhook_id:
                 logger.error(
@@ -2412,10 +2490,13 @@ class JiraTracker(BaseTracker):
                 },
             )
 
-            # Verify the webhook was actually created by fetching it back (with retries)
+            # Verify the webhook was actually created by fetching it back (with retries).
+            # A scoped token has no library session; the 2xx body is the record.
             max_retries = 3
-            verified = False
+            verified = self.jira_client is None
             for attempt in range(max_retries):
+                if self.jira_client is None:
+                    break
                 try:
                     import time
 

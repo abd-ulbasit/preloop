@@ -33997,10 +33997,12 @@ components:
           title: Url
           description: Callback URL to paste into Jira. The API token is never included.
         secret:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Secret
-          description: Organization webhook secret. Shown so an admin can paste it
-            into Jira.
+          description: Organization webhook secret. Returned only to callers who can
+            manage trackers, so a viewer cannot forge signed Jira deliveries.
         events:
           items:
             type: string
@@ -34012,7 +34014,6 @@ components:
       required:
       - organization_id
       - url
-      - secret
       - events
       title: JiraManualWebhook
       description: Steps for an admin when a pasted Jira token cannot register webhooks.

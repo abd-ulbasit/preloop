@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from preloop.api.auth.jwt import get_current_active_user
+from preloop.api.auth.permissions import has_permission
 from preloop.api.loop_safety import run_db_off_loop
 from preloop.schemas.auth import AuthUserResponse
 from preloop.schemas.tracker import (
@@ -138,8 +139,24 @@ def _merge_jira_token_details(
     return merged
 
 
-def _jira_manual_webhook(db: Session, tracker: Tracker) -> Optional[JiraManualWebhook]:
-    """Detail-only instructions, including the organization webhook secret."""
+def _reject_pasted_jira_gateway(*urls: object) -> None:
+    """Refuse a Jira site URL that is the Atlassian API gateway."""
+    from preloop.sync.trackers.jira import pasted_gateway_site_detail
+
+    for url in urls:
+        detail = pasted_gateway_site_detail(url)
+        if detail:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _jira_manual_webhook(
+    db: Session, tracker: Tracker, *, include_secret: bool
+) -> Optional[JiraManualWebhook]:
+    """Detail-only instructions for a webhook an admin must create.
+
+    The organization signing secret is included only when ``include_secret``
+    is true. Viewers still receive the callback URL and the event list.
+    """
     details = tracker.connection_details or {}
     if details.get("webhook_status") != WEBHOOK_STATUS_MANUAL_REQUIRED:
         return None
@@ -168,7 +185,7 @@ def _jira_manual_webhook(db: Session, tracker: Tracker) -> Optional[JiraManualWe
     return JiraManualWebhook(
         organization_id=str(org.id),
         url=url,
-        secret=org.webhook_secret,
+        secret=org.webhook_secret if include_secret else None,
         events=[str(event) for event in events],
     )
 
@@ -587,6 +604,13 @@ async def register_tracker(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Jira tracker requires 'username' in connection_details",
         )
+    if tracker_type == TrackerType.JIRA:
+        _reject_pasted_jira_gateway(
+            url_str,
+            (config or {}).get("url"),
+            (config or {}).get("jira_url"),
+            (config or {}).get("site_url"),
+        )
 
     # Bitbucket: reject app passwords and incomplete configs before any
     # network call. create_tracker_client swallows errors, so validate here.
@@ -1004,7 +1028,11 @@ def get_tracker(
             detail="Tracker not found or access denied",
         )
 
-    manual = _jira_manual_webhook(db, tracker)
+    manual = _jira_manual_webhook(
+        db,
+        tracker,
+        include_secret=has_permission(current_user, "manage_trackers", db),
+    )
     if manual is None:
         return tracker
     payload = TrackerResponse.model_validate(tracker)
@@ -1165,6 +1193,13 @@ async def update_tracker(
         and tracker.tracker_type == TrackerType.JIRA.value
     ):
         requested_url = update_data.get("url")
+        incoming_details = update_data.get("connection_details")
+        detail_urls: tuple[object, ...] = ()
+        if isinstance(incoming_details, dict):
+            detail_urls = tuple(
+                incoming_details.get(key) for key in ("url", "jira_url", "site_url")
+            )
+        _reject_pasted_jira_gateway(requested_url, *detail_urls)
         url_changed = requested_url is not None and str(requested_url).rstrip(
             "/"
         ) != str(tracker.url or "").rstrip("/")

@@ -13,8 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from jira import JIRAError
 
 from preloop.sync.exceptions import TrackerAuthenticationError
+from preloop.sync.trackers.factory import create_tracker_client
 from preloop.sync.trackers.jira import (
     WEBHOOK_STATUS_MANUAL_REQUIRED,
     JiraTracker,
@@ -292,3 +294,94 @@ def test_classic_webhook_still_auto_registers():
     crud_tracker.update.assert_not_called()
     tracker.jira_client._session.post.assert_called_once()
     assert tracker.webhook_status != WEBHOOK_STATUS_MANUAL_REQUIRED
+
+
+def test_library_init_keeps_a_classic_token_client():
+    """A site that accepts the token still builds the jira library client."""
+    sentinel = MagicMock()
+    with patch("preloop.sync.trackers.jira.JIRA", return_value=sentinel) as ctor:
+        tracker = JiraTracker(
+            "tracker-1",
+            TOKEN,
+            {"url": SITE, "username": EMAIL},
+            initialize_client=True,
+        )
+    assert tracker.jira_client is sentinel
+    assert ctor.call_args.kwargs["server"] == SITE
+
+
+@pytest.mark.asyncio
+async def test_site_401_during_library_init_still_reaches_the_gateway():
+    """create_tracker_client uses initialize_client=True.
+
+    The library constructor fetches serverInfo on the site. A scoped token
+    is rejected there; registration must still promote to the gateway.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        path = request.url.path
+        if host == "example-site.atlassian.net" and path == "/rest/api/2/myself":
+            return httpx.Response(401, json={"message": "client must be authenticated"})
+        if host == "example-site.atlassian.net" and path == "/_edge/tenant_info":
+            return httpx.Response(200, json={"cloudId": CLOUD_ID})
+        if (
+            host == "api.atlassian.com"
+            and path == f"/ex/jira/{CLOUD_ID}/rest/api/2/myself"
+        ):
+            return httpx.Response(200, json={"accountId": "abc", "displayName": "Ada"})
+        return httpx.Response(599, json={"host": host, "path": path})
+
+    with patch(
+        "preloop.sync.trackers.jira.JIRA",
+        side_effect=JIRAError(status_code=401, text="unauthorized"),
+    ):
+        client = await create_tracker_client(
+            "jira",
+            "tracker-1",
+            TOKEN,
+            {"url": SITE, "username": EMAIL},
+        )
+    assert isinstance(client, JiraTracker)
+    assert client.jira_client is None
+    seen = _mount(client, handler)
+    result = await client.test_connection()
+    assert result.connected is True
+    assert client.cloud_id == CLOUD_ID
+    assert client.jira_url == SITE
+    assert any(request.url.host == "api.atlassian.com" for request in seen)
+
+
+def test_dynamic_webhook_body_stores_created_webhook_id():
+    """A 2xx from /rest/api/3/webhook carries createdWebhookId, not id/self."""
+    tracker = _tracker()
+    tracker.jira_client = None
+    classic = httpx.Response(
+        401,
+        json={"message": "unauthorized"},
+        request=httpx.Request("POST", f"{SITE}/rest/webhooks/1.0/webhook"),
+    )
+    dynamic = httpx.Response(
+        200,
+        json={"webhookRegistrationResult": [{"createdWebhookId": 42}]},
+        request=httpx.Request("POST", f"{GATEWAY}/rest/api/3/webhook"),
+    )
+
+    def post(url: str, payload: dict) -> httpx.Response:
+        if url.endswith("/rest/api/3/webhook"):
+            return dynamic
+        return classic
+
+    tracker._post_webhook = post  # type: ignore[method-assign]
+    project = SimpleNamespace(id="project-1", identifier="PRJ")
+    with patch("preloop.sync.trackers.jira.crud_webhook") as crud_webhook:
+        crud_webhook.get_by_project_id.return_value = None
+        result = tracker.register_webhook(
+            db=MagicMock(),
+            project=project,
+            webhook_url="https://preloop.example.com/api/v1/private/webhooks/jira/org-1",
+            secret="org-webhook-secret",
+        )
+    assert result is True
+    stored = crud_webhook.create.call_args.kwargs["obj_in"]
+    assert stored["external_id"] == "42"

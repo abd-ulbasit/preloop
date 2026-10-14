@@ -205,9 +205,12 @@ class JiraManualWebhook(BaseModel):
         ...,
         description="Callback URL to paste into Jira. The API token is never included.",
     )
-    secret: str = Field(
-        ...,
-        description="Organization webhook secret. Shown so an admin can paste it into Jira.",
+    secret: Optional[str] = Field(
+        None,
+        description=(
+            "Organization webhook secret. Returned only to callers who can "
+            "manage trackers, so a viewer cannot forge signed Jira deliveries."
+        ),
     )
     events: List[str] = Field(
         ...,
