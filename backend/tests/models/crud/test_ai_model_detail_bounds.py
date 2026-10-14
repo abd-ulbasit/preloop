@@ -23,9 +23,12 @@ from preloop.models.crud import (
 from preloop.services.model_gateway_usage import model_detail_window
 
 ROWS = 50_000
-# Rows for a second model, in the same window. Without them every row the
-# timestamp index returns belongs to the model under test, and the planner
-# never has a reason to pick ``ix_api_usage_account_model_ts``.
+# Same model, outside the queried window. An ``ai_model_id`` index would
+# still read these. The model/time index does not.
+OLD_ROWS = 400_000
+# A second model, inside the window, with a session id. That keeps both the
+# timestamp index and ``runtime_session_id IS NOT NULL`` from being a cheap
+# stand-in for "this model's recent rows".
 OTHER_ROWS = 200_000
 SESSIONS = 40
 INDEX = "ix_api_usage_account_model_ts"
@@ -188,11 +191,11 @@ def _seed(db_session, account_id, model_id) -> None:
                 0.1,
                 'model_gateway',
                 CASE
-                    WHEN g <= :rows THEN now() - (g % 30) * interval '1 day'
-                    ELSE now() - interval '200 days'
+                    WHEN g <= :rows THEN now() - (g % 7) * interval '1 day'
+                    ELSE now() - interval '400 days'
                 END,
                 10, 1, 11, 0.0001, 'example', 'busy', now(), now()
-            FROM generate_series(1, :rows * 2) AS g
+            FROM generate_series(1, :rows + :old) AS g
             JOIN model_detail_sessions s ON s.n = (g % :sessions) + 1
             """
         ),
@@ -200,6 +203,7 @@ def _seed(db_session, account_id, model_id) -> None:
             "account": account_id,
             "model": model_id,
             "rows": ROWS,
+            "old": OLD_ROWS,
             "sessions": SESSIONS,
         },
     )
@@ -219,25 +223,46 @@ def _seed(db_session, account_id, model_id) -> None:
         ),
         {"id": other_model, "account": account_id},
     )
+    other_session = db_session.execute(text("SELECT gen_random_uuid()")).scalar()
+    db_session.execute(
+        text(
+            """
+            INSERT INTO runtime_session (
+                id, account_id, session_source_type, session_source_id,
+                started_at, created_at, updated_at
+            )
+            VALUES (
+                :id, :account, 'custom', 'other-session', now(), now(), now()
+            )
+            """
+        ),
+        {"id": other_session, "account": account_id},
+    )
     db_session.execute(
         text(
             """
             INSERT INTO api_usage (
-                id, account_id, ai_model_id, endpoint, method, status_code,
-                duration, action_type, timestamp, prompt_tokens,
-                completion_tokens, total_tokens, estimated_cost,
-                provider_name, model_alias, created_at, updated_at
+                id, account_id, ai_model_id, runtime_session_id, endpoint,
+                method, status_code, duration, action_type, timestamp,
+                prompt_tokens, completion_tokens, total_tokens,
+                estimated_cost, provider_name, model_alias,
+                created_at, updated_at
             )
             SELECT
-                gen_random_uuid(), :account, :model,
+                gen_random_uuid(), :account, :model, :session,
                 '/openai/v1/chat/completions', 'POST', 200, 0.1,
                 'model_gateway',
-                now() - (g % 30) * interval '1 day',
+                now() - (g % 7) * interval '1 day',
                 1, 1, 2, 0, 'example', 'other', now(), now()
             FROM generate_series(1, :rows) AS g
             """
         ),
-        {"account": account_id, "model": other_model, "rows": OTHER_ROWS},
+        {
+            "account": account_id,
+            "model": other_model,
+            "session": other_session,
+            "rows": OTHER_ROWS,
+        },
     )
     db_session.execute(
         text(
@@ -281,6 +306,9 @@ def _plans(db_session, statements):
     raw = connection.connection.driver_connection
     plans = []
     with raw.cursor() as cursor:
+        # A seq scan is still legal when this is off; it just becomes the
+        # plan of last resort. If the model/time index cannot serve the
+        # probe, that scan shows up and the assertion fails.
         cursor.execute("SET LOCAL enable_seqscan = off")
         for statement, parameters in statements:
             cursor.execute("EXPLAIN " + statement, parameters)
@@ -293,25 +321,22 @@ def _plans(db_session, statements):
     return plans
 
 
-def _assert_bounded(plans) -> None:
-    """No full scan, and the model/time index serves the page."""
-    saw_index = False
-    saw_limit = False
+def _assert_probes(plans, probe) -> None:
+    """The page probe uses the model/time index and does not scan the table.
+
+    A later lookup that happens to touch the index must not hide a probe
+    that walked a different one.
+    """
+    matched = [(statement, plan) for statement, plan in plans if probe(statement)]
+    assert matched, "page probe was not issued"
     for statement, plan in plans:
         assert "Seq Scan on api_usage" not in plan, plan
         assert "Seq Scan on gateway_usage_search_document" not in plan, plan
-        # A leading count is the exact total. Per-session aggregates also
-        # contain count(), and those are limited to the page.
         if statement.lower().startswith("select count("):
             raise AssertionError(f"exact count still runs:\n{statement[:400]}")
-        if INDEX in plan and "Limit" in plan:
-            saw_index = True
-            saw_limit = True
-        if " LIMIT " in f" {statement.upper()} ":
-            saw_limit = True
-    rendered = "\n\n".join(f"{sql[:300]}\n{plan}" for sql, plan in plans)
-    assert saw_index, "page probe did not use " + INDEX + "\n" + rendered
-    assert saw_limit, "page probe has no LIMIT\n" + rendered
+    for _statement, plan in matched:
+        assert INDEX in plan, plan
+        assert "Limit" in plan, plan
 
 
 def test_busy_model_lists_use_the_model_time_index(db_session):
@@ -348,7 +373,13 @@ def _assert_busy_model_lists(db_session, account_id, model_id, start, end) -> No
     assert len(interactions["items"]) == 10
     assert interactions["has_more"] is True
     assert interactions["total"] is None
-    _assert_bounded(_plans(db_session, interaction_sql))
+    _assert_probes(
+        _plans(db_session, interaction_sql),
+        lambda statement: (
+            statement.lower().startswith("select api_usage.id ")
+            and "order by" in statement.lower()
+        ),
+    )
 
     sessions, session_sql = _capture(
         db_session,
@@ -365,4 +396,10 @@ def _assert_busy_model_lists(db_session, account_id, model_id, start, end) -> No
     assert len(sessions["items"]) == 10
     assert sessions["has_more"] is True
     assert sessions["total"] is None
-    _assert_bounded(_plans(db_session, session_sql))
+    _assert_probes(
+        _plans(db_session, session_sql),
+        lambda statement: (
+            "max(api_usage.timestamp)" in statement.lower()
+            and " join " not in statement.lower()
+        ),
+    )
