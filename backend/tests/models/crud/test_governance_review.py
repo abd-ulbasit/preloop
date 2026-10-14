@@ -2,6 +2,10 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import os
+import subprocess
+import sys
+import textwrap
 from threading import Barrier
 from typing import Any
 from uuid import UUID, uuid4
@@ -208,6 +212,34 @@ def test_get_or_default_uses_own_model_when_self_hosted_model_is_configured(
     )
 
     assert row.mode == "on_own_model"
+
+
+def test_importing_governance_review_crud_does_not_import_httpx() -> None:
+    """A worker that only loads the CRUD package must not import the HTTP client.
+
+    ``preloop.models.crud`` imports this module. ``instance_service`` imports
+    ``httpx`` at module level, so a top-level import of that service here would
+    pull the client into every process that registers a stored spend source.
+    """
+    script = textwrap.dedent(
+        """
+        import sys
+        import preloop.models.crud.governance_review
+        assert "httpx" not in sys.modules
+        assert "preloop.services.instance_service" not in sys.modules
+        print("ok")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "PRELOOP_DISABLE_TELEMETRY": "true"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().endswith("ok")
 
 
 def test_set_mode_persists_and_overrides_the_default(

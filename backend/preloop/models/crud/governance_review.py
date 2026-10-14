@@ -17,7 +17,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from preloop.models.models import governance_review as gov
-from preloop.services.instance_service import is_hosted_instance
 
 from .base import CRUDBase
 
@@ -43,7 +42,12 @@ def deployment_mode() -> Literal["cloud", "self-hosted"]:
     """Return ``cloud`` on the hosted service and ``self-hosted`` everywhere else.
 
     Hosted is ``PRELOOP_HOSTED``, the same switch ``instance_service`` uses.
+    The import stays inside this function. ``instance_service`` imports
+    ``httpx`` at module level, and this module is loaded by every worker
+    that imports ``preloop.models.crud``.
     """
+    from preloop.services.instance_service import is_hosted_instance
+
     if is_hosted_instance():
         return "cloud"
     return "self-hosted"
