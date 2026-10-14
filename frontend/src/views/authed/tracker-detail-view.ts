@@ -78,6 +78,16 @@ interface TrackerDetail {
   url?: string;
   auth_type?: string;
   connection_details?: Record<string, any> | null;
+  /**
+   * Present when a pasted Jira token cannot register webhooks. The secret
+   * is the organization webhook secret, not the API token.
+   */
+  jira_manual_webhook?: {
+    organization_id: string;
+    url: string;
+    secret: string;
+    events: string[];
+  } | null;
   /** When the stored token expires, if recorded (Bitbucket). */
   token_expires_at?: string | null;
   /** 'expired', 'expiring' (within 14 days), 'ok', or null when unknown. */
@@ -230,6 +240,10 @@ export class TrackerDetailView extends LitElement {
 
         .managed-connection-panel {
           margin: 0 0 var(--sl-spacing-large) 0;
+        }
+
+        .jira-manual-webhook code {
+          word-break: break-all;
         }
 
         .managed-connection-facts {
@@ -1056,6 +1070,35 @@ export class TrackerDetailView extends LitElement {
   }
 
   /** Managed Jira panel: actor, site, actual expiry, state; no token fields. */
+  private _renderManualJiraWebhook() {
+    const manual = this._tracker?.jira_manual_webhook;
+    if (!manual?.url || !manual.secret || !manual.organization_id) {
+      return nothing;
+    }
+    const events = (manual.events || []).join(', ');
+    return html`
+      <sl-alert variant="warning" open class="jira-manual-webhook">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>Register the Jira webhook manually</strong>
+        <p>
+          This API token cannot register webhooks. In Jira, open
+          <strong>Jira admin &gt; System &gt; WebHooks</strong> and create a
+          webhook with the callback, secret and events below.
+        </p>
+        <dl class="managed-connection-facts">
+          <dt>URL</dt>
+          <dd class="jira-manual-webhook-url"><code>${manual.url}</code></dd>
+          <dt>Secret</dt>
+          <dd class="jira-manual-webhook-secret">
+            <code>${manual.secret}</code>
+          </dd>
+          <dt>Events</dt>
+          <dd class="jira-manual-webhook-events">${events}</dd>
+        </dl>
+      </sl-alert>
+    `;
+  }
+
   private _renderJiraConnection() {
     if (!this._isManagedJira()) {
       return nothing;
@@ -2179,6 +2222,7 @@ export class TrackerDetailView extends LitElement {
           </div>
 
           ${this._renderManagedConnection()} ${this._renderJiraConnection()}
+          ${this._renderManualJiraWebhook()}
 
           <p class="scope-summary">
             <strong>Scope:</strong> ${this._describeScope()}

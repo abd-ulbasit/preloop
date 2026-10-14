@@ -685,6 +685,48 @@ async def test_process_organization_jira(
 @pytest.mark.asyncio
 @patch("preloop.sync.scanner.core.crud_organization")
 @patch("os.getenv")
+async def test_process_organization_jira_manual_webhook_is_not_an_error(
+    mock_getenv,
+    mock_crud_org,
+    mock_db_session,
+    mock_organization,
+    mock_project,
+):
+    """A scoped token that cannot register webhooks does not fail the scan."""
+    mock_getenv.return_value = "http://test.com"
+    mock_client = AsyncMock(spec=TrackerClient)
+    mock_client.client = MagicMock()
+    mock_client.client.managed = False
+    mock_client.client.webhook_status = None
+    mock_client.client.is_webhook_registered_for_project.return_value = False
+
+    def register(**kwargs):
+        mock_client.client.webhook_status = "manual_required"
+        return False
+
+    mock_client.client.register_webhook.side_effect = register
+    second = MagicMock(spec=Project)
+    second.identifier = "other-project"
+    mock_client.scan_projects.return_value = [mock_project, second]
+    mock_client.scan_issues.return_value = ([], 0)
+    mock_client.tracker_type = "jira"
+
+    stats = await _process_organization(
+        db=mock_db_session,
+        client=mock_client,
+        org=mock_organization,
+        since=None,
+        force_update=False,
+    )
+
+    assert mock_client.client.register_webhook.call_count == 1
+    assert stats["organizations"]["errors"] == 0
+    assert stats["projects"] == 2
+
+
+@pytest.mark.asyncio
+@patch("preloop.sync.scanner.core.crud_organization")
+@patch("os.getenv")
 async def test_process_organization_managed_jira_uses_dynamic_webhook(
     mock_getenv,
     mock_crud_org,

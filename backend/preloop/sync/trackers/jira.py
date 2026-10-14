@@ -15,7 +15,12 @@ from jira import JIRA, JIRAError
 from sqlalchemy.orm import Session
 
 from preloop.schemas.readiness import TicketCreationEvidence
-from preloop.models.crud import crud_webhook, crud_organization, crud_project
+from preloop.models.crud import (
+    crud_organization,
+    crud_project,
+    crud_tracker,
+    crud_webhook,
+)
 from preloop.services.issue_estimate import synced_estimate_fields
 from preloop.schemas.tracker_models import (
     Issue,
@@ -79,6 +84,21 @@ DYNAMIC_WEBHOOK_EVENTS = (
     "comment_created",
     "comment_updated",
 )
+# A scoped API token cannot call the dynamic webhook API. Manual setup uses
+# the issue and comment events flows actually consume.
+MANUAL_JIRA_WEBHOOK_EVENTS = (
+    "jira:issue_created",
+    "jira:issue_updated",
+    "comment_created",
+    "comment_updated",
+)
+WEBHOOK_STATUS_MANUAL_REQUIRED = "manual_required"
+_WEBHOOK_BLOCKED_STATUSES = frozenset({401, 403})
+# One label under atlassian.net. The gateway host is api.atlassian.com and
+# must not match, so a pasted gateway URL is not treated as a site.
+_ATLASSIAN_CLOUD_HOST_RE = re.compile(
+    r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$"
+)
 
 
 def _safe_error_text(response: httpx.Response, limit: int = 300) -> str:
@@ -141,6 +161,34 @@ DEFAULT_JIRA_WEBHOOK_EVENTS = [
 ]
 
 
+def _webhook_status_blocked(status_code: Any) -> bool:
+    """True only for a real 401 or 403.
+
+    A ``MagicMock`` status compares equal to everything, so the check has to
+    require an int. Otherwise a test double would look like a refused webhook.
+    """
+    return isinstance(status_code, int) and status_code in _WEBHOOK_BLOCKED_STATUSES
+
+
+def manual_webhook_record(webhook_url: str) -> Dict[str, Any]:
+    """Organization callback instructions. The secret stays on the organization.
+
+    Args:
+        webhook_url: Callback passed into registration, before any project query.
+
+    Returns:
+        ``organization_id``, a query-free ``url``, and the events to select.
+    """
+    parsed = urllib.parse.urlsplit(webhook_url)
+    clean = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    organization_id = parsed.path.rstrip("/").split("/")[-1]
+    return {
+        "organization_id": organization_id,
+        "url": clean,
+        "events": list(MANUAL_JIRA_WEBHOOK_EVENTS),
+    }
+
+
 class JiraTracker(BaseTracker):
     """Jira tracker implementation."""
 
@@ -163,8 +211,10 @@ class JiraTracker(BaseTracker):
             tracker_id: Tracker id.
             api_key: Atlassian API token for Basic auth; empty when managed.
             connection_details: ``url``/``jira_url`` and ``username`` for
-                Basic auth. A managed grant (``auth_type: managed_oauth``)
-                carries ``cloud_id`` and ``site_url`` instead.
+                Basic auth. A scoped token also stores ``cloud_id`` after
+                the site returns 401; links keep using the site URL. A
+                managed grant (``auth_type: managed_oauth``) carries
+                ``cloud_id`` and ``site_url`` instead.
             initialize_client: Build the ``jira`` client (Basic auth only).
             credential_source: Managed grants only: async callable returning
                 a fresh ``ManagedCredential`` before every request.
@@ -177,6 +227,10 @@ class JiraTracker(BaseTracker):
         self._credential_source = credential_source
         self._last_credential: Optional[ManagedCredential] = None
         self.cloud_id: Optional[str] = None
+        self._scoped_gateway = False
+        self._gateway_probe_done = False
+        self._cloud_id_from_config = False
+        self.webhook_status: Optional[str] = None
 
         jira_url = (
             (
@@ -199,9 +253,10 @@ class JiraTracker(BaseTracker):
 
         self.jira_url = jira_url.rstrip("/")
         self.base_url = self.jira_url  # Alias for compatibility
-        # Basic-auth trackers call the site directly, exactly as before.
-        self.api_root = self.jira_url
         self.username = connection_details.get("username", "")
+        # Classic tokens call the site. A stored cloud_id means a previous
+        # 401 already proved this token only works on the gateway.
+        self._configure_basic_origin(connection_details)
 
         auth_str = f"{self.username}:{api_key}"
         encoded_auth = base64.b64encode(auth_str.encode()).decode()
@@ -233,6 +288,154 @@ class JiraTracker(BaseTracker):
                     f"Unexpected error initializing Jira client: {str(e)}"
                 )
 
+    def _site_host(self) -> str:
+        """Hostname of the human-facing Jira site, without a port."""
+        return (urllib.parse.urlsplit(self.jira_url).hostname or "").lower()
+
+    def _site_is_atlassian_cloud(self) -> bool:
+        """True for ``<site>.atlassian.net``, never for the API gateway."""
+        return _ATLASSIAN_CLOUD_HOST_RE.fullmatch(self._site_host()) is not None
+
+    def _configure_basic_origin(self, connection_details: Dict[str, Any]) -> None:
+        """Point REST at the gateway when a scoped token's cloud_id is stored.
+
+        The site URL stays on ``jira_url`` / ``base_url`` for names and links.
+        """
+        stored = str(connection_details.get("cloud_id") or "").strip()
+        status = connection_details.get("webhook_status")
+        if status == WEBHOOK_STATUS_MANUAL_REQUIRED:
+            self.webhook_status = status
+        if self._site_is_atlassian_cloud() and _CLOUD_ID_RE.fullmatch(stored):
+            self.cloud_id = stored
+            self.api_root = f"{ATLASSIAN_API_GATEWAY}/ex/jira/{stored}"
+            self._scoped_gateway = True
+            self._cloud_id_from_config = True
+            self._gateway_probe_done = True
+            return
+        self.api_root = self.jira_url
+        self._scoped_gateway = False
+
+    def _remember_cloud_id(self) -> None:
+        """Keep the resolved cloud id on the client, never the token."""
+        if not self._scoped_gateway or not self.cloud_id:
+            return
+        if isinstance(self.connection_details, dict):
+            self.connection_details["cloud_id"] = self.cloud_id
+            self.connection_details.pop("api_key", None)
+            self.connection_details.pop("token", None)
+
+    def _rollback_promoted_gateway(self) -> None:
+        """Drop a cloud id learned during this call when the gateway rejects it."""
+        if self._cloud_id_from_config:
+            return
+        self.cloud_id = None
+        self._scoped_gateway = False
+        self.api_root = self.jira_url
+        if isinstance(self.connection_details, dict):
+            self.connection_details.pop("cloud_id", None)
+
+    def _basic_client_kwargs(self) -> Dict[str, Any]:
+        """httpx options for a Basic-auth call. Gateway calls are pinned."""
+        kwargs: Dict[str, Any] = {"follow_redirects": False}
+        if self._scoped_gateway:
+            kwargs["timeout"] = MANAGED_HTTP_TIMEOUT_SECONDS
+        if self._transport is not None:
+            kwargs["transport"] = self._transport
+        return kwargs
+
+    def _refuse_token_in_url(self, url: str) -> None:
+        """A pasted token must never be written into a request URL."""
+        if self.api_key and self.api_key in url:
+            raise TrackerConnectionError("Refusing to place a Jira token in a URL.")
+
+    async def _send_basic(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]],
+        json_data: Optional[Dict[str, Any]],
+        api_version: str,
+    ) -> httpx.Response:
+        """One Basic-auth REST call against the current API origin."""
+        url = f"{self.api_root}/rest/api/{api_version}/{endpoint.lstrip('/')}"
+        self._refuse_token_in_url(url)
+        async with httpx.AsyncClient(**self._basic_client_kwargs()) as client:
+            return await client.request(
+                method.upper(),
+                url,
+                headers=self.headers,
+                params=params,
+                json=json_data,
+            )
+
+    async def _read_tenant_cloud_id(self) -> Optional[str]:
+        """Read ``cloudId`` from the site edge. The token is not sent."""
+        url = f"{self.jira_url}/_edge/tenant_info"
+        self._refuse_token_in_url(url)
+        kwargs = self._basic_client_kwargs()
+        # tenant_info is public. Do not attach the Basic header, and do not
+        # follow a redirect that could carry a later retry somewhere else.
+        kwargs.pop("timeout", None)
+        async with httpx.AsyncClient(**kwargs) as client:
+            response = await client.get(url, headers={"Accept": "application/json"})
+        if response.status_code != 200:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        cloud_id = str(payload.get("cloudId") or "").strip()
+        if not _CLOUD_ID_RE.fullmatch(cloud_id):
+            return None
+        return cloud_id
+
+    async def _promote_scoped_gateway(self) -> bool:
+        """Switch REST to the gateway after the site rejects a scoped token."""
+        try:
+            cloud_id = await self._read_tenant_cloud_id()
+        except httpx.RequestError:
+            logger.info(
+                "Could not read Atlassian tenant info for tracker %s", self.tracker_id
+            )
+            return False
+        if not cloud_id:
+            return False
+        self.cloud_id = cloud_id
+        self.api_root = f"{ATLASSIAN_API_GATEWAY}/ex/jira/{cloud_id}"
+        self._scoped_gateway = True
+        logger.info(
+            "Jira tracker %s is using the Atlassian API gateway for cloud %s",
+            self.tracker_id,
+            cloud_id,
+        )
+        return True
+
+    def _interpret_basic_response(self, response: httpx.Response) -> Any:
+        """Turn a Basic-auth response into a body or a typed tracker error."""
+        status_code = response.status_code
+        if self._scoped_gateway and 300 <= status_code < 400:
+            raise TrackerResponseError(
+                "Refusing to follow a Jira redirect with an API token."
+            )
+        if status_code == HTTP_STATUS_UNAUTHORIZED:
+            raise TrackerAuthenticationError("Jira authentication failed")
+        if HTTP_SUCCESS_MIN <= status_code <= HTTP_SUCCESS_MAX:
+            self._remember_cloud_id()
+            if status_code == HTTP_STATUS_NO_CONTENT or not response.content:
+                return None
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
+        body = (
+            _safe_error_text(response)
+            if self._scoped_gateway
+            else (response.text or "")
+        )
+        raise TrackerResponseError(f"Jira API error: {status_code} - {body}")
+
     async def _make_request(
         self,
         method: str,
@@ -250,35 +453,39 @@ class JiraTracker(BaseTracker):
                 json_data=json_data,
                 api_version=api_version,
             )
-        async with httpx.AsyncClient() as client:
-            try:
-                url = f"{self.jira_url}/rest/api/{api_version}/{endpoint.lstrip('/')}"
-                response = await client.request(
-                    method.upper(),
-                    url,
-                    headers=self.headers,
-                    params=params,
-                    json=json_data,
-                )
+        try:
+            response = await self._send_basic(
+                method, endpoint, params, json_data, api_version
+            )
+        except httpx.RequestError as e:
+            raise TrackerConnectionError(f"Jira connection error: {str(e)}") from e
 
-                if response.status_code == HTTP_STATUS_UNAUTHORIZED:
-                    raise TrackerAuthenticationError("Jira authentication failed")
+        promoted = False
+        if (
+            response.status_code == HTTP_STATUS_UNAUTHORIZED
+            and not self._scoped_gateway
+            and not self._gateway_probe_done
+            and self._site_is_atlassian_cloud()
+        ):
+            self._gateway_probe_done = True
+            promoted = await self._promote_scoped_gateway()
+            if promoted:
+                try:
+                    response = await self._send_basic(
+                        method, endpoint, params, json_data, api_version
+                    )
+                except httpx.RequestError as e:
+                    self._rollback_promoted_gateway()
+                    raise TrackerConnectionError(
+                        f"Jira connection error: {str(e)}"
+                    ) from e
+                if not (HTTP_SUCCESS_MIN <= response.status_code <= HTTP_SUCCESS_MAX):
+                    try:
+                        return self._interpret_basic_response(response)
+                    finally:
+                        self._rollback_promoted_gateway()
 
-                if HTTP_SUCCESS_MIN <= response.status_code <= HTTP_SUCCESS_MAX:
-                    if response.status_code == HTTP_STATUS_NO_CONTENT:
-                        return None
-                    if response.content:
-                        try:
-                            return response.json()
-                        except ValueError:
-                            return response.text
-                    return None
-
-                raise TrackerResponseError(
-                    f"Jira API error: {response.status_code} - {response.text}"
-                )
-            except httpx.RequestError as e:
-                raise TrackerConnectionError(f"Jira connection error: {str(e)}")
+        return self._interpret_basic_response(response)
 
     # ------------------------------------------------------------------
     # Managed (Atlassian OAuth 2.0 3LO) transport
@@ -2010,6 +2217,84 @@ class JiraTracker(BaseTracker):
                 continue
         return dependencies
 
+    def _post_webhook(self, url: str, payload: Dict[str, Any]) -> httpx.Response:
+        """POST a webhook body with Basic auth. Redirects are not followed."""
+        self._refuse_token_in_url(url)
+        headers = {
+            "Authorization": self.headers.get("Authorization", ""),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        with httpx.Client(**self._basic_client_kwargs()) as client:
+            return client.post(url, headers=headers, json=payload)
+
+    def _register_webhook_alternate(
+        self, payload: Dict[str, Any]
+    ) -> Optional[httpx.Response]:
+        """Try the other host and the dynamic webhook API.
+
+        Returns:
+            A response that is not 401 or 403, or None when every attempt is
+            blocked. A redirect is refused instead of followed.
+        """
+        site = self.jira_url.rstrip("/")
+        gateway = self.api_root.rstrip("/")
+        if gateway != site:
+            classic = self._post_webhook(
+                f"{gateway}/rest/webhooks/1.0/webhook", payload
+            )
+            if _webhook_status_blocked(classic.status_code):
+                pass
+            elif (
+                isinstance(classic.status_code, int)
+                and 300 <= classic.status_code < 400
+            ):
+                raise TrackerResponseError(
+                    "Refusing to follow a Jira redirect with an API token."
+                )
+            else:
+                return classic
+        dynamic = {
+            "url": payload.get("url"),
+            "webhooks": [
+                {
+                    "events": list(
+                        payload.get("events") or DEFAULT_JIRA_WEBHOOK_EVENTS
+                    ),
+                    "jqlFilter": payload.get("jqlFilter") or "",
+                }
+            ],
+        }
+        response = self._post_webhook(f"{gateway}/rest/api/3/webhook", dynamic)
+        if _webhook_status_blocked(response.status_code):
+            return None
+        if isinstance(response.status_code, int) and 300 <= response.status_code < 400:
+            raise TrackerResponseError(
+                "Refusing to follow a Jira redirect with an API token."
+            )
+        return response
+
+    def _record_manual_webhook(self, db: Optional[Session], webhook_url: str) -> None:
+        """Remember that an admin has to create the webhook. Do not store the token."""
+        instructions = manual_webhook_record(webhook_url)
+        self.webhook_status = WEBHOOK_STATUS_MANUAL_REQUIRED
+        if isinstance(self.connection_details, dict):
+            self.connection_details["webhook_status"] = WEBHOOK_STATUS_MANUAL_REQUIRED
+            self.connection_details["manual_webhook"] = instructions
+            self.connection_details.pop("api_key", None)
+            self.connection_details.pop("token", None)
+        if db is None:
+            return
+        row = crud_tracker.get(db, id=self.tracker_id)
+        if row is None:
+            return
+        details = dict(row.connection_details or {})
+        details["webhook_status"] = WEBHOOK_STATUS_MANUAL_REQUIRED
+        details["manual_webhook"] = instructions
+        details.pop("api_key", None)
+        details.pop("token", None)
+        crud_tracker.update(db, db_obj=row, obj_in={"connection_details": details})
+
     def register_webhook(
         self,
         db: Optional[Session] = None,
@@ -2070,6 +2355,17 @@ class JiraTracker(BaseTracker):
                 f"{self.jira_url}/rest/webhooks/1.0/webhook",
                 json=webhook_payload,
             )
+            if _webhook_status_blocked(response.status_code):
+                alternate = self._register_webhook_alternate(webhook_payload)
+                if alternate is None:
+                    self._record_manual_webhook(db, webhook_url)
+                    logger.info(
+                        "Jira webhook registration is unavailable for tracker %s; "
+                        "manual setup is required.",
+                        self.tracker_id,
+                    )
+                    return False
+                response = alternate
 
             # Log the response details for debugging
             logger.info(

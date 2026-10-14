@@ -8,8 +8,8 @@ remote links back to the issue.
 |---|---|---|
 | Editions | Enterprise (managed-provider plugin `jira_oauth`) | All |
 | Credential | Atlassian OAuth 2.0 (3LO) grant, renewed automatically | Atlassian account email plus API token |
-| API origin | `https://api.atlassian.com/ex/jira/<cloudId>` | `https://<site>.atlassian.net` |
-| Webhooks | Dynamic webhooks, refreshed automatically | Classic webhook with an HMAC secret |
+| API origin | `https://api.atlassian.com/ex/jira/<cloudId>` | Site URL for a classic token. Gateway for a scoped token. Links stay on the site. |
+| Webhooks | Dynamic webhooks, refreshed automatically | Classic webhook, or manual setup when the token cannot register one |
 | `auth_type` | `managed_oauth` | `api_token` |
 
 ## Connect Jira (`auth_type: managed_oauth`)
@@ -77,6 +77,21 @@ operator notes in the plugin README.
 Expand **Use an API token instead** (or use the form directly when the
 managed provider is not configured): site URL, Atlassian account email and an
 API token from <https://id.atlassian.com/manage-profile/security/api-tokens>.
-This path is unchanged and is not renewed automatically. Scoped API tokens do
-not work against the site URL and cannot register webhooks; use a classic
-token or Connect Jira.
+This path is not renewed automatically.
+
+A classic token (no scopes) calls `https://<site>.atlassian.net` directly.
+A scoped token is rejected there with 401. Preloop then reads
+`https://<site>/_edge/tenant_info` for the site `cloudId` and sends REST
+calls to `https://api.atlassian.com/ex/jira/<cloudId>`, with redirects
+disabled. The site URL stays the tracker URL: the organization name and
+every browse or comment link use `https://<site>.atlassian.net`, and
+`cloud_id` is stored in `connection_details`. The token is never written
+into a URL or an error message.
+
+Scoped tokens cannot register webhooks. The classic webhook API returns 401
+and the dynamic webhook API returns 403. The tracker still connects. The
+tracker page shows the manual steps: Jira admin > System > WebHooks, the
+callback `<PRELOOP_URL>/api/v1/private/webhooks/jira/<organization id>`, the
+organization webhook secret, and the events issue created, issue updated,
+comment created and comment updated. A classic token still registers the
+webhook itself.

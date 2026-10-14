@@ -195,6 +195,26 @@ class TrackerUpdate(BaseModel):
         return merged
 
 
+class JiraManualWebhook(BaseModel):
+    """Steps for an admin when a pasted Jira token cannot register webhooks."""
+
+    organization_id: str = Field(
+        ..., description="Organization the callback belongs to"
+    )
+    url: str = Field(
+        ...,
+        description="Callback URL to paste into Jira. The API token is never included.",
+    )
+    secret: str = Field(
+        ...,
+        description="Organization webhook secret. Shown so an admin can paste it into Jira.",
+    )
+    events: List[str] = Field(
+        ...,
+        description="Jira webhook events to enable: issue created/updated and comment events.",
+    )
+
+
 class TrackerResponse(TrackerBase):
     """Response model for tracker data (excluding sensitive info like api_key)."""
 
@@ -227,6 +247,13 @@ class TrackerResponse(TrackerBase):
     github_installation_target_login: Optional[str] = Field(
         None,
         description="Login of the account the bound installation targets (OAuth auth types only)",
+    )
+    jira_manual_webhook: Optional[JiraManualWebhook] = Field(
+        None,
+        description=(
+            "Populated on the tracker detail when a Jira API token cannot "
+            "register webhooks. Null on list responses and for every other tracker."
+        ),
     )
 
     model_config = {"from_attributes": True}

@@ -569,6 +569,19 @@ class TrackerClient:
         return issues_processed, embedding_updates
 
 
+def _scan_client_tracker_id(client: Any) -> Any:
+    """Tracker id when the client has one.
+
+    Spec mocks raise ``AttributeError`` for attributes they were not given,
+    so this reads the instance dict instead of touching a missing attribute.
+    """
+    details = getattr(client, "__dict__", None)
+    tracker = details.get("tracker") if isinstance(details, dict) else None
+    if tracker is None:
+        return None
+    return getattr(tracker, "id", None)
+
+
 async def _process_organization(
     db: Session,
     client: TrackerClient,
@@ -630,36 +643,62 @@ async def _process_organization(
                     )
                     org_stats["organizations"]["errors"] += 1
             elif client.tracker_type == "jira":
-                logger.info(
-                    f"Checking webhook registration for {len(projects)} Jira projects"
-                )
-                for project in projects:
-                    try:
-                        is_registered = client.client.is_webhook_registered_for_project(
-                            project, webhook_target_url
-                        )
-                        logger.info(
-                            f"Webhook for project {project.identifier} registered: {is_registered}"
-                        )
-                        if not is_registered:
-                            logger.info(
-                                f"Registering webhook for project {project.identifier}"
-                            )
-                            result = client.client.register_webhook(
-                                db=db,
-                                project=project,
-                                webhook_url=webhook_target_url,
-                                secret=current_secret_to_use,
+                if getattr(client.client, "webhook_status", None) == "manual_required":
+                    logger.info(
+                        "Jira webhook for tracker %s must be registered manually.",
+                        _scan_client_tracker_id(client),
+                    )
+                else:
+                    logger.info(
+                        "Checking webhook registration for %s Jira projects",
+                        len(projects),
+                    )
+                    for project in projects:
+                        try:
+                            is_registered = (
+                                client.client.is_webhook_registered_for_project(
+                                    project, webhook_target_url
+                                )
                             )
                             logger.info(
-                                f"Webhook registration result for {project.identifier}: {result}"
+                                "Webhook for project %s registered: %s",
+                                project.identifier,
+                                is_registered,
                             )
-                    except Exception as e:
-                        logger.error(
-                            f"Error registering webhook for Jira project {project.identifier}: {e}",
-                            exc_info=True,
-                        )
-                        org_stats["organizations"]["errors"] += 1
+                            if not is_registered:
+                                logger.info(
+                                    "Registering webhook for project %s",
+                                    project.identifier,
+                                )
+                                result = client.client.register_webhook(
+                                    db=db,
+                                    project=project,
+                                    webhook_url=webhook_target_url,
+                                    secret=current_secret_to_use,
+                                )
+                                logger.info(
+                                    "Webhook registration result for %s: %s",
+                                    project.identifier,
+                                    result,
+                                )
+                                if (
+                                    getattr(client.client, "webhook_status", None)
+                                    == "manual_required"
+                                ):
+                                    logger.info(
+                                        "Jira webhook for tracker %s must be "
+                                        "registered manually.",
+                                        _scan_client_tracker_id(client),
+                                    )
+                                    break
+                        except Exception as e:
+                            logger.error(
+                                "Error registering webhook for Jira project %s: %s",
+                                project.identifier,
+                                e,
+                                exc_info=True,
+                            )
+                            org_stats["organizations"]["errors"] += 1
             elif client.tracker_type == "github":
                 try:
                     if not await client.client.is_webhook_registered_for_organization(
