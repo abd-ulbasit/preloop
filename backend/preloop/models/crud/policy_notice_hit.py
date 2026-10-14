@@ -14,6 +14,7 @@ from ..models.permission import Permission, Role, RolePermission, TeamRole, User
 from ..models.policy_notice_hit import (
     POLICY_NOTICE_ACTIONS,
     POLICY_NOTICE_EXCERPT_MAX_CHARS,
+    POLICY_NOTICE_SUMMARY_LIMIT,
     PolicyNoticeHit,
 )
 from ..models.team import Team, TeamMembership
@@ -131,7 +132,9 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
             excerpt: Redacted excerpt, or None when redaction failed.
             now: Hit time. Set from the application clock rather than the
                 transaction's ``now()`` so hits order by when they happened.
-            action: ``notify``, ``deny``, ``require_approval`` or ``redact``.
+            action: ``notify``, ``deny``, or ``require_approval``. ``redact``
+                stays in :data:`POLICY_NOTICE_ACTIONS` so the column can
+                accept it later. No caller inserts it.
             model_alias: Gateway model alias, when known.
             agent_ref: Runtime principal, when known.
             runtime_session_id: Runtime session the call belonged to.
@@ -222,7 +225,7 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         account_id: Any,
         since: datetime,
         until: Optional[datetime] = None,
-        limit: int = 100,
+        limit: int = POLICY_NOTICE_SUMMARY_LIMIT,
         actions: Optional[Sequence[str]] = None,
     ) -> List[PolicyNoticeRuleSummary]:
         """Per-rule hit counts in ``[since, until)``, newest rule activity first.
@@ -244,7 +247,8 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
             since: Inclusive window start (aware or naive UTC).
             until: Exclusive window end (aware or naive UTC), or None for no
                 upper bound.
-            limit: Maximum number of rules returned.
+            limit: Maximum number of rules returned. The summary route uses
+                :data:`POLICY_NOTICE_SUMMARY_LIMIT`.
             actions: When set, only hits with one of these actions.
 
         Returns:
@@ -321,21 +325,25 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         account_id: Any,
         since: datetime,
         until: Optional[datetime] = None,
-        limit: int = 100,
+        limit: int = POLICY_NOTICE_SUMMARY_LIMIT,
         actions: Optional[Sequence[str]] = None,
     ) -> List[PolicyNoticeUserSummary]:
         """Per-developer hit counts in ``[since, until)``.
 
-        A hit with no user is its own bucket, so the counts still add up to
-        the rule totals for the same window and action filter. The username
-        is joined within the summarised account.
+        A hit with no user is its own bucket. The counts add up to the rule
+        totals for the same window and action filter only when neither this
+        list nor the rule list is cut off at ``limit`` (default
+        :data:`POLICY_NOTICE_SUMMARY_LIMIT`). The two caps are independent,
+        so past that limit the returned sums can diverge. The username is
+        joined within the summarised account.
 
         Args:
             db: Database session.
             account_id: Account to summarise.
             since: Inclusive window start.
             until: Exclusive window end, or None.
-            limit: Maximum number of developers returned.
+            limit: Maximum number of developers returned. The summary route
+                uses :data:`POLICY_NOTICE_SUMMARY_LIMIT`.
             actions: When set, only hits with one of these actions.
 
         Returns:
@@ -404,7 +412,7 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         since: datetime,
         until: Optional[datetime] = None,
         column: str,
-        limit: int = 100,
+        limit: int = POLICY_NOTICE_SUMMARY_LIMIT,
         actions: Optional[Sequence[str]] = None,
     ) -> List[PolicyNoticeBreakdown]:
         """Counts grouped by ``model_alias`` or ``agent_ref``.

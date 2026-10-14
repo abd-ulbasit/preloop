@@ -130,11 +130,17 @@ def audit_row_id(details: Optional[Dict[str, Any]]) -> UUID:
     A policy match records the same id on ``policy_notice_hit.audit_event_id``
     and in ``details['audit_event_id']`` before the audit plugin writes the
     row. Using that value as the row id makes the two point at each other
-    without the plugin having to learn a new argument. Any other value, or
-    a missing one, falls back to a fresh id.
+    without the plugin having to learn a new argument.
+
+    The EE audit plugin builds that payload with ``tool_args`` nested under
+    ``details['tool_args']``, then ``details.update(extra_details)``.
+    ``audit_event_id`` therefore has to be a top-level key. A nested
+    ``details['extra_details']`` object is ignored. Any other value, or a
+    missing one, falls back to a fresh id.
 
     Args:
-        details: Audit details payload, possibly carrying ``audit_event_id``.
+        details: Audit details payload. ``audit_event_id`` is read only from
+            the top level, which is where the plugin places ``extra_details``.
 
     Returns:
         The id the row should be inserted with.

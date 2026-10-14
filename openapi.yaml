@@ -17892,11 +17892,17 @@ paths:
 
         The default ``group_by=rule`` list is notify hits, which is what the
 
-        Attention page renders. ``group_by=user`` is the per-developer summary:
+        Attention page renders. ``group_by=user`` is the per-developer summary.
 
-        its user counts add up to its rule counts. Model and agent breakdowns
+        Rule and user lists are each capped at 100. Within that cap, user
 
-        count every stored action either way.'
+        counts add up to rule counts. Past it the two lists are truncated
+
+        independently and the sums can diverge. Model and agent breakdowns
+
+        count every stored action either way, and each of those lists uses
+
+        the same cap.'
       operationId: get_policy_notice_summary_api_v1_policies_notices_summary_get
       security:
       - bearerAuth: []
@@ -17922,13 +17928,13 @@ paths:
           - action
           type: string
           description: rule keeps the Attention list to notify hits. user and action
-            include deny and require_approval hits, and per-user counts sum to the
-            rule totals.
+            include deny and require_approval hits. Rule and user lists are each capped
+            at 100. Within that cap, per-user counts sum to the rule totals.
           default: rule
           title: Group By
         description: rule keeps the Attention list to notify hits. user and action
-          include deny and require_approval hits, and per-user counts sum to the rule
-          totals.
+          include deny and require_approval hits. Rule and user lists are each capped
+          at 100. Within that cap, per-user counts sum to the rule totals.
       responses:
         '200':
           description: Successful Response
@@ -37207,7 +37213,8 @@ components:
         action:
           type: string
           title: Action
-          description: notify, deny, require_approval, or redact
+          description: 'Stored action that occurred: notify, deny, or require_approval.
+            redact is reserved on the column and is not written.'
         count:
           type: integer
           title: Count
@@ -37254,7 +37261,8 @@ components:
         action:
           type: string
           title: Action
-          description: notify, deny, require_approval, or redact
+          description: 'Newest hit''s stored action: notify, deny, or require_approval.
+            redact is reserved and is not written.'
         count:
           type: integer
           title: Count

@@ -465,8 +465,10 @@ def summarize_policy_notice_groups(
     ``group_by=rule`` (the Attention page) lists notify hits only, so a
     block does not show up as a notify card. ``group_by=user`` and
     ``group_by=action`` count every stored action. Per-user counts use the
-    same filter as the rule rows, so they add up to the rule totals.
-    Model and agent breakdowns always count every stored action.
+    same filter as the rule rows. They add up to the rule totals when
+    neither list is truncated at its cap of 100. Model and agent
+    breakdowns always count every stored action, and those lists are
+    capped the same way.
 
     Args:
         db: Database session.

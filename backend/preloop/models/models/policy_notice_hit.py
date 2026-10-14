@@ -19,7 +19,12 @@ from preloop.models.models.base import Base
 POLICY_NOTICE_EXCERPT_MAX_CHARS = 280
 
 #: Stored ``action`` values. ``notify`` is the historical default.
+#: ``redact`` is reserved: a redact match is audited as counts and is not
+#: inserted, because an excerpt would keep the value the rule removes.
 POLICY_NOTICE_ACTIONS = ("notify", "deny", "require_approval", "redact")
+
+#: Rule, user, model, and agent summary lists each stop at this many rows.
+POLICY_NOTICE_SUMMARY_LIMIT = 100
 
 _ACTION_CHECK = "action IN ('notify', 'deny', 'require_approval', 'redact')"
 
@@ -39,7 +44,8 @@ class PolicyNoticeHit(Base):
     Deny and approval hits leave it null; they are not delivered as notices.
 
     ``action`` defaults to ``notify`` so rows written before block and
-    approval matches were stored stay in the original set. ``agent_ref`` is
+    approval matches were stored stay in the original set. ``redact`` is
+    accepted by the check constraint and is not written. ``agent_ref`` is
     the runtime principal (``type:id`` when both are known). ``audit_event_id``
     is the id of the audit row written for the same match.
     """

@@ -21,6 +21,7 @@ from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.common import get_account_for_user
 from preloop.models.db.session import get_db_session
 from preloop.models.models.account import Account
+from preloop.models.models.policy_notice_hit import POLICY_NOTICE_SUMMARY_LIMIT
 from preloop.models.models.user import User
 from preloop.services.policy_notices import summarize_policy_notice_groups
 from preloop.utils.permissions import require_permission
@@ -34,7 +35,13 @@ class PolicyNoticeRuleSummaryResponse(BaseModel):
     rule_id: str = Field(..., description="Model I/O rule id")
     rule_description: Optional[str] = Field(None, description="Rule description")
     target: str = Field(..., description="model.request or model.response")
-    action: str = Field(..., description="notify, deny, require_approval, or redact")
+    action: str = Field(
+        ...,
+        description=(
+            "Newest hit's stored action: notify, deny, or require_approval. "
+            "redact is reserved and is not written."
+        ),
+    )
     count: int = Field(..., description="Hits in the window")
     last_hit_id: UUID = Field(..., description="Newest hit id (card fingerprint)")
     last_hit_at: datetime = Field(..., description="Newest hit time (UTC)")
@@ -56,7 +63,13 @@ class PolicyNoticeUserSummaryResponse(BaseModel):
 class PolicyNoticeActionSummaryResponse(BaseModel):
     """Hits of one action inside the window."""
 
-    action: str = Field(..., description="notify, deny, require_approval, or redact")
+    action: str = Field(
+        ...,
+        description=(
+            "Stored action that occurred: notify, deny, or require_approval. "
+            "redact is reserved on the column and is not written."
+        ),
+    )
     count: int = Field(..., description="Hits in the window")
 
 
@@ -93,8 +106,9 @@ def get_policy_notice_summary(
         "rule",
         description=(
             "rule keeps the Attention list to notify hits. "
-            "user and action include deny and require_approval hits, "
-            "and per-user counts sum to the rule totals."
+            "user and action include deny and require_approval hits. "
+            f"Rule and user lists are each capped at {POLICY_NOTICE_SUMMARY_LIMIT}. "
+            "Within that cap, per-user counts sum to the rule totals."
         ),
     ),
     account: Account = Depends(get_account_for_user),
@@ -104,9 +118,12 @@ def get_policy_notice_summary(
     """Return policy matches from the last ``days`` days.
 
     The default ``group_by=rule`` list is notify hits, which is what the
-    Attention page renders. ``group_by=user`` is the per-developer summary:
-    its user counts add up to its rule counts. Model and agent breakdowns
-    count every stored action either way.
+    Attention page renders. ``group_by=user`` is the per-developer summary.
+    Rule and user lists are each capped at 100. Within that cap, user
+    counts add up to rule counts. Past it the two lists are truncated
+    independently and the sums can diverge. Model and agent breakdowns
+    count every stored action either way, and each of those lists uses
+    the same cap.
     """
     summary = summarize_policy_notice_groups(
         db,
