@@ -81,6 +81,13 @@ const SEARCH_DEBOUNCE_MS = 400;
  */
 const SNIPPETS_PER_SESSION = 3;
 
+/**
+ * Sessions per list page. 50 tall cards made the page 30 viewports long on
+ * prod (#1585); 20 compact rows fit in about two, and "Load more sessions"
+ * pages the rest.
+ */
+export const SESSION_PAGE_SIZE = 20;
+
 /** Matching sessions requested per search. */
 const SEARCH_RESULT_LIMIT = 25;
 
@@ -161,6 +168,13 @@ export class RuntimeSessionsView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state()
   private sessions: AccountRuntimeSessionListResponse | null = null;
+
+  /** The session the location named, kept until the list first loads. */
+  private linkedSessionId: string | null = null;
+
+  /** A linked session that is not on the current list page. */
+  @state()
+  private pinnedSession: RuntimeSessionSummary | null = null;
 
   /** Runners offered by the "New session" dialog; loaded when it opens. */
   @state()
@@ -807,6 +821,7 @@ export class RuntimeSessionsView extends LitElement {
   private readLocation(): void {
     const params = new URLSearchParams(window.location.search);
     this.selectedSessionId = params.get('sessionId');
+    this.linkedSessionId = this.selectedSessionId;
     this.searchQuery = params.get('q') ?? '';
     this.focusTurnId = params.get('turn');
     this.focusArtifactId = params.get('artifact');
@@ -1015,7 +1030,7 @@ export class RuntimeSessionsView extends LitElement {
 
   private buildListParams(): RuntimeSessionListParams {
     const params: RuntimeSessionListParams = {
-      limit: 50,
+      limit: SESSION_PAGE_SIZE,
       status: this.status as 'all' | 'active' | 'ended',
     };
 
@@ -1162,9 +1177,29 @@ export class RuntimeSessionsView extends LitElement {
             (item) => item.id === this.selectedSessionId
           ))
       ) {
-        this.selectedSessionId = this.sessions.items[0]?.id ?? null;
-        this.syncUrl();
+        // A linked session that is not on this page (the page is 20 rows)
+        // is pinned above the list instead of being swapped for the newest.
+        // Only a session the location named. A live refresh keeps the pin:
+        // the linked id is cleared after the first load, but the pinned row
+        // still names the selection. A filter change drops the pin
+        // (`dropPin()`), so the selection then belongs to the new list.
+        const linked =
+          this.linkedSessionId ??
+          (this.pinnedSession?.id === this.selectedSessionId
+            ? this.selectedSessionId
+            : null);
+        const pinned =
+          linked && linked === this.selectedSessionId
+            ? await this.loadPinnedSession(linked)
+            : null;
+        if (seq !== this.loadSequence) return;
+        this.linkedSessionId = null;
+        if (!pinned) {
+          this.selectedSessionId = this.sessions.items[0]?.id ?? null;
+          this.syncUrl();
+        }
       }
+      this.linkedSessionId = null;
       // Paint the session list immediately. Detail/activity/events are owned by
       // <preloop-session-observer> and load after selection, do not block the
       // list on getAccountRuntimeSessionDetail.
@@ -1183,6 +1218,39 @@ export class RuntimeSessionsView extends LitElement {
         this.listLoadInFlight = false;
       }
     }
+  }
+
+  /**
+   * The list row of a linked session, read from its detail, or null when it
+   * cannot be read (gone, outside the plan's history window). Kept in
+   * `pinnedSession` so the observer can open it; the count and the list page
+   * are left as the server stated them.
+   */
+  private async loadPinnedSession(
+    sessionId: string
+  ): Promise<RuntimeSessionSummary | null> {
+    if (this.pinnedSession?.id === sessionId) return this.pinnedSession;
+    try {
+      const detail = await getAccountRuntimeSessionDetail(sessionId);
+      this.pinnedSession = detail.session ?? null;
+    } catch {
+      this.pinnedSession = null;
+    }
+    return this.pinnedSession;
+  }
+
+  /** Rows for the observer: the pinned linked session first, then the page. */
+  private observerSessions(): RuntimeSessionSummary[] {
+    const items = this.sessions?.items ?? [];
+    const pinned = this.pinnedSession;
+    if (
+      !pinned ||
+      pinned.id !== this.selectedSessionId ||
+      items.some((item) => item.id === pinned.id)
+    ) {
+      return items;
+    }
+    return [pinned, ...items];
   }
 
   /**
@@ -1494,8 +1562,15 @@ export class RuntimeSessionsView extends LitElement {
     ).value;
   }
 
+  /** A filter change re-scopes the list: a linked session is no longer pinned. */
+  private dropPin(): void {
+    this.pinnedSession = null;
+    this.linkedSessionId = null;
+  }
+
   private async applyFilters() {
     this.cancelSearchDebounce();
+    this.dropPin();
     await this.runQuery();
     if (this.isSearching) {
       // The filters bound the list as well, so it stays in step for the
@@ -1506,6 +1581,7 @@ export class RuntimeSessionsView extends LitElement {
 
   private async clearFilters() {
     this.cancelSearchDebounce();
+    this.dropPin();
     this.selectedRange = 'last-30';
     this.applyPresetDates('last-30');
     this.searchQuery = '';
@@ -2957,7 +3033,7 @@ export class RuntimeSessionsView extends LitElement {
                       </sl-card>
                     `
                   : html`
-                      ${this.renderObserver(this.sessions?.items || [])}
+                      ${this.renderObserver(this.observerSessions())}
                       ${this.renderLoadMoreSessions()}
                     `
             }
