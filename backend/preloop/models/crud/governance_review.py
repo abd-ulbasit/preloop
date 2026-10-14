@@ -221,10 +221,83 @@ def _validate_evidence(evidence: Any) -> list[dict[str, Any]]:
     return evidence
 
 
-def _as_uuid(value: Any) -> UUID:
+def _as_uuid(value: Any, *, field: str) -> UUID:
+    """Parse ``value`` as a UUID.
+
+    Args:
+        value: A UUID or a string UUID.
+        field: Name used in the validation error.
+
+    Returns:
+        The parsed UUID.
+
+    Raises:
+        GovernanceReviewValidationError: ``value`` is not a UUID.
+    """
     if isinstance(value, UUID):
         return value
-    return UUID(str(value))
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise GovernanceReviewValidationError(f"{field} must be a UUID") from exc
+
+
+def _require_session_in_account(
+    db: Session, *, account_id: UUID, runtime_session_id: UUID
+) -> None:
+    """Reject a digest write whose session belongs to another account.
+
+    Args:
+        db: Database session.
+        account_id: Account the caller claims to write for.
+        runtime_session_id: Session the segment is attached to.
+
+    Raises:
+        GovernanceReviewValidationError: The session is missing or owned by
+            a different account.
+    """
+    from preloop.models.models.runtime_session import RuntimeSession
+
+    owner = (
+        db.query(RuntimeSession.account_id)
+        .filter(RuntimeSession.id == runtime_session_id)
+        .scalar()
+    )
+    if owner is None:
+        raise GovernanceReviewValidationError("runtime_session_id does not exist")
+    if owner != account_id:
+        raise GovernanceReviewValidationError(
+            "runtime_session_id does not belong to this account"
+        )
+
+
+def _require_runs_in_account(
+    db: Session, *, account_id: UUID, run_ids: set[UUID]
+) -> None:
+    """Reject findings whose run belongs to another account.
+
+    Args:
+        db: Database session.
+        account_id: Account the caller claims to write for.
+        run_ids: Run ids stamped on the findings.
+
+    Raises:
+        GovernanceReviewValidationError: A run is missing or owned by a
+            different account.
+    """
+    if not run_ids:
+        return
+    owned = {
+        row[0]
+        for row in db.query(GovernanceReviewRun.id)
+        .filter(
+            GovernanceReviewRun.account_id == account_id,
+            GovernanceReviewRun.id.in_(run_ids),
+        )
+        .all()
+    }
+    if run_ids - owned:
+        raise GovernanceReviewValidationError("run_id does not belong to this account")
 
 
 class CRUDGovernancePolicyDocument(CRUDBase[GovernancePolicyDocument]):
@@ -427,11 +500,22 @@ class CRUDGovernanceReviewSettings(CRUDBase[GovernanceReviewSettings]):
 
 
 def _pair_digest(
-    digest: Optional[dict[str, Any]], summary: Optional[dict[str, Any]]
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Fill a missing digest or summary from the one that was provided."""
+    digest: Any, summary: Any
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Fill a missing digest or summary from the one that was provided.
+
+    ``None`` and ``_UNSET`` both mean the caller omitted that column. When
+    both are omitted the pair is left unchanged on conflict.
+
+    Returns:
+        The two objects to store, or None when both were omitted.
+    """
+    if digest is _UNSET:
+        digest = None
+    if summary is _UNSET:
+        summary = None
     if digest is None and summary is None:
-        return {}, {}
+        return None
     if digest is None:
         copied = dict(summary or {})
         return copied, dict(copied)
@@ -439,6 +523,103 @@ def _pair_digest(
         copied = dict(digest)
         return copied, dict(copied)
     return dict(digest), dict(summary)
+
+
+def _assign_digest_fields(
+    values: dict[str, Any],
+    updates: dict[str, Any],
+    *,
+    policy_document_version: Any,
+    user_id: Any,
+    digest: Any,
+    summary: Any,
+    observations: Any,
+    rolling_summary: Any,
+    digest_version: Any,
+    request_watermark: Any,
+    model_alias: Any,
+    input_tokens: Any,
+    output_tokens: Any,
+    estimated_cost: Any,
+    funding: Any,
+    truncated: Any,
+) -> None:
+    """Fill insert values, and conflict updates only for fields the caller set.
+
+    Args:
+        values: INSERT column map. Always receives a concrete value.
+        updates: ON CONFLICT SET map. Gains a column only when the caller
+            passed it.
+        policy_document_version: Document version, or ``_UNSET``.
+        user_id: Session user, or ``_UNSET``.
+        digest: Spec 4.3 object, or ``_UNSET``.
+        summary: Policy-aware object, or ``_UNSET``.
+        observations: Observation list, or ``_UNSET``.
+        rolling_summary: Rolling text, or ``_UNSET``.
+        digest_version: Digest schema version, or ``_UNSET``.
+        request_watermark: Covered request count, or ``_UNSET``.
+        model_alias: Analysis model, or ``_UNSET``.
+        input_tokens: Input token count, or ``_UNSET``.
+        output_tokens: Output token count, or ``_UNSET``.
+        estimated_cost: Analysis cost, or ``_UNSET``.
+        funding: ``platform`` or ``account``, or ``_UNSET``.
+        truncated: Sample-cut flag, or ``_UNSET``.
+
+    Raises:
+        GovernanceReviewValidationError: A provided value breaks a column rule.
+    """
+
+    def keep(column: str, provided: Any, default: Any) -> None:
+        if provided is _UNSET:
+            values[column] = default
+            return
+        values[column] = provided
+        updates[column] = provided
+
+    if policy_document_version is _UNSET:
+        values["policy_document_version"] = None
+    else:
+        if policy_document_version is not None and policy_document_version < 1:
+            raise GovernanceReviewValidationError(
+                "policy_document_version must be >= 1"
+            )
+        values["policy_document_version"] = policy_document_version
+        updates["policy_document_version"] = policy_document_version
+    keep("user_id", user_id, None)
+
+    paired = _pair_digest(digest, summary)
+    if paired is None:
+        values["digest"] = {}
+        values["summary"] = {}
+    else:
+        stored_digest, stored_summary = paired
+        validate_digest(stored_digest)
+        validate_digest(stored_summary)
+        values["digest"] = stored_digest
+        values["summary"] = stored_summary
+        updates["digest"] = stored_digest
+        updates["summary"] = stored_summary
+
+    if observations is _UNSET:
+        values["observations"] = []
+    else:
+        stored_observations = validate_observations(observations or [])
+        values["observations"] = stored_observations
+        updates["observations"] = stored_observations
+
+    keep("rolling_summary", rolling_summary, None)
+    keep("digest_version", digest_version, 1)
+    keep("request_watermark", request_watermark, 0)
+    keep("model_alias", model_alias, None)
+    keep("input_tokens", input_tokens, 0)
+    keep("output_tokens", output_tokens, 0)
+    keep("estimated_cost", estimated_cost, 0.0)
+    if funding is not _UNSET and funding not in gov.DIGEST_FUNDING:
+        raise GovernanceReviewValidationError(
+            f"funding must be one of {', '.join(gov.DIGEST_FUNDING)}"
+        )
+    keep("funding", funding, gov.DIGEST_FUNDING_PLATFORM)
+    keep("truncated", truncated, False)
 
 
 class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
@@ -453,20 +634,20 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
         segment_index: int = 0,
         window_start: datetime,
         window_end: datetime,
-        policy_document_version: Optional[int] = None,
-        user_id: Optional[UUID] = None,
-        digest: Optional[dict[str, Any]] = None,
-        summary: Optional[dict[str, Any]] = None,
-        observations: Optional[list[dict[str, Any]]] = None,
-        rolling_summary: Optional[str] = None,
-        digest_version: int = 1,
-        request_watermark: int = 0,
-        model_alias: Optional[str] = None,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        estimated_cost: float = 0.0,
-        funding: str = gov.DIGEST_FUNDING_PLATFORM,
-        truncated: bool = False,
+        policy_document_version: Any = _UNSET,
+        user_id: Any = _UNSET,
+        digest: Any = _UNSET,
+        summary: Any = _UNSET,
+        observations: Any = _UNSET,
+        rolling_summary: Any = _UNSET,
+        digest_version: Any = _UNSET,
+        request_watermark: Any = _UNSET,
+        model_alias: Any = _UNSET,
+        input_tokens: Any = _UNSET,
+        output_tokens: Any = _UNSET,
+        estimated_cost: Any = _UNSET,
+        funding: Any = _UNSET,
+        truncated: Any = _UNSET,
         commit: bool = True,
     ) -> GovernanceSessionDigest:
         """Insert or replace one segment of a session.
@@ -474,6 +655,12 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
         The key is ``(runtime_session_id, segment_index)``. Passing only
         ``digest`` or only ``summary`` copies that object into the other
         column so a caller that knows one name still fills both.
+
+        Omitted optional columns stay as they are on conflict. An insert
+        uses the column default (empty observations, zero tokens and cost,
+        ``platform`` funding, digest version 1). ``account_id`` is written
+        on insert and never rewritten: the session must already belong to
+        that account.
 
         Args:
             db: Database session.
@@ -502,8 +689,8 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             The stored segment.
 
         Raises:
-            GovernanceReviewValidationError: A digest, observation, or
-                funding value is invalid.
+            GovernanceReviewValidationError: A digest, observation, funding
+                value, or session owner is invalid.
         """
         if segment_index < 0:
             raise GovernanceReviewValidationError("segment_index must be >= 0")
@@ -511,46 +698,42 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             raise GovernanceReviewValidationError(
                 "window_end must be at or after window_start"
             )
-        if funding not in gov.DIGEST_FUNDING:
-            raise GovernanceReviewValidationError(
-                f"funding must be one of {', '.join(gov.DIGEST_FUNDING)}"
-            )
-        if policy_document_version is not None and policy_document_version < 1:
-            raise GovernanceReviewValidationError(
-                "policy_document_version must be >= 1"
-            )
-        stored_digest, stored_summary = _pair_digest(digest, summary)
-        validate_digest(stored_digest)
-        validate_digest(stored_summary)
-        stored_observations = validate_observations(observations or [])
-        values = {
+        _require_session_in_account(
+            db, account_id=account_id, runtime_session_id=runtime_session_id
+        )
+        values: dict[str, Any] = {
             "id": uuid4(),
             "account_id": account_id,
             "runtime_session_id": runtime_session_id,
             "segment_index": segment_index,
             "window_start": window_start,
             "window_end": window_end,
-            "policy_document_version": policy_document_version,
-            "user_id": user_id,
-            "digest": stored_digest,
-            "summary": stored_summary,
-            "observations": stored_observations,
-            "rolling_summary": rolling_summary,
-            "digest_version": digest_version,
-            "request_watermark": request_watermark,
-            "model_alias": model_alias,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "estimated_cost": estimated_cost,
-            "funding": funding,
-            "truncated": truncated,
         }
-        updates = {
-            key: values[key]
-            for key in values
-            if key not in {"id", "runtime_session_id", "segment_index"}
+        # ``account_id`` is not part of the conflict key, so a re-upsert must
+        # not move the segment to another account.
+        updates: dict[str, Any] = {
+            "window_start": window_start,
+            "window_end": window_end,
+            "updated_at": func.now(),
         }
-        updates["updated_at"] = func.now()
+        _assign_digest_fields(
+            values,
+            updates,
+            policy_document_version=policy_document_version,
+            user_id=user_id,
+            digest=digest,
+            summary=summary,
+            observations=observations,
+            rolling_summary=rolling_summary,
+            digest_version=digest_version,
+            request_watermark=request_watermark,
+            model_alias=model_alias,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost=estimated_cost,
+            funding=funding,
+            truncated=truncated,
+        )
         statement = pg_insert(GovernanceSessionDigest).values(**values)
         statement = statement.on_conflict_do_update(
             constraint="uq_governance_session_digest_segment",
@@ -776,7 +959,8 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
 
         Args:
             db: Database session.
-            account_id: Owning account. Stamped on every row.
+            account_id: Owning account. Stamped on every row. Each ``run_id``
+                must already belong to this account.
             findings: Finding payloads. Each needs ``run_id``, ``kind``,
                 ``category``, ``severity``, ``title``, ``suggestion``, and
                 ``fingerprint``.
@@ -786,7 +970,9 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             The rows this call inserted, in input order.
 
         Raises:
-            GovernanceReviewValidationError: A payload breaks a finding rule.
+            GovernanceReviewValidationError: A payload breaks a finding rule,
+                an identifier is not a UUID, or ``run_id`` belongs to
+                another account.
         """
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -802,6 +988,11 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             rows.append(self._row(account_id, raw))
         if not rows:
             return []
+        _require_runs_in_account(
+            db,
+            account_id=account_id,
+            run_ids={row["run_id"] for row in rows},
+        )
         statement = (
             pg_insert(GovernanceFinding)
             .values(rows)
@@ -858,7 +1049,10 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             raise GovernanceReviewValidationError(
                 "category must be a string of at most 64 characters"
             )
-        session_ids = [_as_uuid(value) for value in raw.get("session_ids") or []]
+        session_ids = [
+            _as_uuid(value, field="session_ids")
+            for value in raw.get("session_ids") or []
+        ]
         if len(session_ids) > gov.FINDING_SESSION_IDS_MAX:
             raise GovernanceReviewValidationError(
                 f"session_ids must contain at most {gov.FINDING_SESSION_IDS_MAX} ids"
@@ -877,7 +1071,7 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
         return {
             "id": uuid4(),
             "account_id": account_id,
-            "run_id": _as_uuid(run_id),
+            "run_id": _as_uuid(run_id, field="run_id"),
             "kind": kind,
             "category": category,
             "severity": severity,
@@ -885,7 +1079,9 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             "evidence": evidence,
             "session_ids": session_ids,
             "user_id": (
-                _as_uuid(raw["user_id"]) if raw.get("user_id") is not None else None
+                _as_uuid(raw["user_id"], field="user_id")
+                if raw.get("user_id") is not None
+                else None
             ),
             "agent_ref": raw.get("agent_ref"),
             "suggestion": suggestion,

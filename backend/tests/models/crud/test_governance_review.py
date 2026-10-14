@@ -12,15 +12,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+from preloop.models.crud import crud_account
 from preloop.models.crud.governance_review import (
+    GovernanceReviewValidationError,
     crud_governance_finding,
     crud_governance_policy_document,
     crud_governance_review_run,
     crud_governance_review_settings,
     crud_governance_session_digest,
+    validate_digest,
+    validate_observations,
 )
 from preloop.models.models.governance_review import (
     DIGEST_MAX_BYTES,
+    OBSERVATION_EXCERPT_MAX_CHARS,
+    POLICY_DOCUMENT_BODY_MAX_BYTES,
     GovernancePolicyDocument,
     GovernanceReviewSettings,
 )
@@ -241,6 +247,12 @@ def test_upsert_digest_is_per_segment(db_session: Session, test_user: User) -> N
             {"rule_ref": "must.secrets", "excerpt": "none", "confidence": 0.2}
         ],
         rolling_summary="Started a parser change.",
+        model_alias="example-model",
+        input_tokens=12,
+        output_tokens=4,
+        estimated_cost=1.5,
+        funding="account",
+        truncated=True,
         commit=False,
     )
     replaced = crud_governance_session_digest.upsert(
@@ -269,6 +281,17 @@ def test_upsert_digest_is_per_segment(db_session: Session, test_user: User) -> N
     assert replaced.policy_document_version == 2
     assert replaced.summary == {"intent": "revised"}
     assert replaced.digest == {"intent": "revised"}
+    assert replaced.observations == [
+        {"rule_ref": "must.secrets", "excerpt": "none", "confidence": 0.2}
+    ]
+    assert replaced.rolling_summary == "Started a parser change."
+    assert replaced.model_alias == "example-model"
+    assert replaced.input_tokens == 12
+    assert replaced.output_tokens == 4
+    assert replaced.estimated_cost == 1.5
+    assert replaced.funding == "account"
+    assert replaced.truncated is True
+    assert replaced.account_id == test_user.account_id
     listed = crud_governance_session_digest.list_for_window(
         db_session,
         account_id=test_user.account_id,
@@ -421,3 +444,171 @@ def test_list_findings_filters_and_dismiss(
     assert [row.fingerprint for row in dismissed] == ["closed"]
     assert dismissed[0].dismissed_reason == "Expected"
     assert dismissed[0].dismissed_by_id == test_user.id
+
+
+def _other_account(db_session: Session) -> UUID:
+    account = crud_account.create(
+        db_session,
+        obj_in={"organization_name": "Other Organization", "is_active": True},
+        commit=False,
+    )
+    return account.id
+
+
+def test_validate_digest_rejects_known_field_mistakes() -> None:
+    with pytest.raises(GovernanceReviewValidationError, match="outcome"):
+        validate_digest({"outcome": "nope"})
+    with pytest.raises(GovernanceReviewValidationError, match="triviality"):
+        validate_digest({"triviality": "huge"})
+    with pytest.raises(GovernanceReviewValidationError, match="notable"):
+        validate_digest({"notable": ["ok"] * 6})
+    with pytest.raises(GovernanceReviewValidationError, match="notable"):
+        validate_digest({"notable": ["x" * 281]})
+    validate_digest({"outcome": "done", "triviality": "routine", "notable": ["ok"]})
+
+
+def test_validate_observations_rejects_bad_items() -> None:
+    with pytest.raises(GovernanceReviewValidationError, match="list"):
+        validate_observations({"rule_ref": "must.secrets"})
+    with pytest.raises(GovernanceReviewValidationError, match="rule_ref"):
+        validate_observations([{"excerpt": "x", "confidence": 1}])
+    with pytest.raises(GovernanceReviewValidationError, match="excerpt"):
+        validate_observations(
+            [
+                {
+                    "rule_ref": "must.secrets",
+                    "excerpt": "x" * (OBSERVATION_EXCERPT_MAX_CHARS + 1),
+                    "confidence": "low",
+                }
+            ]
+        )
+    with pytest.raises(GovernanceReviewValidationError, match="confidence"):
+        validate_observations(
+            [{"rule_ref": "must.secrets", "excerpt": "x", "confidence": None}]
+        )
+
+
+def test_create_version_rejects_invalid_body_and_source(
+    db_session: Session, test_user: User
+) -> None:
+    with pytest.raises(GovernanceReviewValidationError, match="source"):
+        crud_governance_policy_document.create_version(
+            db_session,
+            account_id=test_user.account_id,
+            body_markdown="ok",
+            source="imported",
+            commit=False,
+        )
+    with pytest.raises(GovernanceReviewValidationError, match="body_markdown"):
+        crud_governance_policy_document.create_version(
+            db_session,
+            account_id=test_user.account_id,
+            body_markdown="x" * (POLICY_DOCUMENT_BODY_MAX_BYTES + 1),
+            source="user",
+            commit=False,
+        )
+
+
+def test_upsert_rejects_a_session_from_another_account(
+    db_session: Session, test_user: User
+) -> None:
+    session = _session(db_session, test_user.account_id)
+    start, end = _window()
+    with pytest.raises(GovernanceReviewValidationError, match="account"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=_other_account(db_session),
+            runtime_session_id=session.id,
+            window_start=start,
+            window_end=end,
+            digest={"intent": "cross"},
+            commit=False,
+        )
+
+
+def test_finish_run_rejects_unknown_fields_and_foreign_accounts(
+    db_session: Session, test_user: User
+) -> None:
+    start, end = _window()
+    run = crud_governance_review_run.create_run(
+        db_session,
+        account_id=test_user.account_id,
+        window_start=start,
+        window_end=end,
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="unknown finish"):
+        crud_governance_review_run.finish_run(
+            db_session,
+            account_id=test_user.account_id,
+            run_id=run.id,
+            status="completed",
+            not_a_column=1,
+            commit=False,
+        )
+    missing = crud_governance_review_run.finish_run(
+        db_session,
+        account_id=_other_account(db_session),
+        run_id=run.id,
+        status="failed",
+        commit=False,
+    )
+
+    assert missing is None
+    assert run.status == "running"
+
+
+def test_insert_findings_checks_uuid_and_run_owner(
+    db_session: Session, test_user: User
+) -> None:
+    start, end = _window()
+    run = crud_governance_review_run.create_run(
+        db_session,
+        account_id=test_user.account_id,
+        window_start=start,
+        window_end=end,
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="run_id"):
+        crud_governance_finding.insert_findings(
+            db_session,
+            account_id=test_user.account_id,
+            findings=[{**_finding(run.id), "run_id": "not-a-uuid"}],
+            commit=False,
+        )
+    with pytest.raises(GovernanceReviewValidationError, match="account"):
+        crud_governance_finding.insert_findings(
+            db_session,
+            account_id=_other_account(db_session),
+            findings=[_finding(run.id)],
+            commit=False,
+        )
+
+
+def test_dismiss_returns_none_for_a_foreign_account(
+    db_session: Session, test_user: User
+) -> None:
+    start, end = _window()
+    run = crud_governance_review_run.create_run(
+        db_session,
+        account_id=test_user.account_id,
+        window_start=start,
+        window_end=end,
+        commit=False,
+    )
+    finding = crud_governance_finding.insert_findings(
+        db_session,
+        account_id=test_user.account_id,
+        findings=[_finding(run.id)],
+        commit=False,
+    )[0]
+    missing = crud_governance_finding.dismiss(
+        db_session,
+        account_id=_other_account(db_session),
+        finding_id=finding.id,
+        dismissed_by_id=None,
+        commit=False,
+    )
+
+    assert missing is None
+    assert finding.dismissed_at is None

@@ -37,3 +37,14 @@ The tool configuration system has been expanded with a **ToolAccessRule** model 
 ## Tool Output Filters
 
 Account-scoped `ToolOutputFilter` rules strip named top-level fields from MCP tool JSON results on the proxy hot path before results reach the calling agent, trimming wasted context tokens. The model, CRUD layer, and proxy application live in the OSS core; the Enterprise billing plugin exposes `/api/v1/billing/cost/output-filters` CRUD and the Console tools editor provides a filter dialog (also reachable from session-optimization suggestions). Persistent per-tool cost findings are tracked as `ToolCostFlag` rows and surfaced in the agent detail view.
+
+## Weekly governance review
+
+The OSS store for the weekly governance review is five account-scoped tables: `governance_policy_document`, `governance_review_settings`, `governance_session_digest`, `governance_review_run`, and `governance_finding`. The Enterprise plugin performs the review. The OSS scheduler only publishes the work, and each worker task no-ops when no Enterprise handler is registered.
+
+`GOVERNANCE_REVIEW_ENABLED` (default true) registers two cron jobs. A scheduler restart does not fire either one:
+
+*   `governance_session_digest_sweep` at minute 0 of every hour, UTC.
+*   `governance_weekly_review` on Monday at 07:00 UTC.
+
+An account with no settings row takes a deployment default. The hosted service (`PRELOOP_HOSTED`) defaults to `on_platform`. A self-hosted install defaults to `off` until `PRELOOP_GOVERNANCE_ANALYSIS_MODEL` is set to the analysis model alias, which switches that default to `on_own_model`. A stored settings row overrides the default.
