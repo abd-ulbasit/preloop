@@ -242,6 +242,12 @@ export interface FlowGatewayConversationPreviewMessage {
   redacted?: boolean;
   truncated?: boolean;
   original_length?: number | null;
+  /**
+   * Original index in the event's message list. Set when the page was read
+   * with `history=delta`, which leaves out replayed messages, so the index
+   * in the returned array is no longer the position.
+   */
+  position?: number;
 }
 
 export interface FlowGatewayConversationPreview {

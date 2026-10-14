@@ -766,6 +766,9 @@ class RuntimeSessionExplorerService:
             flow_execution_id=flow_execution_id,
             limit=interaction_limit,
             offset=0,
+            # The timeline shows rows, not a count; the count joins every
+            # document in the window (#1582).
+            include_total=False,
         )
         interaction_items = [
             ModelGatewayUsageService._search_row_to_schema(item)
@@ -1254,11 +1257,15 @@ class RuntimeSessionExplorerService:
                 )
             )
 
-        activity_rows = crud_runtime_session_activity.list_for_runtime_session(
-            self.db,
-            account_id=summary_row["account_id"],
-            runtime_session_id=summary_row["id"],
-            limit=100,
+        # History-free rows: a model call's replayed conversation is read
+        # from the gateway-events endpoint, never from this timeline.
+        activity_rows = (
+            crud_runtime_session_activity.list_timeline_rows_for_runtime_session(
+                self.db,
+                account_id=summary_row["account_id"],
+                runtime_session_id=summary_row["id"],
+                limit=100,
+            )
         )
         if activity_rows:
             items.extend(

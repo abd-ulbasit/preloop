@@ -6,6 +6,7 @@ import {
   isModelGatewayEventType,
   matchInjectedSegment,
 } from './transcript';
+import { sessionTools } from './session-live';
 
 function gatewayEvent(
   id: string,
@@ -740,5 +741,109 @@ describe('transient live coverage', () => {
     expect(
       buildConversation([started], []).stats.eventsWithoutRawBody
     ).to.equal(0);
+  });
+});
+
+describe('buildConversation with a history=delta page (#1586)', () => {
+  // Three calls; each request replays the whole conversation so far.
+  const prompt = { role: 'user', text: 'Fix the test' };
+  const full = [
+    gatewayEvent('e1', '2026-10-13T10:00:00Z', [
+      prompt,
+      { role: 'assistant', source: 'response', text: 'Looking' },
+    ]),
+    gatewayEvent('e2', '2026-10-13T10:01:00Z', [
+      prompt,
+      { role: 'assistant', text: 'Looking' },
+      { role: 'user', text: 'continue' },
+      { role: 'assistant', source: 'response', text: 'Done' },
+    ]),
+    gatewayEvent('e3', '2026-10-13T10:02:00Z', [
+      prompt,
+      { role: 'assistant', text: 'Looking' },
+      { role: 'user', text: 'continue' },
+      { role: 'assistant', text: 'Done' },
+      { role: 'user', text: 'continue' },
+      { role: 'assistant', source: 'response', text: 'Really done' },
+    ]),
+  ];
+  // What the server returns for the same page with history=delta: replayed
+  // messages left out, kept ones carrying their original position, and the
+  // last user message of each event kept.
+  const keep = (event: FlowGatewayEvent, positions: number[]) => {
+    const messages = event.payload!.conversation_preview!.messages!;
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        conversation_preview: {
+          messages: positions.map((position) => ({
+            ...messages[position],
+            position,
+          })),
+        },
+      },
+    } as FlowGatewayEvent;
+  };
+  const delta = [
+    keep(full[0], [0, 1]),
+    keep(full[1], [2, 3]),
+    keep(full[2], [4, 5]),
+  ];
+  // Items and stats: the parity claim covers both.
+  const texts = (events: FlowGatewayEvent[]) => {
+    const result = buildConversation(events);
+    return JSON.stringify(
+      { items: result.items, stats: result.stats },
+      (key, value) => (key === 'event' || key === 'key' ? undefined : value)
+    );
+  };
+
+  it('renders the same transcript as the full page', () => {
+    expect(texts(delta)).to.equal(texts(full));
+  });
+
+  it('derives the same tools when accumulated tools are left out', () => {
+    // The gateway stores the tools accumulated so far on every call; the
+    // delta page keeps only the ones an older event did not carry.
+    const call = (id: string) => ({
+      kind: 'call',
+      call_id: id,
+      name: 'run_tests',
+      text: `{"n":"${id}"}`,
+    });
+    const result = (id: string) => ({
+      kind: 'result',
+      call_id: id,
+      text: `ok ${id}`,
+    });
+    const withTools = (events: FlowGatewayEvent[], tools: unknown[][]) =>
+      events.map(
+        (event, index) =>
+          ({
+            ...event,
+            payload: { ...event.payload, tools: tools[index] },
+          }) as FlowGatewayEvent
+      );
+    const fullTools = withTools(full, [
+      [call('c1')],
+      [call('c1'), result('c1'), call('c2')],
+      [call('c1'), result('c1'), call('c2'), result('c2')],
+    ]);
+    const deltaTools = withTools(delta, [
+      [call('c1')],
+      [result('c1'), call('c2')],
+      [result('c2')],
+    ]);
+    const strip = (events: FlowGatewayEvent[]) =>
+      JSON.stringify(sessionTools(events));
+    const fromFull = sessionTools(fullTools);
+    expect(fromFull).to.have.length(2);
+    expect(strip(deltaTools)).to.equal(strip(fullTools));
+  });
+
+  it('still keeps "continue" said twice at two positions', () => {
+    const rendered = texts(delta);
+    expect(rendered.split('"continue"').length - 1).to.equal(2);
   });
 });

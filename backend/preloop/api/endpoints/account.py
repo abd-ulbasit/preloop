@@ -5,7 +5,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -116,6 +116,7 @@ from preloop.services.account_realtime import (
     emit_account_event,
 )
 from preloop.services.agent_control_presence import control_heartbeat_is_fresh
+from preloop.services.gateway_event_history import elide_replayed_history
 from preloop.services.account_governance_cache import (
     invalidate_account_governance_cache,
 )
@@ -3271,7 +3272,15 @@ async def get_account_session_activity_timeline(
         ),
     ),
 ):
-    """Activity timeline overview for this session."""
+    """Activity timeline overview for this session.
+
+    Model gateway call items leave out the replayed conversation history in
+    `metadata` (`conversation_preview`, `tools`, `tool_activity`, `request`,
+    `response`, `messages`); on a long session those keys were most of the
+    payload (#1586). Read them from
+    `GET /runtime-sessions/{id}/gateway-events` (`history=full` for every
+    event's whole conversation) or from the single gateway event detail.
+    """
     return await run_db_off_loop(
         lambda: RuntimeSessionExplorerService(db).get_account_session_activity_timeline(
             account=account,
@@ -3525,6 +3534,15 @@ async def get_account_runtime_session_gateway_events(
     limit: int = Query(25, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     metadata_only: bool = Query(False),
+    history: Literal["full", "delta"] = Query(
+        "full",
+        description=(
+            "`delta` elides conversation messages and tool entries that an "
+            "older event on the same page already carried. Positions are "
+            "kept: each returned message carries its original `position`. "
+            "The event detail endpoint still returns the full payload."
+        ),
+    ),
 ) -> dict[str, Any]:
     """Return one compact page of stored gateway event metadata for a session."""
     from preloop.models.crud.runtime_session_activity import (
@@ -3571,6 +3589,8 @@ async def get_account_runtime_session_gateway_events(
             }
             for row in rows
         ]
+        if history == "delta" and not metadata_only:
+            events = elide_replayed_history(events)
         next_offset = offset + len(events)
         return {
             "source": "database",

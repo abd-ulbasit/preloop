@@ -213,6 +213,12 @@ Command delivery is read from
 `GET /api/v1/agents/{agent_id}/control/commands/{command_id}`, which returns
 the `delivery_state` described above.
 
+The activity timeline leaves the replayed conversation out of model call
+items (`conversation_preview`, `tools`, `tool_activity`, `request`,
+`response` and `messages` in `metadata`). The full conversation of each call
+is on `GET /api/v1/runtime-sessions/{id}/gateway-events?history=full` and on
+the single gateway event detail.
+
 A hook-governed agent whose credential names the agent but no session (the
 durable credential `preloop agents onboard` writes) is attributed to the
 agent's current open session, the one `preloop notes send --agent` resolves

@@ -3589,7 +3589,20 @@ paths:
       tags:
       - Account
       summary: Get Account Session Activity Timeline
-      description: Activity timeline overview for this session.
+      description: 'Activity timeline overview for this session.
+
+
+        Model gateway call items leave out the replayed conversation history in
+
+        `metadata` (`conversation_preview`, `tools`, `tool_activity`, `request`,
+
+        `response`, `messages`); on a long session those keys were most of the
+
+        payload (#1586). Read them from
+
+        `GET /runtime-sessions/{id}/gateway-events` (`history=full` for every
+
+        event''s whole conversation) or from the single gateway event detail.'
       operationId: get_account_session_activity_timeline_api_v1_runtime_sessions__runtime_session_id__activity_get
       security:
       - bearerAuth: []
@@ -3846,6 +3859,24 @@ paths:
           type: boolean
           default: false
           title: Metadata Only
+      - name: history
+        in: query
+        required: false
+        schema:
+          enum:
+          - full
+          - delta
+          type: string
+          description: '`delta` elides conversation messages and tool entries that
+            an older event on the same page already carried. Positions are kept: each
+            returned message carries its original `position`. The event detail endpoint
+            still returns the full payload.'
+          default: full
+          title: History
+        description: '`delta` elides conversation messages and tool entries that an
+          older event on the same page already carried. Positions are kept: each returned
+          message carries its original `position`. The event detail endpoint still
+          returns the full payload.'
       responses:
         '200':
           description: Successful Response

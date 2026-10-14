@@ -748,6 +748,62 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             .all()
         )
 
+    # Keys of a model gateway call row that carry replayed conversation
+    # history. The activity timeline never renders them (the console reads
+    # model calls from the gateway-events endpoint), and on a long session
+    # they are most of the row: 100 rows at about 70 KB each made the
+    # timeline read multi-second on prod (#1586).
+    GATEWAY_HISTORY_KEYS: tuple[str, ...] = (
+        "conversation_preview",
+        "tools",
+        "tool_activity",
+        "request",
+        "response",
+        "messages",
+    )
+
+    def list_timeline_rows_for_runtime_session(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        runtime_session_id: str,
+        limit: int = 100,
+    ) -> list[Any]:
+        """Return recent activity for the timeline, newest first.
+
+        Same rows as ``list_for_runtime_session``, but a model gateway call
+        comes back without its history keys, removed in SQL so Postgres never
+        ships them. Every other activity type keeps its full metadata.
+        """
+        slim = self.model.metadata_
+        for key in self.GATEWAY_HISTORY_KEYS:
+            slim = slim.op("-")(key)
+        metadata_column = case(
+            (self.model.activity_type == "model_gateway_call", slim),
+            else_=self.model.metadata_,
+        ).label("metadata_")
+        return (
+            db.query(
+                self.model.id,
+                self.model.activity_type,
+                self.model.timestamp,
+                self.model.tool_name,
+                self.model.server_name,
+                self.model.summary,
+                self.model.status,
+                self.model.api_key_id,
+                metadata_column,
+            )
+            .filter(
+                self.model.account_id == account_id,
+                self.model.runtime_session_id == runtime_session_id,
+            )
+            .order_by(self.model.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+
     def list_tool_calls_page(
         self,
         db: Session,
