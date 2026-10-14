@@ -324,10 +324,13 @@ git_clone_config:
   target_branch: null
   create_pull_request: true
   pull_request_title: "Implements: {{trigger_event.payload.object_attributes.title}}"
+  # close_reference is "#<number>" on GitHub and GitLab, and the bare issue
+  # key on Jira. Bitbucket Cloud links a Jira issue from "Closes KEY-4"; a
+  # leading hash stops that link. GitHub and GitLab still render "Closes #N".
   pull_request_description: |
-    Automated implementation for #{{trigger_event.payload.object_attributes.number}}
+    Automated implementation for {{trigger_event.payload.object_attributes.close_reference}}
 
-    Closes #{{trigger_event.payload.object_attributes.number}}
+    Closes {{trigger_event.payload.object_attributes.close_reference}}
   # Publication gate (issue #428): the branch is pushed and the pull request
   # opened only after a runner-controlled verifier re-ran the profile's
   # required checks against the exact final commit and tree. The profile

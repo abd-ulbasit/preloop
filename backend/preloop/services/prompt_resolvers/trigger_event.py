@@ -1,7 +1,8 @@
 """Resolver for trigger event placeholders."""
 
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 from preloop.services.issue_references import (
     NO_REFERENCES,
@@ -12,6 +13,11 @@ from preloop.services.issue_references import (
 from .base import PromptResolver, ResolverContext
 
 logger = logging.getLogger(__name__)
+
+# Same shape as ``extract_jira_issue_key_from_trigger``: a bare key, not a
+# GitHub/GitLab issue number.
+_JIRA_ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,30}-[0-9]{1,10}$")
+_CODE_HOST_SOURCES = {"github", "gitlab", "bitbucket", "bitbucket_dc"}
 
 
 def _flatten_label_names(labels: Any) -> list[str]:
@@ -68,6 +74,193 @@ def _alias_object_attribute_ids(attrs: Dict[str, Any]) -> None:
         attrs["number"] = iid
     if iid is None and number is not None:
         attrs["iid"] = number
+
+
+def _attach_close_reference(attrs: Dict[str, Any], source: str) -> None:
+    """Set the token a pull request body uses to close the triggering issue.
+
+    GitHub and GitLab close with ``#<number>``. Jira links a Bitbucket pull
+    request when the body contains the bare issue key (``Closes KEY-4``). A
+    leading hash stops that link.
+    """
+    if not isinstance(attrs, dict) or attrs.get("close_reference"):
+        return
+    number = attrs.get("number")
+    if number is None:
+        return
+    text = str(number).strip()
+    if not text:
+        return
+    if source == "jira" or _JIRA_ISSUE_KEY.fullmatch(text):
+        attrs["close_reference"] = text
+    else:
+        attrs["close_reference"] = f"#{text}"
+
+
+def _jira_description_text(description: Any) -> str:
+    """Render a Jira description to plain text.
+
+    Cloud webhooks send Atlassian Document Format. Server and some fields
+    send a string. Both become the text the preset prompt reads.
+    """
+    if description is None:
+        return ""
+    if isinstance(description, str):
+        return description
+    if isinstance(description, dict):
+        from preloop.sync.trackers.jira import JiraTracker
+
+        return JiraTracker._adf_to_plain_text(None, description)
+    return str(description)
+
+
+def _jira_site_url(issue: Dict[str, Any]) -> str:
+    """Origin of a Jira issue, taken from its REST self URL."""
+    candidates = [issue.get("self")]
+    fields = issue.get("fields")
+    if isinstance(fields, dict):
+        project = fields.get("project")
+        if isinstance(project, dict):
+            candidates.append(project.get("self"))
+    for raw in candidates:
+        if isinstance(raw, str) and "/rest/api/" in raw:
+            return raw.split("/rest/api/", 1)[0].rstrip("/")
+    return ""
+
+
+def _jira_browse_url(issue: Dict[str, Any]) -> str:
+    """``<site>/browse/<key>`` for a Jira issue webhook object."""
+    key = str(issue.get("key") or "").strip()
+    site = _jira_site_url(issue)
+    if site and key:
+        return f"{site}/browse/{key}"
+    return ""
+
+
+def _is_jira_issue_payload(source: str, payload: Dict[str, Any]) -> bool:
+    """Whether ``payload.issue`` is a Jira issue, not a GitHub issue.
+
+    GitHub issues carry ``title`` and ``number``. Jira issues carry ``key``
+    and ``fields``. A ``source`` of ``jira`` wins even when fields are thin,
+    so the GitHub mapper cannot write ``None`` into ``object_attributes``.
+    """
+    if source in _CODE_HOST_SOURCES:
+        return False
+    issue = payload.get("issue")
+    if not isinstance(issue, dict):
+        return False
+    webhook_event = str(payload.get("webhookEvent") or "")
+    if source == "jira" or webhook_event.startswith("jira:"):
+        return True
+    fields = issue.get("fields")
+    key = str(issue.get("key") or "").strip()
+    return (
+        isinstance(fields, dict)
+        and bool(key)
+        and "title" not in issue
+        and "number" not in issue
+    )
+
+
+def _jira_object_attributes(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a Jira issue webhook object onto GitLab-shaped object_attributes."""
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    key = str(issue.get("key") or "").strip()
+    status = fields.get("status") if isinstance(fields.get("status"), dict) else {}
+    reporter = fields.get("reporter")
+    if not isinstance(reporter, dict):
+        creator = fields.get("creator")
+        reporter = creator if isinstance(creator, dict) else {}
+    labels = fields.get("labels")
+    attrs: Dict[str, Any] = {
+        "title": fields.get("summary") or "",
+        "description": _jira_description_text(fields.get("description")),
+        "url": _jira_browse_url(issue),
+        "number": key,
+        "iid": key,
+        "state": status.get("name") or "",
+        "author": reporter.get("displayName") or reporter.get("accountId") or "",
+        "labels": _flatten_label_names(labels) if isinstance(labels, list) else [],
+        "updated_at": fields.get("updated") or "",
+    }
+    _attach_close_reference(attrs, "jira")
+    return attrs
+
+
+def _bound_repository(event: Dict[str, Any], context: Any) -> Optional[Tuple[str, str]]:
+    """Short name and path of the code host bound to this Jira trigger.
+
+    Returns:
+        ``(name, full_name)`` when a flow or project binding applies, else
+        None. A binding that cannot be applied leaves the name unset; the
+        orchestrator still fails the run when it applies the same binding.
+    """
+    if context is None or getattr(context, "db", None) is None:
+        return None
+    if not getattr(context, "flow_id", None):
+        return None
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from preloop.models.crud import crud_flow
+    from preloop.services.repository_binding import (
+        RepositoryBindingError,
+        resolve_repository_binding,
+    )
+
+    try:
+        flow = crud_flow.get(context.db, id=context.flow_id)
+        if flow is None:
+            return None
+        account_id = getattr(context, "account_id", None) or event.get("account_id")
+        if not account_id and getattr(flow, "account_id", None):
+            account_id = str(flow.account_id)
+        project_id = event.get("project_id")
+        binding = resolve_repository_binding(
+            context.db,
+            account_id=str(account_id) if account_id else None,
+            git_clone_config=getattr(flow, "git_clone_config", None),
+            trigger_tracker_id=event.get("tracker_id"),
+            trigger_source=event.get("source"),
+            trigger_project_id=str(project_id) if project_id else None,
+        )
+    except RepositoryBindingError:
+        logger.debug(
+            "Jira trigger repository binding could not be applied", exc_info=True
+        )
+        return None
+    except (SQLAlchemyError, TypeError, ValueError, AttributeError):
+        logger.warning(
+            "Could not resolve the bound repository for a Jira trigger",
+            exc_info=True,
+        )
+        return None
+    if binding is None:
+        return None
+    repo_path = str(getattr(binding, "repository", "") or "").strip()
+    if not repo_path:
+        return None
+    return repo_path.rsplit("/", 1)[-1], repo_path
+
+
+def _attach_bound_repository(event: Dict[str, Any], context: Any) -> None:
+    """Copy the bound code-host repository onto a Jira trigger payload.
+
+    Preset 011 reads ``payload.repository.name``. Jira webhooks have no
+    repository of their own; the name comes from the flow or project binding.
+    """
+    if str(event.get("source") or "").lower() != "jira":
+        return
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return
+    repository = payload.get("repository")
+    if isinstance(repository, dict) and repository.get("name"):
+        return
+    found = _bound_repository(event, context)
+    if found is None:
+        return
+    name, full_name = found
+    payload["repository"] = {"name": name, "full_name": full_name}
 
 
 def _attach_referenced_issues(
@@ -138,7 +331,7 @@ class TriggerEventResolver(PromptResolver):
     - {{trigger_event.payload.issue.title}}
     - {{trigger_event.payload.commit.sha}}
     - {{trigger_event.source}}
-    - {{trigger_event.payload.object_attributes.title}} (normalized for both GitHub and GitLab)
+    - {{trigger_event.payload.object_attributes.title}} (normalized for GitHub, GitLab and Jira)
     """
 
     @property
@@ -148,11 +341,12 @@ class TriggerEventResolver(PromptResolver):
 
     def _normalize_event_data(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Normalize event data to provide a consistent structure for GitHub and GitLab.
+        Normalize event data to provide a consistent structure.
 
         This adds an `object_attributes` field that maps to:
         - GitLab: payload.object_attributes (native)
         - GitHub: payload.pull_request or payload.issue (mapped)
+        - Jira: payload.issue.fields (summary, description, key, browse URL)
 
         Also adds platform-agnostic fields for common operations.
         """
@@ -173,6 +367,15 @@ class TriggerEventResolver(PromptResolver):
                 _alias_object_attribute_ids(attrs)
                 _enrich_object_attributes(payload, attrs)
                 _attach_referenced_issues(payload, attrs, source)
+                _attach_close_reference(attrs, source)
+            return normalized
+
+        # Jira issue webhooks carry ``issue.key`` and ``issue.fields``, not
+        # GitHub's title/number. Map them before the GitHub branch, which
+        # treats any ``issue`` key as a GitHub issue and would store None.
+        if isinstance(payload, dict) and _is_jira_issue_payload(source, payload):
+            payload["object_attributes"] = _jira_object_attributes(payload["issue"])
+            normalized["payload"] = payload
             return normalized
 
         # Bitbucket Cloud: map the ``pullrequest`` object onto the same keys
@@ -183,6 +386,7 @@ class TriggerEventResolver(PromptResolver):
             object_attributes = build_object_attributes(payload["pullrequest"])
             payload["object_attributes"] = object_attributes
             _attach_referenced_issues(payload, object_attributes, source)
+            _attach_close_reference(object_attributes, source)
             normalized["payload"] = payload
             return normalized
 
@@ -206,6 +410,7 @@ class TriggerEventResolver(PromptResolver):
                 }
                 payload["object_attributes"] = object_attributes
                 _attach_referenced_issues(payload, object_attributes, source)
+                _attach_close_reference(object_attributes, source or "github")
                 self.logger.debug(
                     f"Normalized GitHub PR to object_attributes: {object_attributes.get('title')}"
                 )
@@ -227,6 +432,7 @@ class TriggerEventResolver(PromptResolver):
                 }
                 payload["object_attributes"] = object_attributes
                 _enrich_object_attributes(payload, object_attributes)
+                _attach_close_reference(object_attributes, source or "github")
                 self.logger.debug(
                     f"Normalized GitHub issue to object_attributes: {object_attributes.get('title')}"
                 )
@@ -302,6 +508,11 @@ class TriggerEventResolver(PromptResolver):
         normalized_data = self._redact_workspace_files(
             self._normalize_event_data(context.trigger_event_data)
         )
+        # repository.name is not on a Jira webhook. Fill it from the bound
+        # code host when the placeholder (or a full-event dump) asks for it.
+        lookup = (path or "").strip()
+        if lookup == "" or lookup.startswith("payload.repository"):
+            _attach_bound_repository(normalized_data, context)
 
         # If no path specified, return entire event as JSON
         if not path or path.strip() == "":

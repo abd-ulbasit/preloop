@@ -262,8 +262,14 @@ class TestGitCloneConfig:
             in config["pull_request_title"]
         )
         assert (
-            "Closes #{{trigger_event.payload.object_attributes.number}}"
+            "Closes {{trigger_event.payload.object_attributes.close_reference}}"
             in config["pull_request_description"]
+        )
+        # The hash lives in the resolved token for GitHub and GitLab
+        # ("#12") and is absent for a Jira key ("PROJ-12").
+        assert (
+            "Closes #{{trigger_event.payload.object_attributes.number}}"
+            not in config["pull_request_description"]
         )
 
 
@@ -568,3 +574,246 @@ async def test_rendered_original_issue_and_bound_pr_context(
         assert "never use the PR number as an issue number" in " ".join(
             rendered.split()
         )
+
+
+def _jira_issue_updated_event() -> dict:
+    """A Jira ``jira:issue_updated`` delivery for a label add.
+
+    The shape is a Jira Cloud webhook: ``issue.key``, ``fields.summary``,
+    an ADF description and ``issue.self``. It has no repository and no
+    GitLab ``object_attributes``.
+    """
+    return {
+        "source": "jira",
+        "type": "issue_labeled",
+        "tracker_id": "tracker-jira",
+        "account_id": "account-1",
+        "project_id": "project-jira",
+        "payload": {
+            "timestamp": 1790000000000,
+            "webhookEvent": "jira:issue_updated",
+            "issue_event_type_name": "issue_generic",
+            "user": {"accountId": "acc-1", "displayName": "Example User"},
+            "changelog": {
+                "id": "20001",
+                "items": [
+                    {
+                        "field": "labels",
+                        "fieldtype": "jira",
+                        "fromString": "",
+                        "toString": "agent-ready",
+                    }
+                ],
+            },
+            "issue": {
+                "id": "10001",
+                "self": "https://acme.atlassian.net/rest/api/2/issue/10001",
+                "key": "PROJ-12",
+                "fields": {
+                    "summary": "Export the widget report",
+                    "description": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Render the report as CSV.",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    "labels": ["agent-ready"],
+                    "updated": "2026-10-09T12:00:00.000+0000",
+                    "status": {"name": "To Do"},
+                    "project": {
+                        "id": "10000",
+                        "key": "PROJ",
+                        "self": "https://acme.atlassian.net/rest/api/2/project/10000",
+                    },
+                },
+            },
+        },
+    }
+
+
+# Cold-start fields. The preset says an unresolved resume placeholder means
+# initial intake, and triage context is optional.
+_COLD_START_PLACEHOLDERS = {
+    "trigger_event._resume.pr_url",
+    "trigger_event.lifecycle_pickup.triage_context",
+    "execution.resume_from",
+}
+
+
+@pytest.mark.asyncio
+async def test_jira_issue_updated_preset_placeholders_resolve(preset: dict) -> None:
+    """Every issue placeholder in preset 011 resolves for a Jira webhook.
+
+    PR title is the summary, the body closes the bare key, and the branch
+    carries the key. Resume and triage placeholders stay empty on intake.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from preloop.agents.container import (
+        ContainerAgentExecutor,
+        interpolate_git_config_text,
+    )
+    from preloop.services.prompt_resolvers.base import ResolverContext
+    from preloop.services.prompt_resolvers.execution import ExecutionResolver
+    from preloop.services.prompt_resolvers.trigger_event import TriggerEventResolver
+    from preloop.utils.prompt_filters import parse_placeholders
+
+    event = _jira_issue_updated_event()
+    flow = SimpleNamespace(
+        account_id="account-1",
+        git_clone_config={"enabled": True, "repositories": []},
+    )
+    binding = SimpleNamespace(repository="acme/widget")
+    context = ResolverContext(
+        db=object(),
+        trigger_event_data=event,
+        flow_id="flow-1",
+        execution_id="08095fd6-f861-4939-997d-2600d1ec5a80",
+        account_id="account-1",
+    )
+    trigger = TriggerEventResolver()
+    execution = ExecutionResolver()
+
+    with (
+        patch("preloop.models.crud.crud_flow.get", return_value=flow),
+        patch(
+            "preloop.services.repository_binding.resolve_repository_binding",
+            return_value=binding,
+        ) as resolve_binding,
+    ):
+        resolved: dict[str, str] = {}
+        for item in parse_placeholders(preset["prompt_template"]):
+            if item.name in _COLD_START_PLACEHOLDERS:
+                continue
+            if item.name.startswith("trigger_event."):
+                path = item.name[len("trigger_event.") :]
+                value = await trigger.resolve(path, context)
+            elif item.name.startswith("execution."):
+                path = item.name[len("execution.") :]
+                value = await execution.resolve(path, context)
+            else:
+                continue
+            assert value, f"{item.name} did not resolve"
+            resolved[item.name] = value
+
+    assert resolved["trigger_event.payload.object_attributes.title"] == (
+        "Export the widget report"
+    )
+    assert resolved["trigger_event.payload.object_attributes.description"] == (
+        "Render the report as CSV."
+    )
+    assert "doc" not in resolved["trigger_event.payload.object_attributes.description"]
+    assert resolved["trigger_event.payload.object_attributes.number"] == "PROJ-12"
+    assert resolved["trigger_event.payload.object_attributes.url"] == (
+        "https://acme.atlassian.net/browse/PROJ-12"
+    )
+    assert resolved["trigger_event.payload.repository.name"] == "widget"
+    assert resolve_binding.call_args.kwargs["trigger_source"] == "jira"
+    assert resolve_binding.call_args.kwargs["trigger_project_id"] == "project-jira"
+    assert resolve_binding.call_args.kwargs["trigger_tracker_id"] == "tracker-jira"
+    assert "object_attributes" not in event["payload"]
+
+    config = preset["git_clone_config"]
+    assert (
+        interpolate_git_config_text(config["pull_request_title"], event)
+        == "Implements: Export the widget report"
+    )
+    assert interpolate_git_config_text(config["pull_request_description"], event) == (
+        "Automated implementation for PROJ-12\n\nCloses PROJ-12"
+    )
+
+    executor = ContainerAgentExecutor(
+        agent_type="codex",
+        config={},
+        image="test",
+        use_kubernetes=False,
+    )
+    _source, target, *_rest = executor._resolve_git_branch_plan(
+        {
+            "flow_name": "Automated Issue Implementation",
+            "execution_id": "08095fd6-f861-4939-997d-2600d1ec5a80",
+            "trigger_event_data": event,
+        },
+        {"source_branch": None, "target_branch": None},
+    )
+    assert target == "preloop/issue-PROJ-12-08095fd6"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_git_host_preset_placeholders_unchanged(
+    preset: dict, provider: str
+) -> None:
+    """GitHub and GitLab still resolve number, title and ``Closes #N``."""
+    from preloop.agents.container import interpolate_git_config_text
+    from preloop.services.prompt_resolvers.base import ResolverContext
+    from preloop.services.prompt_resolvers.trigger_event import TriggerEventResolver
+
+    description = "Acceptance: an empty title is rejected."
+    url = (
+        "https://github.com/example/project/issues/12"
+        if provider == "github"
+        else "https://gitlab.example.com/example/project/-/issues/12"
+    )
+    if provider == "github":
+        payload = {
+            "issue": {
+                "number": 12,
+                "title": "Validate title",
+                "body": description,
+                "html_url": url,
+            },
+            "repository": {"name": "project"},
+        }
+    else:
+        payload = {
+            "object_attributes": {
+                "title": "Validate title",
+                "description": description,
+                "iid": 12,
+                "url": url,
+            },
+            "repository": {"name": "project"},
+        }
+    event = {"source": provider, "type": "issue_labeled", "payload": payload}
+    context = ResolverContext(
+        db=object(),
+        trigger_event_data=event,
+        flow_id="flow-1",
+        execution_id="08095fd6-f861-4939-997d-2600d1ec5a80",
+    )
+    resolver = TriggerEventResolver()
+    assert (
+        await resolver.resolve("payload.object_attributes.title", context)
+        == "Validate title"
+    )
+    assert (
+        await resolver.resolve("payload.object_attributes.description", context)
+        == description
+    )
+    assert await resolver.resolve("payload.object_attributes.number", context) == "12"
+    assert await resolver.resolve("payload.object_attributes.url", context) == url
+    assert (
+        await resolver.resolve("payload.object_attributes.close_reference", context)
+        == "#12"
+    )
+    assert await resolver.resolve("payload.repository.name", context) == "project"
+
+    config = preset["git_clone_config"]
+    assert (
+        interpolate_git_config_text(config["pull_request_title"], event)
+        == "Implements: Validate title"
+    )
+    assert interpolate_git_config_text(config["pull_request_description"], event) == (
+        "Automated implementation for #12\n\nCloses #12"
+    )

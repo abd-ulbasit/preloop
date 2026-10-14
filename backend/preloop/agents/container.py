@@ -702,6 +702,25 @@ def _lookup_trigger_path(root: Any, path: str) -> Optional[str]:
     return str(value)
 
 
+def _git_config_payload(trigger: Dict[str, Any]) -> Dict[str, Any]:
+    """Payload with provider ``object_attributes`` filled in.
+
+    Pull-request title and body are rendered here, not by
+    ``TriggerEventResolver.resolve``, so a Jira issue webhook needs the same
+    normalization. Otherwise ``{{object_attributes.*}}`` stays unresolved and
+    the whole body is dropped.
+    """
+    from preloop.services.prompt_resolvers.trigger_event import TriggerEventResolver
+
+    if isinstance(trigger.get("payload"), dict):
+        event: Dict[str, Any] = trigger
+    else:
+        event = {"payload": trigger, "source": trigger.get("source", "")}
+    normalized = TriggerEventResolver()._normalize_event_data(event)
+    payload = normalized.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
 def interpolate_git_config_text(
     text: Optional[str], trigger_data: Optional[Dict[str, Any]]
 ) -> str:
@@ -710,14 +729,14 @@ def interpolate_git_config_text(
     Unresolved placeholders (still containing ``{{``) are treated as empty so
     they cannot become a PR title. GitLab ``object_attributes.*`` paths also
     read GitHub ``issue.*`` so the shipped implementer preset works on both.
+    Jira issue webhooks are normalized to the same ``object_attributes`` keys
+    before lookup, including ``close_reference`` (``#N`` or a bare issue key).
     """
 
     if not text or not isinstance(text, str):
         return ""
     trigger = trigger_data if isinstance(trigger_data, dict) else {}
-    payload = trigger.get("payload", trigger)
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = _git_config_payload(trigger)
 
     def repl(match: re.Match) -> str:
         raw = match.group(1)

@@ -564,3 +564,103 @@ class TestReferencedIssues:
             "payload.object_attributes.referenced_issues", context
         )
         assert value is None
+
+
+class TestJiraIssueObjectAttributes:
+    """Jira webhooks map onto the same object_attributes keys as GitLab."""
+
+    @pytest.mark.asyncio
+    async def test_string_description_and_browse_url_from_project_self(self):
+        resolver = TriggerEventResolver()
+        event = {
+            "source": "jira",
+            "type": "issue_labeled",
+            "payload": {
+                "webhookEvent": "jira:issue_updated",
+                "issue": {
+                    "key": "ALP-9",
+                    "fields": {
+                        "summary": "Broken search",
+                        "description": "Search returns 500",
+                        "project": {
+                            "key": "ALP",
+                            "self": "https://jira.example.com/rest/api/2/project/1",
+                        },
+                    },
+                },
+            },
+        }
+        context = ResolverContext(
+            db=MagicMock(),
+            trigger_event_data=event,
+            flow_id="flow-1",
+            execution_id="exec-1",
+        )
+        assert (
+            await resolver.resolve("payload.object_attributes.description", context)
+            == "Search returns 500"
+        )
+        assert (
+            await resolver.resolve("payload.object_attributes.url", context)
+            == "https://jira.example.com/browse/ALP-9"
+        )
+        assert (
+            await resolver.resolve("payload.object_attributes.close_reference", context)
+            == "ALP-9"
+        )
+        assert "object_attributes" not in event["payload"]
+
+    @pytest.mark.asyncio
+    async def test_unbound_jira_trigger_leaves_repository_name_unset(self):
+        from unittest.mock import patch
+
+        resolver = TriggerEventResolver()
+        context = ResolverContext(
+            db=MagicMock(),
+            trigger_event_data={
+                "source": "jira",
+                "project_id": "project-jira",
+                "payload": {
+                    "issue": {"key": "ALP-9", "fields": {"summary": "Broken search"}}
+                },
+            },
+            flow_id="flow-1",
+            execution_id="exec-1",
+        )
+        with (
+            patch(
+                "preloop.services.repository_binding.resolve_repository_binding",
+                return_value=None,
+            ) as resolve_binding,
+            patch("preloop.models.crud.crud_flow.get", return_value=MagicMock()),
+        ):
+            assert await resolver.resolve("payload.repository.name", context) is None
+        resolve_binding.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_github_issue_is_not_mapped_as_jira(self):
+        resolver = TriggerEventResolver()
+        context = ResolverContext(
+            db=MagicMock(),
+            trigger_event_data={
+                "source": "github",
+                "payload": {
+                    "issue": {
+                        "number": 12,
+                        "title": "Validate title",
+                        "body": "Details",
+                        "html_url": "https://github.com/acme/app/issues/12",
+                        "key": "ALP-9",
+                    }
+                },
+            },
+            flow_id="flow-1",
+            execution_id="exec-1",
+        )
+        assert (
+            await resolver.resolve("payload.object_attributes.number", context) == "12"
+        )
+        assert (
+            await resolver.resolve("payload.object_attributes.close_reference", context)
+            == "#12"
+        )
