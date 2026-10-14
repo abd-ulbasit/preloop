@@ -709,6 +709,11 @@ def _git_config_payload(trigger: Dict[str, Any]) -> Dict[str, Any]:
     ``TriggerEventResolver.resolve``, so a Jira issue webhook needs the same
     normalization. Otherwise ``{{object_attributes.*}}`` stays unresolved and
     the whole body is dropped.
+
+    ``repository.*`` is not filled here. The bound code-host name is resolved
+    on the prompt path, which has a database session. This renderer only has
+    the trigger payload, and preset 011 does not put ``repository.name`` in
+    the pull request title or body.
     """
     from preloop.services.prompt_resolvers.trigger_event import TriggerEventResolver
 

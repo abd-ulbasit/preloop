@@ -110,7 +110,7 @@ def _jira_description_text(description: Any) -> str:
     if isinstance(description, dict):
         from preloop.sync.trackers.jira import JiraTracker
 
-        return JiraTracker._adf_to_plain_text(None, description)
+        return JiraTracker._adf_to_plain_text(description)
     return str(description)
 
 

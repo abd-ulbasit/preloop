@@ -950,8 +950,13 @@ class JiraTracker(BaseTracker):
             logger.warning(f"Failed to parse Jira datetime: {date_str}")
             return None
 
-    def _adf_to_plain_text(self, adf_node: Optional[Any]) -> str:
-        """Converts Jira Atlassian Document Format (ADF) to plain text."""
+    @staticmethod
+    def _adf_to_plain_text(adf_node: Optional[Any]) -> str:
+        """Converts Jira Atlassian Document Format (ADF) to plain text.
+
+        A static method so callers that only have a webhook body can render
+        it without constructing a tracker client.
+        """
         if adf_node is None:
             return ""
         # If it's already plain text (e.g., older Jira server or non-ADF field)
