@@ -449,8 +449,16 @@ What the runner checks, and what it never reads:
   (`partial`), nothing installed (`ungoverned`).
 - **Models.** Copilot CLI has no command that lists models, so the runner
   reports a short list shipped with the CLI (`static`), the `model` set in
-  Copilot's config (`configured`) and models seen in completed runs
-  (`observed`).
+  Copilot's config (`configured`) and models the seat's own runs reported
+  (`observed`). A Copilot session turn or host execution that includes a
+  model id in its `usage` event is remembered for that harness (the id
+  only; paths, tokens and environment values are not) and published on the
+  next inventory refresh. An id already in the static list is not repeated,
+  and the most recently observed id is listed immediately after `auto`.
+  The static list is updated in the CLI when Copilot's models change
+  (the 1.0.9x list includes `claude-sonnet-5.5` and the older ids); update
+  the runner's CLI to pick up a new list, then run
+  `preloop runner inventory --refresh`.
 
 Executable paths, arguments, environment values and user names never leave
 the host.
