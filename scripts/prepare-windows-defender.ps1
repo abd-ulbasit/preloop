@@ -13,6 +13,23 @@ function Enable-WindowsDefenderEventLog {
   } finally { $log.Dispose() }
 }
 
+function Update-GitHubHostedDefenderSignature {
+  # The hosted image can briefly lose Defender's CIM RPC connection while
+  # protection starts. Retry only that transport failure, never policy errors.
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      Update-MpSignature -ErrorAction Stop
+      return
+    } catch {
+      if ($_.FullyQualifiedErrorId -notmatch '^HRESULT 0x800706be(?:,|$)' -or $attempt -eq 3) {
+        throw
+      }
+      Write-Warning "Defender signature update RPC failed; retrying ($attempt/3)."
+      Start-Sleep -Seconds (2 * $attempt)
+    }
+  }
+}
+
 function Initialize-GitHubHostedDefender {
   if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:OS -ne 'Windows_NT') {
     throw 'Protection setup is restricted to disposable GitHub-hosted Windows runners.'
@@ -33,7 +50,7 @@ function Initialize-GitHubHostedDefender {
     }
   }
   Enable-WindowsDefenderEventLog
-  Update-MpSignature -ErrorAction Stop
+  Update-GitHubHostedDefenderSignature
   Assert-DefenderCoverage | Format-List AMRunningMode, AMEngineVersion, AMProductVersion, AntivirusSignatureVersion, RealTimeProtectionEnabled
 }
 

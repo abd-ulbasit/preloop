@@ -237,6 +237,8 @@ Describe 'Disposable runner protection setup' {
     Mock Remove-MpPreference { }
     Mock Enable-WindowsDefenderEventLog { }
     Mock Update-MpSignature { }
+    Mock Start-Sleep { }
+    $script:updateAttempts = 0
     Mock Assert-DefenderCoverage { [pscustomobject]@{ AMRunningMode = 'Normal' } }
   }
 
@@ -262,6 +264,60 @@ Describe 'Disposable runner protection setup' {
       $SubmitSamplesConsent -eq 'SendSafeSamples'
     }
     Should -Invoke Remove-MpPreference -Times 1 -Exactly -ParameterFilter { $ExclusionPath.Count -eq 2 }
+    Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
+  }
+
+  It 'retries a transient signature RPC failure and still asserts coverage' {
+    Mock Update-MpSignature {
+      $script:updateAttempts++
+      if ($script:updateAttempts -lt 3) {
+        throw [System.Management.Automation.ErrorRecord]::new(
+          [System.Exception]::new('The remote procedure call failed.'),
+          'HRESULT 0x800706be,Update-MpSignature',
+          [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+      }
+    }
+    Initialize-GitHubHostedDefender
+    Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 2 }
+    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 4 }
+    Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
+  }
+
+  It 'fails closed when signature RPC failures persist' {
+    Mock Update-MpSignature {
+      throw [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('The remote procedure call failed.'),
+        'HRESULT 0x800706be,Update-MpSignature',
+        [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+    }
+    { Initialize-GitHubHostedDefender } | Should -Throw '*remote procedure call failed*'
+    Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Start-Sleep -Times 2 -Exactly
+    Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
+  }
+
+  It 'does not retry unrelated signature update failures' {
+    Mock Update-MpSignature { throw 'signature transport failed' }
+    { Initialize-GitHubHostedDefender } | Should -Throw '*signature transport failed*'
+    Should -Invoke Update-MpSignature -Times 1 -Exactly
+    Should -Invoke Start-Sleep -Times 0 -Exactly
+    Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
+  }
+
+  It 'still rejects ineffective protection after a recovered RPC failure' {
+    Mock Update-MpSignature {
+      $script:updateAttempts++
+      if ($script:updateAttempts -eq 1) {
+        throw [System.Management.Automation.ErrorRecord]::new(
+          [System.Exception]::new('The remote procedure call failed.'),
+          'HRESULT 0x800706be,Update-MpSignature',
+          [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+      }
+    }
+    Mock Assert-DefenderCoverage { throw 'passive mode' }
+    { Initialize-GitHubHostedDefender } | Should -Throw '*passive mode*'
+    Should -Invoke Update-MpSignature -Times 2 -Exactly
     Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
   }
 
