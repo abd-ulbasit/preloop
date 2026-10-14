@@ -40,3 +40,28 @@ def test_runtime_update_retains_lock_until_atomic_audit_commit() -> None:
     # Default updates still commit for existing callers.
     crud_api_key.update(db, db_obj=row, obj_in={"is_active": True})
     db.commit.assert_called_once()
+
+
+def test_context_key_list_preserves_tenant_and_exact_total() -> None:
+    db = MagicMock()
+    tenant = uuid4()
+    first = db.query.return_value.filter.return_value
+    filtered = first.filter.return_value
+    filtered.count.return_value = 7
+    filtered.order_by.return_value.limit.return_value.all.return_value = [
+        "first",
+        "second",
+    ]
+    rows, total = crud_api_key.list_by_context(
+        db,
+        account_id=tenant,
+        context_key="device_report",
+        filters={"workstation_fingerprint": "a" * 64},
+        limit=2,
+    )
+    assert rows == ["first", "second"] and total == 7
+    account_predicate = db.query.return_value.filter.call_args.args[0]
+    compiled = account_predicate.compile(dialect=postgresql.dialect())
+    assert "api_key.account_id" in str(compiled)
+    assert list(compiled.params.values()) == [tenant]
+    filtered.order_by.return_value.limit.assert_called_once_with(2)

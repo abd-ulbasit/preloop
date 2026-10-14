@@ -100,6 +100,32 @@ class CRUDApiKey(CRUDBase[ApiKey]):
             .first()
         )
 
+    def list_by_context(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        context_key: str,
+        filters: Optional[Dict[str, str]] = None,
+        limit: int = 100,
+    ) -> tuple[List[ApiKey], int]:
+        """List a tenant's context-bound keys with exact count and bounded rows.
+
+        Context field names and values remain bound SQL parameters. Missing
+        and JSON-null contexts cannot match a persisted restriction.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("Key list limit must be between 1 and 1000")
+        context = ApiKey.context_data[context_key]
+        query = db.query(ApiKey).filter(
+            ApiKey.account_id == account_id, context.as_string().is_not(None)
+        )
+        for field, value in (filters or {}).items():
+            query = query.filter(context[field].as_string() == value)
+        total = query.count()
+        rows = query.order_by(ApiKey.created_at.desc(), ApiKey.id).limit(limit).all()
+        return rows, total
+
     def create_runtime_key(
         self,
         db: Session,
