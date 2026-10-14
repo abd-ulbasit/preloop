@@ -2394,11 +2394,26 @@ export async function getAccountAgents(
 
 export async function getAccountAgent(
   agentId: string,
-  params: { start_date?: string; end_date?: string } = {}
+  params: {
+    start_date?: string;
+    end_date?: string;
+    /**
+     * Optional sections to include (`usage_by_model`, `activity`,
+     * `sessions`). Omitted: all of them. Empty: the header only.
+     */
+    include?: Array<'usage_by_model' | 'activity' | 'sessions'>;
+    session_limit?: number;
+    session_offset?: number;
+  } = {}
 ): Promise<ManagedAgentDetailResponse> {
   const queryParams = new URLSearchParams();
   if (params.start_date) queryParams.set('start_date', params.start_date);
   if (params.end_date) queryParams.set('end_date', params.end_date);
+  if (params.include) queryParams.set('include', params.include.join(','));
+  if (params.session_limit)
+    queryParams.set('session_limit', String(params.session_limit));
+  if (params.session_offset)
+    queryParams.set('session_offset', String(params.session_offset));
   const queryStr = queryParams.toString();
   const response = await fetchWithAuth(
     `/api/v1/agents/${agentId}${queryStr ? `?${queryStr}` : ''}`

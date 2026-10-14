@@ -933,6 +933,8 @@ export interface ManagedAgentDetailResponse {
   activity_by_server: ManagedAgentServerActivitySummary[];
   activity_by_tool: ManagedAgentToolActivitySummary[];
   sessions: RuntimeSessionSummary[];
+  /** Sessions across pages; null or absent when not requested. */
+  session_total?: number | null;
 }
 
 export interface ManagedAgentUpdateRequest {
