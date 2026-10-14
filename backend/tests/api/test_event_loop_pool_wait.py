@@ -86,9 +86,9 @@ OFFLOAD_MARKERS = ("run_db_off_loop", "run_in_threadpool", "run_db_async")
 # grow. Lower this number when you convert more handlers.
 ASYNC_SYNC_SESSION_ROUTE_BUDGET = 128
 
-# Sockets that already take a synchronous session. ``iter_route_contexts``
-# yields them with ``methods`` unset (FastAPI 0.143 does; the pinned 0.141.1
-# does not). A new one must be named here or the ratchet fails.
+# Sockets that already take a synchronous session. Included routers wrap
+# them so the effective context has no endpoint or dependant; the original
+# route still does. A new one must be named here or the ratchet fails.
 KNOWN_SYNC_SESSION_SOCKETS = frozenset(
     {
         "/api/v1/agents/control/ws",
@@ -110,19 +110,54 @@ def _iter_route_contexts(app: FastAPI) -> Iterator[Any]:
     yield from iter_route_contexts(app.routes)
 
 
+def _uses_sync_session(dependant: Any) -> bool:
+    """Whether this dependant checks out a synchronous session directly."""
+    return any(
+        getattr(sub, "call", None) is get_db_session
+        for sub in getattr(dependant, "dependencies", ())
+    )
+
+
+def _mounted_websocket_path(context: Any, route: Any) -> str:
+    """Return the path clients open, including the ``include_router`` prefix.
+
+    An included WebSocket's effective context leaves ``path`` empty. The
+    Starlette route on that context still has the mounted path.
+    """
+    inner = getattr(context, "_route_context", None)
+    starlette = getattr(inner, "starlette_route", None) if inner is not None else None
+    if starlette is None:
+        starlette = getattr(context, "starlette_route", None)
+    mounted = getattr(starlette, "path", None)
+    if mounted:
+        return str(mounted)
+    visible = getattr(context, "path", None)
+    if visible:
+        return str(visible)
+    return str(route.path)
+
+
 def _sync_session_routes(
     app: FastAPI,
 ) -> tuple[set[tuple[str, str]], set[str]]:
     """Split async ``get_db_session`` routes into HTTP methods and sockets.
 
-    WebSocket contexts have no HTTP methods. Treating that as GET made two
-    existing sockets look like new handlers once FastAPI started yielding them.
+    Included WebSocket routes leave ``endpoint`` and ``dependant`` unset on
+    the effective context. Read those from the original route, before that
+    filter, or a new socket added the same way never reaches the ratchet.
     """
     from fastapi.routing import APIWebSocketRoute
 
     http: set[tuple[str, str]] = set()
     sockets: set[str] = set()
     for context in _iter_route_contexts(app):
+        route = getattr(context, "original_route", None) or getattr(
+            context, "route", None
+        )
+        if isinstance(route, APIWebSocketRoute):
+            if _uses_sync_session(getattr(route, "dependant", None)):
+                sockets.add(_mounted_websocket_path(context, route))
+            continue
         endpoint = getattr(context, "endpoint", None)
         dependant = getattr(context, "dependant", None)
         if endpoint is None or dependant is None:
@@ -133,12 +168,9 @@ def _sync_session_routes(
             # preloop.api.heavy_routes runs the whole handler on its own
             # bounded thread pool; nothing touches the session on the loop.
             continue
-        if not any(sub.call is get_db_session for sub in dependant.dependencies):
+        if not _uses_sync_session(dependant):
             continue
-        route = getattr(context, "route", None)
-        if isinstance(route, APIWebSocketRoute) or not context.methods:
-            if isinstance(route, APIWebSocketRoute):
-                sockets.add(context.path)
+        if not context.methods:
             continue
         for method in context.methods:
             http.add((method, context.path))
@@ -188,9 +220,9 @@ def test_async_sync_session_route_count_does_not_grow(app: FastAPI) -> None:
         f"{ASYNC_SYNC_SESSION_ROUTE_BUDGET}. New async handlers should take an "
         "async session or offload with run_db_off_loop."
     )
-    assert sockets <= KNOWN_SYNC_SESSION_SOCKETS, (
-        "New WebSocket handlers depend on get_db_session: "
-        + ", ".join(sorted(sockets - KNOWN_SYNC_SESSION_SOCKETS))
+    assert sockets == KNOWN_SYNC_SESSION_SOCKETS, (
+        "WebSocket handlers that depend on get_db_session changed: "
+        f"found {sorted(sockets)}, expected {sorted(KNOWN_SYNC_SESSION_SOCKETS)}"
     )
 
 
