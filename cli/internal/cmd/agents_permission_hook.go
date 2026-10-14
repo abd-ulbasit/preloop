@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -72,6 +73,10 @@ type permissionCheckRequest struct {
 	AgentReasoning  string                 `json:"agent_reasoning,omitempty"`
 	ClientDecision  string                 `json:"client_decision,omitempty"`
 	EvaluationPhase string                 `json:"evaluation_phase,omitempty"`
+	// FlowExecutionID names the persistent flow execution this session runs
+	// for (PRELOOP_FLOW_EXECUTION_ID, set by the Agent Control sidecar). The
+	// backend applies that flow's approval policy to this session only.
+	FlowExecutionID string `json:"flow_execution_id,omitempty"`
 }
 
 // permissionCheckResponse is the (blocking) response from permissionCheckPath.
@@ -583,6 +588,7 @@ func buildPermissionRequest(
 		req.Model = codexPermissionModel(req.SessionID, firstStringField(event, "transcript_path", "rollout_path"), firstStringField(event, "turn_id"))
 	}
 	req.Cwd = firstStringField(event, "cwd")
+	req.FlowExecutionID = permissionHookFlowExecutionID()
 	if source == permissionSourceDevinCLI && req.Cwd == "" {
 		req.Cwd = os.Getenv("DEVIN_PROJECT_DIR")
 	}
@@ -992,6 +998,18 @@ func normalizePermissionSource(source string) string {
 	default:
 		return ""
 	}
+}
+
+var flowExecutionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// permissionHookFlowExecutionID returns PRELOOP_FLOW_EXECUTION_ID when it is
+// a UUID, else "".
+func permissionHookFlowExecutionID() string {
+	value := strings.TrimSpace(permissionHookGetenv("PRELOOP_FLOW_EXECUTION_ID"))
+	if flowExecutionIDPattern.MatchString(value) {
+		return value
+	}
+	return ""
 }
 
 // resolvePermissionHookCredential locates the per-agent credential file for the

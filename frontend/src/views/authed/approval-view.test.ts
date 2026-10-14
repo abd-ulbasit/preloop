@@ -899,6 +899,26 @@ describe('ApprovalView', () => {
         element.shadowRoot!.querySelector('.resolved-info h3')!.textContent
       ).to.contain('Approved by a time-boxed bypass');
     });
+
+    it("names the flow's approval policy", async () => {
+      fetchStub = createFetchStub({
+        request: pendingRequest({
+          status: 'approved',
+          resolved_at: new Date(Date.now() + 1000).toISOString(),
+          auto_approved_reason: 'flow_approval_policy',
+        }),
+        history: [],
+      });
+      const element = (await fixture(
+        html`<approval-view .requestId=${'req-1'}></approval-view>`
+      )) as ApprovalView;
+      await waitUntil(() => !(element as any).loading, 'still loading');
+      await element.updateComplete;
+
+      expect(
+        element.shadowRoot!.querySelector('.resolved-info h3')!.textContent
+      ).to.contain("Approved by the flow's approval policy");
+    });
   });
 
   describe('always allow this tool for this agent', () => {

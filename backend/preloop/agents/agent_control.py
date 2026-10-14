@@ -29,7 +29,10 @@ from preloop.services.agent_control_dispatch import (
     dispatch_operator_message,
 )
 from preloop.services.agent_control_presence import control_heartbeat_is_fresh
-from preloop.services.persistent_workspace import workspace_metadata
+from preloop.services.persistent_workspace import (
+    flow_workspace_metadata,
+    workspace_metadata,
+)
 from preloop.services.runner_service import unwrap_agent_config
 
 logger = logging.getLogger(__name__)
@@ -97,12 +100,62 @@ def _result_is_failure(payload: Optional[Dict[str, Any]]) -> bool:
     return isinstance(error, str) and bool(error.strip()) and status != "completed"
 
 
+_ANTHROPIC_PROVIDERS = frozenset({"anthropic", "claude"})
+
+#: Persistent target kinds whose sidecar resolves ``agent_config.workspace``.
+WORKSPACE_TARGET_KINDS = frozenset({"claude_code"})
+
+
+def persistent_model_name(execution_context: Dict[str, Any]) -> Optional[str]:
+    """Model name a persistent Claude Code target should run the flow with.
+
+    The flow's managed model is sent only when it is a Claude model, so a
+    flow saved with an unrelated model (ignored on this path before) does
+    not start failing on the host. Gateway-routed models use the gateway
+    alias, which the host reaches through its onboarded gateway URL.
+
+    Args:
+        execution_context: Orchestrator context with the resolved model.
+
+    Returns:
+        The model alias or identifier, or None to keep the host default.
+    """
+    gateway = bool(execution_context.get("model_gateway_enabled"))
+    alias = execution_context.get("model_gateway_model_alias") if gateway else None
+    identifier = execution_context.get("model_identifier")
+    name = alias or identifier
+    if not isinstance(name, str) or not name.strip():
+        return None
+    provider = str(execution_context.get("model_provider_name") or "").lower()
+    looks_claude = any(
+        isinstance(value, str) and "claude" in value.lower()
+        for value in (alias, identifier)
+    )
+    if provider not in _ANTHROPIC_PROVIDERS and not looks_claude:
+        return None
+    return name.strip()
+
+
 def _flow_dispatch_metadata(
     execution_context: Dict[str, Any],
     *,
     timeout_seconds: Optional[int] = None,
+    agent_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build the send_message metadata a persistent flow attaches."""
+    """Build the send_message metadata a persistent flow attaches.
+
+    Args:
+        execution_context: Orchestrator context for this execution.
+        timeout_seconds: The flow timeout, sent so the host can bound a turn.
+        agent_config: The flow's persistent agent configuration. Its
+            ``workspace`` names a directory on the agent host.
+
+    Returns:
+        Metadata without None values.
+
+    Raises:
+        AgentStartError: When ``agent_config.workspace`` is malformed.
+    """
     metadata: Dict[str, Any] = {
         "source": "flow_execution",
         "flow_id": execution_context.get("flow_id"),
@@ -144,6 +197,17 @@ def _flow_dispatch_metadata(
     resolved_timeout = timeout_seconds or execution_context.get("timeout_seconds")
     if resolved_timeout is not None:
         metadata["timeout_seconds"] = resolved_timeout
+    model = persistent_model_name(execution_context)
+    if model:
+        metadata["model"] = model
+    try:
+        host_workspace = flow_workspace_metadata(agent_config or {})
+    except ValueError as exc:
+        raise AgentStartError(str(exc), category="runner_error") from exc
+    if host_workspace is not None:
+        # A named host directory replaces the managed checkout.
+        metadata["workspace"] = host_workspace
+        return {key: value for key, value in metadata.items() if value is not None}
     git_config = execution_context.get("git_clone_config")
     try:
         metadata["workspace"] = workspace_metadata(
@@ -301,9 +365,27 @@ class AgentControlExecutor(AgentExecutor):
                     **execution_context,
                     "git_clone_config": flow_git,
                 }
+        agent_kind = str(
+            getattr(agent, "agent_kind", None)
+            or getattr(agent, "session_source_type", None)
+            or ""
+        ).lower()
+        if (
+            self.config.get("workspace") is not None
+            and agent_kind not in WORKSPACE_TARGET_KINDS
+        ):
+            # Other sidecars ignore an authorized directory and would run
+            # in their default directory instead of the one the flow names.
+            raise AgentStartError(
+                "agent_config.workspace is supported only on Claude Code "
+                f"targets; {_target_display_name(agent, target_id)} is "
+                f"{agent_kind or 'unknown'}",
+                category="runner_error",
+            )
         metadata = _flow_dispatch_metadata(
             dispatch_context,
             timeout_seconds=self._timeout_seconds(),
+            agent_config=self.config,
         )
         from preloop.services.flow_execution_limits import parse_execution_limits
 

@@ -32,8 +32,23 @@ export type ControlConfig = {
   observer_enabled?: boolean;
   /** Observer poll cadence in milliseconds. Defaults to 5000. */
   observer_poll_ms?: number;
-  /** Per-turn reply timeout in milliseconds. Defaults to 5 minutes. */
+  /**
+   * Per-turn reply timeout in milliseconds. Defaults to 5 minutes. A flow's
+   * `run_limits.max_duration_seconds` replaces the default; this value, when
+   * set, is the upper bound.
+   */
   turn_timeout_ms?: number;
+  /**
+   * Runner config with the authorized directories a flow may run in.
+   * Defaults to ~/.preloop/runner.json (written by `preloop runner dirs add`).
+   */
+  runner_config_path?: string;
+  /**
+   * Claude Code binary for owned sessions (Agent SDK
+   * pathToClaudeCodeExecutable). Defaults to the `claude` on PATH when it is
+   * newer than the SDK's bundled Claude Code, else the bundled one.
+   */
+  claude_executable?: string;
 };
 
 export const PROTOCOL = "preloop.agent_control.v1";

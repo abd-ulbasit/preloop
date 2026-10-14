@@ -1736,6 +1736,20 @@ class FlowBase(BaseModel):
         idle = v.get(STREAM_IDLE_TIMEOUT_CONFIG_KEY)
         if idle is not None:
             validate_stream_idle_timeout(idle)
+        workspace = v.get("workspace")
+        if workspace is not None:
+            from preloop.services.persistent_workspace import (
+                validate_flow_workspace,
+            )
+
+            validate_flow_workspace(workspace)
+        approval_policy = v.get("approval_policy")
+        if approval_policy is not None:
+            from preloop.services.flow_approval_policy import (
+                validate_approval_policy,
+            )
+
+            validate_approval_policy(approval_policy)
         return v
 
     @field_validator("trigger_project_ids", mode="before")

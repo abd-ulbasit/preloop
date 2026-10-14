@@ -31,7 +31,13 @@ import {
 import { QueryFactory, SessionManager, sdkQueryFactory } from "./sessions.js";
 import { SessionActivity, TranscriptObserver } from "./observer.js";
 import { LauncherBridge, OwnershipMode } from "./mode.js";
-import { WorkspaceManager, WorkspaceSpec } from "./workspace.js";
+import { GitRunner, WorkspaceManager, WorkspaceSpec } from "./workspace.js";
+import {
+  FLOW_WORKSPACE_MODE,
+  FlowWorkspaceSpec,
+  flowModel,
+  resolveFlowWorkspace,
+} from "./flow-workspace.js";
 
 export {
   ControlConfig,
@@ -42,6 +48,11 @@ export {
 export type { ConfigSource, LoadedConfig } from "./config.js";
 export { SessionManager } from "./sessions.js";
 export { WorkspaceManager } from "./workspace.js";
+export {
+  resolveFlowWorkspace,
+  selectTurnTimeoutMs,
+  flowModel,
+} from "./flow-workspace.js";
 export type { WorkspaceSpec } from "./workspace.js";
 export type { QueryFactory, SdkQueryHandle, SdkMessage, SdkUserMessage } from "./sessions.js";
 export { TranscriptObserver } from "./observer.js";
@@ -64,7 +75,6 @@ export type OperatorCommand = {
     session_reference?: string;
     runtime_session_id?: string;
     spawn_worktree?: boolean;
-    cwd?: string;
   };
 };
 
@@ -97,6 +107,8 @@ export class PreloopClaudeSidecar {
   private socket?: WebSocket;
   private sessions?: SessionManager;
   private workspaces?: WorkspaceManager;
+  /** Git runner for the flow-workspace dirty check. Tests replace it. */
+  flowWorkspaceGit?: GitRunner;
   private readonly workspaceByMessage = new Map<string, string>();
   private observer?: TranscriptObserver;
   private launcher = new LauncherBridge();
@@ -160,7 +172,9 @@ export class PreloopClaudeSidecar {
     if (config.enabled === false) {
       throw new Error("preloop-control is disabled (enabled=false)");
     }
-    this.sessions ??= new SessionManager(config, this.queryFactory);
+    this.sessions ??= new SessionManager(config, this.queryFactory, {
+      log: (line) => this.log(`Claude sidecar: ${line}`),
+    });
     this.launcher.setLogger((message) => this.log(message));
     this.launcher.onLauncherReleased(() => {
       void this.sessions?.release();
@@ -391,7 +405,9 @@ export class PreloopClaudeSidecar {
       return undefined;
     }
     if (!this.sessions) {
-      this.sessions = new SessionManager(this.verify(), this.queryFactory);
+      this.sessions = new SessionManager(this.verify(), this.queryFactory, {
+        log: (line) => this.log(`Claude sidecar: ${line}`),
+      });
     }
     const payload = command.payload ?? {};
     const targetSessionId = resolveTargetSessionId(payload);
@@ -426,15 +442,19 @@ export class PreloopClaudeSidecar {
     const messageId = command.message_id;
     let workspacePath: string | undefined;
     const workspace = payload.metadata?.["workspace"];
-    let cwd =
-      typeof payload.cwd === "string"
-        ? payload.cwd
-        : typeof payload.metadata?.["cwd"] === "string"
-          ? String(payload.metadata["cwd"])
-          : undefined;
+    // The cwd comes only from a validated workspace: a raw `cwd` in the
+    // payload or metadata is ignored, so a message cannot point a session
+    // at a directory the host owner did not authorize.
+    let cwd: string | undefined;
     if (workspace && typeof workspace === "object") {
       const spec = workspace as WorkspaceSpec;
-      if (spec.mode === "persistent_checkout") {
+      if ((spec as FlowWorkspaceSpec).mode === FLOW_WORKSPACE_MODE) {
+        cwd = await resolveFlowWorkspace(
+          workspace as FlowWorkspaceSpec,
+          this.verify(),
+          { git: this.flowWorkspaceGit },
+        );
+      } else if (spec.mode === "persistent_checkout") {
         const config = this.verify();
         this.workspaces ??= new WorkspaceManager(config);
         cwd = await this.workspaces.prepare(spec, spawnWorktree);
@@ -456,6 +476,7 @@ export class PreloopClaudeSidecar {
         metadata: payload.metadata,
         spawnWorktree: spawnWorktree && !preparedCheckout,
         cwd,
+        model: flowModel(payload.metadata),
       });
     } finally {
       if (preparedCheckout && cwd) {

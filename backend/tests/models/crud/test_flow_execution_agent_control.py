@@ -84,3 +84,79 @@ def test_bind_agent_control_command_stores_reserved_key(db_session: Session) -> 
         f"control:{managed_agent_id}:{command_id}"
     )
     assert updated.trigger_event_details["source"] == "github"
+
+
+def test_bind_approval_session_is_first_use_and_agent_scoped(
+    db_session: Session,
+) -> None:
+    account = _make_account(db_session)
+    flow = _make_flow(db_session, account.id)
+    execution = crud_flow_execution.create(
+        db_session,
+        obj_in=FlowExecutionCreate(
+            flow_id=flow.id, status="RUNNING", trigger_event_details={}
+        ),
+    )
+    db_session.commit()
+    managed_agent_id = uuid.uuid4()
+    assert (
+        crud_flow_execution.bind_approval_session(
+            db_session,
+            execution_id=execution.id,
+            account_id=str(account.id),
+            managed_agent_id=str(managed_agent_id),
+            session_id="s-1",
+            cwd="/srv/work",
+        )
+        is None
+    ), "no Agent Control binding yet"
+    crud_flow_execution.bind_agent_control_command(
+        db_session,
+        execution_id=execution.id,
+        command_id=str(uuid.uuid4()),
+        managed_agent_id=managed_agent_id,
+    )
+
+    first = crud_flow_execution.bind_approval_session(
+        db_session,
+        execution_id=execution.id,
+        account_id=str(account.id),
+        managed_agent_id=str(managed_agent_id),
+        session_id="s-1",
+        cwd="/srv/work",
+    )
+    assert first is not None
+    assert first["approval_session_id"] == "s-1"
+    assert first["approval_cwd"] == "/srv/work"
+
+    second = crud_flow_execution.bind_approval_session(
+        db_session,
+        execution_id=execution.id,
+        account_id=str(account.id),
+        managed_agent_id=str(managed_agent_id),
+        session_id="s-2",
+        cwd="/elsewhere",
+    )
+    assert second is not None and second["approval_session_id"] == "s-1"
+
+    assert (
+        crud_flow_execution.bind_approval_session(
+            db_session,
+            execution_id=execution.id,
+            account_id=str(account.id),
+            managed_agent_id=str(uuid.uuid4()),
+            session_id="s-1",
+        )
+        is None
+    )
+    other_account = _make_account(db_session)
+    assert (
+        crud_flow_execution.bind_approval_session(
+            db_session,
+            execution_id=execution.id,
+            account_id=str(other_account.id),
+            managed_agent_id=str(managed_agent_id),
+            session_id="s-1",
+        )
+        is None
+    )

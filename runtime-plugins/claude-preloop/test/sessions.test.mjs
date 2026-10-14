@@ -139,53 +139,44 @@ test("a hung turn rejects after turn_timeout_ms instead of blocking forever", as
     () => manager.sendMessage({ text: "never answered" }),
     /timed out after 50ms/,
   );
-  // The sidecar can still take new commands afterwards.
-  assert.equal(manager.ownedSessionIds().length, 1);
+  // The timed-out session is stopped (its Claude Code child is aborted), so
+  // the next command starts or resumes a session instead of queueing
+  // behind a turn that never ends.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(manager.ownedSessionIds().length, 0);
   manager.stop();
 });
 
-test("timed-out first turn's delayed result does not resolve the second waiter", async () => {
-  let releaseFirst;
-  const firstResultGate = new Promise((resolve) => {
-    releaseFirst = resolve;
-  });
+test("a timeout stops the session, so a turn queued behind it fails too", async () => {
+  // Behaviour change (#1679): a timed-out turn aborts the session, which
+  // kills the Claude Code child. A second turn already queued on that
+  // session cannot be answered and is rejected instead of waiting.
   let turn = 0;
-  const delayedFirstFactory = async ({ prompt }) => ({
+  const factory = async ({ prompt, options }) => ({
     async interrupt() {},
     async *[Symbol.asyncIterator]() {
       yield { type: "system", subtype: "init", session_id: "align-1" };
-      for await (const userMessage of prompt) {
+      const aborted = new Promise((resolve) =>
+        options.abortController.signal.addEventListener("abort", resolve),
+      );
+      for await (const _userMessage of prompt) {
         turn += 1;
-        const text = userMessage.message.content;
         if (turn === 1) {
-          await firstResultGate;
-          yield {
-            type: "result",
-            subtype: "success",
-            session_id: "align-1",
-            result: `late-first: ${text}`,
-          };
-        } else {
-          yield {
-            type: "result",
-            subtype: "success",
-            session_id: "align-1",
-            result: `second: ${text}`,
-          };
+          await aborted;
+          throw Object.assign(new Error("aborted"), { name: "AbortError" });
         }
       }
     },
   });
   const manager = new SessionManager(
     { ...baseConfig, turn_timeout_ms: 80 },
-    delayedFirstFactory,
+    factory,
   );
   const first = manager.sendMessage({ text: "A" });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const second = manager.sendMessage({ text: "B" });
+  const second = manager.sendMessage({ text: "B", targetSessionId: "align-1" });
   await assert.rejects(() => first, /timed out after 80ms/);
-  releaseFirst();
-  assert.equal(await second, "second: B");
+  await assert.rejects(() => second, /session ended/);
   manager.stop();
 });
 

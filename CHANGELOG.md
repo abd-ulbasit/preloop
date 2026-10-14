@@ -68,6 +68,10 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Security
 
+- The Claude sidecar no longer takes a session directory from a raw `cwd` in
+  a `send_message`. Persistent flows name an authorized host directory
+  instead, which the sidecar checks against `preloop runner dirs`.
+
 - Personal runners have a threat model with numbered controls T1 to T12:
   per-harness opt-in on the host, who may start a session, the host notice,
   workspace containment, short-lived clone credentials, harness credentials
@@ -97,6 +101,13 @@ machine. The runner never reads, copies or forwards harness credentials. See
   the commitment is no longer a draft.
 
 ### Added
+
+- Persistent flows on Claude Code can run in an authorized host directory
+  (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
+  flow's Claude model, and wait for the flow timeout instead of a fixed 5
+  minute turn. `agent_config.approval_policy` auto-approves the tool calls a
+  scheduled persistent run needs, for that execution's session only, and
+  records each one as approved by the flow's policy.
 
 - **Install a personal runner at login.** After an interactive
   `preloop login`, the CLI offers to install a runner as a background service
@@ -732,6 +743,13 @@ machine. The runner never reads, copies or forwards harness credentials. See
   the breakdown limit are unchanged. Refs #914.
 
 ### Fixed
+
+- The Claude sidecar reports a turn that ends on an error result (such as an
+  API error) as a failed command right away, instead of leaving the flow
+  execution running until its timeout. A timed-out turn now stops the session
+  and its Claude Code child. The bundled Agent SDK moves to 0.3.296, a newer
+  `claude` on PATH (or `claude_executable`) is used when present, and each
+  turn logs the binary and version it ran.
 
 - **Console requests (#1590, #1591, #1593, #1586, #1588)**: pages ask each
   question once. The kill switch is one shared poll for the banner and the
