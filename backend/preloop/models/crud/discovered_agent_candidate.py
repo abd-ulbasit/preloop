@@ -12,6 +12,8 @@ from sqlalchemy import delete, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from preloop.models import models
+
 from ..models.discovered_agent_candidate import (
     CANDIDATE_STATUS_IGNORED,
     CANDIDATE_STATUS_NEW,
@@ -184,6 +186,21 @@ class CRUDDiscoveredAgentCandidate(CRUDBase[DiscoveredAgentCandidate]):
                 outcomes.append(
                     UpsertOutcome(candidate=candidate, created=bool(row.inserted))
                 )
+        # Receipt history includes empty and legacy candidate-only reports.
+        # It establishes reporting history, never collection completeness.
+        db.execute(
+            update(models.ExpectedDevice)
+            .where(
+                models.ExpectedDevice.account_id == account_id,
+                models.ExpectedDevice.device_ref_hash == workstation_fingerprint,
+            )
+            .values(
+                last_reported_at=func.greatest(
+                    models.ExpectedDevice.last_reported_at,
+                    seen_at.replace(tzinfo=UTC) if seen_at.tzinfo is None else seen_at,
+                )
+            )
+        )
         return outcomes
 
     def list_for_account(

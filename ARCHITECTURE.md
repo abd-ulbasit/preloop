@@ -749,3 +749,12 @@ A quarantined migration identity displays an unavailable state without exposing
 a generated membership alias or relaxing authentication. Account seat counts
 continue to count active membership rows. No presentation migration is required;
 apply the identity schema/backfill and authentication changes first.
+
+Expected-device inventory uses the shared `ExpectedDevice` model and
+`crud_expected_device` persistence boundary. An account-local roster is separate
+from reported discovery candidates, immutable source observations and device
+credentials. Atomic roster replacement serializes on the account, preserves
+receipt history for retained entries and never grants a credential or enrollment.
+Latest collection windows remain independent per authenticated reporting source;
+commercial import policy and coverage endpoints are provided by the optional
+fleet service.
