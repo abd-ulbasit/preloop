@@ -1,0 +1,333 @@
+# Builds and publishes the universal Codex image (environments/universal).
+#
+# Pull requests that touch the image recipe, its smoke, or the Perl fixtures
+# it copies, and the weekly schedule, build linux/amd64 and linux/arm64 and
+# smoke amd64. They never push. A README-only edit does not build.
+#
+# A push publishes when it is a v* tag, a workflow_dispatch on main, or a
+# push to main that changes the Dockerfile, the top-level shell and Python
+# scripts, either fixtures tree, environments/perl/perl-toolchain-smoke.sh,
+# or this workflow. The merge of one of those changes is that main push.
+# Tags are
+# sha-<12 hex chars of the commit> and, on a version tag, the tag name.
+# The job summary prints the index digest. actions/attest-build-provenance
+# attests that digest and pushes the attestation to GHCR.
+#
+# Each architecture builds on a native runner. The unpacked base is about
+# 32 GB, so one job does not qemu the other architecture. The runner image
+# guarantees about 14 GB free; the job deletes preinstalled SDKs and refuses
+# to build unless 40 GiB is free.
+#
+# Buildx provenance is off on the per-arch push. Leaving it on wraps each
+# architecture in its own index, and the manifest list would nest. The index
+# digest gets one attestation after imagetools create.
+
+name: Publish Universal Image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'environments/universal/Dockerfile'
+      - 'environments/universal/*.sh'
+      - 'environments/universal/*.py'
+      - 'environments/universal/fixtures/**'
+      - 'environments/perl/perl-toolchain-smoke.sh'
+      - 'environments/perl/fixtures/**'
+      - '.github/workflows/publish-universal-image.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/preloop-codex-universal
+
+jobs:
+  gate:
+    name: Decide publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      run: ${{ steps.decide.outputs.run }}
+      short: ${{ steps.decide.outputs.short }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Detect recipe changes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            recipe:
+              - 'environments/universal/Dockerfile'
+              - 'environments/universal/*.sh'
+              - 'environments/universal/*.py'
+              - 'environments/universal/fixtures/**'
+              - 'environments/perl/perl-toolchain-smoke.sh'
+              - 'environments/perl/fixtures/**'
+              - '.github/workflows/publish-universal-image.yml'
+
+      - name: Decide build and publish
+        id: decide
+        env:
+          RECIPE: ${{ steps.filter.outputs.recipe }}
+        run: |
+          set -euo pipefail
+          if ! gate_out="$(bash environments/universal/publish-gate.sh)"; then
+            echo "publish-gate.sh failed" >&2
+            exit 1
+          fi
+          seen_publish=false
+          seen_run=false
+          while IFS= read -r line; do
+            case "$line" in
+              publish=true|publish=false) seen_publish=true ;;
+              run=true|run=false) seen_run=true ;;
+              "") continue ;;
+              *)
+                echo "unexpected gate output" >&2
+                exit 1
+                ;;
+            esac
+            printf '%s\n' "$line" >> "$GITHUB_OUTPUT"
+          done <<< "$gate_out"
+          if [ "$seen_publish" != true ] || [ "$seen_run" != true ]; then
+            echo "publish-gate.sh did not emit publish and run" >&2
+            exit 1
+          fi
+          short="${GITHUB_SHA::12}"
+          printf '%s' "$short" | grep -Eq '^[0-9a-f]{12}$'
+          printf 'short=%s\n' "$short" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Build ${{ matrix.arch }}
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      # Push the per-architecture image to GHCR when this run publishes.
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/powershell \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /usr/local/share/chromium \
+            /usr/share/miniconda \
+            /usr/local/share/boost \
+            /opt/hostedtoolcache \
+            /usr/local/lib/node_modules
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h
+          avail_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+          min_kb=$((40 * 1024 * 1024))
+          echo "available KiB: ${avail_kb} (need ${min_kb})"
+          if [ "$avail_kb" -lt "$min_kb" ]; then
+            echo "not enough free disk for the unpacked Codex base" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build amd64 image
+        if: matrix.arch == 'amd64'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: environments/universal/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: preloop-codex-universal:smoke
+
+      - name: Drop builder cache
+        if: matrix.arch == 'amd64'
+        run: docker buildx prune -af
+
+      - name: Smoke offline
+        if: matrix.arch == 'amd64'
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+        run: |
+          set -euo pipefail
+          environments/universal/run-smoke.sh preloop-codex-universal:smoke \
+            | tee "$RUNNER_TEMP/universal-smoke.log"
+          {
+            echo "### Universal Codex image"
+            echo
+            echo '```'
+            grep '^PASS ' "$RUNNER_TEMP/universal-smoke.log"
+            echo '```'
+            if [ "$PUBLISH" != "true" ]; then
+              echo
+              echo "- Dry run: nothing was pushed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log in to Container Registry
+        if: needs.gate.outputs.publish == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push smoked amd64 image
+        if: needs.gate.outputs.publish == 'true' && matrix.arch == 'amd64'
+        env:
+          SHORT: ${{ needs.gate.outputs.short }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SHORT" | grep -Eq '^[0-9a-f]{12}$'
+          dest="${IMAGE}:sha-${SHORT}-amd64"
+          docker tag preloop-codex-universal:smoke "$dest"
+          docker push "$dest"
+
+      - name: Build and push arm64
+        if: needs.gate.outputs.publish == 'true' && matrix.arch == 'arm64'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: environments/universal/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          load: false
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE }}:sha-${{ needs.gate.outputs.short }}-arm64
+
+      - name: Build arm64
+        if: needs.gate.outputs.publish != 'true' && matrix.arch == 'arm64'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: environments/universal/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: false
+          provenance: false
+          sbom: false
+          outputs: type=cacheonly
+
+  publish:
+    name: Publish index
+    needs: [gate, image]
+    if: needs.gate.outputs.publish == 'true' && needs.image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Push the index and set the package public.
+      packages: write
+      # Mint the Sigstore certificate for the index digest.
+      id-token: write
+      # Attach the build provenance attestation to the digest.
+      attestations: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish index
+        id: index
+        env:
+          SHORT: ${{ needs.gate.outputs.short }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SHORT" | grep -Eq '^[0-9a-f]{12}$'
+          args=(-t "${IMAGE}:sha-${SHORT}")
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9A-Za-z._-]+$'
+            args+=(-t "${IMAGE}:${GITHUB_REF_NAME}")
+          fi
+          docker buildx imagetools create "${args[@]}" \
+            "${IMAGE}:sha-${SHORT}-amd64" \
+            "${IMAGE}:sha-${SHORT}-arm64"
+          digest="$(
+            docker buildx imagetools inspect "${IMAGE}:sha-${SHORT}" \
+              --format '{{json .Manifest.Digest}}' | tr -d '"'
+          )"
+          printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Universal Codex image"
+            echo
+            echo "- Published: \`${IMAGE}@${digest}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "published ${IMAGE}@${digest}"
+
+      - name: Attest index digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="preloop-codex-universal"
+          for _ in 1 2 3 4 5 6; do
+            if gh api --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}" \
+              -f visibility=public
+            then
+              echo "package ${name} is public"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "could not set ${name} public; anonymous pull would fail" >&2
+          exit 1

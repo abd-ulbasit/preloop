@@ -74,6 +74,24 @@ steps are joined with newlines). Issue acceptance command IDs must also appear
 in the verification policy. Capability readiness is not test-result attestation;
 agent-sandbox files and log markers cannot authorize isolated publication.
 
+## Universal Codex image
+
+`environments/universal/Dockerfile` builds `preloop-codex-universal` from
+`ghcr.io/openai/codex-universal` pinned by digest, and adds the distro Perl
+linters and shellcheck. The Publish Universal Image workflow
+(`.github/workflows/publish-universal-image.yml`) builds linux/amd64 and
+linux/arm64, smokes amd64 with `environments/universal/run-smoke.sh`, and
+publishes the multi-arch index to `ghcr.io/preloop/preloop-codex-universal`.
+
+A pull request and the weekly schedule build and smoke only; they do not
+push. A version tag, a manual run on main, and a merge to main that changes
+the recipe publish. Tags are `sha-<12 hex chars of the commit>` and
+`vX.Y.Z` on a version tag. The run summary records
+`ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`, and the workflow
+attests that digest. The hosted default stays
+`ghcr.io/openai/codex-universal:latest` until a later change pins this
+digest. Private runners can still build `environments/perl`.
+
 ## Backend and frontend tests in the image
 
 The image built from `environments/preloop/Dockerfile` runs the Preloop
