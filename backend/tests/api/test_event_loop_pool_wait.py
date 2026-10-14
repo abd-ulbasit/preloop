@@ -116,7 +116,12 @@ def _async_routes_with_sync_session(app: FastAPI) -> set[tuple[str, str]]:
             continue
         if not any(sub.call is get_db_session for sub in dependant.dependencies):
             continue
-        for method in context.methods or {"GET"}:
+        # FastAPI 0.143 yields WebSocket routes here with methods=None.
+        # Inventing GET for those counted two sockets as HTTP handlers and
+        # tripped the ratchet without any new blocking route.
+        if not context.methods:
+            continue
+        for method in context.methods:
             found.add((method, context.path))
     return found
 
