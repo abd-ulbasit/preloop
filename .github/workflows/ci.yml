@@ -76,6 +76,8 @@ jobs:
               - 'environments/perl/**'
               # backend/tests/test_scanner_agent_image.py pins this recipe.
               - 'environments/scanner/**'
+              # backend/tests/test_universal_agent_image.py pins this recipe.
+              - 'environments/universal/**'
               - 'environments/preloop/Dockerfile'
               - 'pyproject.toml'
               - 'requirements/**'

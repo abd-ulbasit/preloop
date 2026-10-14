@@ -1,0 +1,63 @@
+# Universal Codex image for hosted review runs.
+#
+# Extends ghcr.io/openai/codex-universal pinned by digest. One apt layer adds
+# the distro Perl toolchain (perl, cpanm, perlver, perlcritic, prove) and
+# shellcheck. Later layers add fixtures, a Maven offline cache, the smoke
+# gate, and /opt/preloop-environment.json. It sets no WORKDIR, ENTRYPOINT,
+# or CMD, so the base Codex entrypoint and working directory stay in force.
+#
+#   docker build -f environments/universal/Dockerfile \
+#     -t preloop-codex-universal:local .
+#
+# The build refuses a CODEX_BASE_IMAGE that is not name@sha256:<digest>.
+# See environments/universal/README.md.
+ARG CODEX_BASE_IMAGE=ghcr.io/openai/codex-universal@sha256:905e512f36460e1be4cfedb30928a8a28299edb0fcd5de7998ceaa72d27fe304
+FROM ${CODEX_BASE_IMAGE}
+
+ARG CODEX_BASE_IMAGE=ghcr.io/openai/codex-universal@sha256:905e512f36460e1be4cfedb30928a8a28299edb0fcd5de7998ceaa72d27fe304
+ARG BASE_USER=root
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# Refuse a mutable tag: the evidence must name the exact base.
+RUN case "${CODEX_BASE_IMAGE}" in \
+        *@sha256:*) ;; \
+        *) echo "CODEX_BASE_IMAGE must be pinned by digest (name@sha256:...), got '${CODEX_BASE_IMAGE}'" >&2; exit 1 ;; \
+    esac
+# Distro packages, unpinned like environments/perl/Dockerfile: noble-updates
+# drops superseded point releases, so an exact pin fails the next update.
+# The smoke script is the build gate.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        perl \
+        cpanminus \
+        libperl-minimumversion-perl \
+        libperl-critic-perl \
+        libtest-harness-perl \
+        libtest-simple-perl \
+        shellcheck \
+    && rm -rf /var/lib/apt/lists/*
+# Fixtures before the Maven warm so a smoke-script change does not re-download.
+COPY environments/universal/fixtures /opt/preloop-universal/fixtures
+RUN bash --login -c 'set -euo pipefail; cp -a /opt/preloop-universal/fixtures/java /tmp/java-warm && mvn -q -f /tmp/java-warm/pom.xml package -Dmaven.repo.local=/opt/preloop-universal/m2 && rm -rf /tmp/java-warm && chmod -R a+rX /opt/preloop-universal/m2'
+COPY environments/universal/smoke.sh \
+    environments/universal/tools.sh \
+    environments/universal/codex-env.sh \
+    environments/universal/write_manifest.py \
+    /opt/preloop-universal/
+COPY environments/perl/perl-toolchain-smoke.sh /opt/preloop-universal/perl-toolchain-smoke.sh
+COPY environments/perl/fixtures /opt/preloop-universal/perl-fixtures
+RUN chmod -R a+rX /opt/preloop-universal \
+    && chmod a+x /opt/preloop-universal/smoke.sh \
+        /opt/preloop-universal/perl-toolchain-smoke.sh
+# Offline gate. The entrypoint selects the Preloop CODEX_ENV_* runtimes,
+# then the smoke prints one PASS line per language and writes the manifest.
+RUN --network=none set -a; \
+    . /opt/preloop-universal/codex-env.sh; \
+    set +a; \
+    export CODEX_BASE_IMAGE="${CODEX_BASE_IMAGE}"; \
+    exec /opt/entrypoint.sh /opt/preloop-universal/smoke.sh
+LABEL org.opencontainers.image.title="preloop-codex-universal" \
+      org.opencontainers.image.description="Codex image with Perl linters, shellcheck, and a per-language smoke" \
+      org.opencontainers.image.base.name="${CODEX_BASE_IMAGE}"
+# An empty BASE_USER (a base with no USER) means root.
+USER ${BASE_USER:-root}
