@@ -1202,6 +1202,103 @@ describe('AgentDetailView', () => {
       expect((element as any).sessions).to.have.length(40);
     });
 
+    function sessionsServer(total: number | null, fail = () => false) {
+      fetchStub.callsFake(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(String(input), window.location.origin);
+          const include = url.searchParams.get('include');
+          if (include === 'sessions' || include === 'usage_by_model') {
+            if (fail()) return new Response('{}', { status: 500 });
+          }
+          if (include === 'sessions' && total !== null) {
+            const offset = Number(url.searchParams.get('session_offset') || 0);
+            const limit = Number(url.searchParams.get('session_limit') || 20);
+            const sessions = Array.from(
+              { length: Math.max(0, Math.min(limit, total - offset)) },
+              (_, i) => ({
+                id: `s-${offset + i}`,
+                session_source_type: 'claude_code',
+                session_source_id: `src-${offset + i}`,
+                started_at: '2026-10-01T00:00:00Z',
+              })
+            );
+            return new Response(
+              JSON.stringify({
+                agent: { id: 'agent-1' },
+                sessions,
+                session_total: total,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          return defaultFetch(input, init);
+        }
+      );
+    }
+
+    it('shows the list without Load more on a server that does not page', async () => {
+      sessionsServer(null);
+      const element = await mount();
+      await waitUntil(() => (element as any).loadedSections.has('sessions'));
+      await element.updateComplete;
+      expect((element as any).sessions.length).to.be.greaterThan(0);
+      expect((element as any).sessionTotal).to.equal(null);
+      expect(
+        Boolean(
+          element.shadowRoot!.querySelector(
+            '[data-testid="load-more-sessions"]'
+          )
+        )
+      ).to.equal(false);
+    });
+
+    it('keeps rows past the first 100 when a refresh lands', async () => {
+      sessionsServer(150);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      for (let i = 0; i < 5; i++)
+        await (element as any).loadSessions({ more: true });
+      expect((element as any).sessions).to.have.length(120);
+      await (element as any).loadSessions({ refresh: true });
+      const ids = ((element as any).sessions as Array<{ id: string }>).map(
+        (r) => r.id
+      );
+      expect(ids).to.have.length(120);
+      expect(new Set(ids).size).to.equal(120);
+      expect(ids[119]).to.equal('s-119');
+    });
+
+    it('never lets a refresh overwrite a page loaded after it', async () => {
+      sessionsServer(60);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      const refresh = (element as any).loadSessions({ refresh: true });
+      const more = (element as any).loadSessions({ more: true });
+      await Promise.all([refresh, more]);
+      expect((element as any).sessions).to.have.length(40);
+    });
+
+    it('keeps the list and says so when a session read fails', async () => {
+      let failing = false;
+      sessionsServer(45, () => failing);
+      const element = await mount();
+      await waitUntil(() => (element as any).sessions.length === 20);
+      failing = true;
+      await (element as any).loadSessions({ refresh: true });
+      expect((element as any).sessions).to.have.length(20);
+      expect((element as any).sessionsError).to.be.a('string');
+    });
+
+    it('reports a failed usage read instead of zero spend', async () => {
+      sessionsServer(5, () => true);
+      const element = await mount();
+      await (element as any).loadUsageByModel(true);
+      expect((element as any).usageError).to.be.a('string');
+      expect((element as any).loadedSections.has('usage_by_model')).to.equal(
+        false
+      );
+    });
+
     it('spaces live refreshes out on a busy agent', async () => {
       const element = await mount();
       const clock = sinon.useFakeTimers({

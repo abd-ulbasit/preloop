@@ -132,6 +132,8 @@ type AllowedModelCandidate = {
  */
 /** Sessions per page on the agent page (and per "Load more"). */
 export const AGENT_SESSION_PAGE = 20;
+/** The server's largest session page (`session_limit` <= 100). */
+const AGENT_SESSION_MAX_PAGE = 100;
 /** Live events coalesce for this long before a refresh. */
 const LIVE_REFRESH_DEBOUNCE_MS = 250;
 /** At most one live refresh per this interval on a busy agent. */
@@ -182,6 +184,8 @@ export class AgentDetailView extends LitElement {
   @state() private sessionsLoading = false;
   @state() private sessionsLoadingMore = false;
   @state() private sessionsError: string | null = null;
+  /** The per-model usage read failed; the Models tab says so. */
+  @state() private usageError: string | null = null;
   /**
    * Tab sections already read for this agent and range. The header is one
    * light call; each tab reads its own section the first time it opens.
@@ -986,9 +990,26 @@ export class AgentDetailView extends LitElement {
    * load when the observer opens it. A refresh re-reads as many rows as are
    * shown, so "Load more" pages survive live updates.
    */
-  private async loadSessions(
+  /** Session reads run one after another, so none lands on a newer page. */
+  private sessionsChain: Promise<void> = Promise.resolve();
+
+  private loadSessions(
     options: { refresh?: boolean; more?: boolean } = {}
   ): Promise<void> {
+    const next = this.sessionsChain.then(() => this.readSessions(options));
+    this.sessionsChain = next.catch(() => undefined);
+    return next;
+  }
+
+  /**
+   * One read of the agent's session rows. A refresh re-reads the first
+   * page (up to the server's 100) and keeps any rows loaded past it, so
+   * "Load more" pages survive live updates.
+   */
+  private async readSessions(options: {
+    refresh?: boolean;
+    more?: boolean;
+  }): Promise<void> {
     const agentId = this.agentId;
     if (!agentId) return;
     if (
@@ -1001,7 +1022,10 @@ export class AgentDetailView extends LitElement {
     const more = Boolean(options.more);
     const limit = more
       ? AGENT_SESSION_PAGE
-      : Math.min(100, Math.max(AGENT_SESSION_PAGE, this.sessions.length));
+      : Math.min(
+          AGENT_SESSION_MAX_PAGE,
+          Math.max(AGENT_SESSION_PAGE, this.sessions.length)
+        );
     if (more) this.sessionsLoadingMore = true;
     else if (!options.refresh) this.sessionsLoading = true;
     this.sessionsError = null;
@@ -1013,14 +1037,20 @@ export class AgentDetailView extends LitElement {
       });
       if (generation !== this.sectionGeneration || agentId !== this.agentId)
         return;
-      this.sessions = more
-        ? [
-            ...this.sessions,
-            ...detail.sessions.filter(
-              (row) => !this.sessions.some((shown) => shown.id === row.id)
-            ),
-          ]
-        : detail.sessions;
+      const fresh = detail.sessions;
+      if (more) {
+        const shown = new Set(this.sessions.map((row) => row.id));
+        this.sessions = [
+          ...this.sessions,
+          ...fresh.filter((row) => !shown.has(row.id)),
+        ];
+      } else {
+        const head = new Set(fresh.map((row) => row.id));
+        this.sessions = [
+          ...fresh,
+          ...this.sessions.slice(limit).filter((row) => !head.has(row.id)),
+        ];
+      }
       this.sessionTotal =
         typeof detail.session_total === 'number' ? detail.session_total : null;
       this.loadedSections.add('sessions');
@@ -1051,9 +1081,14 @@ export class AgentDetailView extends LitElement {
       if (generation !== this.sectionGeneration || agentId !== this.agentId)
         return;
       this.usageByModel = detail.usage_by_model;
+      this.usageError = null;
       this.loadedSections.add('usage_by_model');
     } catch (error) {
-      console.warn('Failed to load per-model usage', error);
+      if (generation !== this.sectionGeneration) return;
+      // Say so: with no usage rows the configured model would read as
+      // "$0.00 spent", which is a claim, not a failed read.
+      this.usageError =
+        error instanceof Error ? error.message : 'Could not load model usage';
     }
   }
 
@@ -3856,6 +3891,20 @@ export class AgentDetailView extends LitElement {
                       </div>
                     </sl-card>
                   `
+                : nothing
+            }
+            ${
+              this.activeTab === 'models' && this.usageError
+                ? html`<p role="alert" data-testid="usage-error">
+                    Could not load spend per model (${this.usageError}). The
+                    amounts below are not current.
+                    <sl-button
+                      size="small"
+                      variant="text"
+                      @click=${() => void this.loadUsageByModel(true)}
+                      >Retry</sl-button
+                    >
+                  </p>`
                 : nothing
             }
             ${
