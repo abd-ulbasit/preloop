@@ -86,6 +86,16 @@ OFFLOAD_MARKERS = ("run_db_off_loop", "run_in_threadpool", "run_db_async")
 # grow. Lower this number when you convert more handlers.
 ASYNC_SYNC_SESSION_ROUTE_BUDGET = 128
 
+# Sockets that already take a synchronous session. ``iter_route_contexts``
+# yields them with ``methods`` unset (FastAPI 0.143 does; the pinned 0.141.1
+# does not). A new one must be named here or the ratchet fails.
+KNOWN_SYNC_SESSION_SOCKETS = frozenset(
+    {
+        "/api/v1/agents/control/ws",
+        "/api/v1/runners/{runner_id}/ws",
+    }
+)
+
 
 def _iter_route_contexts(app: FastAPI) -> Iterator[Any]:
     """Yield FastAPI route contexts, flattening included routers.
@@ -100,9 +110,18 @@ def _iter_route_contexts(app: FastAPI) -> Iterator[Any]:
     yield from iter_route_contexts(app.routes)
 
 
-def _async_routes_with_sync_session(app: FastAPI) -> set[tuple[str, str]]:
-    """Return ``(method, path)`` for async routes depending on ``get_db_session``."""
-    found: set[tuple[str, str]] = set()
+def _sync_session_routes(
+    app: FastAPI,
+) -> tuple[set[tuple[str, str]], set[str]]:
+    """Split async ``get_db_session`` routes into HTTP methods and sockets.
+
+    WebSocket contexts have no HTTP methods. Treating that as GET made two
+    existing sockets look like new handlers once FastAPI started yielding them.
+    """
+    from fastapi.routing import APIWebSocketRoute
+
+    http: set[tuple[str, str]] = set()
+    sockets: set[str] = set()
     for context in _iter_route_contexts(app):
         endpoint = getattr(context, "endpoint", None)
         dependant = getattr(context, "dependant", None)
@@ -116,14 +135,14 @@ def _async_routes_with_sync_session(app: FastAPI) -> set[tuple[str, str]]:
             continue
         if not any(sub.call is get_db_session for sub in dependant.dependencies):
             continue
-        # FastAPI 0.143 yields WebSocket routes here with methods=None.
-        # Inventing GET for those counted two sockets as HTTP handlers and
-        # tripped the ratchet without any new blocking route.
-        if not context.methods:
+        route = getattr(context, "route", None)
+        if isinstance(route, APIWebSocketRoute) or not context.methods:
+            if isinstance(route, APIWebSocketRoute):
+                sockets.add(context.path)
             continue
         for method in context.methods:
-            found.add((method, context.path))
-    return found
+            http.add((method, context.path))
+    return http, sockets
 
 
 def _endpoint_for(app: FastAPI, method: str, path: str) -> Callable[..., Any]:
@@ -163,11 +182,15 @@ def test_console_hot_paths_keep_pool_waits_off_the_loop(app: FastAPI) -> None:
 
 def test_async_sync_session_route_count_does_not_grow(app: FastAPI) -> None:
     """Ratchet the number of async handlers holding a synchronous session."""
-    routes = _async_routes_with_sync_session(app)
+    routes, sockets = _sync_session_routes(app)
     assert len(routes) <= ASYNC_SYNC_SESSION_ROUTE_BUDGET, (
         f"{len(routes)} async routes depend on get_db_session, budget is "
         f"{ASYNC_SYNC_SESSION_ROUTE_BUDGET}. New async handlers should take an "
         "async session or offload with run_db_off_loop."
+    )
+    assert sockets <= KNOWN_SYNC_SESSION_SOCKETS, (
+        "New WebSocket handlers depend on get_db_session: "
+        + ", ".join(sorted(sockets - KNOWN_SYNC_SESSION_SOCKETS))
     )
 
 
