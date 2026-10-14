@@ -21,6 +21,15 @@ GATE = REPO / "environments" / "universal" / "publish-gate.sh"
 README = REPO / "environments" / "universal" / "README.md"
 BASH = shutil.which("bash") or "/bin/bash"
 SHA_PIN = re.compile(r"@[0-9a-f]{40}( # v\d|$)")
+RECIPE_PATHS = {
+    "environments/universal/Dockerfile",
+    "environments/universal/*.sh",
+    "environments/universal/*.py",
+    "environments/universal/fixtures/**",
+    "environments/perl/perl-toolchain-smoke.sh",
+    "environments/perl/fixtures/**",
+    ".github/workflows/publish-universal-image.yml",
+}
 
 
 def _workflow() -> dict[str, object]:
@@ -140,11 +149,14 @@ def test_workflow_triggers_and_image_name() -> None:
     assert isinstance(cron, list)
     assert cron == [{"cron": "23 6 * * 1"}]
     paths = trigger["pull_request"]["paths"]
-    assert set(paths) == {
-        "environments/universal/**",
-        "environments/perl/**",
-        ".github/workflows/publish-universal-image.yml",
-    }
+    assert set(paths) == RECIPE_PATHS
+    detect = next(
+        step
+        for step in _steps(_jobs(workflow)["gate"])
+        if step.get("name") == "Detect recipe changes"
+    )
+    listed = set(re.findall(r"- '([^']+)'", str(detect["with"]["filters"])))
+    assert listed == RECIPE_PATHS
     assert workflow["env"]["IMAGE"] == (
         "ghcr.io/${{ github.repository_owner }}/preloop-codex-universal"
     )
@@ -175,6 +187,14 @@ def test_smoke_runs_on_amd64_before_any_push() -> None:
     matrix = _jobs(workflow)["image"]["strategy"]["matrix"]["include"]
     assert {row["platform"] for row in matrix} == {"linux/amd64", "linux/arm64"}
     assert {row["runner"] for row in matrix} == {"ubuntu-latest", "ubuntu-24.04-arm"}
+    build_steps = [
+        step
+        for step in steps
+        if "docker/build-push-action" in str(step.get("uses") or "")
+    ]
+    assert build_steps
+    for step in build_steps:
+        assert step["with"]["platforms"] == "${{ matrix.platform }}"
 
 
 def test_pull_request_path_never_sets_push_true_without_the_gate() -> None:
@@ -197,7 +217,10 @@ def test_pull_request_path_never_sets_push_true_without_the_gate() -> None:
     )
     text = WORKFLOW.read_text()
     assert "publish-gate.sh" in text
-    assert "bash environments/universal/publish-gate.sh" in text
+    assert 'gate_out="$(bash environments/universal/publish-gate.sh)"' in text
+    assert "publish-gate.sh failed" in text
+    assert "did not emit publish and run" in text
+    assert "done < <(" not in text
 
 
 def test_index_digest_is_summarized_and_attested() -> None:
@@ -215,6 +238,8 @@ def test_index_digest_is_summarized_and_attested() -> None:
     assert "${IMAGE}:${GITHUB_REF_NAME}" in script
     assert ".Manifest.Digest" in script
     assert "${IMAGE}@${digest}" in script
+    assert "^v[0-9A-Za-z._-]+$" in script
+    assert "._+-" not in script
     attest = next(step for step in steps if step.get("name") == "Attest index digest")
     assert attest["uses"].startswith("actions/attest-build-provenance@")
     assert attest["with"]["push-to-registry"] is True

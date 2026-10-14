@@ -1,8 +1,8 @@
 # Builds and publishes the universal Codex image (environments/universal).
 #
-# Pull requests that touch the recipe or the Perl fixtures it copies, and the
-# weekly schedule, build linux/amd64 and linux/arm64 and smoke amd64. They
-# never push.
+# Pull requests that touch the image recipe, its smoke, or the Perl fixtures
+# it copies, and the weekly schedule, build linux/amd64 and linux/arm64 and
+# smoke amd64. They never push. A README-only edit does not build.
 #
 # A push publishes when it is a v* tag, a workflow_dispatch on main, or a
 # push to main that changes environments/universal, environments/perl, or
@@ -31,8 +31,12 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'environments/universal/**'
-      - 'environments/perl/**'
+      - 'environments/universal/Dockerfile'
+      - 'environments/universal/*.sh'
+      - 'environments/universal/*.py'
+      - 'environments/universal/fixtures/**'
+      - 'environments/perl/perl-toolchain-smoke.sh'
+      - 'environments/perl/fixtures/**'
       - '.github/workflows/publish-universal-image.yml'
 
 concurrency:
@@ -68,8 +72,12 @@ jobs:
         with:
           filters: |
             recipe:
-              - 'environments/universal/**'
-              - 'environments/perl/**'
+              - 'environments/universal/Dockerfile'
+              - 'environments/universal/*.sh'
+              - 'environments/universal/*.py'
+              - 'environments/universal/fixtures/**'
+              - 'environments/perl/perl-toolchain-smoke.sh'
+              - 'environments/perl/fixtures/**'
               - '.github/workflows/publish-universal-image.yml'
 
       - name: Decide build and publish
@@ -78,16 +86,28 @@ jobs:
           RECIPE: ${{ steps.filter.outputs.recipe }}
         run: |
           set -euo pipefail
+          if ! gate_out="$(bash environments/universal/publish-gate.sh)"; then
+            echo "publish-gate.sh failed" >&2
+            exit 1
+          fi
+          seen_publish=false
+          seen_run=false
           while IFS= read -r line; do
             case "$line" in
-              publish=true|publish=false|run=true|run=false) ;;
+              publish=true|publish=false) seen_publish=true ;;
+              run=true|run=false) seen_run=true ;;
+              "") continue ;;
               *)
                 echo "unexpected gate output" >&2
                 exit 1
                 ;;
             esac
             printf '%s\n' "$line" >> "$GITHUB_OUTPUT"
-          done < <(bash environments/universal/publish-gate.sh)
+          done <<< "$gate_out"
+          if [ "$seen_publish" != true ] || [ "$seen_run" != true ]; then
+            echo "publish-gate.sh did not emit publish and run" >&2
+            exit 1
+          fi
           short="${GITHUB_SHA::12}"
           printf '%s' "$short" | grep -Eq '^[0-9a-f]{12}$'
           printf 'short=%s\n' "$short" >> "$GITHUB_OUTPUT"
@@ -154,7 +174,7 @@ jobs:
         with:
           context: .
           file: environments/universal/Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           push: false
           provenance: false
@@ -210,7 +230,7 @@ jobs:
         with:
           context: .
           file: environments/universal/Dockerfile
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           load: false
           provenance: false
@@ -223,7 +243,7 @@ jobs:
         with:
           context: .
           file: environments/universal/Dockerfile
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
           load: false
           provenance: false
@@ -264,7 +284,7 @@ jobs:
           printf '%s' "$SHORT" | grep -Eq '^[0-9a-f]{12}$'
           args=(-t "${IMAGE}:sha-${SHORT}")
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9A-Za-z._+-]+$'
+            printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9A-Za-z._-]+$'
             args+=(-t "${IMAGE}:${GITHUB_REF_NAME}")
           fi
           docker buildx imagetools create "${args[@]}" \
