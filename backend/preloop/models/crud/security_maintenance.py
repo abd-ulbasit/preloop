@@ -314,13 +314,18 @@ class CRUDSecurityMaintenance:
         )
         if row is not None:
             return row
-        row = models.ToolConfiguration(
-            account_id=account_id,
-            tool_name=tool_name,
-            tool_source="builtin",
+        from .tool_configuration import get_or_create_tool_configuration_sync
+
+        # Another maintenance item in the same account may create the same
+        # row concurrently; insert-if-absent adopts it instead of raising.
+        row, _ = get_or_create_tool_configuration_sync(
+            db,
+            values={
+                "account_id": account_id,
+                "tool_name": tool_name,
+                "tool_source": "builtin",
+            },
         )
-        db.add(row)
-        db.flush()
         return row
 
     def validate_release_workflow(

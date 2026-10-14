@@ -371,4 +371,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert execution_end.down_revision == "20261014_gateway_agg_idx"
     api_usage_autovacuum = script.get_revision("20261015_api_usage_autovacuum")
     assert api_usage_autovacuum.down_revision == "20261014_execution_end_idx"
-    assert script.get_heads() == ["20261015_api_usage_autovacuum"]
+    scope_nulls = script.get_revision("20261014_tool_config_scope_nulls")
+    assert scope_nulls.down_revision == "20261015_api_usage_autovacuum"
+    assert script.get_heads() == ["20261014_tool_config_scope_nulls"]

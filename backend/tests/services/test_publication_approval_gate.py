@@ -79,7 +79,16 @@ def _store_approval(
     workflow = models.ApprovalWorkflow(
         account_id=user.account_id, name=f"publication-gate-{uuid4()}"
     )
-    tool = models.ToolConfiguration(
+    # One account-wide configuration per tool (NULLS NOT DISTINCT scope).
+    tool = (
+        db.query(models.ToolConfiguration)
+        .filter_by(
+            account_id=user.account_id,
+            tool_name="isolated_publication",
+            tool_source="builtin",
+        )
+        .first()
+    ) or models.ToolConfiguration(
         account_id=user.account_id,
         tool_name="isolated_publication",
         tool_source="builtin",
