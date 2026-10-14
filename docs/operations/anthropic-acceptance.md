@@ -143,7 +143,10 @@ or vendor behavior. Do not generate substitute screenshots or infer live access
 from a seeded component.
 
 The [capture manifest](../assets/screenshots/anthropic/manifest.json) records
-available captures and gaps. Until a permissioned tenant/device exists, the
+available captures and gaps. Local synthetic captures of the inference hook
+setup and health page, with their provenance, are listed in
+[local-captures.json](../assets/screenshots/anthropic/local-captures.json) and
+shown in the [inference hook guide](anthropic-inference-hooks.md#screenshots-and-next-steps). Until a permissioned tenant/device exists, the
 following captures remain missing:
 
 - Vendor hook endpoint and effective enforcement/inspection/tool/failure settings.
