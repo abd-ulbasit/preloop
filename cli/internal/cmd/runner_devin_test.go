@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,5 +186,93 @@ func TestDevinInventoryGeneratesRunnableProfile(t *testing.T) {
 	missing := AgentConfig{Name: devinAgentName, ConfigPath: filepath.Join(t.TempDir(), "mcp_config.json")}
 	if _, err := buildManagedMCPEnrollmentPlan(missing, "https://example.com", "example-token"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDevinModelProbePreservesLargeCatalog(t *testing.T) {
+	skipNoShebangOnWindows(t, "fake Devin CLI")
+	variants := []map[string]string{
+		{"model_uid": "swe-2-high", "label": "Private label"},
+		{"model_uid": "swe-2-high"},
+		{"model_uid": "../invalid id"},
+	}
+	for i := 0; i < 838; i++ {
+		variants = append(variants, map[string]string{"model_uid": fmt.Sprintf("example-model-%03d", i), "description": strings.Repeat("catalog metadata ", 32)})
+	}
+	raw, err := json.Marshal(map[string]any{"families": []any{map[string]any{"variants": variants}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) <= 256*1024 {
+		t.Fatal("fixture does not exercise former capture limit")
+	}
+	models := probeDevinModels(fakeDevinModelCatalog(t, raw, 0))
+	if len(models) != maxHarnessModels || models[0] != "swe-2-high" || models[1] != "example-model-000" || models[len(models)-1] != fmt.Sprintf("example-model-%03d", maxHarnessModels-2) {
+		t.Fatalf("wrong bounded catalog: %v", models)
+	}
+}
+
+func TestDevinModelProbeRejectsInvalidCatalogs(t *testing.T) {
+	skipNoShebangOnWindows(t, "fake Devin CLI")
+	valid := []byte(`{"families":[{"variants":[{"model_uid":"swe-2-high"}]}]}`)
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		exit int
+	}{
+		{"malformed", []byte(`{"families":[`), 0},
+		{"trailing data", append(append([]byte{}, valid...), []byte(" extra")...), 0},
+		{"failed command", valid, 1},
+		// Padding leaves a valid small JSON document at the end. A suffix capture
+		// would accept it despite exceeding the complete-document bound.
+		{"oversized", append([]byte(strings.Repeat(" ", 4*1024*1024)), valid...), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if models := probeDevinModels(fakeDevinModelCatalog(t, tc.raw, tc.exit)); len(models) != 0 {
+				t.Fatalf("accepted invalid catalog: %v", models)
+			}
+		})
+	}
+}
+
+func fakeDevinModelCatalog(t *testing.T, raw []byte, exit int) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "catalog.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(dir, "devin")
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$*" = "models list --format json" ] || exit 2
+cat "$(dirname "$0")/catalog.json"
+exit %d
+`, exit)
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return executable
+}
+
+func TestDevinModelCatalogOutputBound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &devinModelCatalogOutput{cancel: cancel}
+	chunk := []byte(strings.Repeat("x", maxDevinModelCatalogBytes/2))
+	for i := 0; i < 2; i++ {
+		if n, err := out.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("write: %d, %v", n, err)
+		}
+	}
+	if out.oversized || ctx.Err() != nil || out.buffer.Len() != maxDevinModelCatalogBytes {
+		t.Fatal("output at the bound was rejected")
+	}
+	if n, err := out.Write([]byte("extra")); n != 5 || err != nil {
+		t.Fatalf("overflow write: %d, %v", n, err)
+	}
+	if !out.oversized || ctx.Err() != context.Canceled || out.buffer.Len() != maxDevinModelCatalogBytes {
+		t.Fatal("overflow did not cancel the probe and cap its buffer")
+	}
+	if _, err := out.Write(chunk); err != nil || out.buffer.Len() != maxDevinModelCatalogBytes {
+		t.Fatal("output continued growing after cancellation")
 	}
 }

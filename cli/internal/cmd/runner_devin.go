@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -258,17 +259,42 @@ func parseDevinModels(raw []byte) []string {
 	return models
 }
 
+// Model catalogs include descriptions and can exceed 256 KiB. Retain the
+// complete JSON document up to a bounded limit; a diagnostic tail cannot be
+// parsed safely as the catalog. Cancel oversized probes without retaining more
+// bytes, and never advertise a partial list from truncated output.
+const maxDevinModelCatalogBytes = 4 * 1024 * 1024
+
+type devinModelCatalogOutput struct {
+	buffer    bytes.Buffer
+	cancel    context.CancelFunc
+	oversized bool
+}
+
+func (out *devinModelCatalogOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := maxDevinModelCatalogBytes - out.buffer.Len()
+	if n > remaining {
+		out.oversized = true
+		out.cancel()
+		p = p[:remaining]
+	}
+	_, _ = out.buffer.Write(p)
+	return n, nil
+}
+
 func probeDevinModels(executable string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "models", "list", "--format", "json")
 	cmd.Env = hostExecProbeEnv(executable)
-	out := &boundedTail{max: 256 * 1024}
+	out := &devinModelCatalogOutput{cancel: cancel}
 	cmd.Stdout = out
-	if cmd.Run() != nil {
+	cmd.WaitDelay = time.Second
+	if err := cmd.Run(); err != nil || out.oversized {
 		return nil
 	}
-	return parseDevinModels([]byte(out.String()))
+	return parseDevinModels(out.buffer.Bytes())
 }
 
 // Devin documents JSONC line and block comments. Preserve string contents,

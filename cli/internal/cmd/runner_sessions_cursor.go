@@ -90,7 +90,11 @@ func cursorSessionArgs(profile hostExecProfile, turn runnerSessionTurnSpec) ([]s
 		profile.ModelMap = models
 		job["model_identifier"] = model
 	}
-	return buildHostExecArgs(profile, job, turn.Dir, "--resume", turn.HarnessSessionID)
+	// The session manager resolves and revalidates the host-authorized workspace
+	// before every turn. Cursor still needs its own noninteractive workspace
+	// trust acknowledgement; --trust does not grant tool permissions, which
+	// remain governed by the mandatory Preloop approval hooks.
+	return buildHostExecArgs(profile, job, turn.Dir, "--trust", "--resume", turn.HarnessSessionID)
 }
 
 func (a *cursorSessionAdapter) Turn(ctx context.Context, turn runnerSessionTurnSpec, emit func(string, map[string]any)) runnerSessionTurnResult {

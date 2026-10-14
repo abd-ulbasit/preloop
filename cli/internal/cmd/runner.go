@@ -1738,6 +1738,7 @@ func launchdPlistBody(bin, logPath, home string) string {
 	// the OS this code compiles on (the unit test runs everywhere).
 	path := strings.Join([]string{
 		strings.TrimRight(home, "/") + "/.local/bin",
+		strings.TrimRight(home, "/") + "/.opencode/bin",
 		strings.TrimRight(home, "/") + "/.docker/bin",
 		"/Applications/Docker.app/Contents/Resources/bin",
 		"/opt/homebrew/bin",

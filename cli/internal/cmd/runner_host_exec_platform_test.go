@@ -489,6 +489,7 @@ func TestLaunchdPlistBodyHasLogsAndPath(t *testing.T) {
 		"<key>StandardErrorPath</key><string>/Users/jane/.preloop/runner.log</string>",
 		"/opt/homebrew/bin",
 		"/Users/jane/.local/bin",
+		"/Users/jane/.opencode/bin",
 		"<key>HOME</key>\n    <string>/Users/jane</string>",
 	} {
 		if !strings.Contains(body, want) {
@@ -760,5 +761,104 @@ func TestWriteSystemdUserUnitFailsWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	if err := writeSystemdUserUnit("/bin/preloop", io.Discard); err == nil {
 		t.Fatal("expected an error when HOME is unset")
+	}
+}
+
+func TestOpenCodeStandaloneInstallWithServicePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
+	name := "opencode"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	binary := filepath.Join(home, ".opencode", "bin", name)
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("standalone executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for label, resolve := range map[string]func(string) (string, error){
+		"discovery": resolveRuntimeExecutable,
+		"runner":    lookupHostExecBinary,
+	} {
+		got, err := resolve("opencode")
+		if err != nil || got != binary {
+			t.Errorf("%s resolution = %q, %v; want %q", label, got, err, binary)
+		}
+	}
+}
+
+func TestOpenCodeFallbackPerOS(t *testing.T) {
+	home := filepath.Join("home", "jane")
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		paths := runtimeExecutableFallbackPathsFor(goos, home, "", "", "opencode")
+		name := "opencode"
+		if goos == "windows" {
+			name += ".exe"
+		}
+		want := filepath.Join(home, ".opencode", "bin", name)
+		if !contains(paths, want) {
+			t.Errorf("%s fallback omits %s", goos, want)
+		}
+	}
+}
+
+func TestOpenCodeServiceInventoryRequiresRunnableInstall(t *testing.T) {
+	for _, kind := range []string{"executable", "missing", "directory", "non_executable"} {
+		t.Run(kind, func(t *testing.T) {
+			if kind == "non_executable" && runtime.GOOS == "windows" {
+				t.Skip("Windows checks executable extensions, not execute bits")
+			}
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("PATH", t.TempDir())
+			name := "opencode"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			binary := filepath.Join(home, ".opencode", "bin", name)
+			if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "directory":
+				if err := os.Mkdir(binary, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "executable", "non_executable":
+				mode := os.FileMode(0o700)
+				if kind == "non_executable" {
+					mode = 0o600
+				}
+				if err := os.WriteFile(binary, []byte("standalone executable"), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			host := fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{}}
+			deps := host.deps(runtime.GOOS)
+			deps.Discover = func() []AgentConfig {
+				agent := AgentConfig{Name: "OpenCode", AuthState: "ready"}
+				state, _ := detectAgentRuntimeState(agent)
+				agent.RuntimeState = string(state)
+				return []AgentConfig{agent}
+			}
+			inv := buildHarnessInventory(deps)
+			if kind == "executable" {
+				entry := entryFor(t, inv, "opencode")
+				if entry.LoginState != harnessLoginSignedIn || entry.SupportLevel != harnessSupportFlowsOnly || !entry.Enabled {
+					t.Fatalf("runnable OpenCode not advertised for flows: %+v", entry)
+				}
+			} else {
+				for _, entry := range inv.Entries {
+					if entry.Harness == "opencode" {
+						t.Fatalf("unrunnable OpenCode advertised: %+v", entry)
+					}
+				}
+			}
+		})
 	}
 }

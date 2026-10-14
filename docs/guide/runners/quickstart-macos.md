@@ -102,7 +102,7 @@ preloop runner status
 it. It is a launchd **agent** in your login session, not a system daemon, so
 the operator's agent CLI logins and keychain stay visible to host execution
 profiles. Runner output is appended to `~/.preloop/runner.log` (launchd has
-no journal). The plist sets a `PATH` that includes `~/.local/bin`,
+no journal). The plist sets a `PATH` that includes `~/.local/bin`, `~/.opencode/bin`,
 `/opt/homebrew/bin` and `/usr/local/bin`, because launchd starts agents with
 a minimal environment. It also pins `HOME` to the home directory of the user
 who ran `enable`, so the agent always reads that user's
@@ -172,6 +172,10 @@ completion, injection rejection, process-group halt). macOS specifics:
   `PATH` is minimal. The CLI's own directory is put at the front of the
   job's `PATH`, so a CLI installed under nvm, fnm or Volta finds the `node`
   its `#!/usr/bin/env node` line asks for.
+  Standalone OpenCode installs in `~/.opencode/bin` are also detected when
+  the service PATH omits that directory. After upgrading the CLI, restart
+  the runner so its inventory and capability tags use the updated detection;
+  an existing LaunchAgent does not need to be reinstalled for this fallback.
 - **Workspace.** `workspace_root` is optional. When omitted, job workspaces
   are created under `~/.preloop/host-workspaces` (mode 0700). Each job still
   gets a fresh `.preloop-host-exec/<execution_id>` directory; reuse and
@@ -188,7 +192,11 @@ completion, injection rejection, process-group halt). macOS specifics:
 - **Cursor profiles** run on the operator's own Cursor plan. Traffic goes to
   Cursor directly, so the run is not gateway metered and this path does not
   ingest usage; the structured result records the model only when Cursor
-  reports one.
+  reports one. Native flow profiles may need `"argv": ["--trust"]` to
+  acknowledge Cursor's workspace trust prompt for new workspaces. Remote
+  sessions supply this option after checking host authorization and the
+  installed approval hooks; native flow profiles retain the operator's
+  explicit trust configuration.
 - **Copilot CLI profiles** run under the operator's Copilot seat. Model
   traffic goes to GitHub, billed as the seat's premium requests; the result
   records the session id, the reported model and the premium request count,
