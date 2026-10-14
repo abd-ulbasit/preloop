@@ -532,6 +532,14 @@ def get_ai_model(
     return model
 
 
+# Both dates omitted means the last 7 days (model_detail_window). One bound
+# the caller sends is kept, so a 30-day request still covers 30 days.
+_MODEL_DETAIL_WINDOW_NOTE = (
+    "When both start_date and end_date are omitted, the server uses the "
+    "last 7 days. A bound the caller sends is kept."
+)
+
+
 @router.get(
     "/ai-models/{model_id}/summary",
     response_model=AIModelGatewayUsageSummaryResponse,
@@ -541,8 +549,14 @@ def get_ai_model(
 @require_permission("view_ai_models")
 def get_ai_model_usage_summary(
     model_id: uuid.UUID,
-    start_date: Optional[datetime] = Query(None),
-    end_date: Optional[datetime] = Query(None),
+    start_date: Optional[datetime] = Query(
+        None,
+        description="Lower bound of the summary window. " + _MODEL_DETAIL_WINDOW_NOTE,
+    ),
+    end_date: Optional[datetime] = Query(
+        None,
+        description="Upper bound of the summary window. " + _MODEL_DETAIL_WINDOW_NOTE,
+    ),
     failed_since: Optional[datetime] = Query(
         None,
         description=(
@@ -583,8 +597,14 @@ def list_ai_model_runtime_sessions(
     query: Optional[str] = Query(None, min_length=1),
     session_source_type: Optional[str] = Query(None),
     status: str = Query("all", pattern="^(all|active|ended)$"),
-    start_date: Optional[datetime] = Query(None),
-    end_date: Optional[datetime] = Query(None),
+    start_date: Optional[datetime] = Query(
+        None,
+        description=("Lower bound of the session window. " + _MODEL_DETAIL_WINDOW_NOTE),
+    ),
+    end_date: Optional[datetime] = Query(
+        None,
+        description=("Upper bound of the session window. " + _MODEL_DETAIL_WINDOW_NOTE),
+    ),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db_session),
@@ -622,8 +642,18 @@ def list_ai_model_interactions(
     query: Optional[str] = Query(None, min_length=1),
     runtime_session_id: Optional[str] = Query(None),
     session_source_type: Optional[str] = Query(None),
-    start_date: Optional[datetime] = Query(None),
-    end_date: Optional[datetime] = Query(None),
+    start_date: Optional[datetime] = Query(
+        None,
+        description=(
+            "Lower bound of the interaction window. " + _MODEL_DETAIL_WINDOW_NOTE
+        ),
+    ),
+    end_date: Optional[datetime] = Query(
+        None,
+        description=(
+            "Upper bound of the interaction window. " + _MODEL_DETAIL_WINDOW_NOTE
+        ),
+    ),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db_session),
