@@ -225,6 +225,10 @@ def test_parent_rules_are_inherited_readonly_and_parent_mode_is_ceiling(
     assert bundle["accounts"][str(child)]["path"] == [str(parent), str(child)]
     assert "parent" not in bundle["accounts"][str(child)]
     assert bundle["ancestor_require_permit"] == ["tool:call"]
+    assert bundle["account_modes"] == {
+        str(parent): {"tool:call": "require_permit"},
+        str(child): {"tool:call": "additive"},
+    }
 
 
 def test_moving_rule_invalidates_previous_and_new_owner(storage: Any) -> None:

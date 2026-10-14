@@ -274,8 +274,6 @@ async def get_mcp_server(
         resource_id=server_id,
     )
     if shared is not None:
-        from preloop.plugins.account_hooks import VISIBLE_MCP_SERVER, filter_viewable
-
         if not filter_viewable(db, current_user, VISIBLE_MCP_SERVER, [shared]):
             raise HTTPException(404, "Resource not found")
         return shared
@@ -289,6 +287,8 @@ async def get_mcp_server(
             detail="MCP server not found or access denied",
         )
 
+    if not filter_viewable(db, current_user, VISIBLE_MCP_SERVER, [server]):
+        raise HTTPException(404, "MCP server not found or access denied")
     return _server_response(db, server)
 
 

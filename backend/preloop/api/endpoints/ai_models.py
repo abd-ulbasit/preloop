@@ -118,6 +118,12 @@ def _get_readable_ai_model(
             )
         )
     ):
+        from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
+
+        if model.account_id is not None and not filter_viewable(
+            db, current_user, VISIBLE_AI_MODEL, [model]
+        ):
+            raise HTTPException(404, "AI Model not found")
         return model
     raise HTTPException(404, "AI Model not found")
 

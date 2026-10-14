@@ -1780,11 +1780,11 @@ def get_account_managed_agent(
         db, account_id=account.id, resource_type="managed_agent", resource_id=agent_id
     )
     if shared is not None:
-        from preloop.plugins.account_hooks import VISIBLE_MANAGED_AGENT, filter_viewable
-
         if not filter_viewable(db, current_user, VISIBLE_MANAGED_AGENT, [shared]):
             raise HTTPException(404, "Resource not found")
         return shared
+    if not filter_viewable(db, current_user, VISIBLE_MANAGED_AGENT, [{"id": agent_id}]):
+        raise HTTPException(404, "Managed agent not found")
     response = _build_managed_agent_detail_response(
         db,
         account_id=str(account.id),

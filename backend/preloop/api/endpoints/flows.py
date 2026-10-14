@@ -2758,7 +2758,7 @@ def read_flow(
 ):
     """Get flow by ID."""
     flow = crud_flow.get(db=db, id=flow_id, account_id=current_user.account_id)
-    if not flow:
+    if not flow or not filter_viewable(db, current_user, VISIBLE_FLOW, [flow]):
         raise HTTPException(status_code=404, detail="Flow not found")
     # The same lifetime counts the list carries. The detail page shows ten
     # recent runs and has to be able to say how many there are in total; a

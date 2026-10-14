@@ -203,6 +203,18 @@ def test_atomic_local_write_version_metadata_and_no_account_mode_mutation(
         assert snapshot.snapshot_data["resource_access"][0]["requirements"][0][
             "permit_rule_ids"
         ] == [str(rule.id)]
+        audit = db.scalars(
+            select(models.AuditLog).where(
+                models.AuditLog.account_id == account,
+                models.AuditLog.resource_type == "resource_access",
+            )
+        ).first()
+        assert audit.details["before"]["version"] == 0
+        assert audit.details["before"]["requirements"] == []
+        assert audit.details["after"]["version"] == 1
+        assert audit.details["after"]["requirements"][0]["permit_rule_ids"] == [
+            str(rule.id)
+        ]
     with pytest.raises(AccessRuleConflictError):
         save(resource, update(rule), version=0)
     with pytest.raises(AccessRuleConflictError):
