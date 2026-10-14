@@ -27,11 +27,18 @@ function Update-GitHubHostedDefenderSignature {
       }
       Write-Warning "Defender signature update service is not ready; retrying ($attempt/3)."
       # 0x800706be is a wedged RPC server inside an already-running WinDefend.
-      # Start-Service does not recycle it, so a later job on a new VM is the
-      # only thing that used to go green. 0x800106ba is the service still
-      # starting; start it and wait.
+      # Hosted images refuse to stop that service, so Restart-Service throws
+      # CouldNotStopService and must not fail the job. 0x800106ba means the
+      # service is still starting.
       if ($_.FullyQualifiedErrorId -match '^HRESULT 0x800706be(?:,|$)') {
-        Restart-Service -Name WinDefend -Force -ErrorAction Stop
+        try {
+          Restart-Service -Name WinDefend -Force -ErrorAction Stop
+        } catch {
+          $stopped = $_.FullyQualifiedErrorId -match 'CouldNotStopService' -or
+            $_.Exception.Message -match 'cannot be stopped'
+          if (-not $stopped) { throw }
+          Write-Warning "WinDefend cannot be stopped on this hosted image; retrying the signature update."
+        }
       } else {
         Start-Service -Name WinDefend -ErrorAction Stop
       }

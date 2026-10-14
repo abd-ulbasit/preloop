@@ -335,7 +335,29 @@ Describe 'Disposable runner protection setup' {
     Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
   }
 
-  It 'fails closed when the service cannot be started after an RPC failure' {
+  It 'retries the signature update when the hosted image will not stop WinDefend' {
+    Mock Update-MpSignature {
+      $script:updateAttempts++
+      if ($script:updateAttempts -lt 3) {
+        throw [System.Management.Automation.ErrorRecord]::new(
+          [System.Exception]::new('The remote procedure call failed.'),
+          'HRESULT 0x800706be,Update-MpSignature',
+          [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+      }
+    }
+    Mock Restart-Service {
+      throw [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new("Service 'WinDefend (WinDefend)' cannot be stopped."),
+        'CouldNotStopService,Microsoft.PowerShell.Commands.RestartServiceCommand',
+        [System.Management.Automation.ErrorCategory]::CloseError, $null)
+    }
+    Initialize-GitHubHostedDefender
+    Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Restart-Service -Times 2 -Exactly
+    Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
+  }
+
+  It 'fails closed when Defender restart is refused by policy after an RPC failure' {
     Mock Update-MpSignature {
       throw [System.Management.Automation.ErrorRecord]::new(
         [System.Exception]::new('The remote procedure call failed.'),

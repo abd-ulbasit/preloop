@@ -48,13 +48,9 @@ const GATEWAY_MODEL = process.env.PRELOOP_E2E_MODEL || 'preloop-fake';
  */
 const BUDGET = {
   firstUsableMs: 1000,
-  // Measured on the EE e2e stack (job 165618, three runs): 42 API calls,
-  // no duplicate URLs, longest start-after-finish chain 5. The control
-  // plane overview fans out gateway, audit and inventory reads; 20 and a
-  // chain of 2 described an earlier page.
-  coldRequests: 42,
+  coldRequests: 20,
   duplicateUrls: 0,
-  longestChain: 5,
+  longestChain: 2,
   requestsAfterBurst: 12,
   longTaskTotalMs: 200,
 };
