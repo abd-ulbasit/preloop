@@ -110,6 +110,14 @@ describe('ApiKeysView', () => {
     localStorage.clear();
   });
 
+  it('pages keys at 25 by default (#1585)', async () => {
+    const element = await fixture<ApiKeysView>(
+      html`<api-keys-view></api-keys-view>`
+    );
+    await waitUntil(() => !(element as any).isLoading);
+    expect(element.table.pageSize).to.equal(25);
+  });
+
   it('loads keys without fetching catalogs, including when creating a key', async () => {
     const element = await fixture<ApiKeysView>(
       html`<api-keys-view></api-keys-view>`

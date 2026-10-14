@@ -4,6 +4,10 @@ import sinon from 'sinon';
 
 import './api-usage-view';
 import type { ApiUsageView } from './api-usage-view';
+import {
+  API_USAGE_BREAKDOWN_PAGE,
+  API_USAGE_SESSION_PAGE,
+} from './api-usage-view';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -531,17 +535,17 @@ describe('ApiUsageView', () => {
     expect(root.querySelectorAll('.daily-row')).to.have.length(14);
     // The collapsed list keeps the most recent days.
     expect(root.querySelector('.daily-list')!.textContent).to.contain('30');
-    // Models page at ten on the shared table, most expensive first.
+    // Models page at five on the shared table (#1585), most expensive first.
     const modelRows = () =>
       root.querySelectorAll('.model-breakdown tbody tr[data-row]');
-    expect(modelRows()).to.have.length(10);
+    expect(modelRows()).to.have.length(API_USAGE_BREAKDOWN_PAGE);
     const pager = root.querySelector(
       '.model-breakdown table-pagination'
     ) as HTMLElement & { updateComplete: Promise<unknown> };
     await pager.updateComplete;
     expect(
       pager.shadowRoot!.querySelector('.range')!.textContent!.trim()
-    ).to.equal('1-10 of 15 models');
+    ).to.equal('1-5 of 15 models');
     (pager.shadowRoot!.querySelector('sl-button.next') as HTMLElement).click();
     await element.updateComplete;
     expect(modelRows()).to.have.length(5);
@@ -744,7 +748,9 @@ describe('ApiUsageView', () => {
     // one summary and its first page of sessions.
     expect(summaryCalls.length).to.equal(2);
     expect(
-      summaryCalls.filter((url) => url.includes('session_limit=10')).length
+      summaryCalls.filter((url) =>
+        url.includes(`session_limit=${API_USAGE_SESSION_PAGE}`)
+      ).length
     ).to.equal(1);
     expect(element.shadowRoot?.textContent).to.contain(
       'All recorded gateway spend'
@@ -1026,11 +1032,12 @@ describe('ApiUsageView', () => {
     expect(sessionUrls()[0]).to.contain('session_offset=0');
     (element as any).sessionPages.total = 60;
     await (element as any).sessionPages.goTo(2);
-    expect(sessionUrls().at(-1)).to.contain('session_offset=20');
+    // Five sessions a page (#1585): page three starts at ten.
+    expect(sessionUrls().at(-1)).to.contain('session_offset=10');
     expect((element as any).sessionPages.total).to.equal(60);
   });
 
-  it('pages the flow breakdown ten at a time', async () => {
+  it('pages the flow breakdown five at a time', async () => {
     const element = (await fixture(
       html`<api-usage-view></api-usage-view>`
     )) as ApiUsageView;
@@ -1043,13 +1050,34 @@ describe('ApiUsageView', () => {
     }));
     const host = document.createElement('div');
     render((element as any).renderFlowBreakdown(flows), host);
-    expect(host.querySelectorAll('.breakdown-row')).to.have.length(10);
+    expect(host.querySelectorAll('.breakdown-row')).to.have.length(5);
     const pager = host.querySelector('table-pagination') as HTMLElement & {
       total: number;
     };
     expect(pager.total).to.equal(12);
-    (element as any).flowPage = 1;
+    (element as any).flowPage = 2;
     render((element as any).renderFlowBreakdown(flows), host);
     expect(host.querySelectorAll('.breakdown-row')).to.have.length(2);
+  });
+
+  it('keeps the secondary sections closed by default (#1585)', async () => {
+    const element = (await fixture(
+      html`<api-usage-view></api-usage-view>`
+    )) as ApiUsageView;
+    await waitUntil(
+      () => !(element as any).loading && (element as any).summary !== null,
+      'API usage view did not finish loading'
+    );
+    await element.updateComplete;
+    const root = element.shadowRoot!;
+    for (const name of ['days', 'flows', 'interactions']) {
+      const section = root.querySelector(
+        `collapsible-section.${name}-section`
+      ) as HTMLElement & { open: boolean };
+      expect(section, name).to.exist;
+      expect(section.open, name).to.equal(false);
+    }
+    expect(API_USAGE_SESSION_PAGE).to.equal(5);
+    expect(API_USAGE_BREAKDOWN_PAGE).to.equal(5);
   });
 });

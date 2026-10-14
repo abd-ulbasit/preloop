@@ -529,8 +529,8 @@ describe('RecordsView', () => {
   });
 
   it('pages checkpoints oldest first with the shared pager', async () => {
-    // 51 rows for a page of 50: the extra one says a next page exists.
-    const page = Array.from({ length: 51 }, (_, index) => ({
+    // 11 rows for a page of 10: the extra one says a next page exists.
+    const page = Array.from({ length: 11 }, (_, index) => ({
       seq: index + 1,
       chain_hash: 'abc',
       row_count: 1,
@@ -543,6 +543,7 @@ describe('RecordsView', () => {
     }));
     install({ checkpoints: page });
     const el = await mount();
+    await openCheckpoints(el);
     const pager = () =>
       el.shadowRoot?.querySelector('table-pagination.checkpoint-pager') as
         | (HTMLElement & {
@@ -554,11 +555,11 @@ describe('RecordsView', () => {
     await pager()!.updateComplete;
     expect(
       pager()!.shadowRoot!.querySelector('.range')!.textContent!.trim()
-    ).to.equal('1-50 checkpoints, oldest first');
+    ).to.equal('1-10 checkpoints, oldest first');
   });
 
   it('offers no Next when the checkpoints end exactly on a page', async () => {
-    const page = Array.from({ length: 50 }, (_, index) => ({
+    const page = Array.from({ length: 10 }, (_, index) => ({
       seq: index + 1,
       chain_hash: 'abc',
       row_count: 1,
@@ -571,11 +572,12 @@ describe('RecordsView', () => {
     }));
     install({ checkpoints: page });
     const el = await mount();
+    await openCheckpoints(el);
     const pager = () =>
       el.shadowRoot?.querySelector('table-pagination.checkpoint-pager') as
         (HTMLElement & { hasNext: boolean }) | null;
     await waitUntil(
-      () => (el as any).checkpoints.length === 50,
+      () => (el as any).checkpoints.length === 10,
       'checkpoints did not load'
     );
     await el.updateComplete;
@@ -596,4 +598,45 @@ describe('RecordsView', () => {
     expect(el.shadowRoot!.querySelector('[data-testid="checkpoint-error"]')).to
       .exist;
   });
+
+  it('keeps the checkpoint table closed until asked (#1585)', async () => {
+    install({ checkpoints: [] });
+    const el = await mount();
+    const section = await waitUntilSection(el);
+    expect(section.open).to.equal(false);
+    const pager = () =>
+      el.shadowRoot!.querySelector(
+        'table-pagination.checkpoint-pager'
+      ) as HTMLElement;
+    // Closed, the rows are not slotted, so they take no room on the page.
+    expect(pager().assignedSlot).to.equal(null);
+    expect(pager().getBoundingClientRect().height).to.equal(0);
+    const toggle = section.shadowRoot!.querySelector('button')!;
+    expect(toggle.getAttribute('aria-expanded')).to.equal('false');
+    toggle.click();
+    await section.updateComplete;
+    expect(toggle.getAttribute('aria-expanded')).to.equal('true');
+    await el.updateComplete;
+    expect(pager().assignedSlot).to.not.equal(null);
+  });
 });
+
+async function waitUntilSection(el: HTMLElement) {
+  await waitUntil(
+    () =>
+      el.shadowRoot?.querySelector('collapsible-section.checkpoint-section'),
+    'checkpoint section did not render'
+  );
+  return el.shadowRoot!.querySelector(
+    'collapsible-section.checkpoint-section'
+  ) as HTMLElement & {
+    open: boolean;
+    updateComplete: Promise<unknown>;
+  };
+}
+
+async function openCheckpoints(el: HTMLElement) {
+  const section = await waitUntilSection(el);
+  section.open = true;
+  await section.updateComplete;
+}

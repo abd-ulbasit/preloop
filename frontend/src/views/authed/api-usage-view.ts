@@ -62,6 +62,7 @@ import {
 } from '../../utils/history-window';
 import { analyticsWindow } from '../../utils/usage-nudges';
 import '../../components/capability-extension';
+import '../../components/collapsible-section';
 import {
   formatTimeRangeWindow,
   resolvePreviousTimeRange,
@@ -84,6 +85,13 @@ const DATE_RANGE_OPTIONS: Array<{ value: TimeRangeKey; label: string }> = [
   // went; the shared util has always been able to resolve it.
   { value: 'all', label: 'All time' },
 ];
+
+/**
+ * Default page sizes that keep Gateway traffic within three viewports at
+ * 1440x900 (#1585); the pager offers the larger sizes.
+ */
+export const API_USAGE_SESSION_PAGE = 5;
+export const API_USAGE_BREAKDOWN_PAGE = 5;
 
 @customElement('api-usage-view')
 export class ApiUsageView extends LitElement {
@@ -160,13 +168,14 @@ export class ApiUsageView extends LitElement {
         breakdowns: ['sessions'],
         sessionPage,
       }),
-    // The page shows ten sessions under the cards, as it showed ten rows.
-    10
+    // Five sessions a page: each session is one row per model it used, so
+    // ten sessions drew about 28 rows and made the page 9 viewports (#1585).
+    API_USAGE_SESSION_PAGE
   );
 
   /** Flow rows, ten a page: the breakdown carries every flow of the period. */
   @state() private flowPage = 0;
-  @state() private flowPageSize = 10;
+  @state() private flowPageSize = API_USAGE_BREAKDOWN_PAGE;
 
   readonly sessionTable = new ListTable<GatewayUsageBySession>(this, {
     listId: 'api-usage-sessions',
@@ -181,8 +190,8 @@ export class ApiUsageView extends LitElement {
     listId: 'api-usage-models',
     getRowId: (model) =>
       `${model.provider_name ?? ''}/${model.model_alias ?? ''}`,
-    pageSize: 10,
-    pageSizes: [10, 25, 50],
+    pageSize: API_USAGE_BREAKDOWN_PAGE,
+    pageSizes: [5, 10, 25, 50],
     defaultSorting: [{ id: 'cost', desc: true }],
     url: { prefix: 'models' },
     columns: this.modelColumns(),
@@ -1448,7 +1457,7 @@ export class ApiUsageView extends LitElement {
         class="flow-pager"
         page-index=${page}
         page-size=${this.flowPageSize}
-        .pageSizes=${[10, 25, 50]}
+        .pageSizes=${[5, 10, 25, 50]}
         .total=${sortedFlows.length}
         page-rows=${pageFlows.length}
         noun="flows"
@@ -1867,7 +1876,18 @@ export class ApiUsageView extends LitElement {
                           }
                         </span>
                       </div>
-                      ${this.renderSearchResults(this.searchResults)}
+                      ${
+                        this.searchQuery.trim()
+                          ? this.renderSearchResults(this.searchResults)
+                          : html`<collapsible-section
+                              class="interactions-section"
+                              heading="recent interactions"
+                              storage-key="api-usage:interactions"
+                              >${this.renderSearchResults(
+                                this.searchResults
+                              )}</collapsible-section
+                            >`
+                      }
                     </sl-card>
 
                     <sl-card class="breakdown-card">
@@ -1895,7 +1915,14 @@ export class ApiUsageView extends LitElement {
                               Requests and spend over time
                             </span>
                           </div>
-                          ${this.renderDailyUsage(this.summary.requests_by_day)}
+                          <collapsible-section
+                            class="days-section"
+                            heading="daily activity"
+                            storage-key="api-usage:days"
+                            >${this.renderDailyUsage(
+                              this.summary.requests_by_day
+                            )}</collapsible-section
+                          >
                         </sl-card>
                       </div>
 
@@ -1917,9 +1944,14 @@ export class ApiUsageView extends LitElement {
                               Flow-level gateway consumption
                             </span>
                           </div>
-                          ${this.renderFlowBreakdown(
-                            this.summary.usage_by_flow
-                          )}
+                          <collapsible-section
+                            class="flows-section"
+                            heading="usage by flow"
+                            storage-key="api-usage:flows"
+                            >${this.renderFlowBreakdown(
+                              this.summary.usage_by_flow
+                            )}</collapsible-section
+                          >
                         </sl-card>
                       </div>
                     </div>
