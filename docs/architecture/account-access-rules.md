@@ -82,7 +82,10 @@ CRUD-backed resource types; `resource:share` additionally requires a shareable
 type. `runner_pool` has no canonical model and is rejected for exact IDs.
 
 Bundles include `resource_access` with explicit `account_id` provenance for
-hierarchy owners. Enterprise must evaluate every applicable local requirement
+hierarchy owners. Managed local permits are excluded from ordinary `rules` and
+carried separately in `resource_access_rules` with the same owner provenance,
+including ancestor-local `scope: self` rules. This keeps local allowlists from
+satisfying account or ancestor permit gates, and keeps every binding resolvable. Enterprise must evaluate every applicable local requirement
 as an independent **AND** ceiling, satisfied only by its designated
 `permit_rule_ids` for the exact owner/type/UUID/action. Broad tag/account permits
 cannot satisfy it. Account and ancestor gates, forbids and existing permission

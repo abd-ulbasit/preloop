@@ -911,11 +911,20 @@ class CRUDAccessRule:
                 )
                 .order_by(models.AccessRule.priority, models.AccessRule.id)
             ).all()
+            local_ids = {key for owner in account_rows for key in _managed_ids(owner)}
+            local_rules = [
+                {**rule_definition(row), "account_id": str(row.account_id)}
+                for row in rules
+                if row.id in local_ids
+            ]
             applicable = [
                 {**rule_definition(row), "account_id": str(row.account_id)}
                 for row in rules
-                if (row.account_id == account_id and row.scope != "subaccounts")
-                or (row.account_id != account_id and row.scope != "self")
+                if row.id not in local_ids
+                and (
+                    (row.account_id == account_id and row.scope != "subaccounts")
+                    or (row.account_id != account_id and row.scope != "self")
+                )
             ]
             modes = {}
             ancestor_require_permit = set()
@@ -934,6 +943,7 @@ class CRUDAccessRule:
                 "rules": applicable,
                 "modes": modes,
                 "ancestor_require_permit": sorted(ancestor_require_permit),
+                "resource_access_rules": local_rules,
                 "resource_access": [
                     {**policy.model_dump(mode="json"), "account_id": str(owner.id)}
                     for owner in account_rows

@@ -408,6 +408,15 @@ def test_bundle_preserves_independent_account_ancestor_and_local_gates(
     assert str(broad["id"]) not in binding["requirements"][0]["permit_rule_ids"]
     assert bundle["modes"]["model:invoke"] == "require_permit"
     assert bundle["ancestor_require_permit"] == ["model:invoke"]
+    # Local permits travel with the gate even for an ancestor's scope=self rule,
+    # and never union into the account/ancestor allowlist.
+    for key in (account, child):
+        detached = crud.bundle(account_id=key)
+        assert [row["id"] for row in detached["rules"]] == [broad["id"]]
+        assert [row["id"] for row in detached["resource_access_rules"]] == [
+            saved.rules[0].id
+        ]
+        assert detached["resource_access_rules"][0]["account_id"] == str(account)
     assert "synthetic-secret" not in repr(bundle)
 
 
