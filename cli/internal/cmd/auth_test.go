@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/zalando/go-keyring"
 
 	"github.com/preloop/preloop/cli/internal/config"
 
@@ -303,6 +305,20 @@ func TestMain(m *testing.M) {
 	}
 	restoreHome, err := testenv.SetProcessHome(tempHome)
 	if err != nil {
+		panic(err)
+	}
+
+	// OS keyrings do not honor HOME. Use an in-memory store and shadow the
+	// macOS security executable so credential discovery cannot reach real logins.
+	keyring.MockInit()
+	keyringBin := filepath.Join(tempHome, "credential-bin")
+	if err := os.MkdirAll(keyringBin, 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(keyringBin, "security"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("PATH", keyringBin+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
 		panic(err)
 	}
 
