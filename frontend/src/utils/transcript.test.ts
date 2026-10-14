@@ -6,6 +6,7 @@ import {
   isModelGatewayEventType,
   matchInjectedSegment,
 } from './transcript';
+import { sessionTools } from './session-live';
 
 function gatewayEvent(
   id: string,
@@ -789,13 +790,56 @@ describe('buildConversation with a history=delta page (#1586)', () => {
     keep(full[1], [2, 3]),
     keep(full[2], [4, 5]),
   ];
-  const texts = (events: FlowGatewayEvent[]) =>
-    JSON.stringify(buildConversation(events).items, (key, value) =>
-      key === 'event' || key === 'key' ? undefined : value
+  // Items and stats: the parity claim covers both.
+  const texts = (events: FlowGatewayEvent[]) => {
+    const result = buildConversation(events);
+    return JSON.stringify(
+      { items: result.items, stats: result.stats },
+      (key, value) => (key === 'event' || key === 'key' ? undefined : value)
     );
+  };
 
   it('renders the same transcript as the full page', () => {
     expect(texts(delta)).to.equal(texts(full));
+  });
+
+  it('derives the same tools when accumulated tools are left out', () => {
+    // The gateway stores the tools accumulated so far on every call; the
+    // delta page keeps only the ones an older event did not carry.
+    const call = (id: string) => ({
+      kind: 'call',
+      call_id: id,
+      name: 'run_tests',
+      text: `{"n":"${id}"}`,
+    });
+    const result = (id: string) => ({
+      kind: 'result',
+      call_id: id,
+      text: `ok ${id}`,
+    });
+    const withTools = (events: FlowGatewayEvent[], tools: unknown[][]) =>
+      events.map(
+        (event, index) =>
+          ({
+            ...event,
+            payload: { ...event.payload, tools: tools[index] },
+          }) as FlowGatewayEvent
+      );
+    const fullTools = withTools(full, [
+      [call('c1')],
+      [call('c1'), result('c1'), call('c2')],
+      [call('c1'), result('c1'), call('c2'), result('c2')],
+    ]);
+    const deltaTools = withTools(delta, [
+      [call('c1')],
+      [result('c1'), call('c2')],
+      [result('c2')],
+    ]);
+    const strip = (events: FlowGatewayEvent[]) =>
+      JSON.stringify(sessionTools(events));
+    const fromFull = sessionTools(fullTools);
+    expect(fromFull).to.have.length(2);
+    expect(strip(deltaTools)).to.equal(strip(fullTools));
   });
 
   it('still keeps "continue" said twice at two positions', () => {

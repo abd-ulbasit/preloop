@@ -3269,7 +3269,15 @@ async def get_account_session_activity_timeline(
         ),
     ),
 ):
-    """Activity timeline overview for this session."""
+    """Activity timeline overview for this session.
+
+    Model gateway call items leave out the replayed conversation history in
+    `metadata` (`conversation_preview`, `tools`, `tool_activity`, `request`,
+    `response`, `messages`); on a long session those keys were most of the
+    payload (#1586). Read them from
+    `GET /runtime-sessions/{id}/gateway-events` (`history=full` for every
+    event's whole conversation) or from the single gateway event detail.
+    """
     return await run_db_off_loop(
         lambda: RuntimeSessionExplorerService(db).get_account_session_activity_timeline(
             account=account,

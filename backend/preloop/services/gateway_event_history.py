@@ -96,6 +96,10 @@ def elide_replayed_history(events: list[dict[str, Any]]) -> list[dict[str, Any]]
                     seen_messages.add(signature)
                 new_messages.append({**message, "position": index})
             new_metadata = dict(preview.get("metadata") or {})
+            # Tells a client this preview is partial and how many replayed
+            # messages an older event on the page already carried; without
+            # it a delta preview reads like a short conversation. A few bytes
+            # per event, against the kilobytes elided.
             new_metadata["history_elided_count"] = elided
             new_payload["conversation_preview"] = {
                 **preview,

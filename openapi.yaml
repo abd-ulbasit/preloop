@@ -3589,7 +3589,20 @@ paths:
       tags:
       - Account
       summary: Get Account Session Activity Timeline
-      description: Activity timeline overview for this session.
+      description: 'Activity timeline overview for this session.
+
+
+        Model gateway call items leave out the replayed conversation history in
+
+        `metadata` (`conversation_preview`, `tools`, `tool_activity`, `request`,
+
+        `response`, `messages`); on a long session those keys were most of the
+
+        payload (#1586). Read them from
+
+        `GET /runtime-sessions/{id}/gateway-events` (`history=full` for every
+
+        event''s whole conversation) or from the single gateway event detail.'
       operationId: get_account_session_activity_timeline_api_v1_runtime_sessions__runtime_session_id__activity_get
       security:
       - bearerAuth: []
@@ -45293,7 +45306,6 @@ components:
           - type: number
             minimum: 0.0
           - type: string
-            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           - type: 'null'
           title: Charged Cost
           description: Amount the source vendor charged, in USD. The billing truth;
