@@ -178,7 +178,8 @@ How the grant is scoped:
   command with any word that does not start with a listed prefix; a command
   with `$`, backticks, backslashes, newlines, redirections, subshells or
   background jobs; a word that names a path outside `paths`, or uses `~` or
-  `..`; `git push`, `fetch`, `pull`, `clone` or remote changes, network tools
+  `..`; `git push`, `fetch`, `pull`, `clone`, `ls-remote`, `submodule`, and
+  every `git remote` subcommand except `show` and `get-url`; network tools
   such as `curl`, `wget`, `ssh` and `gh`, publishing commands, and `sudo`,
   even when quoted. Deny rules and require-approval rules in your approval
   policies still win.

