@@ -407,9 +407,12 @@ def test_approval_and_audit_payloads_omit_raw_text():
         detectors={"pii": True},
         conditions=[ToolCondition(expression="pii.found == true", action="deny")],
     )
-    with patch(
-        "preloop.services.model_content_policy._log_policy_decision_async"
-    ) as audit:
+    with (
+        patch(
+            "preloop.services.model_content_policy._log_policy_decision_async"
+        ) as audit,
+        patch("preloop.services.model_content_policy.schedule_policy_match_hit"),
+    ):
         decision = evaluate_model_io(
             rules=[rule],
             target="model.request",

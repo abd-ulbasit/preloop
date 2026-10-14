@@ -59,6 +59,7 @@ def captured():
     audits = []
     with (
         patch.object(mcp, "schedule_policy_notice", side_effect=notices.append),
+        patch.object(mcp, "schedule_policy_match_hit"),
         patch.object(
             mcp,
             "_log_policy_decision_async",

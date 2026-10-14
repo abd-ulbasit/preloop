@@ -36,7 +36,12 @@ from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_policy_notice_hit
-from preloop.models.crud.policy_notice_hit import PolicyNoticeRuleSummary
+from preloop.models.crud.policy_notice_hit import (
+    PolicyNoticeActionSummary,
+    PolicyNoticeBreakdown,
+    PolicyNoticeRuleSummary,
+    PolicyNoticeUserSummary,
+)
 from preloop.models.models.policy_notice_hit import POLICY_NOTICE_EXCERPT_MAX_CHARS
 from preloop.utils.reporting_window import (
     as_utc,
@@ -89,6 +94,11 @@ class PolicyNotice:
     text_sha256: str
     excerpt: Optional[str]
     approval_workflow: Optional[str] = None
+    action: str = "notify"
+    model_alias: Optional[str] = None
+    agent_ref: Optional[str] = None
+    runtime_session_id: Optional[UUID] = None
+    audit_event_id: Optional[UUID] = None
 
 
 @dataclass
@@ -273,6 +283,11 @@ def record_policy_notice(
         text_sha256=notice.text_sha256,
         excerpt=notice.excerpt,
         now=now,
+        action=notice.action,
+        model_alias=notice.model_alias,
+        agent_ref=notice.agent_ref,
+        runtime_session_id=notice.runtime_session_id,
+        audit_event_id=notice.audit_event_id,
     )
     db.commit()
     claimed = crud_policy_notice_hit.claim_notification(
@@ -316,6 +331,54 @@ def process_policy_notice(notice: PolicyNotice) -> Optional[PolicyNoticeOutcome]
         _safe_close_db_session(db)
 
 
+def _persist_policy_match_hit(notice: PolicyNotice) -> None:
+    """Insert one block or approval hit. Swallows its own errors."""
+    from preloop.models.db.session import _safe_close_db_session, get_db_session
+
+    db = next(get_db_session())
+    try:
+        crud_policy_notice_hit.record(
+            db,
+            account_id=notice.account_id,
+            user_id=notice.user_id,
+            target=notice.target,
+            rule_id=notice.rule_id,
+            rule_description=notice.rule_description,
+            text_sha256=notice.text_sha256,
+            excerpt=notice.excerpt,
+            action=notice.action,
+            model_alias=notice.model_alias,
+            agent_ref=notice.agent_ref,
+            runtime_session_id=notice.runtime_session_id,
+            audit_event_id=notice.audit_event_id,
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - a hit must never fail the model call
+        logger.exception(
+            "Failed to record policy match hit for rule %s", notice.rule_id
+        )
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _safe_close_db_session(db)
+
+
+def schedule_policy_match_hit(notice: PolicyNotice) -> None:
+    """Record a deny or require_approval match off the request thread.
+
+    Unlike :func:`schedule_policy_notice` this does not debounce or deliver.
+    A failure here cannot change the decision returned to the gateway.
+    """
+    try:
+        from preloop.services.db_executor import submit_off_loop
+
+        submit_off_loop(lambda: _persist_policy_match_hit(notice))
+    except Exception:  # noqa: BLE001 - scheduling must never fail the call
+        logger.exception("Could not schedule policy match hit for %s", notice.rule_id)
+
+
 def schedule_policy_notice(notice: PolicyNotice) -> None:
     """Record and deliver ``notice`` off the request thread.
 
@@ -338,6 +401,7 @@ def summarize_policy_notices(
     window: timedelta = NOTICE_SUMMARY_WINDOW,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
+    actions: Optional[Sequence[str]] = None,
 ) -> List[PolicyNoticeRuleSummary]:
     """Per-rule notice counts inside one ``[start, end)`` window.
 
@@ -352,6 +416,7 @@ def summarize_policy_notices(
         window: Length of the default window.
         start: Inclusive window start, or None for the default window.
         end: Exclusive window end, or None for the default window.
+        actions: When set, only hits with one of these actions.
 
     Returns:
         One summary per rule with at least one hit in the window.
@@ -368,7 +433,78 @@ def summarize_policy_notices(
         what="policy notice window",
     )
     return crud_policy_notice_hit.summarize_by_rule(
-        db, account_id=account_id, since=window_start, until=window_end
+        db,
+        account_id=account_id,
+        since=window_start,
+        until=window_end,
+        actions=actions,
+    )
+
+
+@dataclass(frozen=True)
+class PolicyNoticeGroupSummary:
+    """Rule, developer, action, model and agent counts for one window."""
+
+    rules: Sequence[PolicyNoticeRuleSummary]
+    users: Sequence[PolicyNoticeUserSummary]
+    actions: Sequence[PolicyNoticeActionSummary]
+    models: Sequence[PolicyNoticeBreakdown]
+    agents: Sequence[PolicyNoticeBreakdown]
+
+
+def summarize_policy_notice_groups(
+    db: Session,
+    account_id: Any,
+    *,
+    now: Optional[datetime] = None,
+    window: timedelta = NOTICE_SUMMARY_WINDOW,
+    group_by: str = "rule",
+) -> PolicyNoticeGroupSummary:
+    """Counts for ``GET /policies/notices/summary``.
+
+    ``group_by=rule`` (the Attention page) lists notify hits only, so a
+    block does not show up as a notify card. ``group_by=user`` and
+    ``group_by=action`` count every stored action. Per-user counts use the
+    same filter as the rule rows, so they add up to the rule totals.
+    Model and agent breakdowns always count every stored action.
+
+    Args:
+        db: Database session.
+        account_id: Account the summary is for.
+        now: End of the window.
+        window: Length of the window.
+        group_by: ``rule``, ``user`` or ``action``.
+
+    Returns:
+        The five groupings for the window.
+    """
+    window_start, window_end = resolve_reporting_window(
+        start=None,
+        end=None,
+        now=now,
+        default_window=window,
+        what="policy notice window",
+    )
+    rule_actions: Optional[Sequence[str]] = ("notify",) if group_by == "rule" else None
+    shared = {
+        "account_id": account_id,
+        "since": window_start,
+        "until": window_end,
+    }
+    return PolicyNoticeGroupSummary(
+        rules=crud_policy_notice_hit.summarize_by_rule(
+            db, actions=rule_actions, **shared
+        ),
+        users=crud_policy_notice_hit.summarize_by_user(
+            db, actions=rule_actions, **shared
+        ),
+        actions=crud_policy_notice_hit.summarize_by_action(db, **shared),
+        models=crud_policy_notice_hit.summarize_breakdown(
+            db, column="model_alias", **shared
+        ),
+        agents=crud_policy_notice_hit.summarize_breakdown(
+            db, column="agent_ref", **shared
+        ),
     )
 
 
@@ -505,6 +641,10 @@ def build_policy_notice_digest_section(
         window_start=window_start,
         window_end=window_end,
         rows=summarize_policy_notices(
-            db, account_id, start=window_start, end=window_end
+            db,
+            account_id,
+            start=window_start,
+            end=window_end,
+            actions=("notify",),
         ),
     )

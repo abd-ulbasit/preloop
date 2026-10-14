@@ -1,10 +1,15 @@
-"""Policy notice hits: model I/O rules with the ``notify`` action that matched."""
+"""Policy match hits: model I/O rules that matched.
+
+Notify matches send an outbound notice. Deny and require_approval matches
+are stored beside the audit row they already write, so a summary can count
+blocks and approvals per developer. The table name is unchanged.
+"""
 
 from datetime import datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,22 +18,35 @@ from preloop.models.models.base import Base
 #: Upper bound on a stored excerpt, in characters.
 POLICY_NOTICE_EXCERPT_MAX_CHARS = 280
 
+#: Stored ``action`` values. ``notify`` is the historical default.
+POLICY_NOTICE_ACTIONS = ("notify", "deny", "require_approval", "redact")
+
+_ACTION_CHECK = "action IN ('notify', 'deny', 'require_approval', 'redact')"
+
 
 class PolicyNoticeHit(Base):
-    """One ``notify`` match on one model call.
+    """One model I/O match on one model call.
 
-    A hit is written every time a notify rule matches, including repeats; the
-    console and the weekly digest count them. The full prompt or completion is
-    never stored: only its SHA-256 and a secret-scrubbed excerpt of at most
+    A hit is written every time a notify, deny, or require_approval rule
+    matches, including repeats. The console and the weekly digest count
+    them. The full prompt or completion is never stored: only its SHA-256
+    and a secret-scrubbed excerpt of at most
     :data:`POLICY_NOTICE_EXCERPT_MAX_CHARS` characters around the match.
     ``excerpt`` is null when redaction failed.
 
-    ``notified_at`` is set on the one hit per rule, user and hour that sent an
-    outbound message. It is the cross-replica debounce marker.
+    ``notified_at`` is set on the one notify hit per rule, user and hour
+    that sent an outbound message. It is the cross-replica debounce marker.
+    Deny and approval hits leave it null; they are not delivered as notices.
+
+    ``action`` defaults to ``notify`` so rows written before block and
+    approval matches were stored stay in the original set. ``agent_ref`` is
+    the runtime principal (``type:id`` when both are known). ``audit_event_id``
+    is the id of the audit row written for the same match.
     """
 
     __tablename__ = "policy_notice_hit"
     __table_args__ = (
+        CheckConstraint(_ACTION_CHECK, name="ck_policy_notice_hit_action"),
         Index(
             "ix_policy_notice_hit_account_rule_created",
             "account_id",
@@ -36,6 +54,12 @@ class PolicyNoticeHit(Base):
             "created_at",
         ),
         Index("ix_policy_notice_hit_account_created", "account_id", "created_at"),
+        Index(
+            "ix_policy_notice_hit_account_action_created",
+            "account_id",
+            "action",
+            "created_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -69,9 +93,31 @@ class PolicyNoticeHit(Base):
         nullable=True,
         comment="Set when this hit sent the outbound notice (debounce marker)",
     )
+    action: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="notify",
+        server_default="notify",
+        comment="notify | deny | require_approval | redact",
+    )
+    model_alias: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    agent_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Runtime principal, type:id when both are known",
+    )
+    runtime_session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    audit_event_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="Audit row written for the same match",
+    )
 
     def __repr__(self) -> str:
         return (
-            f"<PolicyNoticeHit rule={self.rule_id} target={self.target} "
-            f"account={str(self.account_id)[:8]}>"
+            f"<PolicyNoticeHit rule={self.rule_id} action={self.action} "
+            f"target={self.target} account={str(self.account_id)[:8]}>"
         )

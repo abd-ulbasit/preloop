@@ -1,17 +1,21 @@
-"""CRUD operations for policy notice hits (``notify`` model I/O matches)."""
+"""CRUD operations for policy notice hits (model I/O matches)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from ..models.permission import Permission, Role, RolePermission, TeamRole, UserRole
-from ..models.policy_notice_hit import PolicyNoticeHit
+from ..models.policy_notice_hit import (
+    POLICY_NOTICE_ACTIONS,
+    POLICY_NOTICE_EXCERPT_MAX_CHARS,
+    PolicyNoticeHit,
+)
 from ..models.team import Team, TeamMembership
 from ..models.user import User
 from .base import CRUDBase
@@ -24,6 +28,7 @@ class PolicyNoticeRuleSummary:
     rule_id: str
     rule_description: Optional[str]
     target: str
+    action: str
     count: int
     last_hit_id: UUID
     last_hit_at: datetime
@@ -32,11 +37,64 @@ class PolicyNoticeRuleSummary:
     last_username: Optional[str]
 
 
+@dataclass(frozen=True)
+class PolicyNoticeUserSummary:
+    """Hits of one developer inside a window."""
+
+    user_id: Optional[UUID]
+    username: Optional[str]
+    count: int
+
+
+@dataclass(frozen=True)
+class PolicyNoticeActionSummary:
+    """Hits of one action inside a window."""
+
+    action: str
+    count: int
+
+
+@dataclass(frozen=True)
+class PolicyNoticeBreakdown:
+    """Hits sharing one model alias or agent reference."""
+
+    key: Optional[str]
+    count: int
+
+
 def _naive_utc(value: datetime) -> datetime:
     """``created_at`` is naive UTC (house convention); compare like with like."""
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _bounded(value: Optional[str], limit: int) -> Optional[str]:
+    """Trim ``value`` to ``limit`` characters, or None when it is empty."""
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    return text_value[:limit]
+
+
+def _window_filters(
+    account_id: Any,
+    since: datetime,
+    until: Optional[datetime],
+    actions: Optional[Sequence[str]],
+) -> List[Any]:
+    """Predicates for one account and one ``[since, until)`` window."""
+    filters: List[Any] = [
+        PolicyNoticeHit.account_id == account_id,
+        PolicyNoticeHit.created_at >= _naive_utc(since),
+    ]
+    if until is not None:
+        filters.append(PolicyNoticeHit.created_at < _naive_utc(until))
+    if actions:
+        filters.append(PolicyNoticeHit.action.in_(tuple(actions)))
+    return filters
 
 
 class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
@@ -54,6 +112,11 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         text_sha256: str,
         excerpt: Optional[str],
         now: Optional[datetime] = None,
+        action: str = "notify",
+        model_alias: Optional[str] = None,
+        agent_ref: Optional[str] = None,
+        runtime_session_id: Optional[UUID] = None,
+        audit_event_id: Optional[UUID] = None,
     ) -> PolicyNoticeHit:
         """Insert one hit and flush it. The caller commits.
 
@@ -68,10 +131,23 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
             excerpt: Redacted excerpt, or None when redaction failed.
             now: Hit time. Set from the application clock rather than the
                 transaction's ``now()`` so hits order by when they happened.
+            action: ``notify``, ``deny``, ``require_approval`` or ``redact``.
+            model_alias: Gateway model alias, when known.
+            agent_ref: Runtime principal, when known.
+            runtime_session_id: Runtime session the call belonged to.
+            audit_event_id: Audit row written for the same match.
 
         Returns:
             The flushed hit.
+
+        Raises:
+            ValueError: ``action`` is not one of the stored values.
         """
+        if action not in POLICY_NOTICE_ACTIONS:
+            raise ValueError(f"Unsupported policy hit action: {action}")
+        stored_excerpt = excerpt
+        if stored_excerpt is not None:
+            stored_excerpt = stored_excerpt[:POLICY_NOTICE_EXCERPT_MAX_CHARS] or None
         hit = PolicyNoticeHit(
             account_id=account_id,
             user_id=user_id,
@@ -79,7 +155,12 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
             rule_id=rule_id,
             rule_description=rule_description,
             text_sha256=text_sha256,
-            excerpt=excerpt,
+            excerpt=stored_excerpt,
+            action=action,
+            model_alias=_bounded(model_alias, 255),
+            agent_ref=_bounded(agent_ref, 255),
+            runtime_session_id=runtime_session_id,
+            audit_event_id=audit_event_id,
             created_at=_naive_utc(now or datetime.now(timezone.utc)),
         )
         db.add(hit)
@@ -110,6 +191,8 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         Returns:
             True when this hit should send the notice.
         """
+        if hit.action != "notify":
+            return False
         moment = now or datetime.now(timezone.utc)
         lock_key = f"policy_notice:{hit.account_id}:{hit.rule_id}:{hit.user_id or '-'}"
         db.execute(
@@ -140,6 +223,7 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
         since: datetime,
         until: Optional[datetime] = None,
         limit: int = 100,
+        actions: Optional[Sequence[str]] = None,
     ) -> List[PolicyNoticeRuleSummary]:
         """Per-rule hit counts in ``[since, until)``, newest rule activity first.
 
@@ -161,17 +245,12 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
             until: Exclusive window end (aware or naive UTC), or None for no
                 upper bound.
             limit: Maximum number of rules returned.
+            actions: When set, only hits with one of these actions.
 
         Returns:
             One summary per rule with at least one hit in the window.
         """
-        start = _naive_utc(since)
-        bounds = [
-            PolicyNoticeHit.account_id == account_id,
-            PolicyNoticeHit.created_at >= start,
-        ]
-        if until is not None:
-            bounds.append(PolicyNoticeHit.created_at < _naive_utc(until))
+        bounds = _window_filters(account_id, since, until, actions)
         counts = (
             select(
                 PolicyNoticeHit.rule_id.label("rule_id"),
@@ -203,6 +282,7 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
                 latest.c.rule_id,
                 latest.c.rule_description,
                 latest.c.target,
+                latest.c.action,
                 counts.c.hit_count,
                 latest.c.id,
                 latest.c.created_at,
@@ -223,15 +303,144 @@ class CRUDPolicyNoticeHit(CRUDBase[PolicyNoticeHit]):
                 rule_id=row[0],
                 rule_description=row[1],
                 target=row[2],
-                count=int(row[3]),
-                last_hit_id=row[4],
-                last_hit_at=row[5].replace(tzinfo=timezone.utc),
-                last_excerpt=row[6],
-                last_user_id=row[7],
-                last_username=row[8],
+                action=row[3],
+                count=int(row[4]),
+                last_hit_id=row[5],
+                last_hit_at=row[6].replace(tzinfo=timezone.utc),
+                last_excerpt=row[7],
+                last_user_id=row[8],
+                last_username=row[9],
             )
             for row in rows
         ]
+
+    def summarize_by_user(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        since: datetime,
+        until: Optional[datetime] = None,
+        limit: int = 100,
+        actions: Optional[Sequence[str]] = None,
+    ) -> List[PolicyNoticeUserSummary]:
+        """Per-developer hit counts in ``[since, until)``.
+
+        A hit with no user is its own bucket, so the counts still add up to
+        the rule totals for the same window and action filter. The username
+        is joined within the summarised account.
+
+        Args:
+            db: Database session.
+            account_id: Account to summarise.
+            since: Inclusive window start.
+            until: Exclusive window end, or None.
+            limit: Maximum number of developers returned.
+            actions: When set, only hits with one of these actions.
+
+        Returns:
+            One row per developer, largest count first.
+        """
+        bounds = _window_filters(account_id, since, until, actions)
+        hit_count = func.count(PolicyNoticeHit.id)
+        rows = db.execute(
+            select(PolicyNoticeHit.user_id, User.username, hit_count)
+            .outerjoin(
+                User,
+                and_(User.id == PolicyNoticeHit.user_id, User.account_id == account_id),
+            )
+            .where(*bounds)
+            .group_by(PolicyNoticeHit.user_id, User.username)
+            .order_by(hit_count.desc(), User.username.asc().nulls_last())
+            .limit(limit)
+        ).all()
+        return [
+            PolicyNoticeUserSummary(
+                user_id=row[0],
+                username=row[1],
+                count=int(row[2]),
+            )
+            for row in rows
+        ]
+
+    def summarize_by_action(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        since: datetime,
+        until: Optional[datetime] = None,
+        actions: Optional[Sequence[str]] = None,
+    ) -> List[PolicyNoticeActionSummary]:
+        """Per-action hit counts in ``[since, until)``.
+
+        Args:
+            db: Database session.
+            account_id: Account to summarise.
+            since: Inclusive window start.
+            until: Exclusive window end, or None.
+            actions: When set, only hits with one of these actions.
+
+        Returns:
+            One row per action that occurred, largest count first.
+        """
+        bounds = _window_filters(account_id, since, until, actions)
+        hit_count = func.count(PolicyNoticeHit.id)
+        rows = db.execute(
+            select(PolicyNoticeHit.action, hit_count)
+            .where(*bounds)
+            .group_by(PolicyNoticeHit.action)
+            .order_by(hit_count.desc(), PolicyNoticeHit.action.asc())
+        ).all()
+        return [
+            PolicyNoticeActionSummary(action=row[0], count=int(row[1])) for row in rows
+        ]
+
+    def summarize_breakdown(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        since: datetime,
+        until: Optional[datetime] = None,
+        column: str,
+        limit: int = 100,
+        actions: Optional[Sequence[str]] = None,
+    ) -> List[PolicyNoticeBreakdown]:
+        """Counts grouped by ``model_alias`` or ``agent_ref``.
+
+        Args:
+            db: Database session.
+            account_id: Account to summarise.
+            since: Inclusive window start.
+            until: Exclusive window end, or None.
+            column: ``model_alias`` or ``agent_ref``.
+            limit: Maximum number of keys returned.
+            actions: When set, only hits with one of these actions.
+
+        Returns:
+            One row per key, including a null key, largest count first.
+
+        Raises:
+            ValueError: ``column`` is not a breakdown column.
+        """
+        columns = {
+            "model_alias": PolicyNoticeHit.model_alias,
+            "agent_ref": PolicyNoticeHit.agent_ref,
+        }
+        grouped = columns.get(column)
+        if grouped is None:
+            raise ValueError(f"Unsupported policy hit breakdown: {column}")
+        bounds = _window_filters(account_id, since, until, actions)
+        hit_count = func.count(PolicyNoticeHit.id)
+        rows = db.execute(
+            select(grouped, hit_count)
+            .where(*bounds)
+            .group_by(grouped)
+            .order_by(hit_count.desc(), grouped.asc().nulls_last())
+            .limit(limit)
+        ).all()
+        return [PolicyNoticeBreakdown(key=row[0], count=int(row[1])) for row in rows]
 
     def get_policy_owners(
         self,
