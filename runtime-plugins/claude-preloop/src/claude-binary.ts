@@ -20,6 +20,8 @@ export type ClaudeExecutable = {
   path?: string;
   version?: string;
   source: "config" | "path" | "bundled";
+  /** Set when the binary is older than MIN_CLAUDE_CODE_VERSION. */
+  warning?: string;
 };
 
 /** Compare dotted numeric versions; missing parts count as 0. */
@@ -65,30 +67,60 @@ export async function probeClaudeVersion(
   }
 }
 
-/** First `claude` executable on PATH. */
+/** Whether a path is an existing executable file. */
+export function isExecutableFile(candidate: string): boolean {
+  try {
+    if (!fs.statSync(candidate).isFile()) {
+      return false;
+    }
+    if (process.platform !== "win32") {
+      fs.accessSync(candidate, fs.constants.X_OK);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** First executable named `command` on PATH (PATHEXT on Windows). */
 export function findOnPath(
   command: string,
   searchPath: string = process.env.PATH ?? "",
+  platform: NodeJS.Platform = process.platform,
+  pathExt: string = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
 ): string | undefined {
-  for (const dir of searchPath.split(path.delimiter)) {
-    if (!dir || !path.isAbsolute(dir)) {
+  const delimiter = platform === "win32" ? ";" : ":";
+  const extensions =
+    platform === "win32"
+      ? ["", ...pathExt.split(";").filter(Boolean).map((ext) => ext.toLowerCase())]
+      : [""];
+  for (const dir of searchPath.split(delimiter)) {
+    if (!dir || !(platform === "win32" ? path.win32 : path.posix).isAbsolute(dir)) {
       continue;
     }
-    const candidate = path.join(dir, command);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      if (fs.statSync(candidate).isFile()) {
+    for (const ext of extensions) {
+      const candidate = (platform === "win32" ? path.win32 : path.posix).join(
+        dir,
+        command + ext,
+      );
+      if (isExecutableFile(candidate)) {
         return candidate;
       }
-    } catch {
-      // keep looking
     }
+  }
+  return undefined;
+}
+
+function olderThanMinimum(version: string | undefined): string | undefined {
+  if (version && compareVersions(version, MIN_CLAUDE_CODE_VERSION) < 0) {
+    return `Claude Code ${version} is older than ${MIN_CLAUDE_CODE_VERSION}; the model upstream may reject it`;
   }
   return undefined;
 }
 
 export type ClaudeExecutableDeps = {
   findClaude?: () => string | undefined;
+  isExecutable?: (candidate: string) => boolean;
   probe?: (executable: string) => Promise<string | undefined>;
   bundledVersion?: () => string | undefined;
 };
@@ -108,10 +140,21 @@ export async function resolveClaudeExecutable(
   const probe = deps.probe ?? probeClaudeVersion;
   const bundled = (deps.bundledVersion ?? bundledClaudeCodeVersion)();
   if (config.claude_executable) {
+    const configured = config.claude_executable;
+    if (
+      !path.isAbsolute(configured) ||
+      !(deps.isExecutable ?? isExecutableFile)(configured)
+    ) {
+      throw new Error(
+        `claude_executable ${configured} is not an absolute path to an executable file`,
+      );
+    }
+    const version = await probe(configured);
     return {
-      path: config.claude_executable,
-      version: await probe(config.claude_executable),
+      path: configured,
+      version,
       source: "config",
+      warning: olderThanMinimum(version),
     };
   }
   const onPath = (deps.findClaude ?? (() => findOnPath("claude")))();
@@ -121,5 +164,5 @@ export async function resolveClaudeExecutable(
       return { path: onPath, version, source: "path" };
     }
   }
-  return { version: bundled, source: "bundled" };
+  return { version: bundled, source: "bundled", warning: olderThanMinimum(bundled) };
 }

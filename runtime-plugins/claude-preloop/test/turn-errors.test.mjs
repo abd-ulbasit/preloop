@@ -5,7 +5,11 @@ import { test } from "node:test";
 
 import { SessionManager } from "../dist/sessions.js";
 import { PreloopClaudeSidecar } from "../dist/index.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
+  findOnPath,
   MIN_CLAUDE_CODE_VERSION,
   bundledClaudeCodeVersion,
   compareVersions,
@@ -172,9 +176,30 @@ test("resolveClaudeExecutable prefers config, then a newer PATH claude", async (
   assert.deepEqual(
     await resolveClaudeExecutable(
       { claude_executable: "/opt/claude" },
-      { probe, bundledVersion: () => "2.1.296", findClaude: () => "/usr/local/bin/claude" },
+      {
+        probe,
+        bundledVersion: () => "2.1.296",
+        findClaude: () => "/usr/local/bin/claude",
+        isExecutable: () => true,
+      },
     ),
-    { path: "/opt/claude", version: "2.1.100", source: "config" },
+    {
+      path: "/opt/claude",
+      version: "2.1.100",
+      source: "config",
+      warning: "Claude Code 2.1.100 is older than 2.1.251; the model upstream may reject it",
+    },
+  );
+  await assert.rejects(
+    resolveClaudeExecutable(
+      { claude_executable: "/opt/missing/claude" },
+      { probe, isExecutable: () => false },
+    ),
+    /not an absolute path to an executable file/,
+  );
+  await assert.rejects(
+    resolveClaudeExecutable({ claude_executable: "claude" }, { probe, isExecutable: () => true }),
+    /not an absolute path/,
   );
   assert.deepEqual(
     await resolveClaudeExecutable(
@@ -188,14 +213,14 @@ test("resolveClaudeExecutable prefers config, then a newer PATH claude", async (
       {},
       { probe, bundledVersion: () => "2.1.296", findClaude: () => "/usr/bin/claude" },
     ),
-    { version: "2.1.296", source: "bundled" },
+    { version: "2.1.296", source: "bundled", warning: undefined },
   );
   assert.deepEqual(
     await resolveClaudeExecutable(
       {},
       { probe, bundledVersion: () => "2.1.296", findClaude: () => undefined },
     ),
-    { version: "2.1.296", source: "bundled" },
+    { version: "2.1.296", source: "bundled", warning: undefined },
   );
 });
 
@@ -212,4 +237,33 @@ test("bundled Claude Code meets the upstream minimum version", () => {
     compareVersions(bundled, MIN_CLAUDE_CODE_VERSION) >= 0,
     `bundled Claude Code ${bundled} is older than ${MIN_CLAUDE_CODE_VERSION}; bump @anthropic-ai/claude-agent-sdk`,
   );
+});
+
+test("findOnPath honours PATHEXT on Windows and X_OK elsewhere", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-bin-"));
+  fs.writeFileSync(path.join(dir, "claude.cmd"), "@echo off\r\n");
+  if (process.platform === "win32") {
+    assert.match(findOnPath("claude", dir) ?? "", /claude\.cmd$/i);
+  } else {
+    assert.equal(findOnPath("claude", dir), undefined);
+    const exe = path.join(dir, "claude");
+    fs.writeFileSync(exe, "#!/bin/sh\n", { mode: 0o755 });
+    assert.equal(findOnPath("claude", `relative:${dir}`), exe);
+    fs.chmodSync(exe, 0o644);
+    assert.equal(findOnPath("claude", dir), undefined);
+  }
+});
+
+test("a bad claude_executable fails the turn with its reason", async () => {
+  const factory = async () => {
+    throw new Error("factory must not run");
+  };
+  const manager = new SessionManager(config, factory, {
+    log: () => {},
+    resolveExecutable: async () => {
+      throw new Error("claude_executable /nope is not an absolute path to an executable file");
+    },
+  });
+  await assert.rejects(manager.sendMessage({ text: "go" }), /claude_executable \/nope/);
+  manager.stop();
 });

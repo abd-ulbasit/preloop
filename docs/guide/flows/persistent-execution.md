@@ -157,7 +157,11 @@ run only:
 * `commands` is required when `tools` lists `Bash`: the command prefixes
   (whole words) a Bash call may start with. Shells, interpreters and command
   runners (`sh`, `bash`, `python`, `node`, `env`, `xargs`, `eval`, `find`,
-  `awk` and similar) cannot be listed.
+  `awk` and similar) cannot be listed, and tools such as `git`, `npm` or
+  `docker` must be listed with their subcommand (`git commit`, not `git`).
+  git calls with options that run other programs or move its config
+  (`-c`, `-C`, `--exec-path`, `--upload-pack`, `--git-dir` and similar) are
+  not covered.
 
 How the grant is scoped:
 

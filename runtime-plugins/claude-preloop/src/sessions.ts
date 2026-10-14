@@ -351,8 +351,22 @@ export class SessionManager {
 
   /** The Claude Code binary owned sessions run, resolved once. */
   claudeExecutable(): Promise<ClaudeExecutable> {
-    this.executable ??= this.resolveExecutable().catch(
-      (): ClaudeExecutable => ({ source: "bundled" }),
+    // A bad claude_executable fails every turn with its reason instead of
+    // silently running another binary; it is resolved again next time.
+    this.executable ??= this.resolveExecutable().then(
+      (executable) => {
+        this.log(
+          `claude binary=${executable.path ?? "bundled"} version=${executable.version ?? "unknown"} source=${executable.source}`,
+        );
+        if (executable.warning) {
+          this.log(`warning: ${executable.warning}`);
+        }
+        return executable;
+      },
+      (error: unknown) => {
+        this.executable = undefined;
+        throw error;
+      },
     );
     return this.executable;
   }

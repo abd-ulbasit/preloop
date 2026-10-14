@@ -240,6 +240,40 @@ def _is_command_runner(word: str) -> bool:
     return base in _COMMAND_RUNNERS or re.fullmatch(r"python[0-9.]*", base) is not None
 
 
+#: Tools whose first argument picks the operation; a prefix must name it.
+_SUBCOMMAND_TOOLS = frozenset(
+    {"git", "npm", "pnpm", "yarn", "docker", "cargo", "go", "make", "uv", "pip"}
+)
+
+#: git options that run other programs or change where git reads config.
+_GIT_UNSAFE_OPTIONS = (
+    "-c",
+    "--config-env",
+    "--exec-path",
+    "--upload-pack",
+    "--receive-pack",
+    "-u",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+)
+
+
+def _git_argv_unsafe(argv: Sequence[str]) -> bool:
+    if posixpath.basename(argv[0]) != "git":
+        return False
+    if len(argv) < 2 or argv[1].startswith("-"):
+        # Global options before the subcommand (-c, -C, --exec-path, ...).
+        return True
+    return any(
+        token == option
+        or token.startswith(option + "=")
+        or (option == "-c" and token.startswith("-c") and len(token) > 2)
+        for token in argv[2:]
+        for option in _GIT_UNSAFE_OPTIONS
+    )
+
+
 _PLAIN_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+/=:,@%-]*$")
 
 
@@ -251,6 +285,11 @@ def _command_prefix_tokens(raw: str) -> Optional[list[str]]:
     if any(_PLAIN_TOKEN.fullmatch(token) is None for token in tokens):
         return None
     if _is_command_runner(tokens[0]):
+        return None
+    if tokens[0] in _SUBCOMMAND_TOOLS and (
+        len(tokens) < 2 or tokens[1].startswith("-")
+    ):
+        # "git" alone would approve every subcommand and alias.
         return None
     return tokens
 
@@ -315,8 +354,6 @@ def _bash_within_policy(
 ) -> bool:
     if not cwd or not _within(cwd, paths) or not commands:
         return False
-    if _BASH_DENY.search(command):
-        return False
     segments = _bash_segments(command)
     if segments is None:
         return False
@@ -328,9 +365,12 @@ def _bash_within_policy(
             for prefix in commands
         ):
             return False
-        # The deny list is checked again on the unquoted words, so
-        # git "push" is the same as git push.
-        if _BASH_DENY.search(" ".join(argv)):
+        # The deny list runs on the words that pick the operation (the
+        # unquoted command and subcommand), not on argument text such as a
+        # commit message.
+        if _BASH_DENY.search(" ".join(argv[:2])):
+            return False
+        if _git_argv_unsafe(argv):
             return False
         for token in argv:
             for piece in _PIECE_SPLIT.split(token):
