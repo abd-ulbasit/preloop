@@ -69,7 +69,12 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from preloop.models.schemas.grant_introspection import IntrospectionConfig
-from preloop.schemas.access_rule import AccessRuleDefinition, Action, Mode
+from preloop.schemas.access_rule import (
+    AccessRuleDefinition,
+    Action,
+    Mode,
+    ResourceAccessPolicy,
+)
 from preloop.schemas.resource_share import ResourceShareDefinition
 
 from preloop.services.sensitive_data.detectors import (
@@ -1275,6 +1280,7 @@ class PolicyDocument(BaseModel):
     resource_shares: list[ResourceShareDefinition] | None = None
     access_rules: list[AccessRuleDefinition] | None = None
     access_rule_mode: dict[Action, Mode] | None = None
+    resource_access: list[ResourceAccessPolicy] | None = Field(None, max_length=1000)
 
     defaults: Optional[DefaultsDefinition] = Field(
         None, description="Default behavior settings"
