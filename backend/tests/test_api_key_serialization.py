@@ -64,4 +64,16 @@ def test_context_key_list_preserves_tenant_and_exact_total() -> None:
     compiled = account_predicate.compile(dialect=postgresql.dialect())
     assert "api_key.account_id" in str(compiled)
     assert list(compiled.params.values()) == [tenant]
+    guard = db.query.return_value.filter.call_args.args[1].compile(
+        dialect=postgresql.dialect()
+    )
+    assert "->>" in str(guard) and "IS NOT NULL" in str(guard)
+    assert list(guard.params.values()) == ["device_report"]
+    field_clause = first.filter.call_args.args[0].compile(dialect=postgresql.dialect())
+    assert "->>" in str(field_clause)
+    assert list(field_clause.params.values()) == [
+        "device_report",
+        "workstation_fingerprint",
+        "a" * 64,
+    ]
     filtered.order_by.return_value.limit.assert_called_once_with(2)

@@ -108,6 +108,9 @@ class CRUDBase(Generic[ModelType]):
 
         With commit=False, flush only so a locked update and its audit can
         commit or roll back atomically. The default preserves existing callers.
+        This option applies to this base implementation (including ApiKey).
+        Subclasses overriding update may expose a different signature; callers
+        must check their concrete CRUD implementation before passing commit.
         """
         # Get the set of actual table column names to avoid updating relationships
         table_columns = {column.name for column in db_obj.__table__.columns}
