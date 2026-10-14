@@ -45,7 +45,9 @@ Agent Control connection (Hermes, a Claude workspace, the Codex sidecar)
 the input is in command mode: a typed line starts a new turn, with the same
 permission (control_managed_agent) and audit as the console's command box,
 and its delivery (queued, delivered, started, finished) is shown inline.
-/note <text> sends a plain note instead and /mode shows the current mode.
+a and d still decide a pending approval; with nothing pending they print a
+notice and send nothing. /note <text> sends a note anyway, /turn <text>
+sends that text as a turn, and /mode shows the current mode.
 Any other agent stays in note mode and the attach says why.
 
 Examples:

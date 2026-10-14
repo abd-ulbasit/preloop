@@ -252,7 +252,9 @@ approvals, notes, the end), sends a typed line as an operator note and decides
 a pending approval with `a` or `d`. On a managed agent with a live Agent
 Control connection the input is in command mode instead: a typed line starts
 a new turn and its delivery (queued, delivered, started, finished) is shown
-inline; `/note <text>` still sends a note. `agents attach` does the same by
+inline. `a` and `d` still decide a pending approval (with nothing pending
+they print a notice and send nothing), `/note <text>` still sends a note, and
+`/turn <text>` sends that text as a turn. `agents attach` does the same by
 agent, attaching its current session or waiting for the next. See
 [Attaching to a session from the terminal](sessions-attach.md).
 
