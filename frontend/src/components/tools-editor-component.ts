@@ -6,6 +6,7 @@ import type { AccessRuleSummary } from './governance-rule-set-editor';
 import type { RuleFormData } from './tool-rule-editor';
 import type { GatewayUsageByTool } from '../types';
 import './tool-list-item';
+import '../table/table-pagination';
 import { confirmDialog } from './confirm-dialog';
 
 export type ToolWithRules = Omit<Tool, 'access_rules'> & {
@@ -81,6 +82,11 @@ export class ToolsEditorComponent extends LitElement {
   @property({ type: Object }) toolStats: Record<string, GatewayUsageByTool> =
     {};
 
+  /** Maximum tool rows or empty server headers per page; zero is unpaged. */
+  @property({ type: Number }) pageSize = 0;
+  @state() private pageIndex = 0;
+  private pageCatalogKey = '';
+
   @state() private expandedTools: Set<string> = new Set();
   @state() private collapsedGroups: Set<string> = new Set();
   private _hasAutoCollapsed = false;
@@ -103,6 +109,23 @@ export class ToolsEditorComponent extends LitElement {
   }
 
   willUpdate(changedProperties: Map<string | number | symbol, unknown>) {
+    if (
+      changedProperties.has('tools') ||
+      changedProperties.has('family') ||
+      changedProperties.has('mcpServers') ||
+      changedProperties.has('filterText')
+    ) {
+      // Context and schema loads replace tool objects while the reader edits a
+      // row. Only a changed catalog should send them back to the first page.
+      const catalogKey = JSON.stringify(
+        this._getToolGroups().map((group) => [
+          group.id,
+          ...group.tools.map((tool) => this._getToolKey(tool)),
+        ])
+      );
+      if (catalogKey !== this.pageCatalogKey) this.pageIndex = 0;
+      this.pageCatalogKey = catalogKey;
+    }
     // Only collapse by default if it's the first time we load tools
     if (
       this.collapseByDefault &&
@@ -409,7 +432,7 @@ export class ToolsEditorComponent extends LitElement {
     return `${count} warning${count === 1 ? '' : 's'}`;
   }
 
-  private _renderToolGroup(group: ToolGroup) {
+  private _renderToolGroup(group: ToolGroup, visibleTools = group.tools) {
     const isEnabled = (t: ToolWithRules) =>
       this.mode === 'scoped' && t.name in this.toolEnabledOverrides
         ? this.toolEnabledOverrides[t.name]
@@ -568,7 +591,7 @@ export class ToolsEditorComponent extends LitElement {
                           }
                         </div>`
                       : repeat(
-                          group.tools,
+                          visibleTools,
                           (tool) => this._getToolKey(tool),
                           (tool) => {
                             // determine rules
@@ -617,7 +640,40 @@ export class ToolsEditorComponent extends LitElement {
   }
 
   render() {
-    const groups = this._getToolGroups();
+    const allGroups = this._getToolGroups();
+    const total = allGroups.reduce(
+      (n, group) => n + Math.max(1, group.tools.length),
+      0
+    );
+    const pageIndex =
+      this.pageSize > 0
+        ? Math.min(
+            this.pageIndex,
+            Math.max(0, Math.ceil(total / this.pageSize) - 1)
+          )
+        : 0;
+    const start = pageIndex * this.pageSize;
+    let offset = 0;
+    const groups = allGroups
+      .map((group) => {
+        const groupStart = offset;
+        offset += Math.max(1, group.tools.length);
+        const visibleTools =
+          this.pageSize > 0
+            ? group.tools.slice(
+                Math.max(0, start - groupStart),
+                Math.max(0, start + this.pageSize - groupStart)
+              )
+            : group.tools;
+        return {
+          group,
+          visibleTools,
+          visible:
+            this.pageSize <= 0 ||
+            (offset > start && groupStart < start + this.pageSize),
+        };
+      })
+      .filter((item) => item.visible);
     return html`
       <div class="tool-groups">
         ${
@@ -635,11 +691,26 @@ export class ToolsEditorComponent extends LitElement {
               </div>`
             : repeat(
                 groups,
-                (group) => group.id,
-                (group) => this._renderToolGroup(group)
+                (item) => item.group.id,
+                (item) => this._renderToolGroup(item.group, item.visibleTools)
               )
         }
       </div>
+      ${
+        this.pageSize > 0
+          ? html`<table-pagination
+              noun="tools and empty servers"
+              .pageSize=${this.pageSize}
+              .pageSizes=${[this.pageSize]}
+              .pageIndex=${pageIndex}
+              .total=${total}
+              .pageRows=${Math.min(this.pageSize, total - start)}
+              @page-change=${(e: CustomEvent<{ pageIndex: number }>) => {
+                this.pageIndex = e.detail.pageIndex;
+              }}
+            ></table-pagination>`
+          : ''
+      }
     `;
   }
 }

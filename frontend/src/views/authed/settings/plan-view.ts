@@ -8,6 +8,7 @@ import consoleStyles from '../../../styles/console-styles.css?inline';
 import pricingStyles from '../../../styles/pricing-styles.css?inline';
 import '../../../components/view-header.ts';
 import '../../../components/billing-toggle';
+import '../../../components/collapsible-section';
 import '../../../components/pricing-plans';
 import '../../../components/billing-plan-comparison';
 import '@shoelace-style/shoelace/dist/components/alert/alert.js';
@@ -577,12 +578,17 @@ export class PlanView extends LitElement {
                     @billing-subscription-changed=${() =>
                       void this._reloadOptions()}
                   ></billing-plan-comparison>
-                  <pricing-plan-comparison
-                    .comparison=${this._comparison}
-                    .plans=${this._plans}
-                    .fallbackTitle=${this._comparisonTitle}
-                    .currentPlanId=${this._currentPlanId()}
-                  ></pricing-plan-comparison>
+                  <collapsible-section
+                    heading="plan feature comparison"
+                    storage-key="plan:comparison"
+                  >
+                    <pricing-plan-comparison
+                      .comparison=${this._comparison}
+                      .plans=${this._plans}
+                      .fallbackTitle=${this._comparisonTitle}
+                      .currentPlanId=${this._currentPlanId()}
+                    ></pricing-plan-comparison>
+                  </collapsible-section>
                 `
               : html`<p data-testid="billing-unavailable">
                   This deployment does not manage subscriptions. Every feature

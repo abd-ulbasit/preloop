@@ -467,3 +467,102 @@ describe('ToolsEditorComponent – native family', () => {
     ).to.deep.equal(['mystery_hook']);
   });
 });
+
+describe('ToolsEditorComponent bounded pages', () => {
+  afterEach(() => sessionStorage.clear());
+
+  const exampleTool = (name: string, source: string, sourceId?: string) => ({
+    name,
+    source,
+    source_id: sourceId,
+    description: 'Example tool',
+    is_enabled: true,
+    is_supported: true,
+    access_rules: [],
+  });
+
+  it('pages across server boundaries while retaining whole-group counts', async () => {
+    const servers = [
+      { id: 'first', name: 'First server' },
+      { id: 'second', name: 'Second server' },
+    ];
+    const tools = Array.from({ length: 16 }, (_, i) =>
+      exampleTool(`tool_${i}`, 'mcp', i < 8 ? 'first' : 'second')
+    );
+    const el = await fixture<ToolsEditorComponent>(
+      html`<tools-editor-component
+        .pageSize=${10}
+        .tools=${tools}
+        .mcpServers=${servers}
+      ></tools-editor-component>`
+    );
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(10);
+    expect(root.querySelectorAll('.section-meta')[0].textContent).to.contain(
+      '8/8'
+    );
+    const pager = root.querySelector('table-pagination')!;
+    pager.dispatchEvent(
+      new CustomEvent('page-change', { detail: { pageIndex: 1 } })
+    );
+    await el.updateComplete;
+    expect(root.querySelectorAll('.tool-group').length).to.equal(1);
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(6);
+    el.tools = tools.map((tool) => ({ ...tool, schema: { type: 'object' } }));
+    await el.updateComplete;
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(6);
+    expect((pager as HTMLElement & { pageIndex: number }).pageIndex).to.equal(
+      1
+    );
+    el.tools = [tools[0]];
+    await el.updateComplete;
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(1);
+  });
+
+  it('bounds empty server headers too', async () => {
+    const servers = Array.from({ length: 30 }, (_, i) => ({
+      id: `server-${i}`,
+      name: `Example server ${i}`,
+    }));
+    const el = await fixture<ToolsEditorComponent>(
+      html`<tools-editor-component
+        .pageSize=${10}
+        .mcpServers=${servers}
+      ></tools-editor-component>`
+    );
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('.tool-group').length).to.equal(10);
+    root
+      .querySelector('table-pagination')!
+      .dispatchEvent(
+        new CustomEvent('page-change', { detail: { pageIndex: 2 } })
+      );
+    await el.updateComplete;
+    expect(root.querySelectorAll('.tool-group').length).to.equal(10);
+    expect(root.textContent).to.contain('Example server 29');
+  });
+
+  it('bounds native rows even when a tool appears under multiple adapters', async () => {
+    const tools = Array.from({ length: 20 }, (_, i) => ({
+      ...exampleTool(`native_${i}`, 'agent'),
+      adapters: ['codex-cli', 'claude-code'],
+    }));
+    const el = await fixture<ToolsEditorComponent>(
+      html`<tools-editor-component
+        family="native"
+        .pageSize=${10}
+        .tools=${tools}
+      ></tools-editor-component>`
+    );
+    const root = el.shadowRoot!;
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(10);
+    root
+      .querySelector('table-pagination')!
+      .dispatchEvent(
+        new CustomEvent('page-change', { detail: { pageIndex: 3 } })
+      );
+    await el.updateComplete;
+    expect(root.querySelectorAll('tool-list-item').length).to.equal(10);
+    expect(root.textContent).to.contain('Codex CLI');
+  });
+});
