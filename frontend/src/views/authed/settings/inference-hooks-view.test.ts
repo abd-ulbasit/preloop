@@ -29,6 +29,8 @@ describe('Inference hook console', () => {
   let active = true;
   let permissions = ['manage_policies'];
   let failWrite = false;
+  let failHealth = false;
+  let rollout = 'unknown';
 
   beforeEach(() => {
     invalidateApiCaches();
@@ -36,6 +38,8 @@ describe('Inference hook console', () => {
     active = true;
     permissions = ['manage_policies'];
     failWrite = false;
+    failHealth = false;
+    rollout = 'unknown';
     calls = [];
     fetchStub = sinon.stub(window, 'fetch').callsFake(async (input, init) => {
       const path = String(input);
@@ -55,6 +59,7 @@ describe('Inference hook console', () => {
       if (path.includes('/auth/users/me')) return json({ permissions });
       if (method !== 'GET' && failWrite)
         return json({ detail: 'SECRET_MUST_NOT_BE_ECHOED' }, 500);
+      if (path.endsWith('/health') && failHealth) return json({}, 503);
       if (path.endsWith('/health'))
         return json({
           integration_id: ID,
@@ -66,7 +71,8 @@ describe('Inference hook console', () => {
           vendor_settings_state: 'unknown',
           pilot_state: 'pending',
         });
-      if (path.startsWith(BASE)) return json(INTEGRATION);
+      if (path.startsWith(BASE))
+        return json({ ...INTEGRATION, declared_rollout: rollout });
       return json({}, 404);
     });
   });
@@ -258,5 +264,57 @@ describe('Inference hook console', () => {
     element.remove();
     expect(secret.value).to.equal('');
     expect(calls.some((c) => c.path.startsWith(BASE))).to.equal(false);
+  });
+
+  it('disables a loaded integration with a single POST', async () => {
+    const element = await mount();
+    await load(element);
+    button(element, 'Disable integration').click();
+    await waitUntil(() => calls.some((c) => c.path.endsWith('/disable')));
+    const disable = calls.find((c) => c.path.endsWith('/disable'))!;
+    expect(disable.path).to.equal(`${BASE}/${ID}/disable`);
+    expect(disable.method).to.equal('POST');
+  });
+
+  it('resets configuration, health and secrets for a new integration', async () => {
+    const element = await mount();
+    await load(element);
+    input(element, 'rotation-secret').value = 'whsec_c3ludGhldGlj';
+    button(element, 'New integration').click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('#health-title')).to.equal(null);
+    expect(element.shadowRoot!.textContent).to.include(
+      'Create disabled configuration'
+    );
+    expect(input(element, 'tenant').value).to.equal('');
+    element
+      .shadowRoot!.querySelectorAll<HTMLInputElement>('input[type=password]')
+      .forEach((secret) => expect(secret.value).to.equal(''));
+  });
+
+  it('reports a succeeded write even when the health read fails', async () => {
+    const element = await mount();
+    await load(element);
+    failHealth = true;
+    button(element, 'Save configuration').click();
+    await waitUntil(() => calls.some((c) => c.method === 'PUT'));
+    await waitUntil(() => !(element as any).busy);
+    await element.updateComplete;
+    const content = element.shadowRoot!.textContent!;
+    expect(content).to.include('Configuration saved.');
+    expect(content).to.include('Health could not be read');
+    expect(element.shadowRoot!.querySelector('[role="alert"]')).to.equal(null);
+  });
+
+  it('declares an unknown rollout when the server reports an unlisted state', async () => {
+    rollout = 'future-state';
+    const element = await mount();
+    await load(element);
+    button(element, 'Save configuration').click();
+    await waitUntil(() => calls.some((c) => c.method === 'PUT'));
+    const put = calls.find((c) => c.method === 'PUT')!;
+    expect(
+      (put.body as { declared_rollout: string }).declared_rollout
+    ).to.equal('unknown');
   });
 });

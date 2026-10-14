@@ -29,6 +29,13 @@ const emptyConfig = (): InferenceHookConfig => ({
   declared_rollout: 'unknown',
 });
 
+const ROLLOUTS: readonly InferenceHookConfig['declared_rollout'][] = [
+  'unknown',
+  'off',
+  'shadow',
+  'enforcing',
+];
+
 @customElement('inference-hooks-view')
 export class InferenceHooksView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
@@ -217,9 +224,9 @@ export class InferenceHooksView extends LitElement {
         this.inputValue('unknown') === 'allow_uninspected'
           ? 'allow_uninspected'
           : 'deny',
-      declared_rollout: this.inputValue(
-        'rollout'
-      ) as InferenceHookConfig['declared_rollout'],
+      declared_rollout:
+        ROLLOUTS.find((rollout) => rollout === this.inputValue('rollout')) ??
+        'unknown',
     };
   }
 
@@ -246,11 +253,17 @@ export class InferenceHooksView extends LitElement {
         declared_rollout: result.declared_rollout,
       };
       this.health = null;
-      // A saved declaration survives a failed health read; never retain stale health.
-      await this.refreshHealth(result.integration_id, generation);
+      // A saved declaration survives a failed health read; never retain stale
+      // health, and never report the write itself as failed.
+      let notice = message;
+      try {
+        await this.refreshHealth(result.integration_id, generation);
+      } catch {
+        notice = `${message} Health could not be read; use Refresh health.`;
+      }
       if (generation !== this.generation) return;
-      this.notice = message;
-      this.accessibilityStatus.announce(message);
+      this.notice = notice;
+      this.accessibilityStatus.announce(notice);
     } catch (error) {
       if (generation === this.generation)
         this.error =
