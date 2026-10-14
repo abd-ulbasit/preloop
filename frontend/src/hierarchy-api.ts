@@ -446,7 +446,11 @@ export interface SharingRule {
 }
 
 export async function listSharingRules(): Promise<SharingRule[]> {
-  return items<SharingRule>(await request('/api/v1/access/rules'));
+  // Current EE serves a bare list; earlier console contracts use an envelope.
+  const body = await request<SharingRule[] | { rules?: SharingRule[] }>(
+    '/api/v1/access/rules'
+  );
+  return Array.isArray(body) ? body : (body?.rules ?? []);
 }
 
 const sharesPath = (accountId: string) =>

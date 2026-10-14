@@ -198,6 +198,7 @@ export class ResourceAccessPanel extends LitElement {
   @state() private editor: Editor | null = null;
   @state() private narrow = false;
   @state() private draftShared = false;
+  @state() private accessDraftReady = false;
   @state() private draftTarget: 'all' | 'selected' | 'rule' = 'all';
   @state() private draftSelected = new Set<string>();
   @state() private draftRule = '';
@@ -277,6 +278,7 @@ export class ResourceAccessPanel extends LitElement {
     const id = this.resourceId,
       kind = this.kind;
     this.editor = null;
+    this.accessDraftReady = false;
     this.saving = false;
     this.shares = [];
     this.subaccounts = [];
@@ -375,12 +377,8 @@ export class ResourceAccessPanel extends LitElement {
     this.trigger = event.currentTarget as HTMLButtonElement;
     this.narrow = window.matchMedia('(max-width: 640px)').matches;
     this.error = '';
-    const share = this.explicit;
-    this.draftShared = Boolean(share);
-    this.draftTarget = share?.target_mode ?? 'all';
-    this.draftSelected = new Set(share?.selected_account_ids ?? []);
-    this.draftRule = share?.access_rule_id ?? '';
-    this.draftRequireApproval = share?.require_approval ?? false;
+    this.seedShareDraft();
+    this.accessDraftReady = editor === 'access' && this.shareState === 'on';
     if (editor === 'tags' && this.tagsStale) {
       const generation = this.generation;
       await this.loadTags(generation, this.kind, this.resourceId);
@@ -416,6 +414,27 @@ export class ResourceAccessPanel extends LitElement {
       }
     }
   }
+  private seedShareDraft(): void {
+    const share = this.explicit;
+    this.draftShared = Boolean(share);
+    this.draftTarget = share?.target_mode ?? 'all';
+    this.draftSelected = new Set(share?.selected_account_ids ?? []);
+    this.draftRule = share?.access_rule_id ?? '';
+    this.draftRequireApproval = share?.require_approval ?? false;
+  }
+  private retrySharing = async (): Promise<void> => {
+    if (this.saving) return;
+    const generation = this.generation;
+    this.saving = true;
+    await this.loadShares(generation, this.kind, this.resourceId);
+    if (generation !== this.generation) return;
+    this.saving = false;
+    if (this.shareState === 'on' && !this.accessDraftReady) {
+      this.seedShareDraft();
+      this.accessDraftReady = true;
+    }
+    if (this.shareState === 'off') this.close();
+  };
   private close(restoreFocus = true): void {
     if (this.saving) return;
     this.editor = null;
@@ -468,7 +487,8 @@ export class ResourceAccessPanel extends LitElement {
       selected_account_ids:
         this.draftTarget === 'selected' ? [...this.draftSelected] : [],
       access_rule_id: this.draftTarget === 'rule' ? this.draftRule : null,
-      require_approval: this.draftRequireApproval,
+      require_approval:
+        this.draftRequireApproval || (this.explicit?.require_approval ?? false),
     };
   }
   private sameShare(share: Share, draft: ShareWrite): boolean {
@@ -590,12 +610,21 @@ export class ResourceAccessPanel extends LitElement {
       ${
         this.shareState === 'error'
           ? html`<p class="error" role="alert">
-                Could not load sharing: ${this.shareError}
+                Could not load sharing: ${this.shareError}. Reload sharing
+                before saving again; your draft is kept.
               </p>
-              <sl-button size="small" @click=${() => this.load()}
+              <sl-button
+                size="small"
+                data-testid="share-retry"
+                ?loading=${this.saving}
+                @click=${this.retrySharing}
                 >Retry</sl-button
               >`
-          : html`
+          : nothing
+      }
+      ${
+        this.shareState !== 'error' || this.accessDraftReady
+          ? html`
               ${
                 this.shares.length
                   ? html`<ul data-testid="share-list">
@@ -704,6 +733,7 @@ export class ResourceAccessPanel extends LitElement {
                   : nothing
               }
             `
+          : nothing
       }
     </section>`;
   }
@@ -771,7 +801,7 @@ export class ResourceAccessPanel extends LitElement {
   private renderEditor() {
     const editable =
       this.editor === 'access'
-        ? this.canShare && this.shareState === 'on'
+        ? this.canShare && (this.shareState === 'on' || this.accessDraftReady)
         : this.canTag && this.tagState === 'on';
     return html`<div class="editor" data-editor>
       ${this.narrow ? nothing : html`<h2 id="editor-title">${this.editor === 'access' ? 'Resource access' : 'Tags'}</h2>`}
@@ -785,7 +815,7 @@ export class ResourceAccessPanel extends LitElement {
           @click=${() => this.close()}
           >${editable ? 'Cancel' : 'Close'}</sl-button
         >
-        ${editable ? html`<sl-button size="small" variant="primary" data-testid="editor-save" ?loading=${this.saving} @click=${this.editor === 'access' ? this.saveShares : this.saveTags}>Save</sl-button>` : nothing}
+        ${editable ? html`<sl-button size="small" variant="primary" data-testid="editor-save" ?disabled=${this.editor === 'access' && this.shareState === 'error'} ?loading=${this.saving} @click=${this.editor === 'access' ? this.saveShares : this.saveTags}>Save</sl-button>` : nothing}
       </div>
     </div>`;
   }

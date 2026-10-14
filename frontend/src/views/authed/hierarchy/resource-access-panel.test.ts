@@ -235,6 +235,102 @@ describe('compact resource access', () => {
       expect(api.callsTo('/api/v1/access/rules', 'POST')).to.have.length(0);
     });
   }
+  it('offers existing tag-rule targets from an enveloped rules response', async () => {
+    setup([
+      {
+        path: '/api/v1/access/rules',
+        body: {
+          rules: [
+            {
+              id: 'rule-envelope',
+              name: 'Tagged subaccounts',
+              effect: 'permit',
+              actions: ['resource:share'],
+              subject_selector: { account: { match_labels: { env: 'dev' } } },
+              is_enabled: true,
+            },
+          ],
+          inherited: [],
+          modes: {},
+          version: 'v1',
+        },
+      },
+    ]);
+    const el = await mount();
+    await waitUntil(() => q(el, 'access-control'));
+    await click(el, 'access-control');
+    await change(el, 'share-toggle', 'checked', true);
+    await change(el, 'share-target', 'value', 'rule');
+    await waitUntil(() =>
+      q(el, 'share-rule')?.querySelector('option[value="rule-envelope"]')
+    );
+    await change(el, 'share-rule', 'value', 'rule-envelope', 'change');
+    await click(el, 'editor-save');
+    await waitUntil(() => api.callsTo(SHARES, 'POST').length === 1);
+    expect(
+      (api.callsTo(SHARES, 'POST')[0].body as ShareWrite).access_rule_id
+    ).to.equal('rule-envelope');
+  });
+  it('keeps a draft recoverable when both the save and reconciliation fail', async () => {
+    setup([
+      {
+        method: 'POST',
+        path: SHARES,
+        status: 500,
+        body: { detail: 'Write unavailable' },
+      },
+    ]);
+    const el = await mount();
+    await waitUntil(() => q(el, 'access-control'));
+    await click(el, 'access-control');
+    await change(el, 'share-toggle', 'checked', true);
+    await change(el, 'share-target', 'value', 'selected');
+    const checkbox = el.shadowRoot!.querySelector(
+      '[data-subaccount="sub-0"]'
+    ) as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new CustomEvent('sl-change'));
+    await el.updateComplete;
+    const read = api.stub.withArgs(
+      `${SHARES}?resource_type=ai_model&resource_id=model-1`
+    );
+    read.resolves(
+      new Response(JSON.stringify({ detail: 'Read unavailable' }), {
+        status: 500,
+      })
+    );
+    await click(el, 'editor-save');
+    await waitUntil(
+      () =>
+        q(el, 'share-retry') &&
+        el.shadowRoot!.textContent!.includes('Write unavailable')
+    );
+    expect(Boolean(q(el, 'editor-save'))).to.equal(true);
+    expect((q(el, 'editor-save') as HTMLButtonElement).disabled).to.equal(true);
+    expect((q(el, 'share-target') as HTMLInputElement).value).to.equal(
+      'selected'
+    );
+    read.resolves(new Response(JSON.stringify([]), { status: 200 }));
+    await click(el, 'share-retry');
+    await waitUntil(
+      () => !(q(el, 'editor-save') as HTMLButtonElement).disabled
+    );
+    expect(
+      (
+        el.shadowRoot!.querySelector(
+          '[data-subaccount="sub-0"]'
+        ) as HTMLInputElement
+      ).checked
+    ).to.equal(true);
+    const post = api.stub.withArgs(SHARES, sinon.match.has('method', 'POST'));
+    post.resolves(new Response(JSON.stringify(share()), { status: 201 }));
+    read.resolves(new Response(JSON.stringify([share()]), { status: 200 }));
+    await click(el, 'editor-save');
+    await waitUntil(() => !el.shadowRoot!.querySelector('[data-editor]'));
+    expect(
+      JSON.parse(post.lastCall.args[1].body).selected_account_ids
+    ).to.deep.equal(['sub-0']);
+  });
   it('revokes only the explicit share on Save, leaving applied rules alone', async () => {
     persisted = [
       share(),
