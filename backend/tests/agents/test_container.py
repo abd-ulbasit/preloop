@@ -1,7 +1,10 @@
 """Tests for container agent executor."""
 
 import json
+import os
 import pathlib
+import shlex
+import shutil
 import subprocess
 import sys
 import uuid
@@ -2039,6 +2042,7 @@ class TestResumeRebaseShell:
             )
         )
         assert "--force-with-lease" not in commands
+        assert "push-refused.txt" not in commands
         assert "git push origin preloop/fix" in commands
 
     def test_post_exec_force_with_lease_only_after_rebase(self, container_executor):
@@ -2046,11 +2050,14 @@ class TestResumeRebaseShell:
             self._post_context(resume_from="prior-exec")
         )
         assert "git push --force-with-lease origin preloop/issue-353" in commands
-        assert "/workspace/evidence/resume-rebased" in commands
-        assert "PRELOOP_RESUME_REBASED" in commands
+        assert "/workspace/evidence/resume-rebased-0" in commands
+        assert "PRELOOP_RESUME_REBASED_0" in commands
+        assert "merge-base --is-ancestor" in commands
+        assert "/workspace/evidence/push-refused-0.txt" in commands
         force_at = commands.index("git push --force-with-lease origin")
         plain_at = commands.index("git push origin preloop/issue-353")
-        assert force_at < plain_at
+        refused_at = commands.index("push-refused-0.txt")
+        assert force_at < plain_at < refused_at
 
     def test_resume_rebase_shell_records_conflict_and_aborts(self, container_executor):
         shell = container_executor._build_git_resume_rebase_shell(
@@ -2062,7 +2069,340 @@ class TestResumeRebaseShell:
         assert "/workspace/evidence/rebase-conflict.txt" in shell
         assert "Resolve these paths before continuing:" in shell
         assert "export PRELOOP_RESUME_REBASE_CONFLICT=1" in shell
-        assert "export PRELOOP_RESUME_REBASED=1" in shell
+        assert "export PRELOOP_RESUME_REBASED_0=1" in shell
+        assert "_preloop_head_before=$(git rev-parse HEAD)" in shell
+        assert "_preloop_head_after=$(git rev-parse HEAD)" in shell
+        before = shell.index("_preloop_head_before")
+        changed = shell.index('!= "$_preloop_head_after"')
+        touch = shell.index("touch ")
+        assert before < changed < touch
+        assert "left HEAD unchanged" in shell
+        assert "rm -f /workspace/evidence/resume-rebased-0" in shell
+
+
+class TestResumeRebasePreservesReviewedHistory:
+    """A no-op resume rebase must not rewrite a reviewed pull request.
+
+    Live rehearsal 2026-10-09: ``git rebase`` exits 0 when the base has not
+    moved, the old shell still wrote ``resume-rebased``, and the push used
+    ``--force-with-lease`` after the agent amended. The reviewed commit
+    disappeared and inline comments pointed at a commit that no longer
+    existed.
+    """
+
+    BRANCH = "preloop/issue-353"
+
+    def _run(
+        self, *args: str, cwd: pathlib.Path | None = None, env: dict | None = None
+    ):
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def _git(self, repo: pathlib.Path, *args: str) -> str:
+        result = self._run("git", "-C", str(repo), *args)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def _identity(self, repo: pathlib.Path) -> None:
+        self._git(repo, "config", "user.email", "jane@example.com")
+        self._git(repo, "config", "user.name", "Jane Doe")
+        self._git(repo, "config", "commit.gpgsign", "false")
+
+    def _reviewed_pr(self, tmp_path: pathlib.Path):
+        remote = tmp_path / "remote.git"
+        work = tmp_path / "work"
+        clone = tmp_path / "workspace"
+        assert (
+            self._run(
+                "git", "init", "--bare", "-q", "-b", "main", str(remote)
+            ).returncode
+            == 0
+        )
+        work.mkdir()
+        assert self._run("git", "init", "-q", "-b", "main", str(work)).returncode == 0
+        self._identity(work)
+        (work / "README").write_text("base\n")
+        (work / "app.txt").write_text("one\n")
+        self._git(work, "add", "-A")
+        self._git(work, "commit", "-qm", "base")
+        self._git(work, "remote", "add", "origin", str(remote))
+        self._git(work, "push", "-q", "-u", "origin", "main")
+        self._git(work, "checkout", "-q", "-b", self.BRANCH)
+        (work / "app.txt").write_text("reviewed\n")
+        self._git(work, "add", "-A")
+        self._git(work, "commit", "-qm", "reviewed change")
+        reviewed = self._git(work, "rev-parse", "HEAD")
+        self._git(work, "push", "-q", "-u", "origin", self.BRANCH)
+        cloned = self._run(
+            "git",
+            "clone",
+            "-q",
+            "--branch",
+            self.BRANCH,
+            str(remote),
+            str(clone),
+        )
+        assert cloned.returncode == 0, cloned.stderr
+        self._identity(clone)
+        return remote, work, clone, reviewed
+
+    def _shells(
+        self,
+        container_executor,
+        repo: pathlib.Path,
+        evidence: pathlib.Path,
+        repo_index: int = 0,
+    ):
+        from preloop.agents import container as container_module
+
+        original = container_module.EVIDENCE_DIR_PATH
+        container_module.EVIDENCE_DIR_PATH = str(evidence)
+        try:
+            rebase = container_executor._build_git_resume_rebase_shell(
+                full_path=str(repo), base_branch="main", repo_index=repo_index
+            )
+            push = container_executor._build_git_push_shell(
+                self.BRANCH, resume_rebase=True, repo_index=repo_index
+            )
+        finally:
+            container_module.EVIDENCE_DIR_PATH = original
+        return rebase, push
+
+    def _bash(self, script: str, cwd: pathlib.Path, env: dict | None = None):
+        return self._run(
+            "bash", "--noprofile", "--norc", "-c", script, cwd=cwd, env=env
+        )
+
+    def _push_env(self, tmp_path: pathlib.Path) -> tuple[dict, pathlib.Path]:
+        log = tmp_path / "pushes.log"
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        real_git = shutil.which("git")
+        assert real_git
+        wrapper = bindir / "git"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            'if [ "$1" = push ]; then\n'
+            f"  printf '%s\\n' \"$*\" >> {shlex.quote(str(log))}\n"
+            "fi\n"
+            f'exec {shlex.quote(real_git)} "$@"\n'
+        )
+        wrapper.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        return env, log
+
+    def _remote_tip(self, remote: pathlib.Path) -> str:
+        result = self._run(
+            "git",
+            "--git-dir",
+            str(remote),
+            "rev-parse",
+            f"refs/heads/{self.BRANCH}",
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def _blob(self, repo: pathlib.Path, rev: str, path: str) -> str:
+        return self._git(repo, "rev-parse", f"{rev}:{path}")
+
+    def test_noop_rebase_refuses_amend_and_keeps_reviewed_commit(
+        self, tmp_path, container_executor
+    ):
+        remote, _work, clone, reviewed = self._reviewed_pr(tmp_path)
+        evidence = clone / "evidence"
+        rebase, push = self._shells(container_executor, clone, evidence)
+        rebased = self._bash(rebase, clone)
+        assert rebased.returncode == 0, rebased.stderr
+        assert self._git(clone, "rev-parse", "HEAD") == reviewed
+        assert not (evidence / "resume-rebased-0").exists()
+
+        (clone / "app.txt").write_text("amended\n")
+        self._git(clone, "add", "-A")
+        self._git(clone, "commit", "-q", "--amend", "-m", "amended")
+        env, log = self._push_env(tmp_path)
+        pushed = self._bash(push, clone, env)
+        assert pushed.returncode != 0
+        refusal = (evidence / "push-refused-0.txt").read_text()
+        assert "non-fast-forward" in refusal
+        assert "amended" in refusal
+        assert not log.exists()
+        assert self._remote_tip(remote) == reviewed
+
+    def test_noop_rebase_fast_forward_push_keeps_reviewed_commit(
+        self, tmp_path, container_executor
+    ):
+        remote, _work, clone, reviewed = self._reviewed_pr(tmp_path)
+        evidence = clone / "evidence"
+        rebase, push = self._shells(container_executor, clone, evidence)
+        rebased = self._bash(rebase, clone)
+        assert rebased.returncode == 0, rebased.stderr
+        assert not (evidence / "resume-rebased-0").exists()
+
+        (clone / "notes.txt").write_text("follow-up\n")
+        self._git(clone, "add", "-A")
+        self._git(clone, "commit", "-qm", "follow-up")
+        follow_up = self._git(clone, "rev-parse", "HEAD")
+        env, log = self._push_env(tmp_path)
+        pushed = self._bash(push, clone, env)
+        assert pushed.returncode == 0, pushed.stderr
+        assert self._remote_tip(remote) == follow_up
+        self._git(clone, "merge-base", "--is-ancestor", reviewed, follow_up)
+        pushes = log.read_text().splitlines()
+        assert pushes == [f"push origin {self.BRANCH}"]
+
+    def test_moved_base_force_pushes_once_and_untouched_blobs_resolve(
+        self, tmp_path, container_executor
+    ):
+        """A real rebase may force-push once.
+
+        Review comments anchored to a file the base move did not change
+        still match the published blob. The reviewed commit itself is
+        rewritten, which is why the lease is required.
+        """
+
+        remote, work, clone, reviewed = self._reviewed_pr(tmp_path)
+        self._git(work, "checkout", "-q", "main")
+        (work / "README").write_text("base moved\n")
+        self._git(work, "add", "-A")
+        self._git(work, "commit", "-qm", "move base")
+        self._git(work, "push", "-q", "origin", "main")
+        reviewed_blob = self._blob(clone, "HEAD", "app.txt")
+        evidence = clone / "evidence"
+        rebase, push = self._shells(container_executor, clone, evidence)
+        rebased = self._bash(rebase, clone)
+        assert rebased.returncode == 0, rebased.stderr
+        assert (evidence / "resume-rebased-0").is_file()
+        assert self._git(clone, "rev-parse", "HEAD") != reviewed
+        assert self._blob(clone, "HEAD", "app.txt") == reviewed_blob
+        env, log = self._push_env(tmp_path)
+        pushed = self._bash(push, clone, env)
+        assert pushed.returncode == 0, pushed.stderr
+        pushes = log.read_text().splitlines()
+        assert pushes == [f"push --force-with-lease origin {self.BRANCH}"]
+        tip = self._remote_tip(remote)
+        published = self._run(
+            "git",
+            "--git-dir",
+            str(remote),
+            "rev-parse",
+            f"{tip}:app.txt",
+        )
+        assert published.returncode == 0, published.stderr
+        assert published.stdout.strip() == reviewed_blob
+
+    def test_rebase_conflict_aborts_without_force_marker(
+        self, tmp_path, container_executor
+    ):
+        remote, work, clone, reviewed = self._reviewed_pr(tmp_path)
+        self._git(work, "checkout", "-q", "main")
+        (work / "app.txt").write_text("main edit\n")
+        self._git(work, "add", "-A")
+        self._git(work, "commit", "-qm", "conflicting base edit")
+        self._git(work, "push", "-q", "origin", "main")
+        evidence = clone / "evidence"
+        rebase, _push = self._shells(container_executor, clone, evidence)
+        script = (
+            rebase
+            + '\nprintf "%s\\n" '
+            + '"CONFLICT=${PRELOOP_RESUME_REBASE_CONFLICT:-}" '
+            + '"REBASED=${PRELOOP_RESUME_REBASED_0:-}"\n'
+        )
+        rebased = self._bash(script, clone)
+        assert rebased.returncode == 0, rebased.stderr
+        assert "CONFLICT=1" in rebased.stdout
+        assert "REBASED=" in rebased.stdout
+        assert "REBASED=1" not in rebased.stdout
+        conflict = (evidence / "rebase-conflict.txt").read_text()
+        assert "Resolve these paths before continuing:" in conflict
+        assert "app.txt" in conflict
+        assert not (evidence / "resume-rebased-0").exists()
+        assert self._git(clone, "rev-parse", "HEAD") == reviewed
+        assert not (clone / ".git" / "rebase-merge").exists()
+        assert not (clone / ".git" / "rebase-apply").exists()
+        assert self._remote_tip(remote) == reviewed
+
+    def test_multi_repo_markers_do_not_cross_contaminate(
+        self, tmp_path, container_executor
+    ):
+        """One checkout's rebase must not force-push or block another.
+
+        Both rebases run in one shell, matching the container script.
+        Repository 0's base moved. Repository 1 did not, and its push is
+        attempted with repository 0's env var still set.
+        """
+
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        root_a.mkdir()
+        root_b.mkdir()
+        remote_a, work_a, clone_a, reviewed_a = self._reviewed_pr(root_a)
+        remote_b, _work_b, clone_b, reviewed_b = self._reviewed_pr(root_b)
+        self._git(work_a, "checkout", "-q", "main")
+        (work_a / "README").write_text("base moved\n")
+        self._git(work_a, "add", "-A")
+        self._git(work_a, "commit", "-qm", "move base")
+        self._git(work_a, "push", "-q", "origin", "main")
+        reviewed_blob = self._blob(clone_a, "HEAD", "app.txt")
+        evidence = tmp_path / "evidence"
+        rebase_a, push_a = self._shells(
+            container_executor, clone_a, evidence, repo_index=0
+        )
+        rebase_b, push_b = self._shells(
+            container_executor, clone_b, evidence, repo_index=1
+        )
+        assert "resume-rebased-0" in rebase_a
+        assert "resume-rebased-1" in rebase_b
+        assert "resume-rebased-1" not in rebase_a
+        script = (
+            rebase_a
+            + "\n"
+            + rebase_b
+            + '\nprintf "%s\\n" '
+            + '"R0=${PRELOOP_RESUME_REBASED_0:-}" '
+            + '"R1=${PRELOOP_RESUME_REBASED_1:-}"\n'
+        )
+        rebased = self._bash(script, tmp_path)
+        assert rebased.returncode == 0, rebased.stderr
+        assert "R0=1" in rebased.stdout
+        assert "R1=" in rebased.stdout
+        assert "R1=1" not in rebased.stdout
+        assert (evidence / "resume-rebased-0").is_file()
+        assert not (evidence / "resume-rebased-1").exists()
+        assert self._git(clone_a, "rev-parse", "HEAD") != reviewed_a
+        assert self._git(clone_b, "rev-parse", "HEAD") == reviewed_b
+
+        env, log = self._push_env(tmp_path)
+        pushed_a = self._bash(push_a, clone_a, env)
+        assert pushed_a.returncode == 0, pushed_a.stderr
+        (clone_b / "app.txt").write_text("amended\n")
+        self._git(clone_b, "add", "-A")
+        self._git(clone_b, "commit", "-q", "--amend", "-m", "amended")
+        pushed_b = self._bash(
+            "export PRELOOP_RESUME_REBASED_0=1\n" + push_b, clone_b, env
+        )
+        assert pushed_b.returncode != 0
+        assert (evidence / "push-refused-1.txt").is_file()
+        assert not (evidence / "push-refused-0.txt").exists()
+        assert self._remote_tip(remote_b) == reviewed_b
+        assert log.read_text().splitlines() == [
+            f"push --force-with-lease origin {self.BRANCH}"
+        ]
+        published = self._run(
+            "git",
+            "--git-dir",
+            str(remote_a),
+            "rev-parse",
+            f"{self._remote_tip(remote_a)}:app.txt",
+        )
+        assert published.stdout.strip() == reviewed_blob
 
 
 class TestResolveGitBranchPlan:

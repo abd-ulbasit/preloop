@@ -340,6 +340,7 @@ class TestFlowExecutionOrchestrator:
 
         assert resolved_prompt.endswith(FLOW_SUCCESS_INSTRUCTION)
         assert "FLOW_EXECUTION_SUCCESS" in resolved_prompt
+        assert "Never amend or squash" not in resolved_prompt
         assert "/workspace/result.json" in resolved_prompt
         assert '"pass"' in resolved_prompt
         assert '"fail"' in resolved_prompt
@@ -352,6 +353,7 @@ class TestFlowExecutionOrchestrator:
         the hint is always present and the success instruction stays last.
         """
         from preloop.services.prompt_resolvers.execution import (
+            RESUME_PUBLISHED_HISTORY_HINT,
             RESUME_REBASE_CONFLICT_HINT,
         )
 
@@ -365,10 +367,12 @@ class TestFlowExecutionOrchestrator:
 
         resolved_prompt = await orchestrator._resolve_prompt()
 
+        assert RESUME_PUBLISHED_HISTORY_HINT in resolved_prompt
         assert RESUME_REBASE_CONFLICT_HINT in resolved_prompt
+        history_at = resolved_prompt.index(RESUME_PUBLISHED_HISTORY_HINT)
         hint_at = resolved_prompt.index(RESUME_REBASE_CONFLICT_HINT)
         success_at = resolved_prompt.index(FLOW_SUCCESS_INSTRUCTION)
-        assert hint_at < success_at
+        assert history_at < hint_at < success_at
         assert resolved_prompt.endswith(FLOW_SUCCESS_INSTRUCTION)
 
     @pytest.mark.parametrize(

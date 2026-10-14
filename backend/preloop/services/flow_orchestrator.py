@@ -103,7 +103,7 @@ from preloop.services.prompt_resolvers import (
     ExecutionResolver,
     FlowResolver,
 )
-from preloop.services.prompt_resolvers.execution import resume_rebase_conflict_hint
+from preloop.services.prompt_resolvers.execution import resume_prompt_hints
 from preloop.services.flow_execution_logger import FlowExecutionLogger
 from preloop.services.host_exec import HARNESS_FALLBACK_CONTEXT_KEY
 from preloop.services.flow_runtime_token import (
@@ -1826,12 +1826,11 @@ class FlowExecutionOrchestrator:
         if isinstance(children_prompt, str) and children_prompt.strip():
             resolved_prompt += "\n\n" + children_prompt[:8000]
 
-        # Resume runs always learn to inspect rebase-conflict.txt, because
-        # the rebase happens after this prompt is resolved. Keep this before
-        # the success-confirmation instruction, which must stay last.
-        resolved_prompt = resolved_prompt + resume_rebase_conflict_hint(
-            self.trigger_event_data
-        )
+        # Resume runs always learn to add commits on top of published
+        # history and to inspect rebase-conflict.txt, because the rebase
+        # happens after this prompt is resolved. Keep this before the
+        # success-confirmation instruction, which must stay last.
+        resolved_prompt = resolved_prompt + resume_prompt_hints(self.trigger_event_data)
 
         # Append the success-confirmation instruction so the agent can signal
         # completion. MUST stay at the very END of the prompt (recency): after
