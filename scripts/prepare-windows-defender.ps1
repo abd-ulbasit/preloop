@@ -14,18 +14,20 @@ function Enable-WindowsDefenderEventLog {
 }
 
 function Update-GitHubHostedDefenderSignature {
-  # The hosted image can briefly lose Defender's CIM RPC connection while
-  # protection starts. Retry only that transport failure, never policy errors.
+  # Defender can restart while protection is enabled on the hosted image.
+  # Retry only RPC failure or service-unavailable HRESULTs during startup;
+  # persistent disablement and unrelated policy errors still fail closed.
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     try {
       Update-MpSignature -ErrorAction Stop
       return
     } catch {
-      if ($_.FullyQualifiedErrorId -notmatch '^HRESULT 0x800706be(?:,|$)' -or $attempt -eq 3) {
+      if ($_.FullyQualifiedErrorId -notmatch '^HRESULT 0x(?:800706be|800106ba)(?:,|$)' -or $attempt -eq 3) {
         throw
       }
-      Write-Warning "Defender signature update RPC failed; retrying ($attempt/3)."
-      Start-Sleep -Seconds (2 * $attempt)
+      Write-Warning "Defender signature update service is not ready; retrying ($attempt/3)."
+      Start-Service -Name WinDefend -ErrorAction Stop
+      Start-Sleep -Seconds (5 * $attempt)
     }
   }
 }

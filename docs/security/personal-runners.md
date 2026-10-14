@@ -119,7 +119,10 @@ the clone. Minting is audited as `runner_session.checkout_credential_minted`
 ### T6. Harness credentials are never touched
 
 The runner executes the user's own installed, unmodified harness binary. It
-never reads, copies or forwards the harness login. Inventory reports only
+does not open the harness credential store or copy or forward its credentials.
+Inventory may query the harness's read-only login-status interface. Copilot's `auth.getStatus` response is reduced to `isAuthenticated`; the raw
+response and any account or token fields are never logged or published.
+Inventory reports only
 `login_state` and `login_source`; for `env` it checks that a variable name is
 set and never reads the value. The child environment is the existing host-exec
 allowlist. Any code that reads a harness credential store is a review blocker.

@@ -136,7 +136,7 @@ func runtimeExecutableFallbackPathsFor(goos, homeDir, appData, localAppData, com
 		filepath.Join(homeDir, ".copilot", "bin", command),
 		filepath.Join(homeDir, "Library", "pnpm", command),
 	}
-	if command == "opencode" {
+	if hostExecBinaryBase(command) == "opencode" {
 		paths = append(paths, filepath.Join(homeDir, ".opencode", "bin", command))
 	}
 	return paths

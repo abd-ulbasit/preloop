@@ -791,6 +791,17 @@ func TestOpenCodeStandaloneInstallWithServicePath(t *testing.T) {
 	}
 }
 
+func TestOpenCodeFallbackNormalizesCommandName(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		command := "OpenCode.exe"
+		paths := runtimeExecutableFallbackPathsFor(goos, "home", "", "", command)
+		want := filepath.Join("home", ".opencode", "bin", command)
+		if !contains(paths, want) {
+			t.Errorf("%s fallback omits normalized OpenCode command: %s", goos, want)
+		}
+	}
+}
+
 func TestOpenCodeFallbackPerOS(t *testing.T) {
 	home := filepath.Join("home", "jane")
 	for _, goos := range []string{"darwin", "linux", "windows"} {

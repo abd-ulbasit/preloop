@@ -279,8 +279,8 @@ Describe 'Disposable runner protection setup' {
     }
     Initialize-GitHubHostedDefender
     Should -Invoke Update-MpSignature -Times 3 -Exactly
-    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 2 }
-    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 4 }
+    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
+    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 10 }
     Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
   }
 
@@ -294,6 +294,57 @@ Describe 'Disposable runner protection setup' {
     { Initialize-GitHubHostedDefender } | Should -Throw '*remote procedure call failed*'
     Should -Invoke Update-MpSignature -Times 3 -Exactly
     Should -Invoke Start-Sleep -Times 2 -Exactly
+    Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
+  }
+
+  It 'recovers when the signature RPC failure is followed by service startup' {
+    Mock Update-MpSignature {
+      $script:updateAttempts++
+      $code = switch ($script:updateAttempts) {
+        1 { '800706be' }
+        2 { '800106ba' }
+      }
+      if ($code) {
+        throw [System.Management.Automation.ErrorRecord]::new(
+          [System.Exception]::new('Defender service is starting.'),
+          "HRESULT 0x$code,Update-MpSignature",
+          [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+      }
+    }
+    Initialize-GitHubHostedDefender
+    Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Start-Service -Times 3 -Exactly -ParameterFilter { $Name -eq 'WinDefend' }
+    Should -Invoke Assert-DefenderCoverage -Times 1 -Exactly
+  }
+
+  It 'fails closed when the Defender service remains unavailable' {
+    Mock Update-MpSignature {
+      throw [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Defender service is unavailable.'),
+        'HRESULT 0x800106ba,Update-MpSignature',
+        [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+    }
+    { Initialize-GitHubHostedDefender } | Should -Throw '*service is unavailable*'
+    Should -Invoke Update-MpSignature -Times 3 -Exactly
+    Should -Invoke Start-Service -Times 3 -Exactly -ParameterFilter { $Name -eq 'WinDefend' }
+    Should -Invoke Start-Sleep -Times 2 -Exactly
+    Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
+  }
+
+  It 'fails closed when the service cannot be started after an RPC failure' {
+    Mock Update-MpSignature {
+      throw [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('The remote procedure call failed.'),
+        'HRESULT 0x800706be,Update-MpSignature',
+        [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+    }
+    Mock Start-Service {
+      $script:updateAttempts++
+      if ($script:updateAttempts -gt 1) { throw 'service disabled by policy' }
+    }
+    { Initialize-GitHubHostedDefender } | Should -Throw '*disabled by policy*'
+    Should -Invoke Update-MpSignature -Times 1 -Exactly
+    Should -Invoke Start-Sleep -Times 0 -Exactly
     Should -Invoke Assert-DefenderCoverage -Times 0 -Exactly
   }
 
