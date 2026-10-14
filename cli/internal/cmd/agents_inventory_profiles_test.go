@@ -374,3 +374,23 @@ func TestAllUsersInventoryReportWireFixture(t *testing.T) {
 		t.Fatalf("profile report wire contract changed:\n%s", raw)
 	}
 }
+
+func TestAllUsersInventoryOpenRejectsParentReparse(t *testing.T) {
+	home := t.TempDir()
+	writeInventoryFixture(t, home, "real/config.json", `{"mcpServers":{"credential-canary":{}}}`)
+	if err := os.Symlink("real", filepath.Join(home, "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	// Test the atomic open itself, after the metadata checks. This covers a
+	// parent directory changed into a link between checking and opening it.
+	file, err := openInventoryConfig(root, filepath.Join("alias", "config.json"))
+	if err == nil {
+		file.Close()
+		t.Fatal("atomic config open followed a parent symlink")
+	}
+}

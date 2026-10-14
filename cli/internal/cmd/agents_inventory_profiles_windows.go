@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -74,4 +75,30 @@ func inventoryWindowsProfiles(names []string, read func(string) (string, error),
 	return profiles, truncated, nil
 }
 
-func openInventoryConfig(root *os.Root, path string) (*os.File, error) { return root.Open(path) }
+// OBJ_DONT_REPARSE rejects links anywhere in the relative path atomically,
+// including a parent changed after the collector's metadata prechecks.
+func openInventoryConfig(root *os.Root, path string) (*os.File, error) {
+	if !filepath.IsLocal(path) || filepath.Clean(path) != path || path == "." {
+		return nil, os.ErrPermission
+	}
+	directory, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer directory.Close()
+	name, err := windows.NewNTUnicodeString(path)
+	if err != nil {
+		return nil, err
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		RootDirectory: windows.Handle(directory.Fd()), ObjectName: name,
+		Attributes: windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+	}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+	var handle windows.Handle
+	err = windows.NtCreateFile(&handle, windows.FILE_GENERIC_READ, &attributes, &windows.IO_STATUS_BLOCK{}, nil, windows.FILE_ATTRIBUTE_NORMAL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN, windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_NON_DIRECTORY_FILE, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}
