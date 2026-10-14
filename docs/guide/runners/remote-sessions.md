@@ -81,8 +81,10 @@ The following tool-grant and environment details describe Copilot sessions.
   credentials never reach the agent.
 - A session is shown in **Sessions** like any other governed session: turns,
   agent messages, tool calls, approvals and usage. `preloop sessions attach`
-  opens it in command mode: a typed line is the next turn, `/note <text>` sends
-  a note. The turn's progress (queued, started, finished or failed), the
+  opens it in command mode: a typed line is the next turn, `a` and `d` decide
+  a pending approval (nothing is sent when none is), `/note <text>` sends a
+  note, and `/turn <text>` sends that text as a turn. The turn's progress
+  (queued, started, finished or failed), the
   agent's messages and tool calls stream live, and attach exits when the
   session ends. The approval hook's calls are attached to the runner session itself,
   so its approvals and notes appear on that session's timeline rather than as

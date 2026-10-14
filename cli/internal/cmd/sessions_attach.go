@@ -10,7 +10,9 @@
 // A hook-governed agent cannot be given a new turn: a note is read at its
 // next tool or model call, and the UI says so. A session run by a managed
 // agent with a live Agent Control connection switches to command mode, where
-// a typed line starts a new turn (#1150, sessions_attach_command.go).
+// a typed line starts a new turn (#1150, sessions_attach_command.go). There,
+// a and d still decide approvals: with nothing pending they print a notice
+// and send nothing, and /turn <text> sends a literal turn.
 //
 // Nothing here bypasses a permission. Notes and decisions use the same REST
 // endpoints as `preloop notes send` and `preloop approvals approve`, so the
@@ -103,16 +105,20 @@ Talk back by typing:
   a <id> / d <id>   approve or decline a specific one (short id is enough)
 
 The agent reads a note at its next tool or model call, not as typed input.
+a and d keep that meaning in every mode. In command mode, with nothing
+pending, they print a notice and send nothing. /turn <text> sends that text
+as a turn, so a one-letter turn is still possible.
 
 Command mode: when the session belongs to a managed agent with a live Agent
 Control connection (Hermes, a Claude workspace, the Codex sidecar), a typed
 line starts a new turn instead, through the console's command path, and its
 delivery (queued, delivered, started, finished) is shown inline. /note <text>
-sends a note anyway and /mode prints the current mode. A session hosted on
-a personal runner (Copilot CLI, Cursor CLI, Devin CLI) is in command mode
-too: a line is its next turn, shown as queued, started, then finished or
-failed, with the agent's messages and tool calls in between. Any other
-session stays in note mode and the attach says why.
+sends a note anyway, /turn <text> sends that text as a turn, and /mode
+prints the current mode. A session hosted on a personal runner (Copilot CLI,
+Cursor CLI, Devin CLI) is in command mode too: a line is its next turn,
+shown as queued, started, then finished or failed, with the agent's messages
+and tool calls in between. Any other session stays in note mode and the
+attach says why.
 
 --read-only turns all of this off. Detach with Ctrl-C; the session keeps running. A
 dropped connection is retried with backoff, and the events missed while it
@@ -755,9 +761,13 @@ type attachInput struct {
 }
 
 // parseAttachInput reads one line against the approvals currently pending.
-// A bare a or d, or one followed by an id prefix, is a decision only while
-// something is pending. "/note <text>" is always a note and "/mode" shows
-// the mode. Anything else is a command in command mode and a note otherwise.
+// A bare a or d, or one followed by an id prefix, is a decision in every
+// mode. In command mode that shortcut never starts a turn: with nothing
+// pending, or no matching id, it is a notice and nothing is sent. "/note
+// <text>" is always a note, "/turn <text>" is a literal turn in command
+// mode, and "/mode" shows the mode. Anything else is a command in command
+// mode and a note otherwise. In note mode, a or d with nothing pending is
+// still a note.
 func parseAttachInput(line string, pending []attachApproval, commandMode bool) (attachInput, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
@@ -766,41 +776,81 @@ func parseAttachInput(line string, pending []attachApproval, commandMode bool) (
 	if strings.EqualFold(trimmed, attachModeVerb) {
 		return attachInput{kind: "mode"}, nil
 	}
-	if head := strings.Fields(trimmed)[0]; strings.EqualFold(head, attachNotePrefix) {
+	fields := strings.Fields(trimmed)
+	head := fields[0]
+	if strings.EqualFold(head, attachNotePrefix) {
 		text := strings.TrimSpace(trimmed[len(head):])
 		if text == "" {
 			return attachInput{}, errors.New("usage: /note <text>")
 		}
 		return attachInput{kind: "note", text: text}, nil
 	}
-	fields := strings.Fields(trimmed)
-	verb := strings.ToLower(fields[0])
-	if (verb == "a" || verb == "d") && len(fields) <= 2 && len(pending) > 0 {
+	if strings.EqualFold(head, attachTurnPrefix) {
+		text := strings.TrimSpace(trimmed[len(head):])
+		if text == "" {
+			return attachInput{}, errors.New("usage: /turn <text>")
+		}
+		if !commandMode {
+			return attachInput{}, errors.New("/turn sends a turn, and this session is in note mode")
+		}
+		return attachInput{kind: "command", text: text}, nil
+	}
+	verb := strings.ToLower(head)
+	if (verb == "a" || verb == "d") && len(fields) <= 2 {
 		kind := "approve"
 		if verb == "d" {
 			kind = "decline"
 		}
-		if len(fields) == 1 {
-			return attachInput{kind: kind, approvalID: pending[0].ID}, nil
+		prefix := ""
+		if len(fields) == 2 {
+			prefix = fields[1]
 		}
-		prefix := strings.ToLower(fields[1])
-		var match string
-		for _, approval := range pending {
-			if strings.HasPrefix(strings.ToLower(approval.ID), prefix) {
-				if match != "" {
-					return attachInput{}, fmt.Errorf("%q matches more than one pending approval", fields[1])
-				}
-				match = approval.ID
-			}
+		match, err := matchPendingApproval(pending, prefix)
+		if err != nil {
+			return attachInput{}, err
 		}
 		if match != "" {
 			return attachInput{kind: kind, approvalID: match}, nil
+		}
+		if commandMode {
+			return attachInput{}, approvalShortcutMiss(prefix)
 		}
 	}
 	if commandMode {
 		return attachInput{kind: "command", text: line}, nil
 	}
 	return attachInput{kind: "note", text: line}, nil
+}
+
+// matchPendingApproval returns the id a bare decision or an id prefix names.
+// An empty prefix is the oldest pending approval. No match returns "".
+func matchPendingApproval(pending []attachApproval, prefix string) (string, error) {
+	if len(pending) == 0 {
+		return "", nil
+	}
+	if prefix == "" {
+		return pending[0].ID, nil
+	}
+	needle := strings.ToLower(prefix)
+	var match string
+	for _, approval := range pending {
+		if strings.HasPrefix(strings.ToLower(approval.ID), needle) {
+			if match != "" {
+				return "", fmt.Errorf("%q matches more than one pending approval", prefix)
+			}
+			match = approval.ID
+		}
+	}
+	return match, nil
+}
+
+// approvalShortcutMiss is the one-line notice for a or d in command mode
+// when there is nothing to decide. The line is not sent.
+func approvalShortcutMiss(prefix string) error {
+	if prefix == "" {
+		return errors.New("no pending approval; nothing sent (/turn <text> sends a turn)")
+	}
+	return fmt.Errorf("no pending approval matches %q; nothing sent (/turn <text> sends a turn)", prefix)
 }
 
 func (s *attachSession) handleInput(ctx context.Context, line string) {
