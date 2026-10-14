@@ -499,6 +499,13 @@ Feature flags remain the authority for individual capability gates. The console
 reuses its cached features payload for the header help menu; documentation,
 release notes, and issue/support destinations come from brand URL configuration.
 
+Provider inference-hook setup and health use an OSS Lit lazy view gated by
+`anthropic_inference_hooks` and the existing `manage_policies` permission.
+Commercial plugins own tenant authorization, encrypted secret custody and
+callback evaluation. The console accepts write-only secrets, clears them after
+submission/disconnection, and preserves unverified coverage and pending pilot
+states even when callbacks are observed. It creates no grants or policy DSL.
+
 
 ### Hosted model visibility and request billing attribution
 

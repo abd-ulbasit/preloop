@@ -28,6 +28,7 @@ export const CAPABILITIES = [
   'account_hierarchy',
   'abac_rules',
   'chat_connections',
+  'anthropic_inference_hooks',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
