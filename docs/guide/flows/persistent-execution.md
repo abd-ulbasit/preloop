@@ -141,7 +141,8 @@ run only:
   "approval_policy": {
     "mode": "auto_allow",
     "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
-    "paths": ["<workspace>"]
+    "paths": ["<workspace>"],
+    "commands": ["git status", "git diff", "git add", "git commit", "pytest"]
   }
 }
 ```
@@ -153,6 +154,10 @@ run only:
 * `paths` are absolute directories on the agent host. `<workspace>` is the
   flow's `workspace.path` when it names one, else the directory the session
   runs in.
+* `commands` is required when `tools` lists `Bash`: the command prefixes
+  (whole words) a Bash call may start with. Shells, interpreters and command
+  runners (`sh`, `bash`, `python`, `node`, `env`, `xargs`, `eval`, `find`,
+  `awk` and similar) cannot be listed.
 
 How the grant is scoped:
 
@@ -165,11 +170,25 @@ How the grant is scoped:
 * A covered call is still recorded as an approval request, resolved as
   auto-approved by the flow's approval policy, so the audit trail shows it.
 * Not covered, so it takes the normal approval path: file paths outside
-  `paths`, a Bash call whose working directory is outside `paths`, a Bash
-  command that names a path outside them (or `~`, or `..`), `git push`,
-  `fetch`, `pull`, `clone` or remote changes, network tools such as `curl`,
-  `wget`, `ssh` and `gh`, publishing commands, and `sudo`. Deny rules and
-  require-approval rules in your approval policies still win.
+  `paths`; a Bash call whose working directory is outside `paths`; a Bash
+  command with any word that does not start with a listed prefix; a command
+  with `$`, backticks, backslashes, newlines, redirections, subshells or
+  background jobs; a word that names a path outside `paths`, or uses `~` or
+  `..`; `git push`, `fetch`, `pull`, `clone` or remote changes, network tools
+  such as `curl`, `wget`, `ssh` and `gh`, publishing commands, and `sudo`,
+  even when quoted. Deny rules and require-approval rules in your approval
+  policies still win.
+
+What the checks do not cover, so scope the policy accordingly:
+
+* The checks read the command and paths as written. The control plane
+  cannot resolve symlinks on the host, so a symlink inside `paths` that
+  points elsewhere is not detected.
+* A listed command can run code from the workspace: `pytest` runs test
+  files and `conftest.py`, `npm test` runs package scripts, and the session
+  can edit those files. Auto-approving such a command gives the session the
+  host user's rights for whatever that code does. List only what the run
+  needs.
 
 Also recommended:
 

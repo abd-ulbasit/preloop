@@ -19,6 +19,17 @@ from preloop.services.flow_approval_policy import (
 WORKSPACE = "/srv/work/project"
 
 
+COMMANDS = (
+    ("git", "status"),
+    ("git", "add"),
+    ("git", "commit"),
+    ("git", "diff"),
+    ("ls",),
+    ("pytest",),
+    ("head",),
+)
+
+
 def _grant(tools: tuple[str, ...] = ("Bash", "Read", "Edit", "Write", "Glob", "Grep")):
     return FlowApprovalGrant(
         flow_id=uuid4(),
@@ -26,17 +37,33 @@ def _grant(tools: tuple[str, ...] = ("Bash", "Read", "Edit", "Write", "Glob", "G
         execution_id=str(uuid4()),
         tools=frozenset(tools),
         paths=(WORKSPACE,),
+        commands=COMMANDS,
     )
 
 
 class TestValidate:
     def test_default_is_ask(self) -> None:
-        assert validate_approval_policy({}) == {"mode": "ask", "tools": [], "paths": []}
+        assert validate_approval_policy({}) == {
+            "mode": "ask",
+            "tools": [],
+            "paths": [],
+            "commands": [],
+        }
 
     def test_auto_allow(self) -> None:
         assert validate_approval_policy(
-            {"mode": "auto_allow", "tools": ["Bash"], "paths": ["<workspace>", "/a/b/"]}
-        ) == {"mode": "auto_allow", "tools": ["Bash"], "paths": ["<workspace>", "/a/b"]}
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["<workspace>", "/a/b/"],
+                "commands": ["git  commit", "pytest"],
+            }
+        ) == {
+            "mode": "auto_allow",
+            "tools": ["Bash"],
+            "paths": ["<workspace>", "/a/b"],
+            "commands": ["git commit", "pytest"],
+        }
 
     @pytest.mark.parametrize(
         "value",
@@ -49,6 +76,37 @@ class TestValidate:
             {"mode": "auto_allow", "tools": [], "paths": ["/a"]},
             {"mode": "auto_allow", "tools": ["Bash"], "paths": []},
             {"mode": "auto_allow", "tools": ["Bash"], "paths": ["/a"], "x": 1},
+            {"mode": "auto_allow", "tools": ["Bash"], "paths": ["/a"]},
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["/a"],
+                "commands": ["git $(x)"],
+            },
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["/a"],
+                "commands": [""],
+            },
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["/a"],
+                "commands": ["sh"],
+            },
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["/a"],
+                "commands": ["python3 -c"],
+            },
+            {
+                "mode": "auto_allow",
+                "tools": ["Bash"],
+                "paths": ["/a"],
+                "commands": ["env"],
+            },
         ],
     )
     def test_rejects(self, value: Any) -> None:
@@ -78,6 +136,8 @@ class TestToolCalls:
             "git add -A && git commit -m 'nightly'",
             f"ls {WORKSPACE}/src",
             "pytest -q tests",
+            'git commit -m "docs: link https://example.com"',
+            "git diff | head -n 50",
         ],
     )
     def test_bash_allowed_in_workspace(self, command: str) -> None:
@@ -98,6 +158,16 @@ class TestToolCalls:
             "gh pr create",
             "echo x; wget http://x",
             "echo 'unterminated",
+            'git "push" origin main',
+            "GIT=git; $GIT push",
+            "sh -c 'cat /etc/passwd'",
+            "python3 -c \"open('/etc/passwd').read()\"",
+            'git commit -m "$(cat msg)"',
+            "git status > /tmp/out",
+            "(git status)",
+            "git status &",
+            "rm -rf build",
+            "git status\nrm -rf x",
         ],
     )
     def test_bash_outside_policy(self, command: str) -> None:
@@ -144,6 +214,18 @@ class TestToolCalls:
             cwd=WORKSPACE,
         )
 
+    def test_bash_needs_commands(self) -> None:
+        grant = FlowApprovalGrant(
+            flow_id=uuid4(),
+            flow_name="Nightly",
+            execution_id=str(uuid4()),
+            tools=frozenset({"Bash"}),
+            paths=(WORKSPACE,),
+        )
+        assert not tool_call_within_policy(
+            grant, tool_name="Bash", tool_input={"command": "ls"}, cwd=WORKSPACE
+        )
+
     def test_tool_not_listed(self) -> None:
         assert not tool_call_within_policy(
             _grant(("Read",)),
@@ -181,6 +263,7 @@ def _patch_crud(
                 "mode": "auto_allow",
                 "tools": ["Bash"],
                 "paths": ["<workspace>"],
+                "commands": ["git commit"],
             },
         },
     )
@@ -188,9 +271,9 @@ def _patch_crud(
     monkeypatch.setattr(
         crud_flow,
         "get",
-        lambda db, id, account_id=None: flow
-        if str(account_id) == account_id_
-        else None,
+        lambda db, id, account_id=None: (
+            flow if str(account_id) == account_id_ else None
+        ),
     )
     bind = MagicMock(
         return_value=binding
@@ -223,6 +306,7 @@ class TestResolveGrant:
         assert grant is not None
         assert grant.paths == (WORKSPACE,)
         assert grant.tools == frozenset({"Bash"})
+        assert grant.commands == (("git", "commit"),)
         assert bind.call_args.kwargs["session_id"] == "s-1"
 
     def test_other_session_gets_no_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,6 +341,7 @@ class TestResolveGrant:
                     "mode": "auto_allow",
                     "tools": ["Bash"],
                     "paths": ["/srv"],
+                    "commands": ["git commit"],
                 }
             },
             {"execution_path": "persistent", "approval_policy": {"mode": "bogus"}},
@@ -292,6 +377,7 @@ class TestResolveGrant:
                     "mode": "auto_allow",
                     "tools": ["Bash"],
                     "paths": ["<workspace>"],
+                    "commands": ["git commit"],
                 },
             },
         )

@@ -91,6 +91,7 @@ class FlowApprovalGrant:
     execution_id: str
     tools: frozenset[str]
     paths: tuple[str, ...]
+    commands: tuple[tuple[str, ...], ...] = ()
 
 
 def validate_approval_policy(value: Any) -> Dict[str, Any]:
@@ -107,7 +108,9 @@ def validate_approval_policy(value: Any) -> Dict[str, Any]:
     """
     if not isinstance(value, Mapping):
         raise ValueError("agent_config.approval_policy must be an object")
-    unknown = sorted(str(key) for key in value if key not in {"mode", "tools", "paths"})
+    unknown = sorted(
+        str(key) for key in value if key not in {"mode", "tools", "paths", "commands"}
+    )
     if unknown:
         raise ValueError(
             "agent_config.approval_policy has unsupported keys: " + ", ".join(unknown)
@@ -153,7 +156,103 @@ def validate_approval_policy(value: Any) -> Dict[str, Any]:
         raise ValueError(
             "agent_config.approval_policy with mode auto_allow needs tools and paths"
         )
-    return {"mode": mode, "tools": list(tools), "paths": normalized_paths}
+    commands = value.get("commands", [])
+    if not isinstance(commands, list) or not all(isinstance(c, str) for c in commands):
+        raise ValueError(
+            "agent_config.approval_policy.commands must be a list of command prefixes"
+        )
+    if len(commands) > 32:
+        raise ValueError("agent_config.approval_policy.commands allows at most 32")
+    normalized_commands = []
+    for raw in commands:
+        tokens = _command_prefix_tokens(raw)
+        if tokens is None:
+            raise ValueError(
+                "agent_config.approval_policy.commands entries must be plain "
+                f'command prefixes such as "git commit"; not {raw!r}'
+            )
+        normalized_commands.append(" ".join(tokens))
+    if mode == MODE_AUTO_ALLOW and "Bash" in tools and not normalized_commands:
+        raise ValueError(
+            "agent_config.approval_policy lists Bash, so commands must name the "
+            'command prefixes to auto-approve, e.g. ["git status", "git commit"]'
+        )
+    return {
+        "mode": mode,
+        "tools": list(tools),
+        "paths": normalized_paths,
+        "commands": normalized_commands,
+    }
+
+
+#: Command words that run another command or arbitrary code from their
+#: arguments. They cannot be auto-approved: a prefix such as "sh" would
+#: approve any command at all.
+_COMMAND_RUNNERS = frozenset(
+    {
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "ksh",
+        "fish",
+        "csh",
+        "tcsh",
+        "python",
+        "python2",
+        "python3",
+        "node",
+        "nodejs",
+        "deno",
+        "bun",
+        "perl",
+        "ruby",
+        "php",
+        "lua",
+        "osascript",
+        "env",
+        "xargs",
+        "eval",
+        "exec",
+        "source",
+        ".",
+        "command",
+        "builtin",
+        "nohup",
+        "timeout",
+        "nice",
+        "time",
+        "watch",
+        "parallel",
+        "sudo",
+        "su",
+        "doas",
+        "awk",
+        "gawk",
+        "find",
+        "ssh",
+    }
+)
+
+
+def _is_command_runner(word: str) -> bool:
+    base = posixpath.basename(word)
+    return base in _COMMAND_RUNNERS or re.fullmatch(r"python[0-9.]*", base) is not None
+
+
+_PLAIN_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+/=:,@%-]*$")
+
+
+def _command_prefix_tokens(raw: str) -> Optional[list[str]]:
+    """Tokens of an allow-listed command prefix, or None when not plain."""
+    tokens = raw.split()
+    if not tokens or len(tokens) > 8:
+        return None
+    if any(_PLAIN_TOKEN.fullmatch(token) is None for token in tokens):
+        return None
+    if _is_command_runner(tokens[0]):
+        return None
+    return tokens
 
 
 def _within(path: str, bases: Iterable[str]) -> bool:
@@ -166,23 +265,81 @@ def _within(path: str, bases: Iterable[str]) -> bool:
     return False
 
 
-def _bash_within_policy(command: str, cwd: Optional[str], paths: Sequence[str]) -> bool:
-    if not cwd or not _within(cwd, paths):
+#: Characters that make a command's meaning depend on expansion: variables,
+#: command substitution, escapes and newlines. Such commands are never
+#: auto-approved, because the words the shell runs are not the words here.
+_EXPANSION_CHARS = ("$", "`", "\\", "\n", "\r", "\x00")
+
+#: Control operators allowed between simple commands.
+_SEPARATORS = frozenset({"&&", "||", ";", "|"})
+
+#: A path-like piece inside a token: split on "=" and on ":" that is not a
+#: URL scheme separator.
+_PIECE_SPLIT = re.compile(r"=|:(?!//)")
+
+
+def _bash_segments(command: str) -> Optional[list[list[str]]]:
+    """Split a command into simple commands, or None when it is not plain.
+
+    The command must not contain expansions, subshells, redirections or
+    background jobs. Quotes are removed exactly as the shell removes them,
+    so a quoted word is compared by its value.
+    """
+    if any(char in command for char in _EXPANSION_CHARS):
+        return None
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token and all(char in "();<>|&" for char in token):
+            if token not in _SEPARATORS or not segments[-1]:
+                return None
+            segments.append([])
+            continue
+        segments[-1].append(token)
+    if not segments[-1]:
+        return None
+    return segments
+
+
+def _bash_within_policy(
+    command: str,
+    cwd: Optional[str],
+    paths: Sequence[str],
+    commands: Sequence[Sequence[str]],
+) -> bool:
+    if not cwd or not _within(cwd, paths) or not commands:
         return False
     if _BASH_DENY.search(command):
         return False
-    try:
-        tokens = shlex.split(command, comments=False, posix=True)
-    except ValueError:
+    segments = _bash_segments(command)
+    if segments is None:
         return False
-    for token in tokens:
-        for piece in re.split(r"[=:]", token):
-            if piece.startswith("~"):
-                return False
-            if ".." in piece.split("/"):
-                return False
-            if piece.startswith("/") and not _within(piece, paths):
-                return False
+    for argv in segments:
+        if _is_command_runner(argv[0]):
+            return False
+        if not any(
+            len(argv) >= len(prefix) and tuple(argv[: len(prefix)]) == tuple(prefix)
+            for prefix in commands
+        ):
+            return False
+        # The deny list is checked again on the unquoted words, so
+        # git "push" is the same as git push.
+        if _BASH_DENY.search(" ".join(argv)):
+            return False
+        for token in argv:
+            for piece in _PIECE_SPLIT.split(token):
+                if piece.startswith("~"):
+                    return False
+                if ".." in piece.split("/"):
+                    return False
+                if piece.startswith("/") and not _within(piece, paths):
+                    return False
     return True
 
 
@@ -209,7 +366,7 @@ def tool_call_within_policy(
     if tool_name == "Bash":
         command = tool_input.get("command")
         return isinstance(command, str) and _bash_within_policy(
-            command, cwd, grant.paths
+            command, cwd, grant.paths, grant.commands
         )
     if tool_name in _FILE_PATH_KEYS:
         values = [tool_input.get(key) for key in _FILE_PATH_KEYS[tool_name]]
@@ -329,4 +486,5 @@ def resolve_flow_grant(
         execution_id=str(execution_uuid),
         tools=frozenset(policy["tools"]),
         paths=tuple(paths),
+        commands=tuple(tuple(c.split()) for c in policy["commands"]),
     )
