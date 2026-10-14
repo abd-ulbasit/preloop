@@ -66,6 +66,8 @@ func remoteCredentialCustody(client *api.Client, agent AgentConfig) ([]credentia
 	}
 	var existing []mcpServerResponse
 	if err := client.Get("/api/v1/mcp-servers", &existing); err != nil {
+		// API response bodies can contain credential material. Keep the public
+		// failure metadata-only rather than wrapping the unsanitized cause.
 		return nil, fmt.Errorf("cannot verify MCP credential custody before apply")
 	}
 	held := make(map[string]bool, len(existing))
@@ -99,7 +101,7 @@ func validateCredentialCustody(custody []credentialCustody, opts managedEnrollme
 		if opts.NoCredentialImport && c.RequiredImport {
 			return fmt.Errorf("--no-credential-import refused onboarding before apply: upstream credential import required; select an existing account-held model or MCP credential reference")
 		}
-		if !opts.DryRun && c.SubscriptionTransfer && (opts.AutoApprove || opts.SkipConfirmation || nonInteractiveAutoConfirm() || !stdinIsTerminal()) {
+		if !opts.DryRun && c.SubscriptionTransfer && (opts.AutoApprove || nonInteractiveAutoConfirm() || !stdinIsTerminal()) {
 			return fmt.Errorf("unattended subscription OAuth transfer is prohibited before apply; use an existing account-held credential or interactive onboarding")
 		}
 	}
@@ -109,7 +111,7 @@ func validateCredentialCustody(custody []credentialCustody, opts managedEnrollme
 func enrollmentSelectedUpstream(upstream *managedGatewayUpstream, alias string, selected *aiModelResponse, opts managedEnrollmentOptions) *managedGatewayUpstream {
 	// An explicit account-held selection must not copy a locally discovered
 	// credential when the operator requested no imports.
-	if opts.NoCredentialImport && strings.TrimSpace(opts.PreferredModel) != "" && selected != nil && (selected.HasAPIKey || aiModelUsesAmbientProviderCredentials(selected)) {
+	if opts.NoCredentialImport && strings.TrimSpace(alias) != "" && selected != nil && (selected.HasAPIKey || aiModelUsesAmbientProviderCredentials(selected)) {
 		upstream = nil
 	}
 	return applySelectedModelToUpstream(upstream, alias, selected)

@@ -735,7 +735,15 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		return nil
 	}
 
-	if !opts.SkipConfirmation && !opts.AutoApprove {
+	requiresCustodyConfirmation := false
+	for _, item := range custody {
+		if item.SubscriptionTransfer {
+			requiresCustodyConfirmation = true
+		}
+	}
+	// Discovery can already have confirmed a generic onboarding prompt. A
+	// subscription transfer still needs confirmation after its custody summary.
+	if (!opts.SkipConfirmation || requiresCustodyConfirmation) && !opts.AutoApprove {
 		confirmed, err := confirmActionDefaultYes(
 			input,
 			output,

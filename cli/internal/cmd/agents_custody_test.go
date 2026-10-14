@@ -56,13 +56,15 @@ func TestCredentialCustodyAuthorization(t *testing.T) {
 	t.Cleanup(func() { stdinIsTerminal = old })
 	t.Setenv("PRELOOP_CONFIRM", "")
 	oauth := []credentialCustody{gatewayCredentialCustody(&managedGatewayUpstream{CredentialType: "oauth_openai_codex", CredentialPayload: map[string]interface{}{"refresh_token": "synthetic-secret"}})}
-	for _, opts := range []managedEnrollmentOptions{{AutoApprove: true}, {SkipConfirmation: true}, {NoCredentialImport: true}} {
+	for _, opts := range []managedEnrollmentOptions{{AutoApprove: true}, {NoCredentialImport: true}} {
 		if err := validateCredentialCustody(oauth, opts); err == nil {
 			t.Fatalf("expected rejection: %+v", opts)
 		}
 	}
-	if err := validateCredentialCustody(oauth, managedEnrollmentOptions{}); err != nil {
-		t.Fatal(err)
+	for _, opts := range []managedEnrollmentOptions{{}, {SkipConfirmation: true}} {
+		if err := validateCredentialCustody(oauth, opts); err != nil {
+			t.Fatalf("attended discover or direct onboarding refused: %v", err)
+		}
 	}
 	if err := validateCredentialCustody(oauth, managedEnrollmentOptions{DryRun: true, AutoApprove: true}); err != nil {
 		t.Fatal(err)
@@ -156,13 +158,17 @@ func TestNoCredentialImportStopsBeforeAnyMutation(t *testing.T) {
 }
 
 func TestNoCredentialImportUsesExplicitAccountModel(t *testing.T) {
-	selected := &aiModelResponse{ProviderName: "openai", ModelIdentifier: "example-model", HasAPIKey: true}
-	upstream := enrollmentSelectedUpstream(&managedGatewayUpstream{APIKey: "synthetic-secret"}, "openai/example-model", selected, managedEnrollmentOptions{NoCredentialImport: true, PreferredModel: "openai/example-model"})
-	if upstream.APIKey != "" || upstream.SourceAgent != "account-ai-model" {
-		t.Fatalf("local credential preserved: %+v", upstream)
-	}
-	if err := validateCredentialCustody([]credentialCustody{gatewayCredentialCustody(upstream)}, managedEnrollmentOptions{NoCredentialImport: true, AutoApprove: true}); err != nil {
-		t.Fatal(err)
+	for _, preferred := range []string{"openai/example-model", ""} {
+		t.Run("preferred="+preferred, func(t *testing.T) {
+			selected := &aiModelResponse{ProviderName: "openai", ModelIdentifier: "example-model", HasAPIKey: true}
+			upstream := enrollmentSelectedUpstream(&managedGatewayUpstream{APIKey: "synthetic-secret"}, "openai/example-model", selected, managedEnrollmentOptions{NoCredentialImport: true, PreferredModel: preferred})
+			if upstream.APIKey != "" || upstream.SourceAgent != "account-ai-model" {
+				t.Fatalf("local credential preserved: %+v", upstream)
+			}
+			if err := validateCredentialCustody([]credentialCustody{gatewayCredentialCustody(upstream)}, managedEnrollmentOptions{NoCredentialImport: true, AutoApprove: true}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -255,5 +261,63 @@ func TestUnattendedOAuthStopsBeforeAnyMutation(t *testing.T) {
 	}
 	if strings.Contains(err.Error()+out.String(), "synthetic-access") {
 		t.Fatal("secret leaked")
+	}
+}
+
+func TestRemoteCredentialCustodyFailureDoesNotLeakResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "synthetic-secret jane@example.com https://example.com/private", http.StatusForbidden)
+	}))
+	defer server.Close()
+	_, err := remoteCredentialCustody(api.NewClientWithToken(server.URL, "synthetic-token"), AgentConfig{MCPServers: map[string]MCPDef{"example": {URL: "https://example.com/mcp", Headers: map[string]string{"Authorization": "Bearer synthetic-secret"}}}})
+	if err == nil {
+		t.Fatal("expected fail-closed custody lookup")
+	}
+	for _, sensitive := range []string{"synthetic-secret", "jane@example.com", "example.com"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("API response body leaked in custody error: %v", err)
+		}
+	}
+}
+
+func TestAttendedDiscoverReviewsOAuthCustodyBeforeApply(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	t.Setenv("PATH", "")
+	t.Setenv("PRELOOP_CONFIRM", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat01-synthetic-access")
+	previousTerminal := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = previousTerminal })
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"model":"claude-haiku-4-5"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			mutations++
+			t.Errorf("mutation before custody consent")
+		}
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+	}))
+	defer server.Close()
+	t.Setenv("PRELOOP_URL", server.URL)
+	var out bytes.Buffer
+	// The discover flow already approved generic onboarding. Declining the
+	// newly disclosed custody decision must still leave every resource intact.
+	err := executeManagedEnrollment(AgentConfig{Name: "Claude Code", ConfigPath: path}, managedEnrollmentOptions{
+		Client: api.NewClientWithToken(server.URL, "synthetic-token"), SkipConfirmation: true, AgentPrepared: true,
+		PreferredModel: "anthropic/claude-haiku-4-5", Input: strings.NewReader("n\n"), Output: &out,
+	})
+	if err != nil {
+		t.Fatalf("attended discover was misclassified: %v", err)
+	}
+	summary := strings.Index(out.String(), "Credential custody")
+	confirmation := strings.Index(out.String(), "Apply managed Preloop onboarding")
+	if summary < 0 || confirmation <= summary || mutations != 0 {
+		t.Fatalf("custody approval ordering failed: mutations=%d output=%s", mutations, out.String())
 	}
 }
