@@ -1421,6 +1421,31 @@ def test_account_agent_detail_endpoint_includes_session_history(
         "workspace-1",
     ]
 
+    # The page reads the header first: no session list, no tab aggregates.
+    header = client.get(f"/api/v1/agents/{agent_id}", params={"include": ""})
+    assert header.status_code == 200
+    header_body = header.json()
+    assert header_body["agent"]["id"] == agent_id
+    assert header_body["aggregate"] == detail_body["aggregate"]
+    assert header_body["sessions"] == []
+    assert header_body["usage_by_model"] == []
+    assert header_body["activity_by_server"] == []
+    assert header_body["activity_by_tool"] == []
+
+    # Each tab asks for its own section.
+    tools = client.get(f"/api/v1/agents/{agent_id}", params={"include": "activity"})
+    assert tools.json()["activity_by_server"] == detail_body["activity_by_server"]
+    assert tools.json()["sessions"] == []
+    models_tab = client.get(
+        f"/api/v1/agents/{agent_id}", params={"include": "usage_by_model,sessions"}
+    )
+    assert models_tab.json()["usage_by_model"] == detail_body["usage_by_model"]
+    assert len(models_tab.json()["sessions"]) == 2
+    assert models_tab.json()["activity_by_tool"] == []
+
+    unknown = client.get(f"/api/v1/agents/{agent_id}", params={"include": "notes"})
+    assert unknown.status_code == 422
+
 
 def test_account_agent_update_endpoint_controls_lifecycle_and_owner(
     client, db_session, test_user

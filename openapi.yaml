@@ -2373,6 +2373,20 @@ paths:
             format: date-time
           - type: 'null'
           title: End Date
+      - name: include
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'Comma list of optional sections: usage_by_model, activity,
+            sessions. Omitted returns all of them; an empty value returns the agent,
+            its aggregate, credentials and enrollments only.'
+          title: Include
+        description: 'Comma list of optional sections: usage_by_model, activity, sessions.
+          Omitted returns all of them; an empty value returns the agent, its aggregate,
+          credentials and enrollments only.'
       responses:
         '200':
           description: Successful Response
