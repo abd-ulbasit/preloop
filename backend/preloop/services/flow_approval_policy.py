@@ -246,13 +246,11 @@ _SUBCOMMAND_TOOLS = frozenset(
 )
 
 #: git options that run other programs or change where git reads config.
-_GIT_UNSAFE_OPTIONS = (
-    "-c",
+_GIT_UNSAFE_LONG_OPTIONS = (
     "--config-env",
     "--exec-path",
     "--upload-pack",
     "--receive-pack",
-    "-u",
     "--git-dir",
     "--work-tree",
     "--namespace",
@@ -265,12 +263,13 @@ def _git_argv_unsafe(argv: Sequence[str]) -> bool:
     if len(argv) < 2 or argv[1].startswith("-"):
         # Global options before the subcommand (-c, -C, --exec-path, ...).
         return True
+    # Global options can only precede the subcommand (refused above). After
+    # it, only the long options that run programs or move config matter;
+    # short -c / -u mean other things there (git add -u, git log -c).
     return any(
-        token == option
-        or token.startswith(option + "=")
-        or (option == "-c" and token.startswith("-c") and len(token) > 2)
+        token == option or token.startswith(option + "=")
         for token in argv[2:]
-        for option in _GIT_UNSAFE_OPTIONS
+        for option in _GIT_UNSAFE_LONG_OPTIONS
     )
 
 
@@ -368,7 +367,8 @@ def _bash_within_policy(
         # The deny list runs on the words that pick the operation (the
         # unquoted command and subcommand), not on argument text such as a
         # commit message.
-        if _BASH_DENY.search(" ".join(argv[:2])):
+        operation = argv[:3] if len(argv) > 2 and argv[1] == "remote" else argv[:2]
+        if _BASH_DENY.search(" ".join(operation)):
             return False
         if _git_argv_unsafe(argv):
             return False
