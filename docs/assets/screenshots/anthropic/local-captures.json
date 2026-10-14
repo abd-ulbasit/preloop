@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "captures": [
+    {
+      "id": "preloop-inference-hook-setup",
+      "file": "preloop-inference-hook-setup.png",
+      "evidence_kind": "local_synthetic_ui",
+      "source_sha": "95ec6d3151e1047814ee80cc0f79744874d54929",
+      "fixture_source": "frontend/scripts/capture-inference-hooks.mjs",
+      "fixture_sha256": "349f53e5af0a099d794b021eddb74ca699665a1b2bf2d0d3877479573c631f7d",
+      "image_sha256": "3edb2f63c193075119727ec1f93c0ebd7e42d406a05cadb7183d49ba22abbb03",
+      "captured_at": "2026-10-14T17:29:45.230Z",
+      "browser_version": "156.0.8078.4",
+      "viewport": {
+        "width": 1400,
+        "height": 1000
+      },
+      "alt": "Local synthetic Preloop inference-hook setup, disabled defaults, existing policy reference and an empty write-only secret field."
+    },
+    {
+      "id": "preloop-inference-hook-health",
+      "file": "preloop-inference-hook-health.png",
+      "evidence_kind": "local_synthetic_ui",
+      "source_sha": "95ec6d3151e1047814ee80cc0f79744874d54929",
+      "fixture_source": "frontend/scripts/capture-inference-hooks.mjs",
+      "fixture_sha256": "349f53e5af0a099d794b021eddb74ca699665a1b2bf2d0d3877479573c631f7d",
+      "image_sha256": "3e9a670990abc8d5ca3d5ba6235228847994286f7d31de9d92c8257551bdfa0a",
+      "captured_at": "2026-10-14T17:29:45.424Z",
+      "browser_version": "156.0.8078.4",
+      "viewport": {
+        "width": 1400,
+        "height": 1000
+      },
+      "alt": "Local synthetic Preloop hook health showing coverage unverified, pilot pending, vendor settings unknown and content-free callback counters."
+    }
+  ],
+  "missing": [
+    {
+      "id": "vendor-hook-settings",
+      "reason": "Awaiting designated sandbox or agreed pilot"
+    },
+    {
+      "id": "application-denial",
+      "reason": "Synthetic component rendering does not validate an actual application denial"
+    }
+  ]
+}
