@@ -47,7 +47,8 @@ requirements, document `version` (initially zero) and account `generation`.
 `losing_subjects`. Its caller must authenticate and validate the preview; this
 CRUD layer does not grant permission to call it. It locks the owner, validates
 all references and atomically replaces only that resource's local permits and
-requirements, snapshots and audits. Unrelated metadata, rules, account modes
+requirements, snapshots and audits. Audit details include explicit before/after
+resource documents and the supplied losing-subject set. Unrelated metadata, rules, account modes
 and ancestor policies remain intact. Empty updates remove the local rules and
 gates together, retaining a version tombstone. Generic rule writes/deletes
 reject managed local rules; use the resource document to edit them.
@@ -81,6 +82,14 @@ Supported execution pairs are `model:invoke`/`ai_model`, `tool:call`/`mcp_tool`,
 CRUD-backed resource types; `resource:share` additionally requires a shareable
 type. `runner_pool` has no canonical model and is rejected for exact IDs.
 
+The H4 `resource:view` callers cover owner/shared details and their read-only
+model usage/session/interaction/pricing, MCP tool inventory and flow usage
+subroutes, as well as the normal inventories, model overview and agent control
+inventory. No authorizer means these checks preserve OSS behavior.
+
+Bundles include `account_modes`, keyed by source account UUID, so each ancestor
+and local `require_permit` gate can require an ordinary permit from that source.
+The merged `modes` and `ancestor_require_permit` fields remain for compatibility.
 Bundles include `resource_access` with explicit `account_id` provenance for
 hierarchy owners. Managed local permits are excluded from ordinary `rules` and
 carried separately in `resource_access_rules` with the same owner provenance,

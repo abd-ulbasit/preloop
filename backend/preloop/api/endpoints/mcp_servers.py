@@ -618,7 +618,9 @@ async def list_mcp_server_tools(
         db, id=server_id, account_id=str(current_user.account_id)
     )
 
-    if not server:
+    if not server or not filter_viewable(
+        db, current_user, VISIBLE_MCP_SERVER, [server]
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="MCP server not found or access denied",

@@ -2223,7 +2223,7 @@ def get_flow_gateway_usage_summary(
 ):
     """Get model gateway usage summary for a flow."""
     flow = crud_flow.get(db=db, id=flow_id, account_id=current_user.account_id)
-    if not flow:
+    if not flow or not filter_viewable(db, current_user, VISIBLE_FLOW, [flow]):
         raise HTTPException(status_code=404, detail="Flow not found")
 
     account = crud_account.get(db, id=current_user.account_id)

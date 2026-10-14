@@ -406,6 +406,17 @@ def get_ai_models_overview(
         include_built_in=built_in_models_enabled(),
     )
     account_default_kinds = crud_ai_model.configured_account_default_kinds(models)
+    from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
+
+    models = [
+        *[model for model in models if model.account_id is None],
+        *filter_viewable(
+            db,
+            current_user,
+            VISIBLE_AI_MODEL,
+            [model for model in models if model.account_id is not None],
+        ),
+    ]
     models = [
         model
         for model in models

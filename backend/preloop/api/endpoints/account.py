@@ -1646,7 +1646,12 @@ def list_account_controllable_agents(
     items = _enrich_managed_agent_summaries(
         db,
         account_id=str(account.id),
-        summaries=[dict(item) for item in result["items"]],
+        summaries=filter_viewable(
+            db,
+            current_user,
+            VISIBLE_MANAGED_AGENT,
+            [dict(item) for item in result["items"]],
+        ),
     )
     items = [
         item
