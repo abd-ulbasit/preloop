@@ -84,8 +84,10 @@ def model_detail_window(
     """Default an omitted model-detail window to the last 7 days.
 
     An explicit window is returned unchanged so a caller that asks for 30
-    days still gets 30 days. Only the "no dates at all" case is filled in,
-    and only for the two list reads, not for the usage summary.
+    days still gets 30 days. Only the "no dates at all" case is filled in.
+    The summary uses the same default as the two lists: the console's
+    All time option sends no dates, and the three cards have to cover one
+    window (#1688).
 
     Args:
         start_date: Requested lower bound, or None.

@@ -812,10 +812,12 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
     ) -> tuple[List[Any], bool]:
         """Session ids for one model, newest request first, one page.
 
-        Groups the model's gateway rows and stops at ``limit + 1``. The
-        predicate matches ``ix_api_usage_account_model_ts``, so this is an
-        index range on that model rather than a scan of the account's
-        usage (#1688).
+        Aggregates the model's gateway rows in the window and returns one
+        page of that ranking. The predicate matches
+        ``ix_api_usage_account_model_ts``, so the aggregate is an index
+        range on that model rather than a scan of the account's usage
+        (#1688). ``LIMIT`` applies after the per-session maximum, so the
+        window is what bounds the read.
 
         Args:
             db: Database session.
@@ -1118,9 +1120,13 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         if use_model_page:
             # The probe already stopped at limit + 1. Counting every session
             # that ever used the model is the read that scaled with request
-            # count (#1688). The total is exact only when this page is the
-            # last one.
-            total = None if has_more else offset + len(model_page_ids or [])
+            # count (#1688). The total is exact only on the last page that
+            # returned rows. A page past the end must not report the offset
+            # as the total.
+            if model_page_ids:
+                total = None if has_more else offset + len(model_page_ids)
+            else:
+                total = 0 if offset == 0 and not has_more else None
             page_ids = model_page_ids or []
         else:
             total = session_query.count()

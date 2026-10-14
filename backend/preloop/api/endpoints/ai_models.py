@@ -558,6 +558,9 @@ def get_ai_model_usage_summary(
     db_model = _get_readable_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
+    # Same omitted-date window as the two lists. All time sends no dates,
+    # and the summary must not stay on 30 days while the lists cover 7.
+    start_date, end_date = model_detail_window(start_date, end_date)
     return ModelGatewayUsageService(db).get_ai_model_summary(
         ai_model=db_model,
         account_id=current_user.account_id,

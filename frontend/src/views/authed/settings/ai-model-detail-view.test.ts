@@ -1490,6 +1490,52 @@ describe('AIModelDetailView', () => {
     expect(Math.abs(spanDays - 7)).to.be.below(0.01);
   });
 
+  it('sends one window for the summary, sessions, and interactions on all time', async () => {
+    const element = (await fixture(
+      html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
+    )) as AIModelDetailView;
+    await waitUntil(
+      () => !(element as any).loading && !!(element as any).interactions,
+      'AI model detail view did not finish loading'
+    );
+    const callsFor = (part: string) =>
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes(part));
+    const before = {
+      summary: callsFor('/summary').length,
+      sessions: callsFor('/runtime-sessions').length,
+      interactions: callsFor('/interactions').length,
+    };
+
+    element.shadowRoot?.querySelector('time-range-select')?.dispatchEvent(
+      new CustomEvent('range-change', {
+        detail: { value: 'all' },
+        bubbles: true,
+        composed: true,
+      })
+    );
+
+    await waitUntil(
+      () => callsFor('/interactions').length > before.interactions
+    );
+    await element.updateComplete;
+    for (const [part, prior] of [
+      ['/summary', before.summary],
+      ['/runtime-sessions', before.sessions],
+      ['/interactions', before.interactions],
+    ] as const) {
+      const urls = callsFor(part);
+      expect(urls.length, part).to.be.greaterThan(prior);
+      const query = new URLSearchParams(
+        urls[urls.length - 1].split('?')[1] || ''
+      );
+      expect(query.get('start_date'), part).to.equal(null);
+      expect(query.get('end_date'), part).to.equal(null);
+    }
+  });
+
   // A range change is a refinement, not a new page: the answers it is
   // replacing stay readable, the way API usage and Cost behave.
   it('keeps the previous numbers on screen while a new range loads', async () => {
