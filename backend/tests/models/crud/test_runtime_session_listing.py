@@ -414,3 +414,71 @@ def test_recent_window_ranking_matches_the_full_history(
         "active-old-request"
     )
     assert windowed[(1, 0)] == ["fresh-no-usage"]
+
+
+def test_min_requests_counts_each_sessions_own_usage(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    """The filter is correlated per session and keeps its old semantics."""
+    data = session_listing_data
+    kwargs = {"account_id": str(data["account"].id)}
+    ids = {name: str(row.id) for name, row in data["sessions"].items()}
+
+    at_least_one = crud_runtime_session.list_account_sessions(
+        db_session, **kwargs, min_requests=1
+    )
+    assert {item["id"] for item in at_least_one["items"]} == {
+        ids["direct"],
+        ids["legacy"],
+    }
+    assert at_least_one["total"] == 2
+
+    # "direct" carries six gateway rows of its own, "legacy" one.
+    at_least_three = crud_runtime_session.list_account_sessions(
+        db_session, **kwargs, min_requests=3
+    )
+    assert [item["id"] for item in at_least_three["items"]] == [ids["direct"]]
+    assert at_least_three["total"] == 1
+
+
+def test_page_without_flow_sessions_keeps_direct_totals(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    """A page with no legacy flow session skips that branch, same numbers."""
+    data = session_listing_data
+    result = crud_runtime_session.list_account_sessions(
+        db_session,
+        account_id=str(data["account"].id),
+        session_source_type="custom",
+        start_date=data["now"] - timedelta(days=1),
+        end_date=data["now"],
+    )
+    direct = next(
+        item for item in result["items"] if item["session_source_id"] == "direct"
+    )
+    assert direct["total_requests"] == 3
+    assert direct["total_tokens"] == 45
+
+
+def test_legacy_session_with_a_non_uuid_source_is_ignored_safely(
+    db_session: Session, session_listing_data: dict[str, Any]
+) -> None:
+    data = session_listing_data
+    broken = models.RuntimeSession(
+        account_id=data["account"].id,
+        session_source_type="flow_execution",
+        session_source_id="not-a-uuid",
+        started_at=data["now"] - timedelta(hours=1),
+        last_activity_at=data["now"] - timedelta(minutes=30),
+    )
+    db_session.add(broken)
+    db_session.flush()
+    result = crud_runtime_session.list_account_sessions(
+        db_session,
+        account_id=str(data["account"].id),
+        start_date=data["now"] - timedelta(days=1),
+        end_date=data["now"],
+    )
+    items = {item["id"]: item for item in result["items"]}
+    assert items[str(broken.id)]["total_requests"] == 0
+    assert items[str(data["sessions"]["legacy"].id)]["total_requests"] == 3
