@@ -26,6 +26,7 @@ export function editionOf(
 export const CAPABILITIES = [
   'multi_account',
   'account_hierarchy',
+  'resource_sharing',
   'abac_rules',
   'chat_connections',
 ] as const;

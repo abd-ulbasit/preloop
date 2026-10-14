@@ -2772,7 +2772,26 @@ export class AIModelDetailView extends LitElement {
             Back to models
           </sl-button>
         </div>
-        <div slot="main-column" class="header-actions">
+        <div
+          slot="main-column"
+          class="header-actions"
+          style="display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sl-spacing-small); min-width: 0;"
+        >
+          <capability-extension
+            name="resource-access"
+            style="display: contents;"
+            .context=${{
+              kind: 'ai_model',
+              resourceId: this.modelId,
+              sharedFrom: this.model?.is_shared
+                ? this.model?.owner_name
+                : undefined,
+              readOnly:
+                this.model?.read_only ||
+                this.model?.is_shared ||
+                this.model?.is_built_in,
+            }}
+          ></capability-extension>
           <resource-actions
             .collapseOverflow=${false}
             .actions=${[
@@ -2937,11 +2956,6 @@ export class AIModelDetailView extends LitElement {
                     `
               }
             </sl-card>
-
-            <capability-extension
-              name="resource-access"
-              .context=${{ kind: 'ai_model', resourceId: this.modelId }}
-            ></capability-extension>
 
             <sl-card>
               <div slot="header" class="model-title">Budget Management</div>

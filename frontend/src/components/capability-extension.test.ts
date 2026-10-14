@@ -33,6 +33,20 @@ describe('capability-extension', () => {
     expect(api.calls).to.have.length(0);
   });
 
+  it('does not offer runner-pool sharing on hierarchy-only servers', async () => {
+    api = mockApi();
+    const el = await fixture<CapabilityExtension>(
+      html`<capability-extension
+        name="runner-pools"
+        .capabilities=${new Set<Capability>(['account_hierarchy', 'resource_sharing'])}
+        .context=${{ pools: 'pool-1' }}
+      ></capability-extension>`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(el.children.length).to.equal(0);
+    expect(api.calls.length).to.equal(0);
+  });
+
   it('reads /features when no set is given and stays empty when all are off', async () => {
     api = mockApi();
     const el = await fixture<CapabilityExtension>(
