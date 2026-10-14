@@ -633,7 +633,8 @@ def test_session_end_marks_session_only_notes_undeliverable(
     token = _issue_runtime_token(client)
     agent = _runtime_agent(db_session, test_user)
     session_note_id = client.post(
-        NOTES_URL, json={"agent_id": str(agent.id), "text": "Too late."}
+        NOTES_URL,
+        json={"runtime_session_id": str(agent.runtime_session_id), "text": "Too late."},
     ).json()["note_id"]
     # A note addressed to the agent with no session waits for the next run and
     # must survive this session ending.
@@ -774,7 +775,8 @@ def test_receipt_claimed_session_end_is_undeliverable(client, db_session, test_u
     token = _issue_runtime_token(client)
     agent = _runtime_agent(db_session, test_user)
     created = client.post(
-        NOTES_URL, json={"agent_id": str(agent.id), "text": "Too late."}
+        NOTES_URL,
+        json={"runtime_session_id": str(agent.runtime_session_id), "text": "Too late."},
     ).json()
     headers = {"Authorization": f"Bearer {token}"}
     client.post(
@@ -871,7 +873,11 @@ def test_receipt_undeliverable_webhook_emitted_once(client, db_session, test_use
     )
     db_session.flush()
     created = client.post(
-        NOTES_URL, json={"agent_id": str(agent.id), "text": "Never carried."}
+        NOTES_URL,
+        json={
+            "runtime_session_id": str(agent.runtime_session_id),
+            "text": "Never carried.",
+        },
     ).json()
     headers = {"Authorization": f"Bearer {token}"}
     for _ in range(2):
@@ -946,7 +952,19 @@ def test_receipt_spool_dropped_records_reason(client, db_session, test_user):
     "source,phase,event,decision,expected",
     [
         ("codex_cli", "pre_tool_use", "PreToolUse", "allow", "delivered"),
-        ("copilot_cli", "permission_request", None, "allow", "claimed"),
+        ("copilot_cli", "permission_request", None, "allow", "pending"),
+        *[
+            (source, "permission_request", None, "allow", "pending")
+            for source in (
+                "opencode",
+                "pi",
+                "deepseek",
+                "hermes",
+                "openclaw",
+                "nanobot",
+                "devin_cli",
+            )
+        ],
         ("cursor", "permission_request", "beforeShellExecution", "allow", "claimed"),
         ("cursor", "pre_tool_use", "preToolUse", "allow", "delivered"),
         ("cursor", "pre_tool_use", "preToolUse", "ask", "claimed"),
@@ -979,7 +997,7 @@ def test_receipt_permission_carrier_controls_delivery(
     assert response.status_code == 200, response.text
     receipt = client.get(f"{NOTES_URL}/{created['note_id']}").json()
     assert receipt["state"] == expected
-    assert receipt["claimed_at"]
+    assert bool(receipt["claimed_at"]) == (expected != "pending")
     if expected == "delivered":
         assert receipt["claimed_at"] == receipt["delivered_at"]
     else:
@@ -1263,3 +1281,109 @@ def test_hook_pull_and_session_end_for_a_hosted_runner_session(
 
     assert pulled.status_code == 200, pulled.text
     assert sorted(n["note_id"] for n in pulled.json()["notes"]) == sorted(queued)
+
+
+@pytest.mark.parametrize("register_first", [False, True])
+def test_agent_note_receipt_tracks_native_run_with_enrollment_token(
+    client, db_session, test_user, register_first: bool
+) -> None:
+    """An agent note must ACK against the actual run, not its identity stub."""
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    if register_first:
+        run_id = _start_run(client, token, "native-receipt-run")
+    created = client.post(
+        NOTES_URL,
+        json={"agent_id": str(agent.id), "text": "Run the verification."},
+    ).json()
+    note_id = created["note_id"]
+    assert created["runtime_session_id"] is None
+    if not register_first:
+        run_id = _start_run(client, token, "native-receipt-run")
+    headers = {"Authorization": f"Bearer {token}"}
+    pulled = client.post(
+        PENDING_URL,
+        json={"session_id": "native-receipt-run", "defer_delivery": True},
+        headers=headers,
+    )
+    assert pulled.status_code == 200, pulled.text
+    assert [note["note_id"] for note in pulled.json()["notes"]] == [note_id]
+    acknowledged = client.post(
+        "/api/v1/agents/notes/ack",
+        json={"session_id": "native-receipt-run", "note_ids": [note_id]},
+        headers=headers,
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    receipt = client.get(f"{NOTES_URL}/{note_id}").json()
+    assert receipt["state"] == "delivered"
+    assert receipt["runtime_session_id"] == run_id
+    ended = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": "native-receipt-run"},
+        headers=headers,
+    )
+    assert ended.status_code == 200, ended.text
+    assert client.get(f"{NOTES_URL}/{note_id}").json()["state"] == "delivered"
+
+
+def test_explicit_enrollment_session_note_cannot_leak_into_native_run(
+    client, db_session, test_user
+) -> None:
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    note_id = client.post(
+        NOTES_URL,
+        json={
+            "runtime_session_id": str(agent.runtime_session_id),
+            "text": "Only the named session.",
+        },
+    ).json()["note_id"]
+    _start_run(client, token, "other-native-run")
+    headers = {"Authorization": f"Bearer {token}"}
+    pulled = client.post(
+        PENDING_URL,
+        json={"session_id": "other-native-run", "defer_delivery": True},
+        headers=headers,
+    )
+    assert pulled.status_code == 200, pulled.text
+    assert pulled.json()["notes"] == []
+    client.post(
+        "/api/v1/agents/notes/ack",
+        json={"session_id": "other-native-run", "note_ids": [note_id]},
+        headers=headers,
+    )
+    assert client.get(f"{NOTES_URL}/{note_id}").json()["state"] == "pending"
+
+
+def test_enrollment_agent_note_waits_for_next_run_after_native_end(
+    client, db_session, test_user
+) -> None:
+    token = _issue_runtime_token(client)
+    agent = _runtime_agent(db_session, test_user)
+    _start_run(client, token, "ending-native-run")
+    note_id = client.post(
+        NOTES_URL, json={"agent_id": str(agent.id), "text": "Brief the next run."}
+    ).json()["note_id"]
+    headers = {"Authorization": f"Bearer {token}"}
+    ended = client.post(
+        SESSION_END_URL,
+        json={"external_session_id": "ending-native-run"},
+        headers=headers,
+    )
+    assert ended.status_code == 200, ended.text
+    assert client.get(f"{NOTES_URL}/{note_id}").json()["state"] == "pending"
+    next_run_id = _start_run(client, token, "next-native-run")
+    pulled = client.post(
+        PENDING_URL,
+        json={"session_id": "next-native-run", "defer_delivery": True},
+        headers=headers,
+    )
+    assert [note["note_id"] for note in pulled.json()["notes"]] == [note_id]
+    client.post(
+        "/api/v1/agents/notes/ack",
+        json={"session_id": "next-native-run", "note_ids": [note_id]},
+        headers=headers,
+    )
+    receipt = client.get(f"{NOTES_URL}/{note_id}").json()
+    assert receipt["state"] == "delivered"
+    assert receipt["runtime_session_id"] == next_run_id

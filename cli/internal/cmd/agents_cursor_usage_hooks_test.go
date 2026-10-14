@@ -78,9 +78,15 @@ func TestInstallCursorUsageHooksStoreTranscriptPersistsInCommandAndCredential(t 
 		t.Fatalf("install usage hooks: %v", err)
 	}
 	doc := readJSONDoc(t, hooksPath)
-	command, _ := flatHookEntries(t, doc, "stop")[0]["command"].(string)
-	if !strings.HasSuffix(command, " usage hook --from cursor --store-transcript") {
-		t.Errorf("opt-in missing from command: %q", command)
+	var usageCommand string
+	for _, entry := range flatHookEntries(t, doc, "stop") {
+		command, _ := entry["command"].(string)
+		if strings.Contains(command, " usage hook ") {
+			usageCommand = command
+		}
+	}
+	if !strings.HasSuffix(usageCommand, " usage hook --from cursor --store-transcript") {
+		t.Errorf("opt-in missing from usage command: %q", usageCommand)
 	}
 	// Permission hooks are untouched by the usage hook install.
 	if entries := flatHookEntries(t, doc, "beforeShellExecution"); len(entries) != 1 ||
@@ -116,9 +122,11 @@ func TestInstallCursorUsageHooksStoreTranscriptPersistsInCommandAndCredential(t 
 	if cred.StoreTranscript == nil || *cred.StoreTranscript {
 		t.Errorf("credential store_transcript should be false after re-install without opt-in: %s", data)
 	}
-	command, _ = flatHookEntries(t, readJSONDoc(t, hooksPath), "stop")[0]["command"].(string)
-	if strings.Contains(command, "--store-transcript") {
-		t.Errorf("opt-in should be gone from command: %q", command)
+	for _, entry := range flatHookEntries(t, readJSONDoc(t, hooksPath), "stop") {
+		command, _ := entry["command"].(string)
+		if strings.Contains(command, "--store-transcript") {
+			t.Errorf("opt-in should be gone: %q", command)
+		}
 	}
 }
 
@@ -151,9 +159,9 @@ func TestRemoveCursorUsageHooksLeavesPermissionHooks(t *testing.T) {
 	doc := readJSONDoc(t, hooksPath)
 	hooks := doc["hooks"].(map[string]interface{})
 	for _, key := range cursorUsageHookEvents {
-		if key == "sessionStart" || key == "beforeSubmitPrompt" {
+		if key == "sessionStart" || key == "beforeSubmitPrompt" || key == "stop" || key == "sessionEnd" {
 			entries := flatHookEntries(t, doc, key)
-			if len(entries) != 1 || !strings.Contains(entries[0]["command"].(string), "permission-hook session") {
+			if len(entries) != 1 || !strings.Contains(entries[0]["command"].(string), "permission-hook ") {
 				t.Errorf("session registration lost: %v", entries)
 			}
 			continue

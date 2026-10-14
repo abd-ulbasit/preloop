@@ -90,6 +90,8 @@ interface GroupedResponse {
   total: number;
   skip: number;
   limit: number;
+  /** The server stopped counting at `total`; more events match. */
+  total_capped?: boolean;
 }
 
 interface User {
@@ -147,6 +149,13 @@ const DEEP_LINK_PAGE_SIZE = 200;
 // refreshes start at most this often while events keep coming.
 const LIVE_REFRESH_DEBOUNCE_MS = 400;
 const LIVE_REFRESH_MIN_INTERVAL_MS = 2000;
+// A slow timeline is refreshed less often: at least this many times its last
+// load time apart, up to LIVE_REFRESH_MAX_INTERVAL_MS (#1592).
+const LIVE_REFRESH_LOAD_FACTOR = 4;
+const LIVE_REFRESH_MAX_INTERVAL_MS = 30000;
+// The total is counted up to this many events; past it the page says
+// "10K+ events" and pages with Next, without a last page (#1592).
+const AUDIT_COUNT_LIMIT = 10000;
 const DEEP_LINK_PAGES = 4;
 /** The fixed console header, which a scrolled-to row must clear. */
 const HEADER_OFFSET_PX = 60;
@@ -181,6 +190,8 @@ export class AuditView extends AuthedElement {
   /** Why the timeline could not be loaded; shown instead of the empty state. */
   @state() private _loadError: string | null = null;
   @state() private _total = 0;
+  /** More events match than were counted: `_total` is a lower bound. */
+  @state() private _totalCapped = false;
   @state() private _page = 0;
   @state() private _pageSize = AUDIT_PAGE_SIZES.includes(
     readTablePreferences(AUDIT_LIST_ID)?.pageSize ?? 0
@@ -224,6 +235,13 @@ export class AuditView extends AuthedElement {
   private _liveRefreshInFlight = false;
   private _liveRefreshStale = false;
   private _lastLiveRefreshAt = 0;
+  // How long the last timeline answer took, which paces live refreshes.
+  private _lastLoadMs = 0;
+  // Audit row ids announced while a load was in flight, and whether any
+  // event came without one. A trailing refresh is only owed for rows the
+  // landed answer does not already show.
+  private _pendingLiveIds = new Set<string>();
+  private _pendingLiveUnknown = false;
   // Bumped by every foreground load, so older answers are not applied.
   private _timelineGeneration = 0;
   // Debounce for the tool-name search box, so typing filters the list.
@@ -278,7 +296,8 @@ export class AuditView extends AuthedElement {
   }
 
   private _connectRealtime() {
-    const onAuditEvent = () => this._scheduleRealtimeRefresh();
+    const onAuditEvent = (message?: unknown) =>
+      this._scheduleRealtimeRefresh(message);
     this._unsubscribeRealtime = unifiedWebSocketManager.subscribe(
       'audit',
       onAuditEvent
@@ -286,7 +305,7 @@ export class AuditView extends AuthedElement {
     void unifiedWebSocketManager.connect();
   }
 
-  private _scheduleRealtimeRefresh() {
+  private _scheduleRealtimeRefresh(message?: unknown) {
     // Pulse the live indicator immediately so the user sees feedback even
     // before the coalesced refetch actually runs.
     this._livePulse = true;
@@ -297,7 +316,60 @@ export class AuditView extends AuthedElement {
       this._livePulse = false;
       this._livePulseTimer = null;
     }, 1500);
+    const id = this._liveEventId(message);
+    if (id && this._shownEventIds().has(id)) return;
+    if (this._liveRefreshInFlight || this._loading) {
+      if (id) this._pendingLiveIds.add(id);
+      else this._pendingLiveUnknown = true;
+    }
     this._armLiveRefresh();
+  }
+
+  /**
+   * The audit row a realtime message announces, when it says.
+   *
+   * The audit writer sends the row id (`audit_log_id`). The gateway's own
+   * event for a model request sends the usage id instead, which the audit
+   * row of that request carries in `details.api_usage_id`. Other events
+   * (agent lifecycle) carry neither and always refresh.
+   */
+  private _liveEventId(message: unknown): string | null {
+    const payload = (
+      message as {
+        payload?: { audit_log_id?: unknown; api_usage_id?: unknown };
+      }
+    )?.payload;
+    const id = payload?.audit_log_id;
+    if (typeof id === 'string' && id) return id;
+    const usage = payload?.api_usage_id;
+    return typeof usage === 'string' && usage ? `usage:${usage}` : null;
+  }
+
+  /** Every audit row id on screen, primary and sub-events, and usage ids. */
+  private _shownEventIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const group of this._groups) {
+      ids.add(group.primary_event.id);
+      const usage = group.primary_event.details?.api_usage_id;
+      if (typeof usage === 'string' && usage) ids.add(`usage:${usage}`);
+      for (const sub of group.sub_events) ids.add(sub.id);
+    }
+    return ids;
+  }
+
+  /**
+   * The shortest gap between live refreshes: LIVE_REFRESH_MIN_INTERVAL_MS,
+   * or a multiple of the last load time when the timeline is slow, so a
+   * busy account does not keep a slow read running back to back.
+   */
+  private _liveRefreshIntervalMs(): number {
+    return Math.min(
+      LIVE_REFRESH_MAX_INTERVAL_MS,
+      Math.max(
+        LIVE_REFRESH_MIN_INTERVAL_MS,
+        this._lastLoadMs * LIVE_REFRESH_LOAD_FACTOR
+      )
+    );
   }
 
   /**
@@ -318,7 +390,7 @@ export class AuditView extends AuthedElement {
     const sinceLast = Date.now() - this._lastLiveRefreshAt;
     const delay = Math.max(
       LIVE_REFRESH_DEBOUNCE_MS,
-      LIVE_REFRESH_MIN_INTERVAL_MS - sinceLast
+      this._liveRefreshIntervalMs() - sinceLast
     );
     this._refreshTimer = window.setTimeout(() => {
       this._refreshTimer = null;
@@ -347,8 +419,18 @@ export class AuditView extends AuthedElement {
 
   /** Run the trailing refresh owed to events seen while a load was busy. */
   private _flushStaleLiveRefresh() {
+    const pending = this._pendingLiveIds;
+    const unknown = this._pendingLiveUnknown;
+    this._pendingLiveIds = new Set();
+    this._pendingLiveUnknown = false;
     if (!this._liveRefreshStale || !this.isConnected) return;
     this._liveRefreshStale = false;
+    // Every row announced during the load is in its answer already: a
+    // second read would return the same page (#1592).
+    if (!unknown && pending.size > 0) {
+      const shown = this._shownEventIds();
+      if ([...pending].every((id) => shown.has(id))) return;
+    }
     this._armLiveRefresh();
   }
 
@@ -422,15 +504,19 @@ export class AuditView extends AuthedElement {
         this._pageSize
       );
 
+      params.set('count_limit', String(AUDIT_COUNT_LIMIT));
+      const startedAt = Date.now();
       const res = await fetchWithAuth(
         `/api/v1/audit-logs/grouped?${params}`,
         background ? { passive: true } : {}
       );
+      this._lastLoadMs = Date.now() - startedAt;
       if (generation !== this._timelineGeneration) return;
       if (res.status === 403) {
         this._permissionError = await permissionErrorFromResponse(res);
         this._groups = [];
         this._total = 0;
+        this._totalCapped = false;
         return;
       }
       if (!res.ok) {
@@ -450,6 +536,7 @@ export class AuditView extends AuthedElement {
       this._loadError = null;
       this._groups = data.groups;
       this._total = data.total;
+      this._totalCapped = data.total_capped === true;
     } catch (e) {
       console.error('Failed to load timeline:', e);
       if (!background && generation === this._timelineGeneration) {
@@ -527,6 +614,7 @@ export class AuditView extends AuthedElement {
           page * DEEP_LINK_PAGE_SIZE,
           DEEP_LINK_PAGE_SIZE
         );
+        params.set('count_limit', String(AUDIT_COUNT_LIMIT));
         const res = await fetchWithAuth(`/api/v1/audit-logs/grouped?${params}`);
         if (!res.ok) return null;
         const data: GroupedResponse = await res.json();
@@ -611,7 +699,11 @@ export class AuditView extends AuthedElement {
   }
 
   private _goToPage(pageIndex: number): void {
-    const next = Math.max(0, Math.min(pageIndex, this._totalPages - 1));
+    // Past a capped total the last page is unknown: Next is only offered
+    // while a page comes back full.
+    const next = this._totalCapped
+      ? Math.max(0, pageIndex)
+      : Math.max(0, Math.min(pageIndex, this._totalPages - 1));
     if (next === this._page) return;
     this._page = next;
     this._syncPageLocation();
@@ -1364,7 +1456,8 @@ export class AuditView extends AuthedElement {
         width="wide"
       >
         <span slot="meta" class="header-meta">
-          ${this._formatEventCount(this._total)} events
+          ${this._formatEventCount(this._total)}${this._totalCapped ? '+' : ''}
+          events
           <span class="separator" aria-hidden="true">·</span>
           <sl-tooltip content="Live updates over websocket">
             <span
@@ -2050,8 +2143,9 @@ export class AuditView extends AuthedElement {
       page-index=${this._page}
       page-size=${this._pageSize}
       .pageSizes=${AUDIT_PAGE_SIZES}
-      .total=${this._total}
+      .total=${this._totalCapped ? null : this._total}
       page-rows=${this._groups.length}
+      ?has-next=${this._totalCapped && this._groups.length === this._pageSize}
       ?loading=${this._loading}
       noun="events"
       @page-change=${(event: CustomEvent) =>

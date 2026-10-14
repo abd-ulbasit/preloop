@@ -37,7 +37,11 @@
     "tool_approval": true
   },
   "hooks": [
-    "pre_tool_call"
+    "pre_tool_call",
+    "pre_llm_call",
+    "pre_api_request",
+    "on_session_end",
+    "on_session_finalize"
   ],
   "configSchema": {
     "path": "preloop.control",

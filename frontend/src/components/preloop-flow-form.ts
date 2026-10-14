@@ -9,7 +9,7 @@ import {
   getAccountOrganization,
   getRunners,
   getFlowHarnessOptions,
-  getAllFlows,
+  getAllFlowSummaries,
   uniqueFlowsById,
   listOrganizations,
   listProjects,
@@ -574,7 +574,7 @@ export class PreloopFlowForm extends LitElement {
   @state()
   private accountFlows: any[] = [];
 
-  // True only after getAllFlows returned every page. The "not in this
+  // True only after getAllFlowSummaries returned every page. The "not in this
   // account" badge is a claim about the whole account, so it stays off
   // while the list failed or stopped at the page cap.
   @state()
@@ -882,7 +882,7 @@ export class PreloopFlowForm extends LitElement {
         getFlowPresets().catch(() => []),
         getRunners().catch(() => []),
         getAccountOrganization().catch(() => null),
-        getAllFlows()
+        getAllFlowSummaries()
           .then((result) => ({ ok: true as const, ...result }))
           .catch((error: unknown) => {
             console.error(

@@ -185,6 +185,7 @@ nav:
       - Sensitive data: guide/sensitive-data.md
       - Account kill switch: guide/account-kill-switch.md
       - Operator notes: guide/operator-notes.md
+      - Operator note verification: guide/operator-notes-smoke.md
       - Spawning workers: guide/spawning-workers.md
       - Attaching to a session: guide/sessions-attach.md
 

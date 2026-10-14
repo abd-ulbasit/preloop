@@ -213,3 +213,17 @@ npm run build   # tsc -> dist/
 npm test        # builds, then runs node --test against dist/
 npx tsc --noEmit
 ```
+
+### Operator notes
+
+On OpenCode 1.18.32 the `experimental.chat.system.transform` plugin hook carries
+pending operator notes before each model request, including requests with no
+preceding tool call. It registers the native session, appends the rendered text
+to the existing system context, then acknowledges the deferred claim. Failed
+acknowledgments are retried before the next pull without inserting the previous
+block twice. Note delivery fails open and does not change tool approvals.
+`session.deleted` reports an authoritative session end; `session.idle` is
+resumable and does not end receipts. Process exit has no verified plugin event,
+so managed termination or the note TTL still applies when no end is observed.
+Native tool approval hooks do not claim notes because they cannot insert model
+context. Gateway routing remains another supported delivery point.

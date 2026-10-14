@@ -1920,6 +1920,119 @@ describe('Bedrock API key authentication', () => {
     await element.updateComplete;
   });
 
+  it('shows a manual profile input and explains AWS profiles before listing', async () => {
+    const input = element.shadowRoot!.querySelector(
+      '[data-field="model_identifier"]'
+    );
+    expect(input).to.exist;
+    expect(input!.getAttribute('label')).to.equal(
+      'Model ID or inference profile ID / ARN'
+    );
+    expect(element.shadowRoot!.textContent).to.contain(
+      'Cross-region inference'
+    );
+    expect(element.shadowRoot!.textContent).to.contain('same region');
+  });
+
+  it('renders actionable partial discovery warnings from the API without raw messages', async () => {
+    fetchStub.resolves(
+      new Response(
+        JSON.stringify({
+          models: ['amazon.nova-pro-v1:0'],
+          source: 'live',
+          warnings: [
+            'bedrock_inference_profiles_unavailable',
+            'bedrock_inference_profile_required',
+            'unsafe upstream text',
+          ],
+        })
+      )
+    );
+    (element as any)._bedrockApiKey = 'synthetic-key';
+    await (element as any)._fetchModelsForCurrentProvider();
+    await element.updateComplete;
+    const text = element.shadowRoot!.textContent!;
+    expect(text).to.contain('bedrock:ListInferenceProfiles');
+    expect(text).to.contain('hidden');
+    expect(text).not.to.contain('unsafe upstream text');
+  });
+
+  it('clears regional suggestions on region changes and refreshes with the entered region', async () => {
+    fetchStub.callsFake(
+      async () =>
+        new Response(
+          JSON.stringify({ models: ['amazon.nova-pro-v1:0'], source: 'live' })
+        )
+    );
+    (element as any)._bedrockApiKey = 'synthetic-key';
+    await (element as any)._fetchModelsForCurrentProvider();
+    await element.updateComplete;
+    const region = element.shadowRoot!.querySelector(
+      '[data-field="bedrock_region"]'
+    ) as any;
+    region.value = 'eu-west-1';
+    region.dispatchEvent(new CustomEvent('sl-input', { bubbles: true }));
+    await element.updateComplete;
+    expect((element as any)._modelSuggestions).to.deep.equal([]);
+    await (element as any)._fetchModelsForCurrentProvider();
+    const body = JSON.parse(fetchStub.lastCall.args[1].body);
+    expect(body.aws_region_name).to.equal('eu-west-1');
+  });
+
+  it('discards a listing that completes after credentials change', async () => {
+    let finish!: (response: Response) => void;
+    fetchStub.callsFake(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        })
+    );
+    (element as any)._bedrockApiKey = 'synthetic-key';
+    const fetching = (element as any)._fetchModelsForCurrentProvider();
+    (element as any)._bedrockApiKey = 'replacement-key';
+    (element as any)._syncBedrockApiKey();
+    finish(
+      new Response(JSON.stringify({ models: ['old-profile'], source: 'live' }))
+    );
+    await fetching;
+    expect((element as any)._modelSuggestions).to.deep.equal([]);
+  });
+
+  it('offers manual profile entry when no profiles are discovered', async () => {
+    fetchStub.resolves(
+      new Response(
+        JSON.stringify({
+          models: [],
+          source: 'live',
+          warnings: ['bedrock_inference_profile_required'],
+        })
+      )
+    );
+    (element as any)._bedrockApiKey = 'synthetic-key';
+    await (element as any)._fetchModelsForCurrentProvider();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('[data-field="model_identifier"]'))
+      .to.exist;
+    expect(element.shadowRoot!.textContent).to.contain(
+      'no active matching profile'
+    );
+  });
+
+  it('keeps an existing application profile editable when discovery does not list it', async () => {
+    const profile =
+      'arn:aws:bedrock:eu-west-1:123456789012:application-inference-profile/example';
+    (element as any)._currentModel.model_identifier = profile;
+    (element as any)._bedrockApiKey = 'synthetic-key';
+    await (element as any)._fetchModelsForCurrentProvider();
+    await element.updateComplete;
+    const input = element.shadowRoot!.querySelector(
+      '[data-field="model_identifier"]'
+    ) as any;
+    expect(input).to.exist;
+    expect(input.value).to.equal(profile);
+    expect((element as any)._currentModel.model_identifier).to.equal(profile);
+  });
+
   it('stores only the bearer credential and enables listing without IAM keys', async () => {
     (element as any)._bedrockApiKey = ' synthetic-bedrock-key ';
     (element as any)._bedrockAccessKeyId = 'stale-iam-key';
@@ -2004,6 +2117,7 @@ describe('Bedrock API key authentication', () => {
     expect(JSON.parse(discovery.args[1]!.body as string)).to.deep.equal({
       model_kind: 'llm',
       ai_model_id: 'existing-api-key-model',
+      aws_region_name: 'eu-west-1',
     });
     (element as any)._syncFormFromDom = () => {};
     await (element as any)._handleFormSubmit(new Event('submit'));

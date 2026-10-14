@@ -147,7 +147,7 @@ describe('inventory-card', () => {
     localStorage.removeItem(INVENTORY_TAB_STORAGE_KEY);
   });
 
-  it('leads with tokens split in and out, before the money column', async () => {
+  it('leads with a token total, before the money column', async () => {
     const el = await card({
       agentRows: [
         agentRow({
@@ -178,10 +178,48 @@ describe('inventory-card', () => {
     ) as HTMLElement & { updateComplete: Promise<unknown> };
     expect(figures).to.exist;
     await figures.updateComplete;
-    const text = (figures.shadowRoot?.textContent || '').replace(/\s+/g, ' ');
-    expect(text).to.contain('12.4K in');
-    expect(text).to.contain('3.1K out');
-    expect(text).to.contain('cache 68% hit');
+    // One compact total: an 11% column cut the split mid-figure (#1647).
+    // The split and the cache rate are one hover away.
+    expect(figures.hasAttribute('total-only')).to.be.true;
+    const shown = figures.shadowRoot?.querySelector('.figures') as HTMLElement;
+    expect((shown.textContent || '').trim()).to.equal('15.5K');
+    const title = shown.getAttribute('title') || '';
+    expect(title).to.contain('12,400 input tokens');
+    expect(title).to.contain('3,100 output tokens');
+    expect(title).to.contain('68% hit');
+  });
+
+  it('fits a nine-figure token total in the Agents column (#1647)', async () => {
+    const el = await card({
+      agentRows: [
+        agentRow({
+          tokens: 736_900_000,
+          tokenUsage: {
+            prompt_tokens: 734_600_000,
+            completion_tokens: 2_310_000,
+            total_tokens: 736_900_000,
+            input_tokens: 734_600_000,
+            output_tokens: 2_310_000,
+            cache_read_tokens: 600_000_000,
+            cache_write_tokens: 0,
+            uncached_input_tokens: 134_600_000,
+            cache_hit_ratio: 0.8168,
+          },
+        }),
+      ],
+    });
+    // The Overview's main column at 1440x900.
+    el.style.display = 'block';
+    el.style.width = '735px';
+    await el.updateComplete;
+    const cell = el.shadowRoot!.querySelector(
+      'td[data-label="Tokens"]'
+    ) as HTMLElement;
+    const figures = cell.querySelector('token-figures') as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    await figures.updateComplete;
+    expect(cell.scrollWidth).to.be.at.most(cell.clientWidth + 1);
   });
 
   it('leads the Flows tab with tokens too, before its money column', async () => {
@@ -223,10 +261,12 @@ describe('inventory-card', () => {
     ) as HTMLElement & { updateComplete: Promise<unknown> };
     expect(figures).to.exist;
     await figures.updateComplete;
-    const text = (figures.shadowRoot?.textContent || '').replace(/\s+/g, ' ');
-    expect(text).to.contain('9K in');
-    expect(text).to.contain('1.2K out');
-    expect(text).to.contain('cache 67% hit');
+    const shown = figures.shadowRoot?.querySelector('.figures') as HTMLElement;
+    expect((shown.textContent || '').trim()).to.equal('10.2K');
+    const title = shown.getAttribute('title') || '';
+    expect(title).to.contain('9,000 input tokens');
+    expect(title).to.contain('1,200 output tokens');
+    expect(title).to.contain('67% hit');
   });
 
   it('states no flow tokens rather than a zero when none were reported', async () => {

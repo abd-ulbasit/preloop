@@ -67,9 +67,29 @@ export function collectLandingPublicAssetPaths(brand: BrandConfig): string[] {
       paths.push(feature.placeholderImg);
     }
   }
+  const socialImage = brand.landing?.meta?.og_image;
+  if (socialImage) {
+    paths.push(socialImage);
+  }
   const displayPaths = paths.flatMap((original) => [
     original,
     ...responsiveDerivatives(original).map(({ src }) => src),
   ]);
   return [...new Set(displayPaths)].filter(isRootRelativeAssetPath);
+}
+
+/**
+ * Problems with the landing page's social preview image.
+ *
+ * LinkedIn, Facebook and X do not render SVG previews and show a grey
+ * placeholder card instead, so the build rejects them.
+ */
+export function socialImageProblems(brand: BrandConfig): string[] {
+  const socialImage = brand.landing?.meta?.og_image;
+  if (socialImage && /\.svg(\?|#|$)/i.test(socialImage)) {
+    return [
+      `landing.meta.og_image "${socialImage}" is an SVG; social networks need a PNG or JPEG (1200x630).`,
+    ];
+  }
+  return [];
 }

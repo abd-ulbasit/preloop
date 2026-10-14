@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +48,59 @@ def test_permission_check_url_derives_https_base() -> None:
     assert url == "https://staging.preloop.ai/api/v1/agents/permission-check"
     insecure = _permission_check_url("ws://localhost:8000/api/v1/agents/control/ws")
     assert insecure == "http://localhost:8000/api/v1/agents/permission-check"
+
+
+@pytest.mark.parametrize(
+    "scheme,http",
+    [("wss", "https"), ("ws", "http"), ("https", "https"), ("http", "http")],
+)
+def test_prefixed_permission_and_note_endpoints(
+    scheme: str, http: str, monkeypatch: Any
+) -> None:
+    url = f"{scheme}://example.com/deployment/api/v1/agents/control/ws?ignored=1"
+    assert (
+        _permission_check_url(url)
+        == f"{http}://example.com/deployment/api/v1/agents/permission-check"
+    )
+    instance = HermesPreloopPlugin()
+    instance._control_settings = (
+        AgentControlConfig(
+            control_ws_url=url,
+            bearer_token="agt_synthetic",
+            runtime_principal_id="hermes",
+        ),
+        {},
+    )
+    urls: list[str] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+        def read(self, size: int) -> bytes:
+            return json.dumps({"runtime_session_id": "runtime", "notes": []}).encode()
+
+    def open_request(request: Any, timeout: int) -> Response:
+        urls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    instance._note_carrier().prepare("session", "turn")
+    assert urls == [
+        f"{http}://example.com/deployment/api/v1/agents/session-start",
+        f"{http}://example.com/deployment/api/v1/agents/notes/pending",
+    ]
+
+
+@pytest.mark.parametrize("path", ["", "/", "/custom/ws"])
+def test_noncanonical_permission_endpoint_keeps_root_fallback(path: str) -> None:
+    assert (
+        _permission_check_url(f"wss://example.com{path}")
+        == "https://example.com/api/v1/agents/permission-check"
+    )
 
 
 def test_block_envelope_matches_upstream_hermes_shape() -> None:

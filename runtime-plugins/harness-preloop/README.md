@@ -49,8 +49,21 @@ Re-onboarding preserves the approvals setting.
 
 Both plugins report session lifecycle events without uploading transcript text
 or duplicating gateway token charges. Pi adds its native session ID to model
-requests. DeepSeek reports native sessions through lifecycle hooks; its current
-provider SDK does not offer per-request session headers for custom gateways.
+requests. DeepSeek's pinned provider SDK offers static deployment headers but
+no per-request session headers. Its native `agent/pre-step` hook admits operator
+notes as identified user messages in the durable session log; the read-only
+`llm/stream` hook acknowledges a note only after that exact message appears in
+model input. A rejected step never claims notes. A message dropped before
+admission remains claimed and is retried at a later step. Failed receipt writes
+retry on later model requests without inserting an admitted message twice.
+
+DeepSeek registers its native session ID with Preloop before pulling notes.
+Native agent disposal reports session end; an agent-owned awaited disposer also
+covers orderly process shutdown. Idle and turn completion leave the session
+open. Abrupt process termination or a lost termination request can leave notes
+waiting until their TTL; the server cannot infer an end from silence. Pi's
+session header provides the gateway delivery path; Pi's native tool gate is
+not a context carrier.
 
 An outbound authenticated WebSocket supports operator messages and interruption
 of **active sessions**. Commands use native session identity, reject ambiguous
@@ -113,7 +126,10 @@ PRELOOP_DISABLE_TELEMETRY=true npm test
 ```
 
 The optional keyless integration test runs both real binaries against a local
-mock model and approval server. It verifies a tool is blocked before executing:
+mock model and approval server. It verifies a tool is blocked before executing,
+and DeepSeek's logged note reaches model input once, is acknowledged, and posts
+session end on orderly shutdown. Set `PRELOOP_TEST_RUNTIME=deepseek` to run only
+DeepSeek against that runtime's own bin directory:
 
 ```sh
 PRELOOP_DISABLE_TELEMETRY=true DSH_TELEMETRY_DISABLED=true \
