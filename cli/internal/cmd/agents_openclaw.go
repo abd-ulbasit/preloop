@@ -722,6 +722,9 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		return custodyErr
 	}
 	custody = append(custody, mcpCustody...)
+	if len(custody) > 1 && custody[0].Kind == "none" {
+		custody = custody[1:]
+	}
 	printCredentialCustody(output, custody)
 	if err := validateCredentialCustody(custody, opts); err != nil {
 		return err

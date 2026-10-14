@@ -139,6 +139,9 @@ func TestNoCredentialImportStopsBeforeAnyMutation(t *testing.T) {
 			if string(after) != tc.config {
 				t.Fatal("config changed")
 			}
+			if strings.Contains(out.String(), "none: none -> none") {
+				t.Fatal("required import plan also claims no credential import")
+			}
 			if strings.Contains(err.Error()+out.String(), "synthetic-secret") {
 				t.Fatal("secret leaked")
 			}
