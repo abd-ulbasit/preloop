@@ -11,6 +11,7 @@ from preloop.models.crud import (
     crud_expected_device,
 )
 from preloop.models.crud.discovery_observation import ObservationConflictError
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 import pytest
 
@@ -221,3 +222,170 @@ def test_import_after_report_seeds_history_before_retention(
         ].last_reported_at
         == NOW
     )
+
+
+def test_roster_limit_and_missing_account_do_not_mutate_existing_roster(
+    db_session: Session,
+    test_user: models.User,
+) -> None:
+    from preloop.models.crud.expected_device import MAX_ROSTER_DEVICES
+
+    tenant = test_user.account_id
+    crud_expected_device.replace(db_session, account_id=tenant, devices=[device("a")])
+    with pytest.raises(ValueError, match="Roster limit exceeded"):
+        crud_expected_device.replace(
+            db_session,
+            account_id=tenant,
+            devices=[device("b")] * (MAX_ROSTER_DEVICES + 1),
+        )
+    with pytest.raises(ValueError, match="Account not found"):
+        crud_expected_device.replace(
+            db_session, account_id=uuid4(), devices=[device("b")]
+        )
+    assert [
+        row.device_ref_hash
+        for row in crud_expected_device.list_for_account(db_session, account_id=tenant)
+    ] == ["a" * 64]
+
+
+def test_touch_normalizes_naive_receipts_and_does_not_move_backward(
+    db_session: Session,
+    test_user: models.User,
+) -> None:
+    tenant = test_user.account_id
+    crud_expected_device.replace(db_session, account_id=tenant, devices=[device("a")])
+    crud_expected_device.touch_last_reported_at(
+        db_session,
+        account_id=tenant,
+        device_ref_hash="a" * 64,
+        at=NOW.replace(tzinfo=None),
+    )
+    crud_expected_device.touch_last_reported_at(
+        db_session,
+        account_id=tenant,
+        device_ref_hash="a" * 64,
+        at=NOW - timedelta(hours=1),
+    )
+    assert (
+        crud_expected_device.list_for_account(db_session, account_id=tenant)[
+            0
+        ].last_reported_at
+        == NOW
+    )
+
+
+@pytest.mark.parametrize("import_first", [True, False])
+@pytest.mark.parametrize("legacy", [True, False])
+def test_concurrent_first_report_and_import_preserve_receipt(
+    db_engine: Engine,
+    import_first: bool,
+    legacy: bool,
+) -> None:
+    """Exercise both lock orderings in committed, independent PG sessions."""
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import Queue
+    import time
+    from sqlalchemy import text
+    from preloop.models.crud.discovered_agent_candidate import ReportedCandidate
+
+    candidate = ReportedCandidate(agent_kind="cursor", config_path_hash="b" * 64)
+    with Session(db_engine) as setup:
+        account = crud_account.create(
+            setup, obj_in={"organization_name": "Synthetic race tenant"}
+        )
+        tenant = account.id
+        if legacy:
+            crud_discovered_agent_candidate.record_report(
+                setup,
+                account_id=tenant,
+                workstation_fingerprint="a" * 64,
+                os_family="linux",
+                cli_version=None,
+                candidates=[candidate],
+                now=(NOW - timedelta(hours=1)).replace(tzinfo=None),
+            )
+            setup.commit()
+    backend_ids: Queue[int] = Queue()
+
+    def report(db: Session) -> None:
+        if legacy:
+            crud_discovered_agent_candidate.record_report(
+                db,
+                account_id=tenant,
+                workstation_fingerprint="a" * 64,
+                os_family="linux",
+                cli_version=None,
+                candidates=[candidate],
+                now=NOW.replace(tzinfo=None),
+            )
+            return
+        crud_discovery_observation.record(
+            db,
+            account_id=tenant,
+            workstation_fingerprint="a" * 64,
+            source_ref=uuid4(),
+            evidence=observation(),
+            now=NOW,
+        )
+
+    def import_roster(db: Session) -> None:
+        crud_expected_device.replace(db, account_id=tenant, devices=[device("a")])
+
+    def contender() -> None:
+        with Session(db_engine) as db:
+            backend_ids.put(db.scalar(text("SELECT pg_backend_pid()")))
+            (report if import_first else import_roster)(db)
+            db.commit()
+
+    try:
+        with Session(db_engine) as owner, ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                (import_roster if import_first else report)(owner)
+                future = pool.submit(contender)
+                backend_id = backend_ids.get(timeout=5)
+                deadline = time.monotonic() + 5
+                waiting = False
+                while time.monotonic() < deadline:
+                    waiting = owner.scalar(
+                        text(
+                            "SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"
+                        ),
+                        {"pid": backend_id},
+                    )
+                    if waiting:
+                        break
+                    if future.done():
+                        future.result()
+                        break
+                    time.sleep(0.01)
+                assert waiting, "Contending transaction must wait for the account lock"
+                assert not future.done()
+                owner.commit()
+                future.result(timeout=5)
+            finally:
+                owner.rollback()
+        with Session(db_engine) as check:
+            assert (
+                crud_expected_device.list_for_account(check, account_id=tenant)[
+                    0
+                ].last_reported_at
+                == NOW
+            )
+            crud_discovery_observation.purge_expired(
+                check, account_id=tenant, now=NOW + timedelta(days=91)
+            )
+            if legacy:
+                crud_discovered_agent_candidate.purge_stale(
+                    check,
+                    account_id=tenant,
+                    now=(NOW + timedelta(days=91)).replace(tzinfo=None),
+                )
+            assert (
+                crud_expected_device.list_for_account(check, account_id=tenant)[
+                    0
+                ].last_reported_at
+                == NOW
+            )
+    finally:
+        with Session(db_engine) as cleanup:
+            crud_account.purge(cleanup, account_id=str(tenant))

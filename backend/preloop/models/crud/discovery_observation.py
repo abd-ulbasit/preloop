@@ -11,7 +11,7 @@ from uuid import UUID
 
 from preloop.models import models
 from preloop.schemas.discovery_evidence import DiscoveryEvidence
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -53,6 +53,9 @@ class CRUDDiscoveryObservation:
             model.source_ref == source_ref,
             model.observation_id == observation_id,
         )
+        from .expected_device import crud_expected_device
+
+        crud_expected_device.lock_account(db, account_id=account_id)
         db.execute(
             insert(model)
             .values(
@@ -77,17 +80,11 @@ class CRUDDiscoveryObservation:
             raise ObservationConflictError(
                 "Observation identifier already contains different evidence"
             )
-        db.execute(
-            update(models.ExpectedDevice)
-            .where(
-                models.ExpectedDevice.account_id == account_id,
-                models.ExpectedDevice.device_ref_hash == workstation_fingerprint,
-            )
-            .values(
-                last_reported_at=func.greatest(
-                    models.ExpectedDevice.last_reported_at, received
-                )
-            )
+        crud_expected_device.touch_last_reported_at(
+            db,
+            account_id=account_id,
+            device_ref_hash=workstation_fingerprint,
+            at=received,
         )
         return row
 

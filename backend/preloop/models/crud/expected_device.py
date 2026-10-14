@@ -100,6 +100,51 @@ class CRUDExpectedDevice:
         db.flush()
         return self.list_for_account(db, account_id=account_id)
 
+    def lock_account(self, db: Session, *, account_id: UUID) -> None:
+        """Serialize imports/reports before report inserts acquire FK locks."""
+        if (
+            db.scalar(
+                select(models.Account.id)
+                .where(models.Account.id == account_id)
+                .with_for_update(key_share=True)
+            )
+            is None
+        ):
+            raise ValueError("Account not found")
+
+    def touch_last_reported_at(
+        self,
+        db: Session,
+        *,
+        account_id: UUID,
+        device_ref_hash: str,
+        at: datetime,
+    ) -> None:
+        """Preserve receipts across concurrent import, including absent rows.
+
+        Report paths acquire the account NO KEY UPDATE lock before inserts.
+        The same lock serializes this receipt update against
+        roster replacement. It is compatible with report inserts' foreign-key
+        KEY SHARE locks, avoiding lock-upgrade deadlocks between reporters.
+        If an import won first, this statement sees its committed roster row;
+        if the report won first, the import later seeds its committed receipt.
+        The caller owns commit, so report data and receipt remain atomic.
+        """
+        self.lock_account(db, account_id=account_id)
+        normalized_at = at.replace(tzinfo=UTC) if at.tzinfo is None else at
+        db.execute(
+            update(models.ExpectedDevice)
+            .where(
+                models.ExpectedDevice.account_id == account_id,
+                models.ExpectedDevice.device_ref_hash == device_ref_hash,
+            )
+            .values(
+                last_reported_at=func.greatest(
+                    models.ExpectedDevice.last_reported_at, normalized_at
+                )
+            )
+        )
+
     def list_for_account(
         self, db: Session, *, account_id: UUID
     ) -> list[models.ExpectedDevice]:

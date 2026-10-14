@@ -585,6 +585,15 @@ lives in the optional plugin. Candidate deduplication and discovered events
 remain unchanged. Collector assertions preserve provenance and scan gaps, and
 do not establish runtime verification or device attestation.
 
+Expected-device inventory uses the shared `ExpectedDevice` model and
+`crud_expected_device` persistence boundary. An account-local roster is separate
+from reported discovery candidates, immutable source observations and device
+credentials. Atomic roster replacement serializes on the account, preserves
+receipt history for retained entries and never grants a credential or enrollment.
+Latest collection windows remain independent per authenticated reporting source;
+commercial import policy and coverage endpoints are provided by the optional
+fleet service.
+
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
 ### Restricted external runtime authority
@@ -618,6 +627,9 @@ with `meta_data.ingest_degraded`, and omits content search, content-derived
 summaries and tool enrichment. LLM session optimization falls back to its
 deterministic analyzers. With no registered policy, OSS retains full detail.
 The policy never changes forwarded requests or governance decisions.
+
+
+
 ## Canonical person identities
 
 `Person` owns the chosen username, address and verification, shared name/avatar,
@@ -749,12 +761,3 @@ A quarantined migration identity displays an unavailable state without exposing
 a generated membership alias or relaxing authentication. Account seat counts
 continue to count active membership rows. No presentation migration is required;
 apply the identity schema/backfill and authentication changes first.
-
-Expected-device inventory uses the shared `ExpectedDevice` model and
-`crud_expected_device` persistence boundary. An account-local roster is separate
-from reported discovery candidates, immutable source observations and device
-credentials. Atomic roster replacement serializes on the account, preserves
-receipt history for retained entries and never grants a credential or enrollment.
-Latest collection windows remain independent per authenticated reporting source;
-commercial import policy and coverage endpoints are provided by the optional
-fleet service.
