@@ -367,7 +367,12 @@ def _bash_within_policy(
         # The deny list runs on the words that pick the operation (the
         # unquoted command and subcommand), not on argument text such as a
         # commit message.
-        operation = argv[:3] if len(argv) > 2 and argv[1] == "remote" else argv[:2]
+        operation = list(argv[:2])
+        if len(argv) > 2 and argv[1] == "remote":
+            # git remote takes its own options (-v) before the subcommand.
+            sub = next((token for token in argv[2:] if not token.startswith("-")), "")
+            if sub:
+                operation.append(sub)
         if _BASH_DENY.search(" ".join(operation)):
             return False
         if _git_argv_unsafe(argv):
