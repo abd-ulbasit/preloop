@@ -744,6 +744,13 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Fixed
 
+- A feedback continuation no longer force-pushes a reviewed pull request
+  when the resume rebase leaves HEAD unchanged. `--force-with-lease` is
+  used only after that rebase moves HEAD. An amended or squashed tip is
+  refused and written to `evidence/push-refused.txt`, and the continuation
+  prompt says to add commits on top of the published history
+  ([#1659](https://github.com/preloop/preloop/issues/1659)).
+
 - The Claude sidecar reports a turn that ends on an error result (such as an
   API error) as a failed command right away, instead of leaving the flow
   execution running until its timeout. A timed-out turn now stops the session
