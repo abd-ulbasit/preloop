@@ -32,7 +32,9 @@ import {
   getPlanChoice,
   recordFreePlanChoice,
   coalesceKey,
+  GET_RESPONSE_REUSE_MS,
   getUsageNudges,
+  readRecentGets,
   getAccountGatewayUsageSearch,
   getAccountGatewayUsageSummary,
   getAccountRuntimeSessionActivityTimeline,
@@ -563,6 +565,97 @@ describe('api', () => {
 
       // A coalescer, not a cache: nothing is remembered after a response
       // lands, so nobody can read a stale body.
+      expect(fetchStub.callCount).to.equal(2);
+    });
+
+    it('reuses a finished GET for a short window when the caller opts in', async () => {
+      // The second Overview read starts after the first has settled, so
+      // in-flight dedupe has already forgotten it. A websocket refresh
+      // opts into the short window; an ordinary caller does not.
+      const clock = sinon.useFakeTimers({ now: 10_000, toFake: ['Date'] });
+      try {
+        fetchStub.resolves(
+          new Response(JSON.stringify({ users: [{ id: 'user-1' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        );
+        const url = '/api/v1/users?skip=0&limit=100';
+
+        const first = await fetchWithAuth(url);
+        const second = await readRecentGets(() => fetchWithAuth(url));
+
+        expect(
+          fetchStub.callCount,
+          'one network request inside the window'
+        ).to.equal(1);
+        expect(await first.json()).to.eql({ users: [{ id: 'user-1' }] });
+        expect(await second.json()).to.eql({ users: [{ id: 'user-1' }] });
+
+        await fetchWithAuth(url);
+        expect(
+          fetchStub.callCount,
+          'a caller outside the helper does not reuse'
+        ).to.equal(2);
+
+        const passiveUrl = '/api/v1/roles?skip=0&limit=100';
+        await fetchWithAuth(passiveUrl, { passive: true });
+        await readRecentGets(() => fetchWithAuth(passiveUrl));
+        expect(
+          fetchStub.callCount,
+          'an active read does not take a passive body'
+        ).to.equal(4);
+        await readRecentGets(() =>
+          fetchWithAuth(passiveUrl, { passive: true })
+        );
+        expect(
+          fetchStub.callCount,
+          'a passive read reuses the passive body'
+        ).to.equal(4);
+
+        clock.tick(GET_RESPONSE_REUSE_MS);
+        await readRecentGets(() => fetchWithAuth(url));
+        expect(fetchStub.callCount, 'the window has closed').to.equal(5);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it('drops a reused GET after a write or a cache reset', async () => {
+      fetchStub.resolves(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+      const url = '/api/v1/teams?skip=0&limit=100';
+
+      await fetchWithAuth(url);
+      await fetchWithAuth(url, { method: 'POST', body: '{}' });
+      await readRecentGets(() => fetchWithAuth(url));
+      expect(fetchStub.callCount, 'a write ends the reuse window').to.equal(3);
+
+      await readRecentGets(() => fetchWithAuth(url));
+      expect(fetchStub.callCount, 'still inside the window').to.equal(3);
+      invalidateApiCaches();
+      await readRecentGets(() => fetchWithAuth(url));
+      expect(fetchStub.callCount, 'sign-out drops the reused body').to.equal(4);
+    });
+
+    it('does not reuse an error response', async () => {
+      fetchStub.onCall(0).resolves(new Response('no', { status: 500 }));
+      fetchStub.onCall(1).resolves(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+
+      const failed = await fetchWithAuth('/api/v1/agents');
+      const again = await readRecentGets(() => fetchWithAuth('/api/v1/agents'));
+
+      expect(failed.status).to.equal(500);
+      expect(again.status).to.equal(200);
       expect(fetchStub.callCount).to.equal(2);
     });
 

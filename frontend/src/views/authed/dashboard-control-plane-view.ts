@@ -58,8 +58,10 @@ import {
   getFeatures,
   getUserProfile,
   hasPermission,
+  readRecentGets,
   type UserPermissions,
 } from '../../api';
+import { holdKillSwitchPoll } from '../../services/kill-switch-store';
 import '../../components/preloop-invite-dialog';
 import '../../components/preloop-flow-form';
 import '../../components/add-ai-model-modal';
@@ -216,7 +218,19 @@ const REALTIME_DEBOUNCE_MS = 250;
  * published once per model call, so without a floor a single busy agent is a
  * refresh loop.
  */
-const REALTIME_TOPIC_INTERVAL_MS = 10000;
+export const REALTIME_TOPIC_INTERVAL_MS = 10000;
+
+/**
+ * Topics a full Overview load already answered. A websocket refresh of one
+ * of these, queued while that load was in flight, is the same GET again.
+ */
+const LOAD_COVERED_TOPIC_KEYS = [
+  'gateway',
+  'fleet',
+  'budget',
+  'approvals',
+  'flows',
+] as const;
 
 /** How often the expensive background reads run while the tab is visible. */
 const BACKGROUND_REFRESH_MS = 60000;
@@ -511,6 +525,12 @@ export class DashboardView extends AuthedElement {
   private refreshTimers: Record<string, number> = {};
   /** When each topic key last ran, for its 10s floor. */
   private lastTopicRefresh: Record<string, number> = {};
+  /**
+   * The next flush of queued topic refreshes should reuse responses the
+   * load just stored. Set when a slow load arms the floor, cleared by the
+   * flush so a later event still reads the network.
+   */
+  private reuseTrailingRefreshes = false;
   private backgroundTimer: number | null = null;
   /** The budget fetch, for the parts of the page that do need to wait on it. */
   private budgetReady: Promise<void> = Promise.resolve();
@@ -2045,7 +2065,33 @@ export class DashboardView extends AuthedElement {
     }, delay);
   }
 
+  /**
+   * Start the topic floor when a slow load's data is finally in hand.
+   *
+   * Measuring the floor from the start of the load does not help. Audit
+   * overview holds the load open for longer than {@link
+   * REALTIME_TOPIC_INTERVAL_MS}, so the floor has expired by the time the
+   * load ends and every queued topic refresh fires at the debounce. Those
+   * second GETs start after the first has finished, which in-flight dedupe
+   * cannot collapse. Stamping the floor at the end coalesces that wave
+   * into one refresh per topic after the interval, outside the cold load.
+   * The refresh also reuses a response that is still inside the short TTL,
+   * for the case where it does start before that window closes.
+   */
+  private armTopicFloorAfterLongLoad(): void {
+    if (Date.now() - this.lastFetchStartedAt < REALTIME_TOPIC_INTERVAL_MS) {
+      return;
+    }
+    const now = Date.now();
+    for (const key of LOAD_COVERED_TOPIC_KEYS) {
+      this.lastTopicRefresh[key] = now;
+    }
+    this.reuseTrailingRefreshes = true;
+  }
+
   private flushPendingTopicRefreshes(): void {
+    const reuseStoredResponses = this.reuseTrailingRefreshes;
+    this.reuseTrailingRefreshes = false;
     if (!this.isConnected) {
       this.pendingTopicRefreshes.clear();
       this.queuedDashboardRefresh = null;
@@ -2063,7 +2109,12 @@ export class DashboardView extends AuthedElement {
     }
     const pending = [...this.pendingTopicRefreshes];
     this.pendingTopicRefreshes.clear();
-    for (const [key, run] of pending) this.scheduleTopicRefresh(key, run);
+    for (const [key, run] of pending) {
+      this.scheduleTopicRefresh(
+        key,
+        reuseStoredResponses ? () => readRecentGets(run) : run
+      );
+    }
   }
 
   /** What a gateway call can change: the totals, the deltas, the failures. */
@@ -2443,8 +2494,12 @@ export class DashboardView extends AuthedElement {
       return;
     }
     this.refreshInFlight = true;
+    // The banner poll is 15s. Held for this load so it does not issue a
+    // second kill-switch read while the cold Overview is still in flight.
+    const releaseKillSwitchPoll = holdKillSwitchPoll();
     const generation = ++this.dashboardLoadGeneration;
     this.lastFetchStartedAt = Date.now();
+    let loadCoveredTopics = false;
     markOverviewTiming('overview-fetch-start');
 
     // Both the sessions figure (this wave) and the audit figure (the
@@ -2653,6 +2708,10 @@ export class DashboardView extends AuthedElement {
         features: featuresRes,
       });
       this.scheduleCacheWrite();
+      // The fold has the gateway, fleet and budget reads. Deferred work
+      // (audit overview) is what holds a cold load open past the topic
+      // floor; the floor is armed from here even if that read fails.
+      loadCoveredTopics = true;
 
       await this.fetchDeferredData(startDateStr, {
         // A range change reloads what the range changes; the flows, the
@@ -2684,6 +2743,8 @@ export class DashboardView extends AuthedElement {
       this.fetchingAuditTrail = false;
       this.loading = false;
     } finally {
+      if (loadCoveredTopics) this.armTopicFloorAfterLongLoad();
+      releaseKillSwitchPoll();
       this.refreshInFlight = false;
       this.flushPendingTopicRefreshes();
     }

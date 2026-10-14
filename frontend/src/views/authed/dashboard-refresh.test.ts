@@ -1,7 +1,10 @@
 import { expect } from '@open-wc/testing';
 import sinon from 'sinon';
 import './dashboard-control-plane-view';
-import type { DashboardView } from './dashboard-control-plane-view';
+import {
+  REALTIME_TOPIC_INTERVAL_MS,
+  type DashboardView,
+} from './dashboard-control-plane-view';
 
 describe('Overview refresh backpressure', () => {
   let clock: sinon.SinonFakeTimers;
@@ -24,11 +27,46 @@ describe('Overview refresh backpressure', () => {
     element['scheduleTopicRefresh']('fleet', run);
     await clock.tickAsync(1000);
     element['refreshInFlight'] = false;
+    // A load this short has not outlived the topic floor, so arming it
+    // must not push the queued refresh out to a fresh interval.
+    element['armTopicFloorAfterLongLoad']();
     element['flushPendingTopicRefreshes']();
     await clock.tickAsync(3999);
     expect(run.called).to.equal(false);
     await clock.tickAsync(1);
     expect(run.calledOnce).to.equal(true);
+  });
+
+  it('coalesces trailing refreshes after a load that outlasted the topic floor', async () => {
+    // The cold-load case: audit overview holds the page open for longer
+    // than the floor, websocket events queue one refresh per topic, and
+    // the load then ends. Those refreshes must not start on the debounce.
+    // They do not overlap the load's own GETs, so in-flight dedupe cannot
+    // collapse them.
+    element['refreshInFlight'] = true;
+    element['lastFetchStartedAt'] = Date.now() - 23_000;
+    const gateway = sinon.stub().resolves();
+    const fleet = sinon.stub().resolves();
+    const budget = sinon.stub().resolves();
+    element['scheduleTopicRefresh']('gateway', gateway);
+    element['scheduleTopicRefresh']('gateway', gateway);
+    element['scheduleTopicRefresh']('fleet', fleet);
+    element['scheduleTopicRefresh']('budget', budget);
+    element['armTopicFloorAfterLongLoad']();
+    element['refreshInFlight'] = false;
+    element['flushPendingTopicRefreshes']();
+
+    await clock.tickAsync(REALTIME_TOPIC_INTERVAL_MS - 1);
+    expect(gateway.called, 'gateway refresh stayed behind the floor').to.equal(
+      false
+    );
+    expect(fleet.called).to.equal(false);
+    expect(budget.called).to.equal(false);
+
+    await clock.tickAsync(1);
+    expect(gateway.calledOnce, 'one coalesced gateway refresh').to.equal(true);
+    expect(fleet.calledOnce).to.equal(true);
+    expect(budget.calledOnce).to.equal(true);
   });
 
   it('does not launch realtime requests during a slow initial load', async () => {

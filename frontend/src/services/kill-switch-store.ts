@@ -28,6 +28,13 @@ let readAt = 0;
 let lastFailed = false;
 let inflight: Promise<KillSwitchStatus | null> | null = null;
 let pollTimer: number | undefined;
+/**
+ * Pages that are still on their first read. The interval skips a turn
+ * while this is above zero so a slow Overview does not ask for
+ * kill-switch status again in the middle of that load. The initial read
+ * still happens; the next poll is the following interval.
+ */
+let pollHoldCount = 0;
 /** Bumped by a reset so a read from before it cannot land after it. */
 let epoch = 0;
 const listeners = new Set<KillSwitchListener>();
@@ -91,6 +98,24 @@ export function getKillSwitchSnapshot(): KillSwitchStatus | null {
  * Listen for the halt state. The first listener starts the shared poll and
  * the last one to leave stops it. A hidden tab skips its turn.
  */
+/**
+ * Hold the shared poll until `release`.
+ *
+ * The banner's interval is 15s. A cold Overview whose audit read takes
+ * longer than that used to fire the poll inside the load, which is a
+ * second `GET /account/kill-switch/status` for data the page already has.
+ * The pairs do not overlap, so in-flight dedupe does not collapse them.
+ */
+export function holdKillSwitchPoll(): () => void {
+  pollHoldCount += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pollHoldCount = Math.max(0, pollHoldCount - 1);
+  };
+}
+
 export function subscribeKillSwitch(listener: KillSwitchListener): () => void {
   listeners.add(listener);
   if (status) listener(status, lastFailed);
@@ -101,6 +126,10 @@ export function subscribeKillSwitch(listener: KillSwitchListener): () => void {
         document.visibilityState === 'hidden'
       )
         return;
+      // A held poll is not late news. Skipping the turn leaves the last
+      // read on screen until the interval comes round again, after the
+      // load that asked for it has finished.
+      if (pollHoldCount > 0) return;
       void refreshKillSwitch({ force: true });
     }, KILL_SWITCH_POLL_MS);
   }
@@ -120,6 +149,7 @@ export function resetKillSwitchStore(): void {
   readAt = 0;
   lastFailed = false;
   inflight = null;
+  pollHoldCount = 0;
   epoch += 1;
 }
 
