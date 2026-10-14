@@ -9,11 +9,12 @@ import json
 import threading
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine, event, func, or_, select
+from sqlalchemy.orm import ORMExecuteState, Session
+from sqlalchemy.sql.dml import Delete
 
 from preloop.models import models
 from preloop.models.db.session import get_engine
@@ -83,11 +84,17 @@ def policy_section(db: Session, account_id: UUID) -> dict[str, Any]:
 
 
 def _references(
-    db: Session, definition: AccessRuleDefinition, account: models.Account
+    db: Session,
+    definition: AccessRuleDefinition,
+    account: models.Account,
+    *,
+    resource_ids_validated: bool = False,
 ) -> AccessRuleDefinition:
     value = definition.model_dump(mode="json", by_alias=True)
     accounts = list(account.hierarchy_path or [account.id])
     for field, model in (("teams", models.Team), ("roles", models.Role)):
+        if not value["subject_selector"][field]:
+            continue
         scope = model.account_id.in_(accounts)
         if field == "roles":
             scope = or_(scope, model.account_id.is_(None))
@@ -124,24 +131,46 @@ def _references(
         )
         if found != set(selector.ids):
             raise AccessReferenceError("subject_selector.ids", "invalid subject IDs")
-    for resource_id in definition.resource_selector.ids:
-        _resource(db, account.id, definition.resource_type, resource_id)
+    if not resource_ids_validated:
+        _resources(
+            db, account.id, definition.resource_type, definition.resource_selector.ids
+        )
     return AccessRuleDefinition.model_validate(value)
+
+
+def _resources(
+    db: Session, account_id: UUID, resource_type: str | None, resource_ids: list[UUID]
+) -> None:
+    """Validate a type's exact references with one owner-scoped IN query."""
+    if not resource_ids:
+        return
+    model = RESOURCE_MODELS.get(resource_type) if resource_type is not None else None
+    if model is None:
+        raise AccessReferenceError("resource_type", str(resource_type))
+    owner = model.id if resource_type == "account" else model.account_id
+    found = set(
+        db.scalars(
+            select(model.id).where(model.id.in_(resource_ids), owner == account_id)
+        )
+    )
+    if found != set(resource_ids):
+        raise AccessReferenceError("resource_selector.ids", "invalid resource IDs")
 
 
 def _resource(
     db: Session, account_id: UUID, resource_type: str | None, resource_id: UUID
 ) -> None:
-    """Resolve exact owner-local identity without exposing foreign resources."""
-    model = RESOURCE_MODELS.get(resource_type) if resource_type is not None else None
-    if model is None:
-        raise AccessReferenceError("resource_type", str(resource_type))
-    owner = model.id if resource_type == "account" else model.account_id
-    if (
-        db.scalar(select(model.id).where(model.id == resource_id, owner == account_id))
-        is None
-    ):
-        raise AccessReferenceError("resource_selector.ids", str(resource_id))
+    _resources(db, account_id, resource_type, [resource_id])
+
+
+def _validate_resource_references(
+    db: Session, account_id: UUID, rules: list[AccessRuleDefinition]
+) -> None:
+    grouped: dict[str | None, set[UUID]] = defaultdict(set)
+    for rule in rules:
+        grouped[rule.resource_type].update(rule.resource_selector.ids)
+    for resource_type, ids in grouped.items():
+        _resources(db, account_id, resource_type, list(ids))
 
 
 def _policies(account: models.Account) -> list[ResourceAccessPolicy]:
@@ -470,7 +499,11 @@ class CRUDAccessRule:
             before = _document(db, account, resource_type, resource_id)
             if before.version != expected_version:
                 raise AccessRuleConflictError("resource access document changed")
-            rules = [_references(db, rule, account) for rule in document.rules]
+            _validate_resource_references(db, account_id, document.rules)
+            rules = [
+                _references(db, rule, account, resource_ids_validated=True)
+                for rule in document.rules
+            ]
             ids = [rule.id for rule in rules if rule.id is not None]
             if len(ids) != len(rules) or len(ids) != len(set(ids)):
                 raise AccessRuleConflictError(
@@ -1022,7 +1055,11 @@ def validate_policy_section(
         raise AccessRuleConflictError(
             "require_permit requires the access mode explain preview endpoint"
         )
-    validated = [_references(db, definition, account) for definition in rules or []]
+    _validate_resource_references(db, account_id, rules or [])
+    validated = [
+        _references(db, definition, account, resource_ids_validated=True)
+        for definition in rules or []
+    ]
     identities = [str(rule.id) for rule in validated if rule.id]
     names = [rule.name for rule in validated]
     if len(identities) != len(set(identities)) or len(names) != len(set(names)):
@@ -1143,3 +1180,145 @@ def apply_policy_section(
         ]
         account.meta_data = metadata
     _record_change(db, account_id, user_id, "access_rules_imported", {})
+
+
+# Keep deleted identities and their local documents in the same transaction.
+# Registration is unconditional through models.crud, including OSS processes and
+# fresh workers that have not loaded an evaluator or read a resource document.
+_DELETED_RESOURCES = "access_rule_deleted_resources"
+
+
+def _collect_deleted_resources(db: Session, *_: Any) -> None:
+    for row in db.deleted:
+        for kind, model in RESOURCE_MODELS.items():
+            if (
+                kind != "account"
+                and isinstance(row, model)
+                and row.account_id is not None
+            ):
+                db.info.setdefault(_DELETED_RESOURCES, set()).add(
+                    (row.account_id, kind, row.id)
+                )
+
+
+def _collect_bulk_deleted_resources(state: ORMExecuteState) -> None:
+    if not state.is_delete or state.bind_mapper is None:
+        return
+    for kind, model in RESOURCE_MODELS.items():
+        if kind == "account" or state.bind_mapper.class_ is not model:
+            continue
+        query = select(model.account_id, model.id)
+        statement = cast(Delete, state.statement)
+        if statement.whereclause is not None:
+            query = query.where(statement.whereclause)
+        with state.session.no_autoflush:
+            for owner, resource_id in state.session.execute(query):
+                if owner is not None:
+                    state.session.info.setdefault(_DELETED_RESOURCES, set()).add(
+                        (owner, kind, resource_id)
+                    )
+
+
+def _cleanup_deleted_resources(db: Session) -> None:
+    if db.in_nested_transaction():
+        return  # The outer commit owns cleanup; a savepoint may still roll back.
+    db.flush()  # Collect ORM deletes even when the caller commits without flushing.
+    targets = db.info.pop(_DELETED_RESOURCES, set())
+    grouped: dict[UUID, dict[str, set[UUID]]] = defaultdict(lambda: defaultdict(set))
+    for owner, kind, resource_id in targets:
+        grouped[owner][kind].add(resource_id)
+    for owner in sorted(grouped, key=str):
+        account = db.scalar(
+            select(models.Account)
+            .where(models.Account.id == owner)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if account is None:
+            continue  # The owning account itself was deleted.
+        candidates = grouped[owner]
+        metadata = dict(account.meta_data or {})
+        before = metadata.get("resource_access", [])
+        rows = list(
+            db.scalars(
+                select(models.AccessRule).where(models.AccessRule.account_id == owner)
+            )
+        )
+        for item in before:
+            candidates[item["resource_type"]].add(UUID(item["resource_id"]))
+        for row in rows:
+            if row.resource_type is None:
+                continue
+            candidates[row.resource_type].update(
+                UUID(key) for key in (row.resource_selector or {}).get("ids", [])
+            )
+        removed: dict[str, set[UUID]] = {}
+        for kind, ids in candidates.items():
+            if not ids:
+                continue
+            model = RESOURCE_MODELS[kind]
+            owner_column = model.id if kind == "account" else model.account_id
+            found = set(
+                db.scalars(
+                    select(model.id).where(model.id.in_(ids), owner_column == owner)
+                )
+            )
+            missing = ids - found
+            if missing:
+                removed[kind] = missing
+        retained = [
+            item
+            for item in before
+            if UUID(item["resource_id"])
+            not in removed.get(item["resource_type"], set())
+        ]
+        changed = len(retained) != len(before)
+        if changed:
+            metadata["resource_access"] = retained
+            account.meta_data = metadata
+        for row in rows:
+            selector = dict(row.resource_selector or {})
+            ids = selector.get("ids", [])
+            remaining = [
+                key
+                for key in ids
+                if UUID(key) not in removed.get(row.resource_type or "", set())
+            ]
+            if len(remaining) == len(ids):
+                continue
+            changed = True
+            if remaining:
+                selector["ids"] = remaining
+                row.resource_selector = selector
+                row.version += 1
+            else:
+                # Never turn an emptied exact-ID selector into a broad permit.
+                db.delete(row)
+        if changed:
+            _record_change(
+                db,
+                owner,
+                None,
+                "resource_access_target_deleted",
+                {
+                    "resources": [
+                        {"resource_type": kind, "resource_id": str(key)}
+                        for kind, ids in sorted(removed.items())
+                        for key in sorted(ids, key=str)
+                    ]
+                },
+                resource_type="resource_access",
+            )
+
+
+def _clear_deleted_resources(db: Session, transaction: Any) -> None:
+    # Preserve outer deletes across a rolled-back savepoint. The cleanup also
+    # rechecks existence so rolled-back inner deletions cannot prune live gates.
+    if transaction.parent is None:
+        db.info.pop(_DELETED_RESOURCES, None)
+
+
+event.listen(Session, "before_flush", _collect_deleted_resources)
+event.listen(Session, "do_orm_execute", _collect_bulk_deleted_resources)
+event.listen(Session, "before_commit", _cleanup_deleted_resources)
+event.listen(Session, "after_soft_rollback", _clear_deleted_resources)

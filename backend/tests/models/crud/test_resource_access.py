@@ -634,3 +634,289 @@ def test_concurrent_resource_writers_only_one_generation_can_commit(
     )
     assert saved.version == 1 and len(saved.rules) == 1
     assert saved.requirements[0].permit_rule_ids == [saved.rules[0].id]
+
+
+@pytest.mark.parametrize("delete_kind", ["crud", "bulk"])
+def test_deleted_target_cleanup_is_atomic_and_preserves_other_resources(
+    resource: Any, delete_kind: str
+) -> None:
+    from sqlalchemy import delete
+    from preloop.models.crud import crud_ai_model
+
+    crud, owners, ids = resource
+    account, user = owners[0]
+    local = save(resource, update(local_rule(ids[0])))
+    with crud.session() as db, db.begin():
+        other = models.AIModel(
+            account_id=account,
+            name="Other model",
+            provider_name="example",
+            model_identifier="other",
+        )
+        db.add(other)
+        db.flush()
+        other_id = other.id
+        row = db.get(models.Account, account)
+        row.meta_data = {**row.meta_data, "unrelated_setting": "preserved"}
+    singleton = crud.write(
+        account_id=account,
+        user_id=user,
+        definition=local_rule(ids[0], name="Ordinary singleton"),
+    )
+    multiple = crud.write(
+        account_id=account,
+        user_id=user,
+        definition=local_rule(
+            ids[0],
+            name="Ordinary multiple",
+            resource_selector={"ids": [str(ids[0]), str(other_id)]},
+        ),
+    )
+    try:
+        with crud.session() as db:
+            if delete_kind == "crud":
+                crud_ai_model.remove(db, id=ids[0])
+            else:
+                db.execute(delete(models.AIModel).where(models.AIModel.id == ids[0]))
+                db.commit()
+        rules = crud.rules(account_id=account)
+        assert [row["id"] for row in rules] == [multiple["id"]]
+        assert rules[0]["resource_selector"]["ids"] == [str(other_id)]
+        assert rules[0]["version"] == 2
+        assert singleton["id"] != local.rules[0].id
+        with crud.session() as db, db.begin():
+            owner = db.get(models.Account, account)
+            assert owner.meta_data["resource_access"] == []
+            assert owner.meta_data["unrelated_setting"] == "preserved"
+            exported = export_current_policy(db, account)
+            apply_policy_section(
+                db,
+                account,
+                user,
+                exported.access_rules,
+                exported.access_rule_mode,
+                exported.resource_access,
+            )
+        # A deleted resource no longer blocks unrelated edits or policy roundtrips.
+        changed = crud.write_resource_access(
+            account_id=account,
+            user_id=user,
+            resource_type="ai_model",
+            resource_id=other_id,
+            document=update(local_rule(other_id, name="Other local permit")),
+            expected_version=0,
+            expected_generation=crud.generation(account_id=account),
+            losing_subjects=[],
+        )
+        assert changed.version == 1
+        assert all(
+            item["resource_id"] != str(ids[0])
+            for item in crud.bundle(account_id=account)["resource_access"]
+        )
+    finally:
+        with crud.session() as db, db.begin():
+            db.delete(db.get(models.AIModel, other_id))
+
+
+def test_target_deletion_rollback_preserves_gate_and_generation(resource: Any) -> None:
+    crud, owners, ids = resource
+    account, _ = owners[0]
+    saved = save(resource, update(local_rule(ids[0])))
+    with crud.session() as db:
+        db.delete(db.get(models.AIModel, ids[0]))
+        db.flush()
+        db.rollback()
+        db.commit()  # A later commit cannot replay cleanup for the rolled-back delete.
+    assert (
+        crud.resource_access(
+            account_id=account, resource_type="ai_model", resource_id=ids[0]
+        )
+        == saved
+    )
+
+
+def test_cleanup_failure_rolls_back_target_deletion_and_local_gate(
+    resource: Any, monkeypatch: Any
+) -> None:
+    import preloop.models.crud.access_rule as module
+
+    crud, owners, ids = resource
+    account, _ = owners[0]
+    saved = save(resource, update(local_rule(ids[0])))
+    original = module._record_change
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        original(*args, **kwargs)
+        raise RuntimeError("Synthetic cleanup failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_record_change", fail)
+        with crud.session() as db:
+            db.delete(db.get(models.AIModel, ids[0]))
+            with pytest.raises(RuntimeError, match="cleanup failure"):
+                db.commit()
+            db.rollback()
+    assert (
+        crud.resource_access(
+            account_id=account, resource_type="ai_model", resource_id=ids[0]
+        )
+        == saved
+    )
+
+
+def test_resource_reference_validation_batches_ids_across_import_rules(
+    resource: Any,
+) -> None:
+    from sqlalchemy import event
+
+    crud, owners, ids = resource
+    account, _ = owners[0]
+    resource_selects = []
+
+    def executed(
+        connection: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if "FROM ai_model" in statement:
+            resource_selects.append(statement)
+
+    event.listen(crud.engine, "before_cursor_execute", executed)
+    try:
+        with crud.session() as db:
+            validate_policy_section(
+                db,
+                account,
+                [local_rule(ids[0], name=f"Batch rule {index}") for index in range(25)],
+                None,
+            )
+    finally:
+        event.remove(crud.engine, "before_cursor_execute", executed)
+    assert len(resource_selects) == 1
+
+
+def test_yaml_can_restore_inheritance_without_turning_local_permits_into_account_grants(
+    resource: Any,
+) -> None:
+    crud, owners, ids = resource
+    account, user = owners[0]
+    saved = save(resource, update(local_rule(ids[0])))
+    with crud.session() as db, db.begin():
+        exported = export_current_policy(db, account)
+        inherited = exported.resource_access[0].model_copy(update={"requirements": []})
+        apply_policy_section(
+            db, account, user, exported.access_rules, None, [inherited]
+        )
+    current = crud.resource_access(
+        account_id=account, resource_type="ai_model", resource_id=ids[0]
+    )
+    assert current.requirements == [] and current.rules == saved.rules
+    bundle = crud.bundle(account_id=account)
+    assert bundle["rules"] == []
+    assert [row["id"] for row in bundle["resource_access_rules"]] == [saved.rules[0].id]
+
+
+def test_cascading_resource_delete_cleans_child_resource_gates(resource: Any) -> None:
+    from sqlalchemy import delete
+
+    crud, owners, _ = resource
+    account, user = owners[0]
+    with crud.session() as db, db.begin():
+        server = models.MCPServer(
+            account_id=account,
+            name="Example server",
+            url="https://example.com/mcp",
+            transport="http-streaming",
+        )
+        db.add(server)
+        db.flush()
+        tool = models.ToolConfiguration(
+            account_id=account,
+            mcp_server_id=server.id,
+            tool_name="example_tool",
+            tool_source="mcp",
+        )
+        db.add(tool)
+        db.flush()
+        server_id, tool_id = server.id, tool.id
+    rule = local_rule(
+        tool_id,
+        name="Example tool gate",
+        resource_type="mcp_tool",
+        actions=["tool:call"],
+    )
+    crud.write_resource_access(
+        account_id=account,
+        user_id=user,
+        resource_type="mcp_tool",
+        resource_id=tool_id,
+        document=ResourceAccessUpdate(
+            rules=[rule],
+            requirements=[
+                ResourceAccessRequirement(action="tool:call", permit_rule_ids=[rule.id])
+            ],
+        ),
+        expected_version=0,
+        expected_generation=crud.generation(account_id=account),
+        losing_subjects=[],
+    )
+    with crud.session() as db, db.begin():
+        db.execute(delete(models.MCPServer).where(models.MCPServer.id == server_id))
+    with crud.session() as db:
+        assert db.get(models.ToolConfiguration, tool_id) is None
+        assert db.get(models.Account, account).meta_data["resource_access"] == []
+    assert crud.rules(account_id=account) == []
+
+
+def test_savepoint_rollback_preserves_live_gate_but_cleans_outer_deleted_target(
+    resource: Any,
+) -> None:
+    crud, owners, ids = resource
+    account, user = owners[0]
+    save(resource, update(local_rule(ids[0])))
+    with crud.session() as db, db.begin():
+        other = models.AIModel(
+            account_id=account,
+            name="Savepoint model",
+            provider_name="example",
+            model_identifier="savepoint",
+        )
+        db.add(other)
+        db.flush()
+        other_id = other.id
+    other_saved = crud.write_resource_access(
+        account_id=account,
+        user_id=user,
+        resource_type="ai_model",
+        resource_id=other_id,
+        document=update(local_rule(other_id)),
+        expected_version=0,
+        expected_generation=crud.generation(account_id=account),
+        losing_subjects=[],
+    )
+    try:
+        with crud.session() as db, db.begin():
+            db.delete(db.get(models.AIModel, ids[0]))
+            db.flush()
+            nested = db.begin_nested()
+            db.delete(db.get(models.AIModel, other_id))
+            db.flush()
+            nested.rollback()
+        current = crud.resource_access(
+            account_id=account, resource_type="ai_model", resource_id=other_id
+        )
+        assert (
+            current.rules == other_saved.rules
+            and current.requirements == other_saved.requirements
+        )
+        with crud.session() as db:
+            metadata = db.get(models.Account, account).meta_data
+            assert [item["resource_id"] for item in metadata["resource_access"]] == [
+                str(other_id)
+            ]
+    finally:
+        with crud.session() as db, db.begin():
+            db.delete(db.get(models.AIModel, other_id))

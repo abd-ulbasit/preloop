@@ -93,8 +93,19 @@ ceilings still apply separately. Core ships storage and validation only; it
 does not advertise usable resource restrictions or install an evaluator.
 
 Requirements round-trip through export, snapshots and policy diffs. YAML cannot
-activate or change requirements, or edit permits supporting an active local
-gate: use the validated preview/application path. Omitted `resource_access`
+activate or tighten requirements, change the designated links of an active gate,
+or edit permits supporting an active local gate: use the validated
+preview/application path. YAML may remove a requirement to restore inheritance;
+retaining a document's local permits after that removal does not leave a gate.
+Removing a whole document requires removing its managed permits too. Omitted `resource_access`
 preserves bindings; removing a document must also remove its managed permits,
 and replacing rules cannot leave dangling bindings. Metadata and rule triggers
 invalidate generations only on commit; rollback preserves the previous bundle.
+
+Resource deletion cleanup is registered by the core CRUD package for ORM and
+bulk ORM deletes. Before commit it removes the deleted typed resource's local
+document and exact permits, snapshots/audits the cleanup, and removes deleted
+IDs from ordinary multi-ID rules (deleting a rule when its last ID disappears).
+Cleanup shares the deletion transaction and rolls back with it; it never turns
+an emptied selector into a broad permit or leaves stale restrictions blocking
+unrelated resource edits and policy roundtrips.

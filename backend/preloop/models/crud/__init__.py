@@ -45,6 +45,7 @@ from . import restricted_runtime as crud_restricted_runtime
 from . import notification_preferences
 from . import runtime_session_artifact as crud_runtime_session_artifact
 from . import tool_approval_condition
+from .access_rule import crud_access_rule
 from .account import CRUDAccount
 from .account_halt import CRUDAccountHalt, crud_account_halt
 from .account_milestone import CRUDAccountMilestone, crud_account_milestone
@@ -441,6 +442,7 @@ __all__ = [
     "get_active_bypass_async",
     "record_bypass_use_async",
     "crud_tool_access_rule",
+    "crud_access_rule",
     "plan",
     "subscription",
     "monthly_usage",
