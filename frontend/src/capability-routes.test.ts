@@ -94,6 +94,20 @@ describe('capability routes', () => {
     expect(isCapabilityPath('/console/settings/chat')).to.equal(true);
   });
 
+  it('gates provider inference hooks on their own capability', () => {
+    expect(
+      capabilityRoutesFor(caps('anthropic_inference_hooks')).map((r) => r.path)
+    ).to.eql(['settings/inference-hooks']);
+    expect(
+      capabilityRoutesFor(caps('chat_connections')).some(
+        (r) => r.path === 'settings/inference-hooks'
+      )
+    ).to.equal(false);
+    expect(isCapabilityPath('/console/settings/inference-hooks')).to.equal(
+      true
+    );
+  });
+
   it('recognises gated paths for deep links', () => {
     expect(isCapabilityPath('/console/settings/subaccounts')).to.equal(true);
     expect(isCapabilityPath('/console/shared/ai_model/m-1')).to.equal(true);

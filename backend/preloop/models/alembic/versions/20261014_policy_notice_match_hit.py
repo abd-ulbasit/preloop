@@ -1,7 +1,7 @@
 """Store block and approval matches on policy_notice_hit.
 
 Revision ID: 20261014_policy_notice_match
-Revises: 20261014_tool_config_scope_nulls
+Revises: 20261014_expected_devices
 
 Notify matches were the only rows in ``policy_notice_hit``. Deny and
 require_approval matches were audit rows only, so a summary could not
@@ -19,7 +19,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "20261014_policy_notice_match"
-down_revision: Union[str, None] = "20261014_tool_config_scope_nulls"
+down_revision: Union[str, None] = "20261014_expected_devices"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

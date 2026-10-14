@@ -861,8 +861,10 @@ func init() {
 	agentsDiscoverCmd.Flags().BoolP("yes", "y", false, "auto-approve interactive onboarding prompts")
 	agentsDiscoverCmd.Flags().BoolP("force", "f", false, "alias for --yes")
 	agentsDiscoverCmd.Flags().Bool("skip-live-validate", false, "do not run a direct gateway route/accounting probe after onboarding")
+	agentsDiscoverCmd.Flags().String("device-ref", "", "opaque administrative device reference to hash for opt-in discovery reporting")
 	agentsDiscoverCmd.Flags().Bool("report", false, "opt in: send salted hashes of what was found to Preloop (also PRELOOP_DISCOVERY_REPORT=1); see docs/guide/agent-discovery-reporting.md")
 	_ = agentsDiscoverCmd.Flags().MarkDeprecated("add", "use 'preloop agents onboard [agent]'")
+	agentsEnrollCmd.Flags().Bool("no-credential-import", false, "refuse upstream credential import before any apply mutation")
 	agentsEnrollCmd.Flags().Bool("dry-run", false, "preview account and config changes without writing")
 	agentsEnrollCmd.Flags().BoolP("yes", "y", false, "skip the onboarding confirmation prompt")
 	agentsEnrollCmd.Flags().BoolP("force", "f", false, "alias for --yes")
@@ -909,6 +911,7 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 	autoApprove, _ := cmd.Flags().GetBool("yes")
 	skipLiveValidate, _ := cmd.Flags().GetBool("skip-live-validate")
 	report, _ := cmd.Flags().GetBool("report")
+	deviceRef, _ := cmd.Flags().GetString("device-ref")
 
 	if addServers {
 		return fmt.Errorf("discover is now read-only; use 'preloop agents onboard <agent>'")
@@ -937,7 +940,7 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 		if asJSON {
 			reportOut = os.Stderr
 		}
-		if err := sendDiscoveryReport(client, discovered, reportOut); err != nil {
+		if err := sendDiscoveryReport(client, discovered, reportOut, deviceRef); err != nil {
 			return err
 		}
 	}
@@ -1370,6 +1373,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 		return runClaudeDesktopModelRouteCmd(cmd, args)
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	noCredentialImport, _ := cmd.Flags().GetBool("no-credential-import")
 	autoApprove := isAutoApprove(cmd)
 	liveValidate, _ := cmd.Flags().GetBool("live-validate")
 	skipLiveValidate, _ := cmd.Flags().GetBool("skip-live-validate")
@@ -1398,6 +1402,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := managedEnrollmentOptions{
+		NoCredentialImport:  noCredentialImport,
 		DryRun:              dryRun,
 		AutoApprove:         autoApprove,
 		LiveValidate:        liveValidate,
@@ -5118,6 +5123,10 @@ func ensureLegacyCodexMCPServer(agent AgentConfig, doc map[string]interface{}, b
 }
 
 func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, publicURL string) (*remoteServerSyncResult, error) {
+	return ensureDiscoveredRemoteServersWithCustody(client, agent, publicURL, false)
+}
+
+func ensureDiscoveredRemoteServersWithCustody(client *api.Client, agent AgentConfig, publicURL string, noImport bool) (*remoteServerSyncResult, error) {
 	var existing []mcpServerResponse
 	if err := client.Get("/api/v1/mcp-servers", &existing); err != nil {
 		return nil, fmt.Errorf("failed to list MCP servers: %w", err)
@@ -5125,6 +5134,23 @@ func ensureDiscoveredRemoteServers(client *api.Client, agent AgentConfig, public
 	existingByName := make(map[string]mcpServerResponse, len(existing))
 	for _, item := range existing {
 		existingByName[item.Name] = item
+	}
+
+	// Recheck all credential-bearing registrations before creating any server.
+	// A reference that disappeared after preview must not become a local import.
+	if noImport {
+		for name, server := range agent.MCPServers {
+			request, _, _, ok := buildManagedRemoteServerRequest(name, server)
+			if !ok {
+				continue
+			}
+			if _, exists := existingByName[name]; exists {
+				continue
+			}
+			if remoteRequestImportsCredential(request) {
+				return nil, fmt.Errorf("--no-credential-import refused onboarding before apply: MCP credential reference is unavailable")
+			}
+		}
 	}
 
 	result := &remoteServerSyncResult{}

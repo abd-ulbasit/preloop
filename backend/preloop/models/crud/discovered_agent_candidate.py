@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+
 from ..models.discovered_agent_candidate import (
     CANDIDATE_STATUS_IGNORED,
     CANDIDATE_STATUS_NEW,
@@ -139,6 +140,9 @@ class CRUDDiscoveredAgentCandidate(CRUDBase[DiscoveredAgentCandidate]):
         Returns:
             One outcome per distinct candidate key, in input order.
         """
+        from .expected_device import crud_expected_device
+
+        crud_expected_device.lock_account(db, account_id=account_id)
         seen_at = now or utc_now_naive()
         outcomes: list[UpsertOutcome] = []
         seen_keys: set[tuple[str, str]] = set()
@@ -184,6 +188,14 @@ class CRUDDiscoveredAgentCandidate(CRUDBase[DiscoveredAgentCandidate]):
                 outcomes.append(
                     UpsertOutcome(candidate=candidate, created=bool(row.inserted))
                 )
+        # Receipt history includes empty and legacy candidate-only reports.
+        # It establishes reporting history, never collection completeness.
+        crud_expected_device.touch_last_reported_at(
+            db,
+            account_id=account_id,
+            device_ref_hash=workstation_fingerprint,
+            at=seen_at,
+        )
         return outcomes
 
     def list_for_account(

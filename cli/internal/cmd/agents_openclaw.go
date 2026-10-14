@@ -262,8 +262,9 @@ var openCodeDefaultEndpointByProvider = map[string]string{
 }
 
 type managedEnrollmentOptions struct {
-	Client *api.Client
-	DryRun bool
+	NoCredentialImport bool
+	Client             *api.Client
+	DryRun             bool
 	// AutoApprove skips interactive Y/n confirmations for the high-level
 	// onboarding decision (applies to the "Onboard X?" prompt in interactive
 	// flows). It does NOT control whether live validation runs — see
@@ -613,16 +614,21 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 	if staleEntries := detectStaleOpenClawPluginEntries(agent, plan.ManagedDocument); len(staleEntries) > 0 {
 		plan.Notes = append(plan.Notes, staleOpenClawPluginEntriesNote(staleEntries))
 	}
+	var plannedUpstream *managedGatewayUpstream
+	var plannedServerReuse bool
 	if managedGatewayEnabled {
 		upstream, upstreamErr := resolveManagedGatewayUpstreamWithHints(agent, gatewayHints)
 		if upstreamErr != nil {
 			return upstreamErr
 		}
-		upstream = applySelectedModelToUpstream(
+		upstream = enrollmentSelectedUpstream(
 			upstream,
 			gatewayHints.PreferredModelAlias,
 			gatewayHints.SelectedAIModel,
+			opts,
 		)
+		upstream = preferExistingGatewayCustody(client, agent, upstream)
+		plannedUpstream = upstream
 		if upstream != nil {
 			plan.Notes = append(plan.Notes, upstream.Notes...)
 		}
@@ -634,6 +640,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		planServerReuse := upstream != nil &&
 			!upstream.CanRouteThroughGateway() &&
 			serverHasReusableGatewayCredential(client, agent, upstream)
+		plannedServerReuse = planServerReuse
 		if planServerReuse {
 			plan.Notes = append(
 				plan.Notes,
@@ -684,13 +691,59 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		plan.Notes = append(plan.Notes, claudeDesktopRoutePlanNote(baseURL))
 	}
 
+	custody := []credentialCustody{gatewayCredentialCustody(plannedUpstream)}
+	if plannedServerReuse {
+		custody[0] = gatewayCredentialCustody(&managedGatewayUpstream{SourceAgent: "account-ai-model", CredentialType: plannedUpstream.CredentialType})
+	}
+	var plannedOpenClaw *openClawParsedConfig
+	if isOpenClawAgent(agent) && !selectedOpenClawModel {
+		plannedOpenClaw, err = parseOpenClawConfig(agent.ConfigPath)
+		if err != nil {
+			return err
+		}
+		if !opts.DryRun && !opts.NoCredentialImport && plannedOpenClaw.ProviderAPIKey == "" && !plannedOpenClaw.UsesAmbientAuth && !opts.SkipConfirmation && !opts.AutoApprove && !nonInteractiveAutoConfirm() {
+			key, promptErr := promptForTextInput(bufio.NewReader(input), output, "Enter OpenClaw API key (or leave blank to configure later in UI): ")
+			if promptErr != nil {
+				return fmt.Errorf("failed to read credential input")
+			}
+			plannedOpenClaw.ProviderAPIKey = strings.TrimSpace(key)
+		}
+		if plannedOpenClaw.ProviderAPIKey != "" && len(plannedOpenClaw.ConfiguredModels) == 0 {
+			custody = append(custody, gatewayCredentialCustody(&managedGatewayUpstream{APIKey: plannedOpenClaw.ProviderAPIKey}))
+		}
+		for _, model := range plannedOpenClaw.ConfiguredModels {
+			if model.ProviderAPIKey != "" {
+				custody = append(custody, gatewayCredentialCustody(&managedGatewayUpstream{APIKey: model.ProviderAPIKey}))
+			}
+		}
+	}
+	mcpCustody, custodyErr := remoteCredentialCustody(client, syncAgent)
+	if custodyErr != nil {
+		return custodyErr
+	}
+	custody = append(custody, mcpCustody...)
+	if len(custody) > 1 && custody[0].Kind == "none" {
+		custody = custody[1:]
+	}
+	printCredentialCustody(output, custody)
+	if err := validateCredentialCustody(custody, opts); err != nil {
+		return err
+	}
 	printEnrollmentPlan(plan, opts.DryRun)
 	if opts.DryRun {
 		fmt.Println("Dry run only: no local files or Preloop account state were changed.")
 		return nil
 	}
 
-	if !opts.SkipConfirmation && !opts.AutoApprove {
+	requiresCustodyConfirmation := false
+	for _, item := range custody {
+		if item.SubscriptionTransfer {
+			requiresCustodyConfirmation = true
+		}
+	}
+	// Discovery can already have confirmed a generic onboarding prompt. A
+	// subscription transfer still needs confirmation after its custody summary.
+	if (!opts.SkipConfirmation || requiresCustodyConfirmation) && !opts.AutoApprove {
 		confirmed, err := confirmActionDefaultYes(
 			input,
 			output,
@@ -720,7 +773,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		}
 	}
 
-	serverSync, err := ensureDiscoveredRemoteServers(client, syncAgent, baseURL)
+	serverSync, err := ensureDiscoveredRemoteServersWithCustody(client, syncAgent, baseURL, opts.NoCredentialImport)
 	if err != nil {
 		return err
 	}
@@ -767,23 +820,8 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 	var aiModelNotes []string
 	modelBindings := make([]managedAgentModelBindingSyncItem, 0)
 	if strings.EqualFold(strings.TrimSpace(agent.Name), "openclaw") && !selectedOpenClawModel {
-		parsed, err := parseOpenClawConfig(agent.ConfigPath)
-		if err != nil {
-			return err
-		}
-		if parsed.ProviderAPIKey == "" && !parsed.UsesAmbientAuth {
-			if !opts.SkipConfirmation && !opts.AutoApprove && !nonInteractiveAutoConfirm() {
-				fmt.Fprintf(opts.Output, "\n[Action Required] OpenClaw model %s requires an API key for gateway routing.\n", parsed.ModelAlias) //nolint:errcheck
-				inputKey, err := promptForTextInput(
-					bufio.NewReader(opts.Input),
-					opts.Output,
-					"Enter API key (or leave blank to configure later in UI): ",
-				)
-				if err == nil {
-					parsed.ProviderAPIKey = strings.TrimSpace(inputKey)
-				}
-			}
-		}
+		parsed := plannedOpenClaw
+		// The reviewed snapshot is the only source of imported credentials.
 
 		modelBindings, aiModelNotes, err = syncOpenClawAIModels(
 			client,
@@ -810,15 +848,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		return err
 	}
 	if managedGatewayEnabled {
-		upstream, upstreamErr := resolveManagedGatewayUpstreamWithHints(agent, gatewayHints)
-		if upstreamErr != nil {
-			return upstreamErr
-		}
-		upstream = applySelectedModelToUpstream(
-			upstream,
-			gatewayHints.PreferredModelAlias,
-			gatewayHints.SelectedAIModel,
-		)
+		upstream := plannedUpstream
 		if upstream != nil {
 			plan.Notes = append(plan.Notes, upstream.Notes...)
 		}
