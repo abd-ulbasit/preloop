@@ -150,77 +150,6 @@ let userProfileEpoch = 0;
 const inFlightGets = new Map<string, Promise<Response>>();
 
 /**
- * How long a finished GET may answer a caller that explicitly reuses it.
- *
- * In-flight dedupe only joins requests that overlap. The Overview's cold
- * load asks again after the first response has already landed (a trailing
- * websocket refresh, the banner poll), so the second call has nothing to
- * join. This window is that second call. It is not a cache for ordinary
- * reads: only {@link readRecentGets} consults it, a write drops it, and
- * sign-out drops it.
- */
-export const GET_RESPONSE_REUSE_MS = 2000;
-
-type RecentGet = {
-  response: Response;
-  storedAt: number;
-};
-
-const recentGets = new Map<string, RecentGet>();
-
-/** Callers inside {@link readRecentGets}. Ordinary reads leave this at 0. */
-let recentGetReaders = 0;
-
-function sweepRecentGets(now: number): void {
-  for (const [key, entry] of recentGets) {
-    if (now - entry.storedAt >= GET_RESPONSE_REUSE_MS) recentGets.delete(key);
-  }
-}
-
-function rememberRecentGet(key: string, response: Response): void {
-  const now = Date.now();
-  sweepRecentGets(now);
-  if (!response.ok) {
-    recentGets.delete(key);
-    return;
-  }
-  // The caller reads the original. Keep an unread clone, and skip the memo
-  // if this body was already consumed rather than failing that caller.
-  try {
-    recentGets.set(key, { response: response.clone(), storedAt: now });
-  } catch {
-    recentGets.delete(key);
-  }
-}
-
-function takeRecentGet(key: string): Response | null {
-  const entry = recentGets.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.storedAt >= GET_RESPONSE_REUSE_MS) {
-    recentGets.delete(key);
-    return null;
-  }
-  return entry.response.clone();
-}
-
-/**
- * Run `run` so its GETs reuse a successful response from the last
- * {@link GET_RESPONSE_REUSE_MS} instead of asking again.
- *
- * For a websocket refresh that starts after the load's own read has
- * finished. Callers outside this helper always hit the network once any
- * in-flight share has settled.
- */
-export function readRecentGets<T>(run: () => T | Promise<T>): Promise<T> {
-  recentGetReaders += 1;
-  return Promise.resolve()
-    .then(run)
-    .finally(() => {
-      recentGetReaders -= 1;
-    });
-}
-
-/**
  * Drop the cached profile, and nothing else.
  *
  * `invalidateApiCaches` is the sign-out broom: it also clears features and a
@@ -259,10 +188,8 @@ export function invalidateApiCaches(): void {
   planChoiceSettled = null;
   invalidateUsageNudges();
   // Drop coalesced GETs so a later caller cannot join a response that started
-  // under a previous session or fetch stub. The short reuse window goes
-  // with them: it is the same session's data.
+  // under a previous session or fetch stub.
   inFlightGets.clear();
-  recentGets.clear();
   if (typeof sessionStorage !== 'undefined') {
     try {
       sessionStorage.removeItem('preloop.agents.gateway_summary.v1');
@@ -627,11 +554,10 @@ export async function fetchWithAuth(
 ): Promise<Response> {
   const method = (options.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {
-    // A write makes every read already in the air, and every response still
-    // inside the short reuse window, a read of the past. A caller that asks
-    // again after this must get a request of its own.
+    // A write makes every read already in the air a read of the past: a
+    // caller that asks again after this must get a request of its own, not
+    // join one that started before the change.
     inFlightGets.clear();
-    recentGets.clear();
   }
   // Only plain reads: a body, a signal or a custom header makes the call the
   // caller's own, and anything that is not a GET may change something.
@@ -655,20 +581,11 @@ export async function fetchWithAuth(
     if (pending) {
       return (await pending).clone();
     }
-    if (recentGetReaders > 0) {
-      const reused = takeRecentGet(key);
-      if (reused) return reused;
-    }
-    const request = performFetchWithAuth(url, options)
-      .then((response) => {
-        rememberRecentGet(key, response);
-        return response;
-      })
-      .finally(() => {
-        if (inFlightGets.get(key) === request) {
-          inFlightGets.delete(key);
-        }
-      });
+    const request = performFetchWithAuth(url, options).finally(() => {
+      if (inFlightGets.get(key) === request) {
+        inFlightGets.delete(key);
+      }
+    });
     inFlightGets.set(key, request);
     // The first caller gets a clone too, so every caller reads its own body.
     return (await request).clone();

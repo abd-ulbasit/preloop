@@ -35,6 +35,12 @@ let pollTimer: number | undefined;
  * still happens; the next poll is the following interval.
  */
 let pollHoldCount = 0;
+/**
+ * Polls skipped while a hold is up. One skip covers the cold Overview.
+ * The tick after that asks anyway, so a load that never finishes cannot
+ * silence the halt banner.
+ */
+let heldSkips = 0;
 /** Bumped by a reset so a read from before it cannot land after it. */
 let epoch = 0;
 const listeners = new Set<KillSwitchListener>();
@@ -95,16 +101,14 @@ export function getKillSwitchSnapshot(): KillSwitchStatus | null {
 }
 
 /**
- * Listen for the halt state. The first listener starts the shared poll and
- * the last one to leave stops it. A hidden tab skips its turn.
- */
-/**
  * Hold the shared poll until `release`.
  *
  * The banner's interval is 15s. A cold Overview whose audit read takes
  * longer than that used to fire the poll inside the load, which is a
  * second `GET /account/kill-switch/status` for data the page already has.
  * The pairs do not overlap, so in-flight dedupe does not collapse them.
+ * A hold skips one tick only. The tick after that asks even if the load
+ * is still running, so a hung read cannot hide a halt.
  */
 export function holdKillSwitchPoll(): () => void {
   pollHoldCount += 1;
@@ -113,9 +117,14 @@ export function holdKillSwitchPoll(): () => void {
     if (released) return;
     released = true;
     pollHoldCount = Math.max(0, pollHoldCount - 1);
+    if (pollHoldCount === 0) heldSkips = 0;
   };
 }
 
+/**
+ * Listen for the halt state. The first listener starts the shared poll and
+ * the last one to leave stops it. A hidden tab skips its turn.
+ */
 export function subscribeKillSwitch(listener: KillSwitchListener): () => void {
   listeners.add(listener);
   if (status) listener(status, lastFailed);
@@ -126,10 +135,13 @@ export function subscribeKillSwitch(listener: KillSwitchListener): () => void {
         document.visibilityState === 'hidden'
       )
         return;
-      // A held poll is not late news. Skipping the turn leaves the last
-      // read on screen until the interval comes round again, after the
-      // load that asked for it has finished.
-      if (pollHoldCount > 0) return;
+      // One skipped tick is the cold load. A second tick while the hold
+      // is still up means the load did not finish; ask anyway.
+      if (pollHoldCount > 0 && heldSkips < 1) {
+        heldSkips += 1;
+        return;
+      }
+      heldSkips = 0;
       void refreshKillSwitch({ force: true });
     }, KILL_SWITCH_POLL_MS);
   }
@@ -150,6 +162,7 @@ export function resetKillSwitchStore(): void {
   lastFailed = false;
   inflight = null;
   pollHoldCount = 0;
+  heldSkips = 0;
   epoch += 1;
 }
 

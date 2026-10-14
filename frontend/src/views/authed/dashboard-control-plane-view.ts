@@ -58,7 +58,6 @@ import {
   getFeatures,
   getUserProfile,
   hasPermission,
-  readRecentGets,
   type UserPermissions,
 } from '../../api';
 import { holdKillSwitchPoll } from '../../services/kill-switch-store';
@@ -525,12 +524,6 @@ export class DashboardView extends AuthedElement {
   private refreshTimers: Record<string, number> = {};
   /** When each topic key last ran, for its 10s floor. */
   private lastTopicRefresh: Record<string, number> = {};
-  /**
-   * The next flush of queued topic refreshes should reuse responses the
-   * load just stored. Set when a slow load arms the floor, cleared by the
-   * flush so a later event still reads the network.
-   */
-  private reuseTrailingRefreshes = false;
   private backgroundTimer: number | null = null;
   /** The budget fetch, for the parts of the page that do need to wait on it. */
   private budgetReady: Promise<void> = Promise.resolve();
@@ -2073,10 +2066,12 @@ export class DashboardView extends AuthedElement {
    * REALTIME_TOPIC_INTERVAL_MS}, so the floor has expired by the time the
    * load ends and every queued topic refresh fires at the debounce. Those
    * second GETs start after the first has finished, which in-flight dedupe
-   * cannot collapse. Stamping the floor at the end coalesces that wave
-   * into one refresh per topic after the interval, outside the cold load.
-   * The refresh also reuses a response that is still inside the short TTL,
-   * for the case where it does start before that window closes.
+   * cannot collapse. A short response memo cannot stand in for that wave
+   * either: the refresh belongs a full interval later, and by then a memo
+   * would be serving a body from before the events, and `/cost/timeseries`
+   * would miss it anyway because its end date is "now". Stamping the floor
+   * at the end coalesces the wave into one refresh per topic after the
+   * interval, outside the cold load.
    */
   private armTopicFloorAfterLongLoad(): void {
     if (Date.now() - this.lastFetchStartedAt < REALTIME_TOPIC_INTERVAL_MS) {
@@ -2086,12 +2081,9 @@ export class DashboardView extends AuthedElement {
     for (const key of LOAD_COVERED_TOPIC_KEYS) {
       this.lastTopicRefresh[key] = now;
     }
-    this.reuseTrailingRefreshes = true;
   }
 
   private flushPendingTopicRefreshes(): void {
-    const reuseStoredResponses = this.reuseTrailingRefreshes;
-    this.reuseTrailingRefreshes = false;
     if (!this.isConnected) {
       this.pendingTopicRefreshes.clear();
       this.queuedDashboardRefresh = null;
@@ -2109,12 +2101,7 @@ export class DashboardView extends AuthedElement {
     }
     const pending = [...this.pendingTopicRefreshes];
     this.pendingTopicRefreshes.clear();
-    for (const [key, run] of pending) {
-      this.scheduleTopicRefresh(
-        key,
-        reuseStoredResponses ? () => readRecentGets(run) : run
-      );
-    }
+    for (const [key, run] of pending) this.scheduleTopicRefresh(key, run);
   }
 
   /** What a gateway call can change: the totals, the deltas, the failures. */

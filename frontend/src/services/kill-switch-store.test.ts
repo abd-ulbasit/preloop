@@ -132,6 +132,28 @@ describe('kill-switch-store', () => {
     }
   });
 
+  it('asks again on the second tick if the cold load never finishes', async () => {
+    const clock = sinon.useFakeTimers();
+    const release = holdKillSwitchPoll();
+    const off = subscribeKillSwitch(() => undefined);
+    try {
+      await clock.tickAsync(0);
+      expect(statusCalls()).to.equal(1);
+
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(statusCalls(), 'the first held tick is the cold load').to.equal(1);
+
+      await clock.tickAsync(KILL_SWITCH_POLL_MS);
+      expect(statusCalls(), 'a hung load cannot skip a second tick').to.equal(
+        2
+      );
+    } finally {
+      off();
+      release();
+      clock.restore();
+    }
+  });
+
   it('drops a read that started before a reset', async () => {
     const pending = refreshKillSwitch();
     resetKillSwitchStore();
