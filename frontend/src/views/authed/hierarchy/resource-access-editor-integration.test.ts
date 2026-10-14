@@ -3,6 +3,8 @@ import { sendKeys, setViewport } from '@web/test-runner-commands';
 import './resource-access-panel';
 import type { ResourceAccessPanel } from './resource-access-panel';
 import type { ResourcePolicyEditor } from './resource-policy-editor';
+import type { Capability } from '../../../capabilities';
+import type { Share, ShareWrite } from '../../../hierarchy-api';
 import {
   mockApi,
   signInForTest,
@@ -20,10 +22,10 @@ const q = (el: ResourceAccessPanel, id: string) =>
   el.shadowRoot!.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 const editor = (el: ResourceAccessPanel) =>
   el.shadowRoot!.querySelector<ResourcePolicyEditor>('resource-policy-editor')!;
-async function mount() {
+async function mount(capabilities: Capability[] = ['resource_access']) {
   const el = await fixture<ResourceAccessPanel>(
     html`<resource-access-panel
-      .capabilities=${new Set(['resource_access'])}
+      .capabilities=${new Set(capabilities)}
       .context=${{ kind: 'ai_model', resourceId: RESOURCE_ID }}
     ></resource-access-panel>`
   );
@@ -126,7 +128,114 @@ describe('enforced resource access integration', () => {
       'Could not inspect resource access'
     );
   });
-  it('closes and refreshes the compact summary after the signed save', async () => {
+  it('keeps both section drafts when saving policy and subaccount sharing independently', async () => {
+    const sharesPath = '/api/v1/accounts/acc-root/shares';
+    let shares: Share[] = [];
+    const saved = resourceSummary();
+    saved.document.version = 4;
+    saved.document.requirements = [
+      { action: 'model:invoke', mode: 'require_permit', permit_rule_ids: [] },
+    ];
+    api = mockApi({
+      routes: [
+        { path: BASE, body: resourceSummary() },
+        ...directoryRoutes,
+        { path: sharesPath, body: () => shares },
+        {
+          path: '/api/v1/accounts/acc-root/subaccounts',
+          body: [{ id: 'sub-1', name: 'Example child' }],
+        },
+        { method: 'POST', path: BASE + '/preview', body: resourcePreview() },
+        { method: 'PUT', path: BASE, body: saved },
+        {
+          method: 'POST',
+          path: sharesPath,
+          body: (call) => {
+            shares = [
+              {
+                ...(call.body as ShareWrite),
+                id: 'share-1',
+                recipient_account_ids: [],
+                is_automatic: false,
+              },
+            ];
+            return shares[0];
+          },
+        },
+      ],
+    });
+    const el = await mount(['resource_access', 'resource_sharing']);
+    q(el, 'access-control').click();
+    await waitUntil(() => !!editor(el) && !!q(el, 'share-toggle'));
+    const child = editor(el);
+    const toggle = q(el, 'share-toggle') as unknown as HTMLInputElement;
+    toggle.checked = true;
+    toggle.dispatchEvent(new CustomEvent('sl-change', { bubbles: true }));
+    const mode = child.shadowRoot!.querySelector<HTMLSelectElement>(
+      '[data-mode="model:invoke"]'
+    )!;
+    mode.value = 'restricted';
+    mode.dispatchEvent(new Event('change'));
+    await child.updateComplete;
+    const button = (id: string) =>
+      child.shadowRoot!.querySelector<HTMLButtonElement>(
+        `[data-testid="${id}"]`
+      )!;
+    button('resource-preview-button').click();
+    await waitUntil(() => !button('resource-save').disabled);
+    button('resource-save').click();
+    await waitUntil(() => !!q(el, 'access-saved'));
+    expect(editor(el)).to.equal(child);
+    expect(
+      (q(el, 'share-toggle') as unknown as HTMLInputElement).checked
+    ).to.equal(true);
+    const view = child.shadowRoot!.querySelector<HTMLSelectElement>(
+      '[data-mode="resource:view"]'
+    )!;
+    view.value = 'restricted';
+    view.dispatchEvent(new Event('change'));
+    await child.updateComplete;
+    q(el, 'editor-save').click();
+    await waitUntil(() =>
+      q(el, 'access-saved')!.textContent!.includes('Subaccount sharing saved')
+    );
+    expect(api.callsTo(sharesPath, 'POST')).to.have.length(1);
+    expect(editor(el)).to.equal(child);
+    expect(
+      child.shadowRoot!.querySelector<HTMLSelectElement>(
+        '[data-mode="resource:view"]'
+      )!.value
+    ).to.equal('restricted');
+    button('resource-preview-button').click();
+    await waitUntil(() => api.callsTo(BASE + '/preview', 'POST').length === 2);
+    const request = api.callsTo(BASE + '/preview', 'POST')[1].body as {
+      document: { requirements: unknown[] };
+      expected_version: number;
+    };
+    expect(request.document.requirements).to.have.length(2);
+    expect(request.expected_version).to.equal(4);
+  });
+  it('reuses directory names when reopening the same resource', async () => {
+    api = mockApi({
+      routes: [{ path: BASE, body: resourceSummary() }, ...directoryRoutes],
+    });
+    const el = await mount();
+    q(el, 'access-control').click();
+    await waitUntil(() => !!editor(el) && editor(el).subjects.length === 3);
+    editor(el)
+      .shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-testid="resource-cancel"]'
+      )!
+      .click();
+    await waitUntil(() => !editor(el));
+    q(el, 'access-control').click();
+    await waitUntil(() => !!editor(el));
+    await el.updateComplete;
+    expect(editor(el).subjects).to.have.length(3);
+    expect(api.callsTo('/api/v1/users')).to.have.length(1);
+    expect(api.callsTo('/api/v1/teams')).to.have.length(1);
+  });
+  it('refreshes the compact summary and keeps the editor open after the signed save', async () => {
     const saved = resourceSummary();
     saved.document.version = 4;
     saved.document.requirements = [
@@ -166,7 +275,8 @@ describe('enforced resource access integration', () => {
         '[data-testid="resource-save"]'
       )!
       .click();
-    await waitUntil(() => !editor(el));
+    await waitUntil(() => !!q(el, 'access-saved'));
+    expect(editor(el)).to.equal(child);
     expect(q(el, 'access-control').textContent).to.contain('Restricted');
   });
 });

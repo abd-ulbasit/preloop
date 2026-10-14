@@ -6,6 +6,7 @@ import {
   labelsOf,
   ruleDefinition,
   RESOURCE_ACTIONS,
+  SUBJECT_DIRECTORY_LIMIT,
   type PolicyRule,
   type Action,
   type SubjectOption,
@@ -356,6 +357,11 @@ export class AccessRuleForm extends LitElement {
                   @input=${(e: Event) => (this.search = (e.target as HTMLInputElement).value)}
                   ?disabled=${this.busy}
               /></label>
+              <p class="muted">
+                Names include up to ${SUBJECT_DIRECTORY_LIMIT} users, teams and
+                roles per directory. Search filters this list; use Advanced YAML
+                with a UUID for other subjects.
+              </p>
               <label
                 >Who<select
                   data-testid="rule-who"

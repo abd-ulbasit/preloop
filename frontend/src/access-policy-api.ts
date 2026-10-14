@@ -8,6 +8,7 @@ import {
   hasPermission,
 } from './api';
 import { ConflictError, NotFoundError } from './hierarchy-api';
+import { CapabilityOffError } from './capabilities';
 
 export type Action =
   | 'resource:view'
@@ -121,15 +122,18 @@ export interface SubjectOption {
 }
 export async function accessRequest<T>(
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  onNotFound: 'not-found' | 'capability-off' = 'not-found'
 ): Promise<T> {
   const response = await fetchWithAuth(path, {
     ...init,
     ...(init.body ? { headers: { 'Content-Type': 'application/json' } } : {}),
   });
   if (response.status === 409) throw new ConflictError();
-  if (response.status === 404)
+  if (response.status === 404) {
+    if (onNotFound === 'capability-off') throw new CapabilityOffError(path);
     throw new NotFoundError('This resource or access endpoint is unavailable.');
+  }
   if (!response.ok)
     throw new Error(
       extractErrorMessage(
@@ -219,7 +223,7 @@ export const emptyRule = (): PolicyRule => ({
 export const labelsOf = (selector: Selector) =>
   selector.matchLabels ?? selector.match_labels ?? {};
 export const listPolicyRules = (): Promise<StoredRule[]> =>
-  accessRequest('/api/v1/access/rules');
+  accessRequest('/api/v1/access/rules', {}, 'capability-off');
 export const writePolicyRule = (
   rule: PolicyRule,
   version?: number
@@ -280,16 +284,23 @@ export async function getAccountModes(): Promise<
   return policy.access_rule_mode ?? {};
 }
 
-/** Existing tenant-scoped directories, paginated; names are display-only. */
+export const SUBJECT_DIRECTORY_LIMIT = 500;
+const SUBJECT_PAGE_SIZE = 100;
+const SUBJECT_MAX_PAGES = SUBJECT_DIRECTORY_LIMIT / SUBJECT_PAGE_SIZE;
+/** At most five pages per directory; use advanced UUID selectors beyond the name list. */
 export async function loadSubjectOptions(
   permissions: string[] | null
 ): Promise<SubjectOption[]> {
   const options: SubjectOption[] = [];
   if (hasPermission(permissions, 'view_users')) {
-    for (let skip = 0; ;) {
-      const page = await getUsers(skip, 100);
+    for (
+      let skip = 0, pageIndex = 0;
+      pageIndex < SUBJECT_MAX_PAGES;
+      pageIndex++
+    ) {
+      const page = await getUsers(skip, SUBJECT_PAGE_SIZE);
       options.push(
-        ...page.users.map((user) => ({
+        ...page.users.slice(0, SUBJECT_PAGE_SIZE).map((user) => ({
           kind: 'user' as const,
           id: user.id,
           label: user.full_name || user.username || user.email || user.id,
@@ -300,7 +311,7 @@ export async function loadSubjectOptions(
     }
     const roles = await getRoles();
     options.push(
-      ...roles.roles.map((role) => ({
+      ...roles.roles.slice(0, SUBJECT_DIRECTORY_LIMIT).map((role) => ({
         kind: 'role' as const,
         id: role.id,
         label: role.name,
@@ -308,10 +319,14 @@ export async function loadSubjectOptions(
     );
   }
   if (hasPermission(permissions, 'view_teams')) {
-    for (let skip = 0; ;) {
-      const page = await getTeams(skip, 100);
+    for (
+      let skip = 0, pageIndex = 0;
+      pageIndex < SUBJECT_MAX_PAGES;
+      pageIndex++
+    ) {
+      const page = await getTeams(skip, SUBJECT_PAGE_SIZE);
       options.push(
-        ...page.teams.map((team) => ({
+        ...page.teams.slice(0, SUBJECT_PAGE_SIZE).map((team) => ({
           kind: 'team' as const,
           id: team.id,
           label: team.name,

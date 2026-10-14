@@ -7,6 +7,7 @@ import {
   previewResourceAccess,
   putResourceAccess,
   explainResourceAccess,
+  SUBJECT_DIRECTORY_LIMIT,
   type Action,
   type PolicyRule,
   type ResourceSummary,
@@ -522,6 +523,10 @@ export class ResourcePolicyEditor extends LitElement {
             ${this.subjects.filter((s) => s.kind === 'user').map((s) => html`<option value=${s.id}>${s.label}</option>`)}
           </select></label
         >
+        <p class="muted">
+          The name list includes up to ${SUBJECT_DIRECTORY_LIMIT} users. Enter a
+          principal UUID below for anyone else.
+        </p>
         <label
           >Principal kind<select
             .value=${this.subjectKind}

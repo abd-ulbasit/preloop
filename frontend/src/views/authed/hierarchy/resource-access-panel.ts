@@ -296,6 +296,7 @@ export class ResourceAccessPanel extends LitElement {
     this.policyBusy = false;
     this.policy = null;
     this.subjects = [];
+    this.subjectsLoaded = false;
     this.policyError = '';
     this.accessDraftReady = false;
     this.saving = false;
@@ -422,11 +423,14 @@ export class ResourceAccessPanel extends LitElement {
       this.tagError = this.message(error);
     }
   }
+  private subjectsLoaded = false;
+  @state() private saveNotice = '';
   private async open(editor: Editor, event: Event): Promise<void> {
     if (this.saving) return;
     this.trigger = event.currentTarget as HTMLButtonElement;
     this.narrow = window.matchMedia('(max-width: 640px)').matches;
     this.error = '';
+    this.saveNotice = '';
     this.seedShareDraft();
     this.accessDraftReady = editor === 'access' && this.shareState === 'on';
     if (editor === 'tags' && this.tagsStale) {
@@ -452,11 +456,18 @@ export class ResourceAccessPanel extends LitElement {
       this.renderRoot
         .querySelector<HTMLElement>('[data-editor] [autofocus]')
         ?.focus();
-    if (editor === 'access' && this.policyState === 'on') {
+    if (
+      editor === 'access' &&
+      this.policyState === 'on' &&
+      !this.subjectsLoaded
+    ) {
       const generation = this.generation;
       try {
         const subjects = await loadSubjectOptions(this.profilePermissions);
-        if (generation === this.generation) this.subjects = subjects;
+        if (generation === this.generation) {
+          this.subjects = subjects;
+          this.subjectsLoaded = true;
+        }
       } catch (error) {
         if (generation === this.generation)
           this.policyError = `Directory names unavailable: ${this.message(error)}`;
@@ -589,7 +600,10 @@ export class ResourceAccessPanel extends LitElement {
     }
     const old = this.explicit;
     if ((!old && !draft) || (old && draft && this.sameShare(old, draft))) {
-      this.close();
+      if (!this.policy) this.close();
+      else
+        this.saveNotice =
+          'Subaccount sharing is unchanged. Policy edits are kept.';
       return;
     }
     const generation = this.generation,
@@ -618,7 +632,11 @@ export class ResourceAccessPanel extends LitElement {
           'Saved, but could not reload sharing. Retry to confirm the persisted state.'
         );
       this.saving = false;
-      this.close();
+      if (!this.policy) this.close();
+      else {
+        this.seedShareDraft();
+        this.saveNotice = 'Subaccount sharing saved. Policy edits are kept.';
+      }
     } catch (error) {
       if (generation !== this.generation) return;
       // Reconcile persisted state without overwriting the editor's draft.
@@ -700,7 +718,8 @@ export class ResourceAccessPanel extends LitElement {
                 this.saving = false;
                 this.policyBusy = false;
                 this.policy = event.detail;
-                this.close();
+                this.saveNotice =
+                  'Access saved. Subaccount sharing edits are kept.';
               }}
               @resource-reloaded=${(event: CustomEvent<ResourceSummary>) => {
                 this.policy = event.detail;
@@ -713,6 +732,7 @@ export class ResourceAccessPanel extends LitElement {
             ></resource-policy-editor>`
           : nothing
       }
+      ${this.saveNotice ? html`<p role="status" data-testid="access-saved">${this.saveNotice}</p>` : nothing}
       ${this.policyError && this.policyState === 'on' ? html`<p class="muted">${this.policyError}</p>` : nothing}
       ${this.shareState === 'on' || this.shareState === 'error' ? this.renderSharing() : nothing}
     `;

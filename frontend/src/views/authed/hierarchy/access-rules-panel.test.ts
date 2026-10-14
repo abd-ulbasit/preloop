@@ -80,6 +80,21 @@ describe('access-rules-panel real EE contract', () => {
     api?.restore();
     localStorage.clear();
   });
+  it('hides a missing collection route as capability-off without showing an item error', async () => {
+    api = mockApi({ capabilities: ['abac_rules'] });
+    const el = await fixture<AccessRulesPanel>(
+      html`<access-rules-panel></access-rules-panel>`
+    );
+    let hidden = false;
+    el.addEventListener('capability-off', () => {
+      hidden = true;
+    });
+    await waitUntil(() => hidden);
+    await el.updateComplete;
+    expect(q(el, 'rules')).to.equal(null);
+    expect(el.shadowRoot!.textContent).not.to.contain('unavailable');
+    expect(api.callsTo('/api/v1/policies/export')).to.have.length(0);
+  });
   it('lists real bare-list rules with inherited provenance and no inherited controls', async () => {
     api = mockApi({ capabilities: ['abac_rules'], routes: base });
     const el = await mount();

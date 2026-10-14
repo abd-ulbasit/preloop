@@ -75,6 +75,42 @@ describe('access-policy API', () => {
       '?skip=1&limit=100',
     ]);
   });
+  it('caps each paginated directory at five requests and 500 names', async () => {
+    api = mockApi({
+      routes: [
+        {
+          path: '/api/v1/users',
+          body: {
+            users: Array.from({ length: 100 }, (_, i) => ({
+              id: `user-${i}`,
+              username: `User ${i}`,
+            })),
+            total: 100000,
+          },
+        },
+        {
+          path: '/api/v1/teams',
+          body: {
+            teams: Array.from({ length: 100 }, (_, i) => ({
+              id: `team-${i}`,
+              name: `Team ${i}`,
+            })),
+            total: 100000,
+          },
+        },
+        ...directoryRoutes.slice(2),
+      ],
+    });
+    const options = await loadSubjectOptions(['view_users', 'view_teams']);
+    expect(api.callsTo('/api/v1/users')).to.have.length(5);
+    expect(api.callsTo('/api/v1/teams')).to.have.length(5);
+    expect(options.filter((option) => option.kind === 'user')).to.have.length(
+      500
+    );
+    expect(options.filter((option) => option.kind === 'team')).to.have.length(
+      500
+    );
+  });
   it('does not probe directories without permission', async () => {
     api = mockApi();
     expect(await loadSubjectOptions(['view_policies'])).to.eql([]);

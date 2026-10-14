@@ -1,7 +1,11 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { getUserProfile, hasPermission } from '../../../api';
-import { loadCapabilities, type CapabilitySet } from '../../../capabilities';
+import {
+  loadCapabilities,
+  isCapabilityOff,
+  type CapabilitySet,
+} from '../../../capabilities';
 import { isConflict } from '../../../hierarchy-api';
 import {
   emptyRule,
@@ -170,7 +174,8 @@ export class AccessRulesPanel extends LitElement {
           },
         };
     } catch (error) {
-      if (generation === this.generation)
+      if (generation === this.generation && isCapabilityOff(error)) this.off();
+      else if (generation === this.generation)
         this.error =
           error instanceof Error
             ? error.message
