@@ -26,6 +26,7 @@ interface StubOpts {
   total?: number;
   openCounts?: Record<string, number>;
   trackerType?: string;
+  trackerExtra?: Record<string, unknown>;
   pullRequests?: unknown[];
   prHasMore?: boolean;
   prTotal?: number;
@@ -39,6 +40,7 @@ function stubFetch(opts: StubOpts = {}) {
     total = issues.length,
     openCounts,
     trackerType = 'github',
+    trackerExtra = {},
     pullRequests = [],
     prHasMore = false,
     prTotal,
@@ -62,6 +64,7 @@ function stubFetch(opts: StubOpts = {}) {
           created: '2026-01-01T00:00:00Z',
           last_updated: '2026-01-02T00:00:00Z',
           is_valid: true,
+          ...trackerExtra,
         });
       }
       if (url.includes('/api/v1/features')) {
@@ -1234,5 +1237,88 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
       'Managed Jira connections are unavailable here'
     );
     expect(calls.some((c) => c.includes('/auth/jira/'))).to.equal(false);
+  });
+});
+
+describe('TrackerDetailView scoped Jira webhook instructions', () => {
+  let fetchStub: sinon.SinonStub;
+  const orgId = '22222222-2222-2222-2222-222222222222';
+
+  beforeEach(() => {
+    localStorage.setItem('accessToken', 'test-access-token');
+    window.history.replaceState({}, '', `/console/trackers/${trackerId}`);
+  });
+
+  afterEach(() => {
+    fetchStub?.restore();
+    localStorage.clear();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('shows the manual webhook steps with the organization id', async () => {
+    fetchStub = stubFetch({
+      trackerType: 'jira',
+      trackerExtra: {
+        auth_type: 'api_token',
+        url: 'https://example-site.atlassian.net',
+        jira_manual_webhook: {
+          organization_id: orgId,
+          url: `https://preloop.example.com/api/v1/private/webhooks/jira/${orgId}`,
+          secret: 'org-webhook-secret',
+          events: [
+            'jira:issue_created',
+            'jira:issue_updated',
+            'comment_created',
+            'comment_updated',
+          ],
+        },
+      },
+    });
+    const el = await mountView();
+    const panel = el.shadowRoot!.querySelector('.jira-manual-webhook');
+    expect(panel).to.exist;
+    const text = panel!.textContent || '';
+    expect(text).to.contain('Jira admin');
+    expect(text).to.contain('System');
+    expect(text).to.contain('WebHooks');
+    expect(text).to.contain(orgId);
+    expect(text).to.contain('org-webhook-secret');
+    expect(text).to.contain('jira:issue_created');
+    expect(text).to.contain('jira:issue_updated');
+    expect(text).to.contain('comment_created');
+    expect(text).to.contain('comment_updated');
+    expect(text).to.not.contain('scoped-token');
+  });
+
+  it('shows the callback without the secret for a viewer', async () => {
+    fetchStub = stubFetch({
+      trackerType: 'jira',
+      trackerExtra: {
+        auth_type: 'api_token',
+        url: 'https://example-site.atlassian.net',
+        jira_manual_webhook: {
+          organization_id: orgId,
+          url: `https://preloop.example.com/api/v1/private/webhooks/jira/${orgId}`,
+          secret: null,
+          events: ['jira:issue_created', 'comment_created'],
+        },
+      },
+    });
+    const el = await mountView();
+    const panel = el.shadowRoot!.querySelector('.jira-manual-webhook');
+    expect(panel).to.exist;
+    const text = panel!.textContent || '';
+    expect(text).to.contain(orgId);
+    expect(text).to.contain('jira:issue_created');
+    expect(text).to.contain('manage trackers');
+    expect(panel!.querySelector('.jira-manual-webhook-secret code')).to.equal(
+      null
+    );
+  });
+
+  it('hides the manual steps when the token can register webhooks', async () => {
+    fetchStub = stubFetch({ trackerType: 'jira' });
+    const el = await mountView();
+    expect(el.shadowRoot!.querySelector('.jira-manual-webhook')).to.equal(null);
   });
 });

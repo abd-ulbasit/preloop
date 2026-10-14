@@ -1,6 +1,7 @@
 """Trackers router for registering and managing issue trackers."""
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
@@ -9,10 +10,12 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from preloop.api.auth.jwt import get_current_active_user
+from preloop.api.auth.permissions import has_permission
 from preloop.api.loop_safety import run_db_off_loop
 from preloop.schemas.auth import AuthUserResponse
 from preloop.schemas.tracker import (
     BitbucketDCConnectionDetails,
+    JiraManualWebhook,
     TrackerResponse,
     TrackerUpdate,
     TrackerTestResponse,
@@ -35,9 +38,14 @@ from preloop.models import models
 from preloop.models.crud import (
     crud_account,
     crud_oauth_app_installation,
+    crud_organization,
     crud_tracker,
     crud_tracker_scope_rule,
     crud_tool_configuration,
+)
+from preloop.sync.trackers.jira import (
+    MANUAL_JIRA_WEBHOOK_EVENTS,
+    WEBHOOK_STATUS_MANUAL_REQUIRED,
 )
 
 from preloop.services.dynamic_mcp_server import get_tracker_types, has_tracker
@@ -93,6 +101,94 @@ MANAGED_JIRA_SITE_DETAIL = (
     "A managed Jira connection is bound to its Atlassian site. Choose a "
     "different site from the tracker page (Connect Jira), not by editing it."
 )
+_JIRA_TOKEN_PRESERVED_KEYS = ("cloud_id", "webhook_status", "manual_webhook")
+
+
+def _jira_cloud_id_from_client(client: Any) -> Optional[str]:
+    """Cloud id learned while testing a pasted token, if it is a real string.
+
+    Async mocks grow attributes on access, so only a string is stored.
+    """
+    cloud_id = getattr(client, "cloud_id", None)
+    if isinstance(cloud_id, str) and cloud_id.strip():
+        return cloud_id.strip()
+    return None
+
+
+def _merge_jira_token_details(
+    previous: Dict[str, Any],
+    incoming: Dict[str, Any],
+    *,
+    reset_binding: bool,
+) -> Dict[str, Any]:
+    """Keep a scoped token's cloud id across a username edit.
+
+    A new token or a new site URL drops the binding so the next request
+    probes the site again. A pasted token is never copied into the details.
+    """
+    merged = dict(incoming)
+    merged.pop("api_key", None)
+    merged.pop("token", None)
+    if reset_binding:
+        for key in _JIRA_TOKEN_PRESERVED_KEYS:
+            merged.pop(key, None)
+        return merged
+    for key in _JIRA_TOKEN_PRESERVED_KEYS:
+        if key in previous and key not in merged:
+            merged[key] = previous[key]
+    return merged
+
+
+def _reject_pasted_jira_gateway(*urls: object) -> None:
+    """Refuse a Jira site URL that is the Atlassian API gateway."""
+    from preloop.sync.trackers.jira import pasted_gateway_site_detail
+
+    for url in urls:
+        detail = pasted_gateway_site_detail(url)
+        if detail:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _jira_manual_webhook(
+    db: Session, tracker: Tracker, *, include_secret: bool
+) -> Optional[JiraManualWebhook]:
+    """Detail-only instructions for a webhook an admin must create.
+
+    The organization signing secret is included only when ``include_secret``
+    is true. Viewers still receive the callback URL and the event list.
+    """
+    details = tracker.connection_details or {}
+    if details.get("webhook_status") != WEBHOOK_STATUS_MANUAL_REQUIRED:
+        return None
+    if tracker.tracker_type != TrackerType.JIRA.value:
+        return None
+    manual = details.get("manual_webhook")
+    if not isinstance(manual, dict):
+        manual = {}
+    orgs = crud_organization.get_for_tracker(db, tracker_id=str(tracker.id))
+    wanted = str(manual.get("organization_id") or "")
+    org = next((item for item in orgs if str(item.id) == wanted), None)
+    if org is None and orgs:
+        org = orgs[0]
+    if org is None or not org.webhook_secret:
+        return None
+    base = (os.getenv("PRELOOP_URL") or "").strip().rstrip("/")
+    if base:
+        url = f"{base}/api/v1/private/webhooks/jira/{org.id}"
+    else:
+        url = str(manual.get("url") or "")
+    if not url:
+        return None
+    events = manual.get("events")
+    if not isinstance(events, list) or not events:
+        events = list(MANUAL_JIRA_WEBHOOK_EVENTS)
+    return JiraManualWebhook(
+        organization_id=str(org.id),
+        url=url,
+        secret=org.webhook_secret if include_secret else None,
+        events=[str(event) for event in events],
+    )
+
 
 # OAuthAppInstallation.external_id is a BigInteger, so an id outside the signed
 # 64-bit range can never match a stored installation.
@@ -508,6 +604,13 @@ async def register_tracker(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Jira tracker requires 'username' in connection_details",
         )
+    if tracker_type == TrackerType.JIRA:
+        _reject_pasted_jira_gateway(
+            url_str,
+            (config or {}).get("url"),
+            (config or {}).get("jira_url"),
+            (config or {}).get("site_url"),
+        )
 
     # Bitbucket: reject app passwords and incomplete configs before any
     # network call. create_tracker_client swallows errors, so validate here.
@@ -775,6 +878,17 @@ async def register_tracker(
         if auth_type in ("github_app", "oauth_app") and installation:
             oauth_installation_uuid = installation.id
 
+        # A scoped token's cloud id is learned during test_connection. Keep
+        # the site URL as the tracker URL; links and the organization name
+        # stay on that host. Never copy the token into connection_details.
+        if tracker_type == TrackerType.JIRA:
+            cloud_id = _jira_cloud_id_from_client(client)
+            if cloud_id:
+                config = dict(config or {})
+                config["cloud_id"] = cloud_id
+                config.pop("api_key", None)
+                config.pop("token", None)
+
         # Persist via CRUD so credentials are encrypted at rest (never write
         # plaintext api_key columns from the endpoint).
         new_tracker = crud_tracker.create(
@@ -895,7 +1009,7 @@ def get_tracker(
     tracker_id: UUID4,
     current_user: AuthUserResponse = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
-) -> Tracker:
+) -> Tracker | TrackerResponse:
     """Get a non-deleted tracker by ID, ensuring it belongs to the current user."""
     account = crud_account.get(db, id=current_user.account_id)
     if not account:
@@ -914,9 +1028,16 @@ def get_tracker(
             detail="Tracker not found or access denied",
         )
 
-    # Note: Projects are not included in TrackerResponse by default.
-    # If needed, fetch projects separately or adjust the response model.
-    return tracker  # FastAPI handles conversion via response_model
+    manual = _jira_manual_webhook(
+        db,
+        tracker,
+        include_secret=has_permission(current_user, "manage_trackers", db),
+    )
+    if manual is None:
+        return tracker
+    payload = TrackerResponse.model_validate(tracker)
+    payload.jira_manual_webhook = manual
+    return payload
 
 
 @router.put("/trackers/{tracker_id}", response_model=TrackerResponse)
@@ -1066,6 +1187,36 @@ async def update_tracker(
             )
         except BitbucketConfigError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if (
+        not is_managed_tracker(tracker)
+        and tracker.tracker_type == TrackerType.JIRA.value
+    ):
+        requested_url = update_data.get("url")
+        incoming_details = update_data.get("connection_details")
+        detail_urls: tuple[object, ...] = ()
+        if isinstance(incoming_details, dict):
+            detail_urls = tuple(
+                incoming_details.get(key) for key in ("url", "jira_url", "site_url")
+            )
+        _reject_pasted_jira_gateway(requested_url, *detail_urls)
+        url_changed = requested_url is not None and str(requested_url).rstrip(
+            "/"
+        ) != str(tracker.url or "").rstrip("/")
+        token_changed = "api_key" in update_data
+        incoming = update_data.get("connection_details")
+        if isinstance(incoming, dict) or url_changed or token_changed:
+            if not isinstance(incoming, dict):
+                incoming = {
+                    key: value
+                    for key, value in dict(tracker.connection_details or {}).items()
+                    if key not in _JIRA_TOKEN_PRESERVED_KEYS
+                }
+            update_data["connection_details"] = _merge_jira_token_details(
+                dict(tracker.connection_details or {}),
+                dict(incoming),
+                reset_binding=url_changed or token_changed,
+            )
 
     # Special handling if api_key is updated - revalidate connection.
     api_key_updated = "api_key" in update_data

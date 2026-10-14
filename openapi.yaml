@@ -34030,6 +34030,37 @@ components:
       type: object
       title: IssueUpdate
       description: Model for updating an issue.
+    JiraManualWebhook:
+      properties:
+        organization_id:
+          type: string
+          title: Organization Id
+          description: Organization the callback belongs to
+        url:
+          type: string
+          title: Url
+          description: Callback URL to paste into Jira. The API token is never included.
+        secret:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret
+          description: Organization webhook secret. Returned only to callers who can
+            manage trackers, so a viewer cannot forge signed Jira deliveries.
+        events:
+          items:
+            type: string
+          type: array
+          title: Events
+          description: 'Jira webhook events to enable: issue created/updated and comment
+            events.'
+      type: object
+      required:
+      - organization_id
+      - url
+      - events
+      title: JiraManualWebhook
+      description: Steps for an admin when a pasted Jira token cannot register webhooks.
     KeywordListDefinition:
       properties:
         name:
@@ -44824,6 +44855,12 @@ components:
           title: Github Installation Target Login
           description: Login of the account the bound installation targets (OAuth
             auth types only)
+        jira_manual_webhook:
+          anyOf:
+          - $ref: '#/components/schemas/JiraManualWebhook'
+          - type: 'null'
+          description: Populated on the tracker detail when a Jira API token cannot
+            register webhooks. Null on list responses and for every other tracker.
         degraded_projects:
           items:
             type: string
