@@ -439,7 +439,7 @@ func writeUnattendedConfig(agent AgentConfig, document map[string]interface{}) e
 	}
 	data = append(data, '\n')
 	if info, err := os.Lstat(agent.ConfigPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("unattended config symlinks are not supported")
+		return fmt.Errorf("unattended enrollment refuses symlinked config %q; use attended onboarding to preserve its target", agent.ConfigPath)
 	}
 	file, err := os.CreateTemp(filepath.Dir(agent.ConfigPath), ".preloop-enrollment-*")
 	if err != nil {

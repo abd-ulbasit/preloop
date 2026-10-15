@@ -254,6 +254,48 @@ func TestUnattendedAuthorityReaderDoesNotForwardUnknownFields(t *testing.T) {
 	}
 }
 
+func TestUnattendedClaudeCodeNativeMCPShape(t *testing.T) {
+	for _, existing := range []string{`{}`, `{"servers":{"other":{"url":"https://example.com"}}}`, `{"mcpServers":{"other":{"command":"example"}}}`} {
+		t.Run(existing, func(t *testing.T) {
+			home := testenv.SetTempHome(t)
+			agent, _ := unattendedAgent("claude_code", home)
+			var document map[string]interface{}
+			if err := json.Unmarshal([]byte(existing), &document); err != nil {
+				t.Fatal(err)
+			}
+			adapter := managedMCPAdapterForAgent(agent)
+			container, err := adapter.EnsureServerContainer(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			container["preloop"] = adapter.BuildManagedServer("https://example.com", "agt_synthetic")
+			if err := writeUnattendedConfig(agent, document); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(agent.ConfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual map[string]interface{}
+			if err := json.Unmarshal(raw, &actual); err != nil {
+				t.Fatal(err)
+			}
+			native, _ := asObjectMap(actual["mcpServers"])
+			entry, _ := asObjectMap(native["preloop"])
+			expected := map[string]interface{}{"type": "http", "url": "https://example.com/mcp/v1", "headers": map[string]interface{}{"Authorization": "Bearer agt_synthetic"}}
+			if !reflect.DeepEqual(entry, expected) {
+				t.Fatalf("native MCP entry = %#v", entry)
+			}
+			if legacy, _ := asObjectMap(actual["servers"]); legacy["preloop"] != nil {
+				t.Fatal("wrote legacy server container")
+			}
+			if result := adapter.ValidateManagedConfig(actual, "https://example.com"); result["validation_passed"] != true {
+				t.Fatalf("native config failed validation: %#v", result)
+			}
+		})
+	}
+}
+
 func TestUnattendedClaudeCodeDiscoveryAndIdentityUseNativeConfig(t *testing.T) {
 	home := testenv.SetTempHome(t)
 	agent, _ := unattendedAgent("claude_code", home)

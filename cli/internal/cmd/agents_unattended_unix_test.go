@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +68,26 @@ func TestUnattendedAuthorityFileRejectsSharedAndSymlinkedFiles(t *testing.T) {
 	}
 	if err := validateEnrollmentTokenFile(file, link); err == nil {
 		t.Fatal("accepted symlink authority")
+	}
+}
+
+func TestUnattendedConfigSymlinkRefusalNamesRecovery(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	original := []byte(`{"existing":true}`)
+	if err := os.WriteFile(target, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	err := writeUnattendedConfig(AgentConfig{Name: "Cursor", ConfigPath: link}, map[string]interface{}{})
+	if err == nil || !strings.Contains(err.Error(), link) || !strings.Contains(err.Error(), "attended onboarding") {
+		t.Fatalf("missing path/recovery explanation: %v", err)
+	}
+	after, err := os.ReadFile(target)
+	if err != nil || string(after) != string(original) {
+		t.Fatalf("changed symlink target: %v", err)
 	}
 }

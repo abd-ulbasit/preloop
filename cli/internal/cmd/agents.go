@@ -6287,7 +6287,20 @@ func (a genericManagedMCPAdapter) Key() string {
 	return runtimeSessionSourceTypeForAgent(a.agent.Name)
 }
 
+func isClaudeCodeUserMCPConfig(agent AgentConfig) bool {
+	return isClaudeCodeAgent(agent) && filepath.Base(agent.ConfigPath) == ".claude.json"
+}
+
 func (a genericManagedMCPAdapter) EnsureServerContainer(doc map[string]interface{}) (map[string]interface{}, error) {
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		// Native user-scoped MCP registration belongs only in mcpServers.
+		if servers, ok := asObjectMap(doc["mcpServers"]); ok {
+			return servers, nil
+		}
+		created := make(map[string]interface{})
+		doc["mcpServers"] = created
+		return created, nil
+	}
 	if strings.EqualFold(strings.TrimSpace(a.agent.Name), "codex cli") {
 		// Codex reads MCP servers from the top-level [mcp_servers] table.
 		// It ignores an [mcp] table entirely (verified on Codex 0.142.5), so
@@ -6350,6 +6363,12 @@ func (a genericManagedMCPAdapter) EnsureServerContainer(doc map[string]interface
 
 func (a genericManagedMCPAdapter) BuildManagedServer(baseURL, token string) map[string]interface{} {
 	url := strings.TrimRight(baseURL, "/") + "/mcp/v1"
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		return map[string]interface{}{
+			"type": "http", "url": url,
+			"headers": map[string]interface{}{"Authorization": "Bearer " + token},
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(a.agent.Name)) {
 	case "codex cli":
 		// Codex reads the [mcp_servers.preloop] table with `url` +
@@ -6455,6 +6474,9 @@ func (a genericManagedMCPAdapter) BuildManagedServer(baseURL, token string) map[
 
 func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface{}, baseURL string) map[string]interface{} {
 	container := lookupMCPServerContainer(doc)
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		container, _ = asObjectMap(doc["mcpServers"])
+	}
 	preloop, ok := container["preloop"].(map[string]interface{})
 	expectedURL := strings.TrimRight(baseURL, "/") + "/mcp/v1"
 	result := map[string]interface{}{
@@ -6491,7 +6513,7 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		// Devin defaults to Streamable HTTP and takes no transport field.
 		result["transport_ok"] = true
 	}
-	if isCopilotCLIAgent(a.agent) {
+	if isCopilotCLIAgent(a.agent) || isClaudeCodeUserMCPConfig(a.agent) {
 		result["transport_ok"] = strings.EqualFold(
 			strings.TrimSpace(fmt.Sprint(preloop["type"])),
 			"http",
