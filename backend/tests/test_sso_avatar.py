@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_person
+from preloop.services import sso_avatar as sso_avatar_module
 from preloop.services.sso_avatar import refresh_anonymous_sso_avatar
 
 _DEFAULT = "https://lh3.googleusercontent.com/a/default-user=s96-c"
@@ -41,6 +42,55 @@ def _refresh(db_session: Session, user: models.User) -> bool:
 
 
 class TestRefreshAnonymousSsoAvatar:
+    def setup_method(self) -> None:
+        sso_avatar_module._repair_not_before.clear()
+
+    def test_failed_lookup_is_not_retried_on_the_next_profile_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = {"n": 0}
+
+        def replacement(*args, **kwargs):
+            calls["n"] += 1
+            return None, False
+
+        monkeypatch.setattr(sso_avatar_module, "_replacement_avatar", replacement)
+        kwargs = {
+            "membership_id": "membership",
+            "person_id": "person-cooldown",
+            "avatar_url": _DEFAULT,
+            "avatar_source": "sso",
+        }
+        assert refresh_anonymous_sso_avatar(None, **kwargs) is False  # type: ignore[arg-type]
+        assert refresh_anonymous_sso_avatar(None, **kwargs) is False  # type: ignore[arg-type]
+        assert calls["n"] == 1
+
+    def test_empty_sso_avatar_with_no_replacement_does_not_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            sso_avatar_module,
+            "_replacement_avatar",
+            lambda *args, **kwargs: (None, True),
+        )
+
+        def forbid_write(*args, **kwargs):
+            raise AssertionError("empty avatar was written")
+
+        monkeypatch.setattr(
+            "preloop.services.sso_avatar.crud_person.update_profile", forbid_write
+        )
+        assert (
+            refresh_anonymous_sso_avatar(
+                None,  # type: ignore[arg-type]
+                membership_id="membership",
+                person_id="person-empty",
+                avatar_url=None,
+                avatar_source="sso",
+            )
+            is False
+        )
+
     def test_transient_lookup_does_not_clear_the_placeholder(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

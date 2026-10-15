@@ -9,7 +9,7 @@ import hashlib
 import io
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -119,13 +119,22 @@ def process_avatar(data: bytes, content_type: str) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-# SHA-256 of the PNG Google serves for ``/a/default-user=s96-c``. A rotted
-# or private ``lh3.googleusercontent.com`` picture URL returns this exact
-# file with HTTP 200, so the console would otherwise paint a blank person
-# glyph and look like the profile photo disappeared.
+# SHA-256 of the PNGs Google serves for ``/a/default-user``. A rotted picture
+# URL returns one of these files with HTTP 200. The digest depends on the
+# requested size: ``=s96-c`` is the small asset, ``=s512-c`` and the unsized
+# URL share the large one, and ``=s64-c`` / ``=s128-c`` are their own files.
 GOOGLE_ANONYMOUS_AVATAR_SHA256 = (
     "653f73dde99fede7a5ebaed7a14dad72c299935d3b9a0bad7420769cc8186a32"
 )
+GOOGLE_ANONYMOUS_AVATAR_SHA256S = frozenset(
+    {
+        GOOGLE_ANONYMOUS_AVATAR_SHA256,
+        "959856355107bbc8bd53b2979ddf281288188d0397e59bc044409cdac3380732",
+        "adf8ef226f14c364f96769e83cd05622fd5a2ef1381d413e04b467c522fda378",
+        "d88bafbb2e759709f9362826b410a5f9731294dc75cc102ff633c6d6e4445af5",
+    }
+)
+_http_client: Any = None
 _GOOGLE_AVATAR_HOSTS = {
     "lh3.googleusercontent.com",
     "lh4.googleusercontent.com",
@@ -179,6 +188,47 @@ def _remember_anonymous(url: str, anonymous: bool, *, ttl: float) -> None:
     _anon_cache[url] = (time.monotonic() + ttl, anonymous)
 
 
+def avatar_http_client() -> Any:
+    """Return one shared client for avatar downloads and provider picture lookups.
+
+    Opening a new client per request on the profile path spends a connection
+    setup on every console load. ``httpx.Client`` is safe to share across threads.
+    """
+    global _http_client
+    if _http_client is None:
+        import httpx
+
+        _http_client = httpx.Client(timeout=2.0, follow_redirects=True)
+    return _http_client
+
+
+def fetch_google_avatar(url: str) -> Optional[tuple[bytes, str]]:
+    """Download an https avatar from Google's photo CDN.
+
+    Args:
+        url: Candidate avatar URL.
+
+    Returns:
+        Image bytes and the final URL after redirects, or None when the host
+        is not allowed or the fetch fails. Redirects that leave the CDN are
+        discarded.
+    """
+    if not is_google_avatar_host(url):
+        return None
+    try:
+        response = avatar_http_client().get(url)
+    except Exception:
+        logger.debug("Avatar fetch failed", exc_info=True)
+        return None
+    final_url = str(response.url)
+    if response.status_code != 200 or not is_google_avatar_host(final_url):
+        return None
+    body = response.content
+    if not body or len(body) > _AVATAR_FETCH_BYTES:
+        return None
+    return body, final_url
+
+
 def fetch_avatar_bytes(url: str) -> Optional[bytes]:
     """Download an https avatar from Google's photo CDN.
 
@@ -187,36 +237,22 @@ def fetch_avatar_bytes(url: str) -> Optional[bytes]:
 
     Returns:
         Image bytes, or None when the host is not allowed or the fetch fails.
-        Redirects that leave the CDN are discarded.
     """
-    if not is_google_avatar_host(url):
+    fetched = fetch_google_avatar(url)
+    if fetched is None:
         return None
-    try:
-        import httpx
-    except ImportError:  # pragma: no cover - httpx is a declared dependency
-        return None
-    try:
-        with httpx.Client(timeout=2.0, follow_redirects=True) as client:
-            response = client.get(url)
-    except Exception:
-        logger.debug("Avatar fetch failed", exc_info=True)
-        return None
-    if response.status_code != 200 or not is_google_avatar_host(str(response.url)):
-        return None
-    body = response.content
-    if not body or len(body) > _AVATAR_FETCH_BYTES:
-        return None
-    return body
+    return fetched[0]
 
 
 def is_anonymous_provider_avatar(url: str) -> bool:
     """Return whether ``url`` is Google's anonymous person glyph.
 
     The literal ``default-user`` path is anonymous without a download. Any
-    other Google photo URL is anonymous when its bytes match the known
-    default image. A failed download is not treated as anonymous, so a CDN
-    blip cannot wipe a real photo. Confirmed real photos are remembered for
-    an hour so the console profile read does not download them on every page.
+    other Google photo URL is anonymous when the redirect lands on that path
+    or the bytes match a known default-user size. A failed download is not
+    treated as anonymous, so a CDN blip cannot wipe a real photo. Confirmed
+    real photos are remembered for an hour so the console profile read does
+    not download them on every page.
 
     Args:
         url: Avatar URL stored for the person or offered by a provider.
@@ -231,11 +267,14 @@ def is_anonymous_provider_avatar(url: str) -> bool:
     cached = _cached_anonymous(url)
     if cached is not None:
         return cached
-    body = fetch_avatar_bytes(url)
-    if body is None:
+    fetched = fetch_google_avatar(url)
+    if fetched is None:
         _remember_anonymous(url, False, ttl=_ANON_CACHE_MISS_SECONDS)
         return False
-    anonymous = hashlib.sha256(body).hexdigest() == GOOGLE_ANONYMOUS_AVATAR_SHA256
+    body, final_url = fetched
+    anonymous = _default_user_path(final_url) or (
+        hashlib.sha256(body).hexdigest() in GOOGLE_ANONYMOUS_AVATAR_SHA256S
+    )
     if not anonymous:
         _remember_anonymous(url, False, ttl=_ANON_CACHE_REAL_SECONDS)
     return anonymous

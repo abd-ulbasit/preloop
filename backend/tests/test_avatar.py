@@ -5,6 +5,8 @@ Covers upload validation, precedence rules, and per-provider SSO claim mapping.
 
 import hashlib
 import io
+from pathlib import Path
+
 import pytest
 from uuid import uuid4
 
@@ -15,6 +17,7 @@ from preloop.models.crud import crud_user
 
 from preloop.services.avatar import (
     GOOGLE_ANONYMOUS_AVATAR_SHA256,
+    GOOGLE_ANONYMOUS_AVATAR_SHA256S,
     AvatarValidationError,
     extract_sso_avatar_url,
     fetch_avatar_bytes,
@@ -367,23 +370,59 @@ class TestAnonymousProviderAvatar:
 
     def test_matching_bytes_are_anonymous(self, monkeypatch):
         body = b"default-silhouette"
-        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: body)
+        digest = hashlib.sha256(body).hexdigest()
         monkeypatch.setattr(
             avatar_service,
-            "GOOGLE_ANONYMOUS_AVATAR_SHA256",
-            hashlib.sha256(body).hexdigest(),
+            "fetch_google_avatar",
+            lambda url: (body, url),
+        )
+        monkeypatch.setattr(
+            avatar_service,
+            "GOOGLE_ANONYMOUS_AVATAR_SHA256S",
+            frozenset({digest}),
         )
         url = "https://lh3.googleusercontent.com/a-/rotten=s96-c"
         assert is_anonymous_provider_avatar(url) is True
 
+    def test_s512_placeholder_bytes_are_anonymous_without_the_default_path(
+        self, monkeypatch
+    ):
+        """A rotted ``a-/`` URL is anonymous when the body is the 512px glyph."""
+        body = (
+            Path(__file__).resolve().parent / "fixtures" / "google-anonymous-s512.png"
+        ).read_bytes()
+        assert hashlib.sha256(body).hexdigest() in GOOGLE_ANONYMOUS_AVATAR_SHA256S
+        monkeypatch.setattr(
+            avatar_service,
+            "fetch_google_avatar",
+            lambda url: (body, url),
+        )
+        url = "https://lh3.googleusercontent.com/a-/rotted-picture=s512-c"
+        assert "/a/default-user" not in url
+        assert is_anonymous_provider_avatar(url) is True
+
+    def test_redirect_to_default_user_is_anonymous(self, monkeypatch):
+        monkeypatch.setattr(
+            avatar_service,
+            "fetch_google_avatar",
+            lambda url: (
+                b"not-the-known-bytes",
+                "https://lh3.googleusercontent.com/a/default-user=s96-c",
+            ),
+        )
+        url = "https://lh3.googleusercontent.com/a-/rotted-picture"
+        assert is_anonymous_provider_avatar(url) is True
+
     def test_other_image_bytes_are_kept(self, monkeypatch):
-        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: b"face")
+        monkeypatch.setattr(
+            avatar_service, "fetch_google_avatar", lambda url: (b"face", url)
+        )
         url = "https://lh3.googleusercontent.com/a-/real=s96-c"
         assert is_anonymous_provider_avatar(url) is False
-        assert GOOGLE_ANONYMOUS_AVATAR_SHA256
+        assert GOOGLE_ANONYMOUS_AVATAR_SHA256 in GOOGLE_ANONYMOUS_AVATAR_SHA256S
 
     def test_download_failure_is_not_anonymous(self, monkeypatch):
-        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: None)
+        monkeypatch.setattr(avatar_service, "fetch_google_avatar", lambda url: None)
         url = "https://lh4.googleusercontent.com/a-/maybe=s96-c"
         assert is_anonymous_provider_avatar(url) is False
 

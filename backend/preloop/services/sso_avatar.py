@@ -9,6 +9,7 @@ picture, or with the stable avatar of another linked provider.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from preloop.models.crud.person import IdentityProfileUpdate, crud_person
 from preloop.services.avatar import (
     AvatarValidationError,
+    avatar_http_client,
     fetch_avatar_bytes,
     image_media_type,
     is_anonymous_provider_avatar,
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 _GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v2/userinfo"
 _GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
+# A failed provider lookup must not run again on every console page load.
+_REPAIR_COOLDOWN_SECONDS = 300.0
+_repair_not_before: dict[str, float] = {}
 
 
 def refresh_anonymous_sso_avatar(
@@ -65,6 +70,9 @@ def refresh_anonymous_sso_avatar(
         return False
     if not url and avatar_source != "sso":
         return False
+    person_key = str(person_id)
+    if _repair_is_cooling_down(person_key):
+        return False
     if google and not is_anonymous_provider_avatar(url):
         return False
 
@@ -74,7 +82,10 @@ def refresh_anonymous_sso_avatar(
         person_id=person_id,
         skip_url=url,
     )
-    if not definitive or replacement == url:
+    if not definitive:
+        _defer_repair(person_key)
+        return False
+    if (replacement or "") == url:
         return False
     stored = _durable_copy(replacement) if replacement else None
     changes: IdentityProfileUpdate = {
@@ -118,6 +129,22 @@ def _replacement_avatar(
     return None, True
 
 
+def _repair_is_cooling_down(person_key: str) -> bool:
+    until = _repair_not_before.get(person_key)
+    if until is None:
+        return False
+    if time.monotonic() >= until:
+        _repair_not_before.pop(person_key, None)
+        return False
+    return True
+
+
+def _defer_repair(person_key: str) -> None:
+    if len(_repair_not_before) > 1024:
+        _repair_not_before.clear()
+    _repair_not_before[person_key] = time.monotonic() + _REPAIR_COOLDOWN_SECONDS
+
+
 def _github_avatar(db: Session, person_id: Any) -> Optional[str]:
     subject = crud_person.provider_subject(db, person_id=person_id, provider="github")
     if subject and subject.isdigit():
@@ -135,10 +162,7 @@ def _gitlab_avatar(db: Session, person_id: Any) -> Optional[str]:
     if not base.startswith("https://"):
         return None
     try:
-        import httpx
-
-        with httpx.Client(timeout=2.0) as client:
-            response = client.get(f"{base}/api/v4/users/{subject}")
+        response = avatar_http_client().get(f"{base}/api/v4/users/{subject}")
         if response.status_code != 200:
             return None
         avatar = response.json().get("avatar_url")
@@ -187,13 +211,10 @@ def _fresh_google_picture(
 
 
 def _userinfo_picture(access_token: str) -> Optional[str]:
-    import httpx
-
-    with httpx.Client(timeout=2.0) as client:
-        response = client.get(
-            _GOOGLE_USERINFO,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
+    response = avatar_http_client().get(
+        _GOOGLE_USERINFO,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
     if response.status_code != 200:
         return None
     picture = response.json().get("picture")
@@ -209,18 +230,15 @@ def _refresh_google_access(refresh_token: str) -> Optional[str]:
     client_secret = settings.google_oauth.client_secret
     if not refresh_token or not client_id or not client_secret:
         return None
-    import httpx
-
-    with httpx.Client(timeout=2.0) as client:
-        response = client.post(
-            _GOOGLE_TOKEN,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
+    response = avatar_http_client().post(
+        _GOOGLE_TOKEN,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        },
+    )
     if response.status_code != 200:
         return None
     access = response.json().get("access_token")
