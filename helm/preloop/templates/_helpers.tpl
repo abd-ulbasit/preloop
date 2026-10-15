@@ -244,6 +244,18 @@ Shared OTLP env for API and gateway (one values schema).
 {{- end }}
 {{- end -}}
 
+{{/*
+CODEX_IMAGE for processes that launch hosted Codex (API and workers).
+Empty leaves the variable unset so the process uses the digest pinned in
+the application. Call with the root context.
+*/}}
+{{- define "preloop.codexImageEnv" -}}
+{{- if .Values.agents.codexImage }}
+- name: CODEX_IMAGE
+  value: {{ .Values.agents.codexImage | quote }}
+{{- end }}
+{{- end -}}
+
 {{/* namespace.create governs local provisioning, not a remote destination. */}}
 {{- define "preloop.executionNamespace" -}}
 {{- if or .Values.agentExecution.kubeconfigSecret .Values.agentExecution.namespace.create -}}

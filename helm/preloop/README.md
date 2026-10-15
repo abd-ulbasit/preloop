@@ -492,6 +492,12 @@ helm install preloop ./helm/preloop \
 | `autoscaling.maxReplicas`      | Maximum number of replicas                            | `5`         |
 | `autoscaling.targetCPUUtilizationPercentage` | Target CPU utilization percentage      | `80`        |
 
+### Hosted agent images
+
+| Name                | Description                                                                                                      | Value |
+|---------------------|------------------------------------------------------------------------------------------------------------------|-------|
+| `agents.codexImage` | `CODEX_IMAGE` on the API and worker pods. Empty uses the digest pinned in the application. A tag logs one warning at startup. | `""`  |
+
 ### Agent runtime placement parameters
 
 | Name                                                        | Description                                                       | Value           |

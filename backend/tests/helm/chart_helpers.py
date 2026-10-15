@@ -67,6 +67,7 @@ def _run_helm(
     template: Optional[str] = None,
     overrides: List[str] | None = None,
     values_files: List[str] | None = None,
+    string_overrides: List[str] | None = None,
 ) -> str:
     helm = shutil.which("helm")
     if helm is None:  # pragma: no cover - depends on the local toolchain
@@ -86,6 +87,8 @@ def _run_helm(
         command += ["-f", str(path)]
     for override in overrides or []:
         command += ["--set", override]
+    for override in string_overrides or []:
+        command += ["--set-string", override]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -96,6 +99,7 @@ def helm_template(
     overrides: List[str] | None = None,
     *,
     values_files: List[str] | None = None,
+    string_overrides: List[str] | None = None,
 ) -> str:
     """Render one chart template, skipping when helm is unavailable."""
     with offline_chart() as chart_dir:
@@ -104,6 +108,7 @@ def helm_template(
             template=template,
             overrides=overrides,
             values_files=values_files,
+            string_overrides=string_overrides,
         )
 
 

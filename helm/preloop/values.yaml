@@ -889,6 +889,12 @@ notifications:
 cleanup:
   enabled: false
 
+# Hosted agent images. Empty codexImage leaves CODEX_IMAGE unset, so the
+# API and worker use the digest pinned in the application. A tag logs one
+# warning at process startup.
+agents:
+  codexImage: ""
+
 # Agent execution configuration
 agentExecution:
   # Existing Secret with key kubeconfig; credentials target the execution cluster.

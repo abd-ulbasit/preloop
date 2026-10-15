@@ -188,10 +188,11 @@ active execution. App signing keys remain on the controller. The runtime replace
 stale git credentials and uses the fresh token for PR REST calls as well.
 The sandboxed-browser allowlist sidecar lives in
 [`environments/egress-proxy`](environments/egress-proxy/README.md).
-An opt-in Codex-compatible image with a distro Perl toolchain is built from
-[`environments/perl`](environments/perl/README.md); hosted executors select it
-with `CODEX_IMAGE`, private Docker runners with `agent_config.image`, and native
-host profiles use no image.
+Hosted Codex defaults to the digest-pinned universal image
+(`ghcr.io/preloop/preloop-codex-universal`), which includes the distro Perl
+toolchain. Private runners can still build
+[`environments/perl`](environments/perl/README.md) and select it with
+`agent_config.image`. Native host profiles use no image.
 
 Native Copilot host profiles can publish through managed legacy publication
 (`backend/preloop/services/host_exec_publication.py`, runner
@@ -601,7 +602,9 @@ and Tags controls. Sharing requires the server's `resource_sharing` capability
 and a supported model, MCP server, or managed-agent kind; hierarchy alone never
 advertises sharing. Flows, policy baselines, and runner pools retain independent
 `abac_rules` tag controls. Editors use persisted drafts with explicit Save/Cancel,
-an anchored desktop popover, and a phone dialog. Account defaults describe policy
+an anchored desktop popover in the browser top layer, and a phone dialog. Model
+metadata controls mount only after ownership is known; global provider models
+without an account do not expose unsupported Access or Tags endpoints. Account defaults describe policy
 configuration, and sharing summaries describe intent rather than effective access.
 Sharing targets reference existing sharing permits. The independent
 `resource_access` capability adds People & teams, applied-rule provenance and

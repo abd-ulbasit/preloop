@@ -53,11 +53,18 @@ def _arg_default(name: str) -> str:
     return match.group(1)
 
 
-def test_base_is_the_default_codex_image_pinned_by_digest() -> None:
+def test_base_is_pinned_upstream_and_hosted_default_is_separate() -> None:
+    """The scanner still extends upstream. Hosted Codex uses our image."""
     base = _arg_default("CODEX_BASE_IMAGE")
     name, _, digest = base.partition("@sha256:")
     assert re.fullmatch(r"[a-f0-9]{64}", digest)
-    assert name == DEFAULT_AGENT_IMAGES["codex"].rsplit(":", 1)[0]
+    assert name == "ghcr.io/openai/codex-universal"
+    hosted = DEFAULT_AGENT_IMAGES["codex"]
+    assert re.fullmatch(
+        r"ghcr.io/preloop/preloop-codex-universal@sha256:[a-f0-9]{64}",
+        hosted,
+    )
+    assert hosted.split("@", 1)[0] != name
     assert re.fullmatch(r"\S+@sha256:[a-f0-9]{64}", _arg_default("FETCH_IMAGE"))
 
 

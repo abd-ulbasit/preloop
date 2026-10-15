@@ -222,7 +222,7 @@ export interface AIModel {
   is_default?: boolean;
   created_at: string;
   updated_at: string;
-  account_id?: string;
+  account_id?: string | null;
 }
 
 export interface SpeechToTextResponse {
