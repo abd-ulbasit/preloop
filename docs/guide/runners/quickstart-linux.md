@@ -365,8 +365,9 @@ after a successful socket write but before server persistence can lose that
 batch. The runner does not maintain an unbounded replay queue.
 
 When the flow omits `image` / `docker_image`, the control plane uses the hosted
-Codex/OpenCode default. The default `ghcr.io/openai/codex-universal:latest`
-entrypoint is preserved because it initializes language runtimes. Custom
+Codex/OpenCode default. The default Codex image
+`ghcr.io/preloop/preloop-codex-universal` keeps the base entrypoint, which
+initializes language runtimes. Custom
 images normally run with `/bin/bash` as the entrypoint. They must provide
 Bash, Python 3, Git, Node/npm, writable `/workspace`, a writable home directory,
 and the dependencies required by repository setup/tests. The shared bootstrap

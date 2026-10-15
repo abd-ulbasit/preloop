@@ -188,10 +188,11 @@ active execution. App signing keys remain on the controller. The runtime replace
 stale git credentials and uses the fresh token for PR REST calls as well.
 The sandboxed-browser allowlist sidecar lives in
 [`environments/egress-proxy`](environments/egress-proxy/README.md).
-An opt-in Codex-compatible image with a distro Perl toolchain is built from
-[`environments/perl`](environments/perl/README.md); hosted executors select it
-with `CODEX_IMAGE`, private Docker runners with `agent_config.image`, and native
-host profiles use no image.
+Hosted Codex defaults to the digest-pinned universal image
+(`ghcr.io/preloop/preloop-codex-universal`), which includes the distro Perl
+toolchain. Private runners can still build
+[`environments/perl`](environments/perl/README.md) and select it with
+`agent_config.image`. Native host profiles use no image.
 
 Native Copilot host profiles can publish through managed legacy publication
 (`backend/preloop/services/host_exec_publication.py`, runner

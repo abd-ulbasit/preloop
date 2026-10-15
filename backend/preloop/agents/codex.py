@@ -109,7 +109,9 @@ class CodexAgent(ContainerAgentExecutor):
                 - model: OpenAI model to use (default: gpt-5.4)
                 - custom settings for Codex CLI
         """
-        image = default_agent_image("codex") or "ghcr.io/openai/codex-universal:latest"
+        image = default_agent_image("codex")
+        if image is None:
+            raise RuntimeError("codex default image is not configured")
 
         # Auto-detect Kubernetes environment or use explicit env var
         use_k8s = self._detect_kubernetes_environment()

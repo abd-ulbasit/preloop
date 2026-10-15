@@ -1,16 +1,90 @@
 """Tests for the shared default agent image helper."""
 
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 from uuid import uuid4
 
 import pytest
+from click.testing import CliRunner
 
 from preloop.agents.aider import AiderAgent
 from preloop.agents.codex import CodexAgent
 from preloop.agents.gemini import GeminiAgent
-from preloop.agents.images import DEFAULT_AGENT_IMAGES, default_agent_image
+from preloop.agents.images import (
+    DEFAULT_AGENT_IMAGES,
+    default_agent_image,
+    warn_codex_image_tag_once,
+)
 from preloop.agents.opencode import OpenCodeAgent
+
+HOSTED_CODEX_IMAGE = (
+    "ghcr.io/preloop/preloop-codex-universal@sha256:"
+    "2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de"
+)
+
+
+def test_unset_codex_image_is_digest_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hosted Codex defaults to the published universal image digest."""
+    monkeypatch.delenv("CODEX_IMAGE", raising=False)
+    image = default_agent_image("codex")
+    assert image == HOSTED_CODEX_IMAGE
+    assert image is not None and "@sha256:" in image
+    assert DEFAULT_AGENT_IMAGES["codex"] == image
+
+
+def test_tag_valued_codex_image_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A tag in CODEX_IMAGE logs exactly one warning."""
+    monkeypatch.setattr("preloop.agents.images._codex_tag_warning_emitted", False)
+    monkeypatch.setenv("CODEX_IMAGE", "ghcr.io/example/codex:latest")
+    with caplog.at_level(logging.WARNING, logger="preloop.agents.images"):
+        warn_codex_image_tag_once()
+        warn_codex_image_tag_once()
+    matches = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "CODEX_IMAGE" in record.getMessage()
+    ]
+    assert len(matches) == 1
+    assert "ghcr.io/example/codex:latest" in matches[0].getMessage()
+
+
+def test_digest_valued_codex_image_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("preloop.agents.images._codex_tag_warning_emitted", False)
+    monkeypatch.setenv("CODEX_IMAGE", HOSTED_CODEX_IMAGE)
+    with caplog.at_level(logging.WARNING, logger="preloop.agents.images"):
+        warn_codex_image_tag_once()
+        warn_codex_image_tag_once()
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "CODEX_IMAGE" in record.getMessage()
+    ]
+
+
+def test_worker_startup_warns_once_for_tag_codex_image(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The sync worker logs the tag warning once when the process starts."""
+    from preloop.sync.cli.worker_commands import worker_cmd
+
+    monkeypatch.setattr("preloop.agents.images._codex_tag_warning_emitted", False)
+    monkeypatch.setenv("CODEX_IMAGE", "ghcr.io/example/codex:latest")
+
+    def _close(coro: object) -> None:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+
+    monkeypatch.setattr("preloop.sync.cli.worker_commands.asyncio.run", _close)
+    result = CliRunner().invoke(worker_cmd, [])
+    assert result.exit_code == 0, result.output
+    captured = capfd.readouterr()
+    assert captured.err.count("CODEX_IMAGE is a tag") == 1
 
 
 def test_default_agent_image_matches_hosted_executors() -> None:

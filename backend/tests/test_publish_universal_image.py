@@ -254,8 +254,12 @@ def test_environments_doc_names_the_published_digest() -> None:
         REPO / "docs" / "guide" / "flows" / "environments-and-recovery.md"
     ).read_text()
     assert "publish-universal-image.yml" in text
-    assert "ghcr.io/preloop/preloop-codex-universal@sha256:" in text
-    assert "codex-universal:latest" in text
+    assert (
+        "ghcr.io/preloop/preloop-codex-universal@sha256:"
+        "2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de"
+    ) in text
+    assert "agents.codexImage" in text
+    assert "hosted default stays" not in text
 
 
 def test_readme_points_at_the_publish_workflow() -> None:

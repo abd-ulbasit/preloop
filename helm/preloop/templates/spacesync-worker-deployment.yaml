@@ -320,6 +320,7 @@ spec:
               value: {{ $.Values.atlassianOauth.scopes | quote }}
             {{- end }}
             {{- end }}
+            {{- include "preloop.codexImageEnv" $ | nindent 12 }}
             {{- include "preloop.extraEnv" $ | nindent 12 }}
           {{- with $.Values.extraEnvFrom }}
           envFrom:
