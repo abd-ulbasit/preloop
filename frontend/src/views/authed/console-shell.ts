@@ -201,9 +201,10 @@ export class ConsoleShell extends LitElement {
     consoleDialogStyles,
     unsafeCSS(consoleStyles),
     css`
-      /* One scroller: .main-content. The shell is exactly the window tall
-         (dvh where supported, so mobile browser bars do not clip it) and
-         nothing inside may grow the document. */
+      /* Two scrollers, both inside the window: .main-content for the page,
+         and the sidebar nav for a menu taller than the window. The shell is
+         exactly the window tall (dvh where supported, so mobile browser bars
+         do not clip it) and nothing inside may grow the document. */
       :host {
         display: block;
         height: 100vh;
@@ -228,6 +229,9 @@ export class ConsoleShell extends LitElement {
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
         transition:
           width 0.2s ease,
           transform 0.25s ease;
@@ -249,6 +253,8 @@ export class ConsoleShell extends LitElement {
         position: relative;
         display: flex;
         flex-shrink: 0;
+        height: 100%;
+        min-height: 0;
       }
 
       .sidebar-backdrop {
@@ -440,6 +446,15 @@ export class ConsoleShell extends LitElement {
         margin: 0;
         padding: 0;
         font-size: var(--console-text-body);
+      }
+      /* The logo stays put. The menu is what scrolls, so Settings at the
+         foot stays reachable on a short window. Nested section lists are
+         not this scroller. */
+      #console-nav > .nav-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       .sidebar-link {
         display: flex;
