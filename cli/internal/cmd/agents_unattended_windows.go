@@ -9,7 +9,8 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"syscall"
+	"sort"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -177,11 +178,7 @@ func runUnattendedAsTarget(opts unattendedOptions, output io.Writer) (bool, erro
 			break
 		}
 	}
-	child.Stdin, child.Stdout, child.Stderr = nil, nil, nil
-	child.Env = append(env, "PRELOOP_DISABLE_TELEMETRY=true")
-	child.Dir = profile
-	child.SysProcAttr = &syscall.SysProcAttr{Token: syscall.Token(token), NoInheritHandles: true, HideWindow: true}
-	if err := child.Run(); err != nil {
+	if err := launchEnrollmentWindowsUser(token, child.Path, child.Args, profile, env); err != nil {
 		return true, fmt.Errorf("enrollment in target user session failed: %w", err)
 	}
 	fmt.Fprintln(output, "Selected apps processed in the active user session; application login may still be pending.") //nolint:errcheck
@@ -220,4 +217,75 @@ func setEnrollmentWindowsDACL(path, targetSID string, directory bool) error {
 		return err
 	}
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// CreateProcessAsUser needs the target interactive desktop explicitly. A
+// service's default window station belongs to session 0 and must not leak
+// into the logged-in user's process. No handles cross the session boundary.
+func launchEnrollmentWindowsUser(token windows.Token, executable string, args []string, profile string, environment []string) error {
+	appPtr, err := windows.UTF16PtrFromString(executable)
+	if err != nil {
+		return err
+	}
+	commandPtr, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(args))
+	if err != nil {
+		return err
+	}
+	directoryPtr, err := windows.UTF16PtrFromString(profile)
+	if err != nil {
+		return err
+	}
+	desktopPtr, err := windows.UTF16PtrFromString(`winsta0\default`)
+	if err != nil {
+		return err
+	}
+	envBlock, err := enrollmentWindowsEnvironment(environment)
+	if err != nil {
+		return err
+	}
+	startup := windows.StartupInfo{Desktop: desktopPtr, Flags: windows.STARTF_USESHOWWINDOW, ShowWindow: windows.SW_HIDE}
+	startup.Cb = uint32(unsafe.Sizeof(startup))
+	var process windows.ProcessInformation
+	if err := windows.CreateProcessAsUser(token, appPtr, commandPtr, nil, nil, false, windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_NO_WINDOW, &envBlock[0], directoryPtr, &startup, &process); err != nil {
+		return err
+	}
+	defer windows.CloseHandle(process.Thread)  //nolint:errcheck
+	defer windows.CloseHandle(process.Process) //nolint:errcheck
+	event, err := windows.WaitForSingleObject(process.Process, 300000)
+	if err != nil {
+		return err
+	}
+	if event != windows.WAIT_OBJECT_0 {
+		_ = windows.TerminateProcess(process.Process, 1)
+		_, _ = windows.WaitForSingleObject(process.Process, 5000)
+		return errors.New("target enrollment process did not finish within five minutes; retry from its credential checkpoint")
+	}
+	var code uint32
+	if err := windows.GetExitCodeProcess(process.Process, &code); err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("target enrollment exited with status %d", code)
+	}
+	return nil
+}
+
+func enrollmentWindowsEnvironment(values []string) ([]uint16, error) {
+	filtered := make([]string, 0, len(values)+1)
+	for _, value := range values {
+		if !strings.HasPrefix(strings.ToUpper(value), "PRELOOP_DISABLE_TELEMETRY=") {
+			filtered = append(filtered, value)
+		}
+	}
+	filtered = append(filtered, "PRELOOP_DISABLE_TELEMETRY=true")
+	sort.Slice(filtered, func(i, j int) bool { return strings.ToUpper(filtered[i]) < strings.ToUpper(filtered[j]) })
+	block := []uint16{}
+	for _, value := range filtered {
+		encoded, err := windows.UTF16FromString(value)
+		if err != nil {
+			return nil, err
+		}
+		block = append(block, encoded...)
+	}
+	return append(block, 0), nil
 }

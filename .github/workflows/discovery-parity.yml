@@ -36,8 +36,8 @@ jobs:
           cache-dependency-path: cli/go.sum
       - name: Download dependencies before offline tests
         run: go mod download
-      - name: Test offline discovery, inventory and report builders
+      - name: Test discovery, inventory and unattended enrollment fixtures
         env:
           GOPROXY: 'off'
           GOSUMDB: 'off'
-        run: go test ./internal/cmd -run 'Test(AllUsersInventory|Inventory|SafeDiscoveryJSON|DiscoverReport|DiscoverWithoutReport|DiscoverEnvOff|DiscoveryLinkFields|BuildDiscovery|DiscoveryKind|HomeRelative|ConfigPathHash|WorkstationFingerprint|LocalProfile|ParseMachineID|PersistedWorkstationID|ClaudeDesktopConfigPaths|ConfigPathsForOther|UserConfigDirs)' -count=1
+        run: go test ./internal/cmd -run 'Test(Unattended|AllUsersInventory|Inventory|SafeDiscoveryJSON|DiscoverReport|DiscoverWithoutReport|DiscoverEnvOff|DiscoveryLinkFields|BuildDiscovery|DiscoveryKind|HomeRelative|ConfigPathHash|WorkstationFingerprint|LocalProfile|ParseMachineID|PersistedWorkstationID|ClaudeDesktopConfigPaths|ConfigPathsForOther|UserConfigDirs)' -count=1
