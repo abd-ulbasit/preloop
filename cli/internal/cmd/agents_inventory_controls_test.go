@@ -72,7 +72,7 @@ func TestInventoryVerificationFreshness(t *testing.T) {
 
 func TestInventoryLocalControlsRemainUnverified(t *testing.T) {
 	home := t.TempDir()
-	writeInventoryFixture(t, home, ".claude/settings.json", `{"env":{"ANTHROPIC_BASE_URL":"https://example.com/anthropic","ANTHROPIC_AUTH_TOKEN":"synthetic-secret"},"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/example/preloop agents permission-hook --source claude-code"}]}]},"mcpServers":{"preloop":{"url":"https://example.com/mcp/v1"}}}`)
+	writeInventoryFixture(t, home, ".claude/settings.json", `{"env":{"ANTHROPIC_BASE_URL":"https://example.com/anthropic","ANTHROPIC_AUTH_TOKEN":"synthetic-secret"},"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/example/preloop agents permission-hook --source claude_code"}]}]},"mcpServers":{"preloop":{"url":"https://example.com/mcp/v1"}}}`)
 	scan := collectAgentInventory(inventoryTestDependencies(t, home))
 	for _, app := range scan.Apps {
 		if app.AppID == "claude-code" {
@@ -138,11 +138,11 @@ func TestInventoryHookRecognitionRejectsShellWrappers(t *testing.T) {
 		command string
 		want    string
 	}{
-		{`/opt/example/preloop agents permission-hook --source claude-code`, "true"},
-		{`"/opt/Example App/preloop" agents permission-hook --source claude-code`, "true"},
-		{`false && /opt/example/preloop agents permission-hook --source claude-code`, "unknown"},
-		{`echo /opt/example/preloop agents permission-hook --source claude-code`, "unknown"},
-		{`$(echo /opt/example)/preloop agents permission-hook --source claude-code`, "unknown"},
+		{`/opt/example/preloop agents permission-hook --source claude_code`, "true"},
+		{`"/opt/Example App/preloop" agents permission-hook --source claude_code`, "true"},
+		{`false && /opt/example/preloop agents permission-hook --source claude_code`, "unknown"},
+		{`echo /opt/example/preloop agents permission-hook --source claude_code`, "unknown"},
+		{`$(echo /opt/example)/preloop agents permission-hook --source claude_code`, "unknown"},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			controls := inventoryControls(AgentConfig{Name: "Claude Code"})
@@ -152,5 +152,14 @@ func TestInventoryHookRecognitionRejectsShellWrappers(t *testing.T) {
 				t.Fatalf("got %+v", controls[1])
 			}
 		})
+	}
+}
+
+func TestInventoryRecognizesInstalledApprovalHook(t *testing.T) {
+	controls := inventoryControls(AgentConfig{Name: "Claude Code"})
+	data, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{map[string]any{"type": "command", "command": strings.Replace(approvalHookCommand(permissionSourceClaudeCode), preloopExecutableForHooks(), "/opt/example/preloop", 1)}}}}}})
+	inventoryObserveLocalControls(controls, "Claude Code", data)
+	if controls[1].Configured != "true" || controls[1].Verification != "unverified" {
+		t.Fatalf("installed hook not recognized: %+v", controls[1])
 	}
 }

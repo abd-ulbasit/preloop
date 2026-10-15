@@ -126,6 +126,10 @@ mcpServers:{one:{url:"https://example.com/?secret"}}}`, 1, false},
 			if (err != nil) != tt.malformed || count != tt.count {
 				t.Fatalf("count=%d error=%v", count, err)
 			}
+			_, summaryCount, summaryErr := inventoryConfigSummary(tt.app, tt.path, []byte(tt.data))
+			if summaryCount != count || (summaryErr != nil) != (err != nil) {
+				t.Fatalf("route summary drift: count=%d error=%v; legacy count=%d error=%v", summaryCount, summaryErr, count, err)
+			}
 			if err != nil && err.Error() != "config_malformed" {
 				t.Fatalf("unsafe error %v", err)
 			}

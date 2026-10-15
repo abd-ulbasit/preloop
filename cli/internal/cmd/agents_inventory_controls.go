@@ -18,6 +18,9 @@ type inventoryControl struct {
 	EvidenceKind          string `json:"evidence_kind"`
 }
 
+// Freshness scaffolding for a future app-harness caller: there is no prior-
+// verification loader or writer in this collector. Offline inventory always
+// reports unverified/unavailable, including when old enrollment probes passed.
 // Revisions are opaque, local verifier inputs, not serialized inventory fields.
 // Unknown revisions cannot establish freshness. Never read credentials to build
 // these during offline collection; it has no verification evidence to reuse.
@@ -128,7 +131,7 @@ func inventoryObserveLocalControls(controls []inventoryControl, appName string, 
 			continue
 		}
 		for _, hook := range group.Hooks {
-			const suffix = " agents permission-hook --source claude-code"
+			const suffix = " agents permission-hook --source " + permissionSourceClaudeCode
 			if hook.Type != "command" || !strings.HasSuffix(hook.Command, suffix) {
 				continue
 			}

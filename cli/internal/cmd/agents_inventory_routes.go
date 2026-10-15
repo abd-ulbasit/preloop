@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,6 +107,10 @@ func inventoryRouteFromRaw(name string, raw json.RawMessage, decode func([]byte,
 	if !ok {
 		return inventoryClassifyRoute(name, MCPDef{}, false)
 	}
+	return inventoryRouteFromFields(name, fields, decode)
+}
+
+func inventoryRouteFromFields(name string, fields map[string]json.RawMessage, decode func([]byte, any) error) inventoryMCPRoutes {
 	def := MCPDef{}
 	valid := true
 	var kind, transport string
@@ -169,12 +174,14 @@ func inventoryRouteFromRaw(name string, raw json.RawMessage, decode func([]byte,
 }
 
 func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoutes, error) {
+	routes, _, err := inventoryConfigSummary(appName, path, data)
+	return routes, err
+}
+
+// One document parse supplies both legacy structural counts and route facts.
+// Validation and container precedence match inventoryMCPServerCount.
+func inventoryConfigSummary(appName, path string, data []byte) (inventoryMCPRoutes, int, error) {
 	result := inventoryMCPRoutes{Completeness: "complete"}
-	// Reuse the collector's syntax/shape validation and container selection.
-	if _, err := inventoryMCPServerCount(appName, path, data); err != nil {
-		result.Completeness = "partial"
-		return result, err
-	}
 	decode := json.Unmarshal
 	var servers map[string]json.RawMessage
 	switch strings.ToLower(filepath.Ext(path)) {
@@ -192,7 +199,7 @@ func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoute
 			} `toml:"mcp_servers"`
 		}
 		if toml.Unmarshal(data, &doc) != nil {
-			return inventoryMCPRoutes{Completeness: "partial"}, errInventoryConfig
+			return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
 		}
 		servers = map[string]json.RawMessage{}
 		for name, s := range doc.Servers {
@@ -206,16 +213,27 @@ func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoute
 		}
 	case ".yaml", ".yml":
 		var doc yaml.Node
-		if yaml.Unmarshal(data, &doc) != nil {
-			return inventoryMCPRoutes{Completeness: "partial"}, errInventoryConfig
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		if decoder.Decode(&doc) != nil || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode || !inventoryUniqueYAMLKeys(doc.Content[0]) {
+			return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
+		}
+		var extra yaml.Node
+		if decoder.Decode(&extra) != io.EOF {
+			return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
 		}
 		servers = map[string]json.RawMessage{}
 		root := doc.Content[0]
 		for i := 0; i < len(root.Content); i += 2 {
 			if root.Content[i].Value == "mcp_servers" {
 				entries := root.Content[i+1]
+				if entries.Kind != yaml.MappingNode || !inventoryUniqueYAMLKeys(entries) {
+					return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
+				}
 				for j := 0; j < len(entries.Content); j += 2 {
 					entry := entries.Content[j+1]
+					if entry.Kind != yaml.MappingNode {
+						return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
+					}
 					fields := map[string]any{}
 					for k := 0; k < len(entry.Content); k += 2 {
 						key := entry.Content[k].Value
@@ -236,7 +254,10 @@ func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoute
 		if appName == "OpenClaw" {
 			decode = json5.Unmarshal
 		}
-		doc, _ := inventoryRawObject(decode, data)
+		doc, ok := inventoryRawObject(decode, data)
+		if !ok {
+			return inventoryMCPRoutes{Completeness: "partial"}, 0, errInventoryConfig
+		}
 		for _, key := range []string{"mcpServers", "servers", "mcp_servers"} {
 			if raw, exists := doc[key]; exists {
 				if _, ok := inventoryRawObject(decode, raw); !ok {
@@ -255,10 +276,17 @@ func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoute
 		}
 		servers = inventoryLookupMCPContainer(doc, decode)
 	}
+	count := 0
 	for name, raw := range servers {
-		result.add(inventoryRouteFromRaw(name, raw, decode))
+		fields, ok := inventoryRawObject(decode, raw)
+		if !ok {
+			result.add(inventoryClassifyRoute(name, MCPDef{}, false))
+			continue
+		}
+		count++
+		result.add(inventoryRouteFromFields(name, fields, decode))
 	}
-	return result, nil
+	return result, count, nil
 }
 
 func inventoryRoutesForDocument(doc map[string]interface{}) inventoryMCPRoutes {

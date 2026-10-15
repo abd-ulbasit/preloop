@@ -178,12 +178,7 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 					addProbe("config", "error", "config_malformed")
 					continue
 				}
-				count, err := inventoryMCPServerCount(spec.Name, path, data)
-				if err != nil {
-					addProbe("config", "error", "config_malformed")
-					continue
-				}
-				routes, routeErr := inventoryConfigRoutes(spec.Name, path, data)
+				routes, count, routeErr := inventoryConfigSummary(spec.Name, path, data)
 				if routeErr != nil || routes.Completeness == "partial" {
 					addProbe("config", "error", "config_malformed")
 					continue
