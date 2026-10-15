@@ -89,6 +89,22 @@ VERSION_ARGV: dict[str, tuple[str, ...]] = {
     "tsc": ("tsc", "--version"),
 }
 
+# A review policy can name a version_linter. Only these programs may be
+# suggested. Anything else stays in the report as not applicable, with an
+# empty command, so a pull request cannot point the reviewer at `rm`.
+KNOWN_CHECKERS = frozenset(
+    {
+        "eslint",
+        "golangci-lint",
+        "mypy",
+        "perlcritic",
+        "perlver",
+        "ruff",
+        "shellcheck",
+        "tsc",
+    }
+)
+
 SUGGESTED_COMMANDS: dict[str, str] = {
     "eslint": "eslint .",
     "golangci-lint": "golangci-lint run",
@@ -237,13 +253,16 @@ class RealEnvironment(Environment):
             )
         except (OSError, subprocess.TimeoutExpired):
             return None
-        text = f"{completed.stdout}\n{completed.stderr}"
-        parsed = _first_version(text)
-        if parsed:
-            return parsed
+        probed = version_from_probe(
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+        if probed is not None:
+            return probed
+        # The module probe failed. A perlver binary on PATH is still the
+        # checker; do not invent a version from perl's stderr.
         if tool == "perlver" and shutil.which("perlver") is not None:
-            return ""
-        if completed.returncode == 0:
             return ""
         return None
 
@@ -306,16 +325,23 @@ def build_report(root: Path, environment: Environment | None = None) -> Report:
     }
 
 
-def format_checks_section(checks: Sequence[Check] | None) -> str:
-    """Render the review summary Checks section for a staged review.
+def format_checks_section(
+    checks: Sequence[Check] | None,
+    results: Mapping[tuple[str, str], str] | None = None,
+) -> str:
+    """Render the review summary Checks section.
+
+    ``main`` prints this after the table. A result keyed by ``(tool, path)``
+    is a checker the reviewer actually ran. Every other checker stays
+    "not run". Not run is never described as a pass.
 
     Args:
         checks: Checkers the preflight detected. None means the
             ``preloop-preflight`` binary itself was not on PATH.
+        results: Optional map of ``(tool, path)`` to one result line.
 
     Returns:
-        Markdown whose heading is ``### Checks``. Every checker is one
-        "not run" line. Not run is never described as a pass.
+        Markdown whose heading is ``### Checks``.
     """
     lines = ["### Checks", ""]
     if checks is None:
@@ -323,18 +349,33 @@ def format_checks_section(checks: Sequence[Check] | None) -> str:
     elif not checks:
         lines.append("- `preloop-preflight`: no declared checkers detected")
     else:
+        quoted = results or {}
         for item in checks:
-            where = f" `{item['path']}`" if item["path"] else ""
-            command = ""
-            if item["command"]:
-                command = f" Suggested command: `{item['command']}`."
             lines.append(
-                f"- `{item['tool']}` ({item['language']}){where}: "
-                f"not run: {item['reason']}.{command}"
+                _format_check_line(
+                    item,
+                    quoted.get((item["tool"], item["path"])),
+                )
             )
     lines.append("")
     lines.append("Not run never counts as a pass.")
     return "\n".join(lines)
+
+
+def _format_check_line(item: Check, result: str | None) -> str:
+    where = f" `{item['path']}`" if item["path"] else ""
+    if result is not None:
+        return (
+            f"- `{item['tool']}` ({item['language']}){where}: "
+            f"ran `{item['command']}`: {result}"
+        )
+    command = ""
+    if item["command"]:
+        command = f" Suggested command: `{item['command']}`."
+    return (
+        f"- `{item['tool']}` ({item['language']}){where}: "
+        f"not run: {item['reason']}.{command}"
+    )
 
 
 def format_table(report: Report) -> str:
@@ -399,7 +440,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OSError as exc:
         print(f"could not write {OUTPUT_PATH}: {exc}", file=sys.stderr)
         return 1
-    sys.stdout.write(payload if args.json else format_table(report))
+    if args.json:
+        sys.stdout.write(payload)
+    else:
+        sys.stdout.write(format_table(report))
+        sys.stdout.write(format_checks_section(report["checks"]))
+        sys.stdout.write("\n")
     return 0
 
 
@@ -576,7 +622,7 @@ def _checks_for(
                 version=None,
                 expected=None,
                 dependency_status=STATUS_NOT_APPLICABLE,
-                reason="version_linter command is unsafe",
+                reason=linter.reason,
                 command="",
             )
             continue
@@ -628,6 +674,7 @@ def _tool_check(
         expected=expected,
         dependency_status=dependency_status,
     )
+    rel = _rel(root, project)
     reason = _reason(
         tool=tool,
         declared=declared,
@@ -638,11 +685,12 @@ def _tool_check(
         missing=missing,
         node_deps=node_deps,
         undeclared_reason=undeclared_reason,
+        path=rel,
     )
     return _make_check(
         tool=tool,
         language=language,
-        path=_rel(root, project),
+        path=rel,
         status=status,
         version=version,
         expected=expected,
@@ -737,8 +785,11 @@ def _reason(
     missing: Sequence[str],
     node_deps: bool,
     undeclared_reason: str,
+    path: str,
 ) -> str:
     parts: list[str] = []
+    if path:
+        parts.append(f"path {path}")
     if not declared:
         parts.append(undeclared_reason or f"no {tool} config")
     elif not present:
@@ -870,11 +921,19 @@ def _package_pin(project: Path, package: str) -> str | None:
 
 
 class _PolicyLinter:
-    def __init__(self, language: str, command: str, program: str, safe: bool) -> None:
+    def __init__(
+        self,
+        language: str,
+        command: str,
+        program: str,
+        safe: bool,
+        reason: str,
+    ) -> None:
         self.language = language
         self.command = command
         self.program = program
         self.safe = safe
+        self.reason = reason
 
 
 def _policy_linters(root: Path) -> list[_PolicyLinter]:
@@ -901,19 +960,56 @@ def _policy_linters(root: Path) -> list[_PolicyLinter]:
         command = _unquote(linter_match.group(1).strip())
         tokens = command.split()
         program = tokens[0] if tokens else ""
-        safe = _command_is_safe(command) and _program_is_safe(program)
+        safe, reason = _policy_command_status(command, program)
         if not _program_is_safe(program):
             program = "version_linter"
-            safe = False
         found.append(
             _PolicyLinter(
                 language or "policy",
                 command if safe else "",
                 program,
                 safe,
+                reason,
             )
         )
     return found
+
+
+def version_from_probe(returncode: int, stdout: str, _stderr: str) -> str | None:
+    """Return a version only when the probe exited 0.
+
+    Args:
+        returncode: Probe process status.
+        stdout: Probe stdout. The only stream a version is read from.
+        _stderr: Probe stderr. Ignored, so an ``@INC`` path cannot look
+            like a successful version.
+
+    Returns:
+        A dotted version, an empty string when the probe succeeded
+        without a version line, or None when the probe failed.
+    """
+    if returncode != 0:
+        return None
+    return _first_version(stdout) or ""
+
+
+def _policy_command_status(command: str, program: str) -> tuple[bool, str]:
+    """Decide whether a review-policy version_linter may be suggested.
+
+    Args:
+        command: The ``version_linter`` value from the policy file.
+        program: The first token of that command.
+
+    Returns:
+        ``(True, "")`` when the command is a known checker with a safe
+        argument shape. Otherwise ``(False, reason)`` and the caller
+        stores an empty command.
+    """
+    if not _program_is_safe(program) or not _command_is_safe(command):
+        return False, "version_linter command is unsafe"
+    if program not in KNOWN_CHECKERS:
+        return False, "version_linter program is not a known checker"
+    return True, ""
 
 
 def _command_is_safe(command: str) -> bool:

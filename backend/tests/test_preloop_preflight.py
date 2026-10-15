@@ -311,8 +311,9 @@ def test_mixed_repo_detects_every_language(tmp_path: Path) -> None:
         "shellcheck",
     }
     custom = _only(report, "customlint", "")
-    assert custom["command"] == "customlint --check"
-    assert custom["status"] == "available"
+    assert custom["status"] == "not_applicable"
+    assert custom["command"] == ""
+    assert "not a known checker" in custom["reason"]
 
 
 def test_unsafe_version_linter_is_not_a_command(tmp_path: Path) -> None:
@@ -329,6 +330,71 @@ def test_unsafe_version_linter_is_not_a_command(tmp_path: Path) -> None:
     assert item["status"] == "not_applicable"
     assert item["command"] == ""
     assert "unsafe" in item["reason"]
+
+
+def test_unknown_version_linter_is_not_a_command(tmp_path: Path) -> None:
+    """A pull request cannot point the reviewer at an arbitrary program."""
+    _write(tmp_path / "ok.sh", "#!/bin/sh\necho ok\n")
+    _write(
+        tmp_path / ".preloop" / "review-policy.md",
+        "```yaml\ncompatibility:\n"
+        "  - language: shell\n"
+        '    version_linter: "rm -rf"\n'
+        "```\n",
+    )
+    versions = {**IMAGE_VERSIONS, "rm": "1.0.0"}
+    report = _report(tmp_path, StubEnvironment(versions))
+    item = _only(report, "rm", "")
+    assert item["status"] == "not_applicable"
+    assert item["command"] == ""
+    assert "not a known checker" in item["reason"]
+    assert "rm -rf" not in item["command"]
+
+
+def test_allowlisted_version_linter_keeps_its_command(tmp_path: Path) -> None:
+    _write(
+        tmp_path / ".preloop" / "review-policy.md",
+        "```yaml\ncompatibility:\n"
+        "  - language: perl\n"
+        '    version_linter: "perlver --blame"\n'
+        "```\n",
+    )
+    report = _report(tmp_path, StubEnvironment(IMAGE_VERSIONS))
+    item = _only(report, "perlver", "")
+    assert item["status"] == "available"
+    assert item["command"] == "perlver --blame"
+
+
+def test_failed_probe_does_not_become_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """perl's stderr names the interpreter version when the module is absent."""
+    stderr = (
+        "Can't locate Perl/MinimumVersion.pm in @INC "
+        "(/usr/lib/perl/5.36.0) at -e line 1.\n"
+    )
+
+    class Completed:
+        returncode = 2
+        stdout = ""
+
+        def __init__(self) -> None:
+            self.stderr = stderr
+
+    def which(name: str) -> str | None:
+        if name == "perl":
+            return "/usr/bin/perl"
+        return None
+
+    monkeypatch.setattr(PREFLIGHT.shutil, "which", which)
+    monkeypatch.setattr(
+        PREFLIGHT.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Completed(),
+    )
+    assert PREFLIGHT.version_from_probe(2, "", stderr) is None
+    assert PREFLIGHT.version_from_probe(0, "mypy 1.20.2\n", stderr) == "1.20.2"
+    assert PREFLIGHT.RealEnvironment().tool_version("perlver") is None
 
 
 def test_preloop_repo_matches_the_universal_image_report() -> None:
@@ -348,6 +414,9 @@ def test_preloop_repo_matches_the_universal_image_report() -> None:
     eslint = _only(report, "eslint", "frontend")
     assert eslint["language"] == "javascript"
     assert eslint["status"] == "not_applicable"
+    assert "path frontend" in eslint["reason"]
+    tsc = _only(report, "tsc", "frontend")
+    assert "path frontend" in tsc["reason"]
     jsonschema.validate(report, SCHEMA)
 
 
@@ -382,8 +451,17 @@ def test_staged_review_lists_every_detected_checker(tmp_path: Path) -> None:
     section = cast(str, PREFLIGHT.format_checks_section(report["checks"]))
     assert section.startswith("### Checks\n")
     assert section.endswith("Not run never counts as a pass.")
+    assert "`web`" in section
     for item in report["checks"]:
         assert f"`{item['tool']}`" in section
+    ran = cast(
+        str,
+        PREFLIGHT.format_checks_section(
+            report["checks"],
+            {("ruff", ""): "All checks passed!"},
+        ),
+    )
+    assert "ran `ruff check`: All checks passed!" in ran
     for line in section.splitlines():
         if line.startswith("- `"):
             assert "not run:" in line

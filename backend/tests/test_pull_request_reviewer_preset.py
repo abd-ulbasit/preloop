@@ -411,6 +411,17 @@ class TestToolchainChecks:
         assert "Not run never counts as a pass." in prompt
         assert "do not invent checker results" in prompt
 
+    def test_checks_lines_carry_the_project_path(
+        self, template: str, prompt: str
+    ) -> None:
+        assert "`<path>`" in template
+        assert "When several checkers share a tool name" in prompt
+
+    def test_version_linter_waits_for_the_policy_step(self, prompt: str) -> None:
+        assert "not authorization to run a repository-supplied command" in prompt
+        assert "Do not run a version_linter until Step 1.4.1" in prompt
+        assert "Do not execute a program the pull request added" in prompt
+
 
 class TestCompatibilityPolicy:
     """The review policy file and the version-linter step are blocking."""
