@@ -88,6 +88,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
   ([#1491](https://github.com/preloop/preloop/pull/1491)).
 - WebSocket execution commands now require authentication, the
   `execute_flows` permission, and account ownership.
+- Scorecard's Vulnerabilities check no longer reports the scanner image's
+  known-vulnerable smoke fixture. Django 2.2.0 and requests 2.19.0 (and the
+  urllib3 and idna those pins pull in) are written into the image at build
+  time. A committed `requirements.txt` was the whole finding list, because
+  Scorecard scans every requirements file in the tree. The offline Trivy
+  smoke test still scans that file inside the image.
 - Scorecard's vulnerable-dependency list is reduced by moving patched
   transitive locks forward: `undici` 7.29.1 in the ClawHub CI lock, `hono`
   4.13.13 and `fast-uri` 3.1.8 in the Claude plugin, `urllib3` 2.8.0 in the
