@@ -524,6 +524,44 @@ describe('ConsoleShell', () => {
     window.history.replaceState({}, '', originalPath);
   });
 
+  for (const [enabled, permissions, shown] of [
+    [true, ['view_cost'], true],
+    [true, ['view_policies'], true],
+    [true, [], false],
+    [false, ['view_policies'], false],
+  ] as [boolean, string[], boolean][]) {
+    it(`gates Governance navigation (plugin ${enabled}, permissions ${permissions.join(',')})`, async () => {
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith('/features')
+          ? { features: { governance_review: enabled }, plugins: [] }
+          : url.endsWith('/users/me')
+            ? {
+                username: 'jane',
+                email: 'jane@example.com',
+                email_verified: true,
+                permissions,
+              }
+            : {};
+        return new Response(JSON.stringify(body), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      const el = await fixture<ConsoleShell>(
+        html`<console-shell></console-shell>`
+      );
+      await waitUntil(
+        () =>
+          (el as unknown as { _featuresLoaded: boolean })._featuresLoaded &&
+          (el as unknown as { _permissionsLoaded: boolean })._permissionsLoaded
+      );
+      await el.updateComplete;
+      expect(
+        !!el.shadowRoot!.querySelector('a[href="/console/governance"]')
+      ).to.equal(shown);
+    });
+  }
+
   it('has sidebar menu with Overview and Tools links', async () => {
     const el = (await fixture(
       html`<console-shell></console-shell>`

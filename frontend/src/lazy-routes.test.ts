@@ -1,7 +1,11 @@
 import { expect, waitUntil } from '@open-wc/testing';
 import { Router } from './router';
 import sinon from 'sinon';
-import { withLazyRoutes } from './lazy-routes';
+import {
+  capabilityRoutesFor,
+  capabilityRouteLoaders,
+  withLazyRoutes,
+} from './lazy-routes';
 
 describe('lazy route modules', () => {
   let outlet: HTMLElement;
@@ -16,6 +20,21 @@ describe('lazy route modules', () => {
   afterEach(() => {
     router.unsubscribe();
     outlet.remove();
+  });
+
+  it('registers governance list and detail lazily only with the plugin', () => {
+    expect(
+      capabilityRoutesFor(new Set()).some(
+        (route) => route.component === 'governance-view'
+      )
+    ).to.equal(false);
+    const routes = capabilityRoutesFor(new Set(['governance_review']));
+    expect(routes.map((route) => route.path)).to.eql([
+      'governance/findings/:findingId',
+      'governance',
+    ]);
+    for (const route of routes)
+      expect(route.load).to.equal(capabilityRouteLoaders['governance-view']);
   });
 
   it('loads only matching routes and waits for registration before rendering', async () => {

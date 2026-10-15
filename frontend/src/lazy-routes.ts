@@ -43,6 +43,16 @@ export interface CapabilityRoute {
  */
 export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
   {
+    capability: 'governance_review',
+    path: 'governance/findings/:findingId',
+    component: 'governance-view',
+  },
+  {
+    capability: 'governance_review',
+    path: 'governance',
+    component: 'governance-view',
+  },
+  {
     capability: 'anthropic_inference_hooks',
     path: 'settings/inference-hooks',
     component: 'inference-hooks-view',
@@ -70,6 +80,7 @@ export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
 ];
 
 export const capabilityRouteLoaders: ComponentLoaders = {
+  'governance-view': () => import('./views/authed/governance-view'),
   'inference-hooks-view': () =>
     import('./views/authed/settings/inference-hooks-view'),
   'chat-connections-view': () =>
