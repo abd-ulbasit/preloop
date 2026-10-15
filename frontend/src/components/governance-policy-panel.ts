@@ -376,9 +376,19 @@ export class GovernancePolicyPanel extends LitElement {
     }
   }
 
+  /**
+   * The picker needs its options: a select holding a value it cannot list
+   * stalls the page, and a read-only member has nothing to pick anyway.
+   */
+  private get _modelPickable(): boolean {
+    return this.canManage && this._models.length > 0;
+  }
+
   private _who(version: GovernancePolicyVersion): string {
     if (!version.created_by_id) {
-      return version.source === 'template' ? 'Default template' : 'Preloop';
+      return version.source === 'default_template'
+        ? 'Default template'
+        : 'Preloop';
     }
     return this._userNames.get(version.created_by_id) ?? 'A team member';
   }
@@ -593,7 +603,14 @@ export class GovernancePolicyPanel extends LitElement {
             )}
           </sl-radio-group>
           ${
-            ownModel
+            ownModel && !this._modelPickable
+              ? html`<div class="analysis-model">
+                  Analysis model: ${settings.analysis_model_alias || 'not set'}
+                </div>`
+              : nothing
+          }
+          ${
+            ownModel && this._modelPickable
               ? html`<sl-select
                   label="Analysis model"
                   class="model"

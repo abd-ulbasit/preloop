@@ -37,7 +37,7 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
       version: 1,
       body_markdown: BODY_V1,
       is_active: true,
-      source: 'template',
+      source: 'default_template',
       created_by_id: null,
       created_at: '2026-10-01T09:00:00Z',
       watchlist_fingerprint: 'f1',
@@ -56,7 +56,9 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
   }
   const settings = {
     mode,
-    analysis_model_id: null as string | null,
+    analysis_model_id: (mode === 'on_own_model' ? 'm-own' : null) as
+      string | null,
+    analysis_model_alias: mode === 'on_own_model' ? 'Own small model' : null,
     own_model_exempt: false,
     privacy_line: 'server line',
   };
@@ -261,6 +263,23 @@ describe('governance-policy-panel', () => {
       element.shadowRoot!.querySelector('sl-button.save-settings')
     ).to.equal(null);
     expect(element.shadowRoot!.querySelector('.read-only-note')).to.exist;
+  });
+
+  it('names the seeded version as the default template', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    expect(
+      element.shadowRoot!.querySelector('tr[data-version="1"]')!.textContent
+    ).to.contain('Default template');
+  });
+
+  it('shows read-only members the configured analysis model', async () => {
+    server = fakeServer('on_own_model');
+    const element = await mount(false);
+    expect(element.shadowRoot!.querySelector('sl-select.model')).to.equal(null);
+    expect(
+      element.shadowRoot!.querySelector('.analysis-model')?.textContent
+    ).to.contain('Own small model');
   });
 
   it('marks must and prefer rules, must first', async () => {
