@@ -31,15 +31,25 @@ Use the existing interactive release command from the repository root:
 ```
 
 Review the version/changelog changes, run release validation, and use the helper's
-commit, tag, push, and monitor prompts when ready to publish. Pushing the `v*` tag
-starts the release workflow, including automatic attestation. Running the helper
-only to prepare files does not publish or sign a release. Its annotated Git tag
-is not itself a cryptographic signature; the workflow signs artifact provenance.
+commit, tag, and push prompts when ready to publish. Pushing the `v*` tag
+starts the release workflow, including automatic attestation. The helper
+refuses to push unless `create-release` in this checkout attests
+`release-assets/*`, stages `preloop-v<version>.intoto.jsonl`, and passes
+release notes through a file. That job creates a draft only after the signed
+bundle is on disk, then publishes the draft only after GitHub lists
+`preloop-v<version>.intoto.jsonl` among the release assets. A failed upload
+stays a draft. After the push the helper watches the tag run. The
+`main` run for the same commit does not count: that run skips Create Release
+and still finishes green. The helper exits non-zero if that tag run fails or
+the published release is missing the bundle or another required asset.
+Running the helper only to prepare files does not publish or sign a release.
+Its annotated Git tag is not itself a cryptographic signature; the workflow
+signs artifact provenance.
 
-After the workflow succeeds, check that the release has the bundle and verify a
-downloaded asset with the commands below. Keep tag creation restricted to trusted
-maintainers and protect changes to `.github/workflows/release.yml`: a signing
-identity can attest malicious artifacts if its build workflow is compromised.
+Verify a downloaded asset with the commands below. Keep tag creation restricted
+to trusted maintainers and protect changes to `.github/workflows/release.yml`:
+a signing identity can attest malicious artifacts if its build workflow is
+compromised.
 
 ## Verify a downloaded asset
 
