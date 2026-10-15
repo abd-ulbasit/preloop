@@ -72,9 +72,14 @@ that behavior.
 Delivery remains at least once. Repeated requests and redeliveries are serialized
 within a serial polling worker, but are not coalesced or globally locked across
 replicas. Fleet concurrency remains controlled by polling replicas and worker
-concurrency configuration. Deploy updated workers before the API: older filtered
-workers do not subscribe to the new on-demand subject. Queued on-demand messages
-remain in the existing tasks stream until a compatible worker consumes them.
+concurrency configuration. A prefetched message renews its lease while waiting
+for a handler slot, preventing this wait from causing an ack-timeout redelivery.
+Active scans retain their existing lease behavior.
+
+Deploy all updated workers before the API. Older filtered workers do not
+subscribe to the new subject, so messages remain queued until a compatible
+worker consumes them. Older wildcard workers match the new subject but drop the
+unknown task; they must also be upgraded before the API starts publishing it.
 
 ## Issue Tracker Clients (within Preloop Sync)
 *   **Location:** Implementations reside within Preloop Sync.
