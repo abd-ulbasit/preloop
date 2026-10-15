@@ -658,6 +658,15 @@ Latest collection windows remain independent per authenticated reporting source;
 commercial import policy and coverage endpoints are provided by the optional
 fleet service.
 
+The OSS Lit Agents page exposes a read-only fleet coverage panel only when
+`/features` advertises `fleet_coverage`. Coverage requests use an explicit
+freshness window; per-device application drilldown uses the existing evidence
+reader filtered by fingerprint within the authenticated account. Both readers
+preserve independent source windows, partial and capped results, and unknown
+verification. Account changes abort reads and discard pending results. CSV
+exports preserve scope and truncation, with formula-safe cells. Local inventory
+control and MCP route counts are not uploaded and are not inferred by this view.
+
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
 ### Restricted external runtime authority
