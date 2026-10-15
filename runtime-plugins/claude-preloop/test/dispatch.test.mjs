@@ -67,6 +67,46 @@ test("send_message text is delivered and reply text returned", async () => {
   sidecar.stop();
 });
 
+test("start_new_session ignores a prior session id so the model is applied", async () => {
+  const opened = [];
+  const factory = async ({ prompt, options }) => {
+    opened.push(options);
+    return {
+      async interrupt() {},
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "fresh-1" };
+        for await (const userMessage of prompt) {
+          yield {
+            type: "result",
+            subtype: "success",
+            result: `ok: ${userMessage.message.content}`,
+            usage: { input_tokens: 1, output_tokens: 1 },
+            total_cost_usd: 0.0001,
+          };
+        }
+      },
+    };
+  };
+  const sidecar = new PreloopClaudeSidecar(undefined, factory);
+  sidecar.configure(baseConfig);
+  const reply = await sidecar.dispatch({
+    type: "command",
+    name: "send_message",
+    message_id: "flow-1",
+    payload: {
+      text: "dream",
+      start_new_session: true,
+      runtime_session_id: "should-not-resume",
+      metadata: { model: "anthropic/claude-opus-5-5" },
+    },
+  });
+  assert.equal(reply, "ok: dream");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].model, "anthropic/claude-opus-5-5");
+  assert.equal("resume" in opened[0], false);
+  sidecar.stop();
+});
+
 test("voice transcripts are delivered as auditable text turns", async () => {
   const { sidecar, state } = makeSidecar();
   const result = await sidecar.dispatch({

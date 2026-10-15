@@ -313,14 +313,30 @@ export function selectTurnTimeoutMs(
 
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
 
-/** The flow's model name from send_message metadata, when well formed. */
-export function flowModel(
-  metadata: Record<string, unknown> | undefined,
-): string | undefined {
-  const value = metadata?.["model"];
+function modelToken(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
   return MODEL_NAME.test(trimmed) ? trimmed : undefined;
+}
+
+/**
+ * The flow's model name from send_message metadata, when well formed.
+ *
+ * The dispatch writes `metadata.model`. A gateway block's `model` is the
+ * same alias when the top-level field was omitted.
+ */
+export function flowModel(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const direct = modelToken(metadata?.["model"]);
+  if (direct) {
+    return direct;
+  }
+  const gateway = metadata?.["gateway"];
+  if (!gateway || typeof gateway !== "object") {
+    return undefined;
+  }
+  return modelToken((gateway as Record<string, unknown>)["model"]);
 }

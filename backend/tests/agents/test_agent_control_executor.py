@@ -338,6 +338,36 @@ async def test_get_result_uses_reply_text(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_get_result_carries_sidecar_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _command_record(
+        status="acked",
+        envelope={
+            COMMAND_RESULT_ENVELOPE_KEY: {
+                "status": "completed",
+                "reply_text": "done",
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 8,
+                    "total_tokens": 20,
+                    "total_cost_usd": 0.0042,
+                },
+            }
+        },
+    )
+    executor, reference = _status_executor(monkeypatch, record)
+    result = await executor.get_result(reference)
+    assert result.status == AgentStatus.SUCCEEDED
+    assert result.usage == {
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20,
+        "estimated_cost": 0.0042,
+    }
+
+
+@pytest.mark.asyncio
 async def test_stop_sends_interrupt_and_marks_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -937,6 +967,68 @@ def test_persistent_model_name_prefers_direct_claude_identifier() -> None:
         )
         == "claude-opus-5-5"
     )
+
+
+def test_persistent_model_name_reads_claude_code_row_shape() -> None:
+    """Issue #1703: Claude Code <alias> rows must still send the gateway alias."""
+    from preloop.agents.agent_control import (
+        persistent_model_name,
+        settle_control_usage,
+    )
+
+    assert (
+        persistent_model_name(
+            {
+                "model_gateway_enabled": False,
+                "model_identifier": "claude-opus-5-5",
+                "model_name": "Claude Code anthropic/claude-opus-5-5",
+                "model_provider_name": "anthropic",
+            }
+        )
+        == "anthropic/claude-opus-5-5"
+    )
+    assert (
+        persistent_model_name(
+            {
+                "model_gateway_enabled": True,
+                "model_gateway_model_alias": "anthropic/claude-opus-5-5",
+                "model_identifier": "anthropic/claude-opus-5-5",
+                "model_name": "Claude Code anthropic/claude-opus-5-5",
+                "model_provider_name": "preloop",
+            }
+        )
+        == "anthropic/claude-opus-5-5"
+    )
+    tokens, cost = settle_control_usage(
+        {"api_requests": 0},
+        {
+            "total_tokens": 40,
+            "input_tokens": 30,
+            "output_tokens": 10,
+            "estimated_cost": 0.01,
+        },
+        total_tokens=0,
+        estimated_cost=None,
+    )
+    assert tokens == 40
+    assert cost == 0.01
+
+
+@pytest.mark.asyncio
+async def test_start_sends_claude_code_display_name_alias(
+    monkeypatch: pytest.MonkeyPatch, connected_patches
+) -> None:
+    metadata = await _dispatch_metadata(
+        monkeypatch,
+        config={},
+        context={
+            "model_gateway_enabled": False,
+            "model_identifier": "claude-opus-5-5",
+            "model_name": "Claude Code anthropic/claude-opus-5-5",
+            "model_provider_name": "anthropic",
+        },
+    )
+    assert metadata["model"] == "anthropic/claude-opus-5-5"
 
 
 @pytest.mark.asyncio

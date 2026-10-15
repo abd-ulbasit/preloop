@@ -89,6 +89,52 @@ test("an error result fails the turn with the error text", async () => {
   manager.stop();
 });
 
+test("turn logs carry the effective model and flow execution id", async () => {
+  const lines = [];
+  const factory = async ({ prompt, options }) => ({
+    async interrupt() {},
+    async *[Symbol.asyncIterator]() {
+      yield { type: "system", subtype: "init", session_id: "s-log" };
+      for await (const _message of prompt) {
+        assert.equal(options.model, "anthropic/claude-opus-5-5");
+        yield {
+          type: "result",
+          subtype: "success",
+          result: "ok",
+          usage: { input_tokens: 3, output_tokens: 2 },
+          total_cost_usd: 0.001,
+        };
+      }
+    },
+  });
+  const manager = new SessionManager(config, factory, {
+    log: (line) => lines.push(line),
+    resolveExecutable: async () => ({ source: "bundled", version: "2.1.296" }),
+  });
+  const executionId = "6fdedd35-1111-2222-3333-444444444444";
+  const outcome = await manager.completeTurn({
+    text: "go",
+    model: "anthropic/claude-opus-5-5",
+    metadata: {
+      source: "flow_execution",
+      flow_execution_id: executionId,
+    },
+  });
+  assert.equal(outcome.text, "ok");
+  assert.equal(outcome.usage?.total_tokens, 5);
+  assert.ok(
+    lines.some(
+      (line) =>
+        line.startsWith("turn end") &&
+        line.includes("outcome=completed") &&
+        line.includes(`model=anthropic/claude-opus-5-5`) &&
+        line.includes(`execution_id=${executionId}`),
+    ),
+    lines.join("\n"),
+  );
+  manager.stop();
+});
+
 test("error subtypes without is_error also fail the turn", async () => {
   const factory = async ({ prompt }) => ({
     async interrupt() {},

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any, Dict, Optional, Tuple
 from uuid import UUID
@@ -105,6 +106,124 @@ _ANTHROPIC_PROVIDERS = frozenset({"anthropic", "claude"})
 #: Persistent target kinds whose sidecar resolves ``agent_config.workspace``.
 WORKSPACE_TARGET_KINDS = frozenset({"claude_code"})
 
+# Same shape the Claude sidecar accepts for ``options.model``.
+_SIDECAR_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$")
+_CLAUDE_CODE_NAME = re.compile(r"^claude code\s+(\S+)", re.IGNORECASE)
+
+
+def _sidecar_model(value: Any) -> Optional[str]:
+    """Return ``value`` when the sidecar will pass it as ``--model``."""
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if _SIDECAR_MODEL.fullmatch(token):
+        return token
+    return None
+
+
+def _embedded_claude_code_model(display_name: Any) -> Optional[str]:
+    """Alias carried in a ``Claude Code <alias>`` model row name."""
+    if not isinstance(display_name, str):
+        return None
+    match = _CLAUDE_CODE_NAME.match(display_name.strip())
+    if match is None:
+        return None
+    return _sidecar_model(match.group(1))
+
+
+def _non_negative_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
+        return None
+    return float(value)
+
+
+def control_reply_usage(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Token and cost totals from a sidecar command reply.
+
+    Args:
+        payload: Persisted ``command_result`` payload.
+
+    Returns:
+        ``input_tokens``, ``output_tokens``, ``total_tokens`` and
+        ``estimated_cost`` when the reply carried them, else None.
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("usage")
+    usage_in = raw if isinstance(raw, dict) else {}
+    parsed: Dict[str, Any] = {}
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        number = _non_negative_number(usage_in.get(key))
+        if number is not None:
+            parsed[key] = int(number)
+    if "total_tokens" not in parsed and (
+        "input_tokens" in parsed or "output_tokens" in parsed
+    ):
+        parsed["total_tokens"] = int(parsed.get("input_tokens", 0)) + int(
+            parsed.get("output_tokens", 0)
+        )
+    cost = _non_negative_number(usage_in.get("total_cost_usd"))
+    if cost is None:
+        cost = _non_negative_number(payload.get("total_cost_usd"))
+    if cost is not None:
+        parsed["estimated_cost"] = cost
+    if not parsed:
+        return None
+    return parsed
+
+
+def settle_control_usage(
+    metrics: Dict[str, Any],
+    control_usage: Optional[Dict[str, Any]],
+    *,
+    total_tokens: int,
+    estimated_cost: Optional[float],
+) -> Tuple[int, Optional[float]]:
+    """Choose the token and cost totals written on a finished execution.
+
+    Gateway attribution wins when this execution recorded any request.
+    Otherwise the persistent sidecar reply supplies the turn's tokens and,
+    when the reply priced itself, the cost.
+
+    Args:
+        metrics: ``ExecutionMetricsService.get_execution_metrics`` result.
+        control_usage: Usage from the sidecar command reply, if any.
+        total_tokens: Tokens already counted on the orchestrator.
+        estimated_cost: Cost already counted on the orchestrator.
+
+    Returns:
+        ``(total_tokens, estimated_cost)`` to persist.
+    """
+    gateway_requests = metrics.get("api_requests") or 0
+    if (
+        isinstance(gateway_requests, int)
+        and not isinstance(gateway_requests, bool)
+        and gateway_requests > 0
+    ) or not isinstance(control_usage, dict):
+        token_usage = metrics.get("token_usage")
+        reported = (
+            token_usage.get("total_tokens") if isinstance(token_usage, dict) else None
+        )
+        tokens = reported if isinstance(reported, int) else total_tokens
+        cost = metrics.get("estimated_cost", estimated_cost)
+        priced = _non_negative_number(cost)
+        return tokens, estimated_cost if priced is None and cost is not None else priced
+
+    reported_tokens = control_usage.get("total_tokens")
+    tokens = (
+        reported_tokens
+        if isinstance(reported_tokens, int)
+        and not isinstance(reported_tokens, bool)
+        and reported_tokens >= 0
+        else total_tokens
+    )
+    priced = _non_negative_number(control_usage.get("estimated_cost"))
+    if priced is not None:
+        return tokens, priced
+    return tokens, estimated_cost
+
 
 def persistent_model_name(execution_context: Dict[str, Any]) -> Optional[str]:
     """Model name a persistent Claude Code target should run the flow with.
@@ -112,7 +231,9 @@ def persistent_model_name(execution_context: Dict[str, Any]) -> Optional[str]:
     The flow's managed model is sent only when it is a Claude model, so a
     flow saved with an unrelated model (ignored on this path before) does
     not start failing on the host. Gateway-routed models use the gateway
-    alias, which the host reaches through its onboarded gateway URL.
+    alias, which the host reaches through its onboarded gateway URL. A row
+    named ``Claude Code <alias>`` still contributes that alias when the
+    gateway flag did not copy it onto the execution context.
 
     Args:
         execution_context: Orchestrator context with the resolved model.
@@ -123,17 +244,20 @@ def persistent_model_name(execution_context: Dict[str, Any]) -> Optional[str]:
     gateway = bool(execution_context.get("model_gateway_enabled"))
     alias = execution_context.get("model_gateway_model_alias") if gateway else None
     identifier = execution_context.get("model_identifier")
-    name = alias or identifier
-    if not isinstance(name, str) or not name.strip():
-        return None
+    display_name = execution_context.get("model_name")
+    embedded = _embedded_claude_code_model(display_name)
     provider = str(execution_context.get("model_provider_name") or "").lower()
     looks_claude = any(
         isinstance(value, str) and "claude" in value.lower()
-        for value in (alias, identifier)
+        for value in (alias, identifier, display_name, embedded)
     )
     if provider not in _ANTHROPIC_PROVIDERS and not looks_claude:
         return None
-    return name.strip()
+    for candidate in (alias, embedded, identifier):
+        token = _sidecar_model(candidate)
+        if token is not None:
+            return token
+    return None
 
 
 def _flow_dispatch_metadata(
@@ -618,6 +742,7 @@ class AgentControlExecutor(AgentExecutor):
             session_reference=session_reference,
             output_summary=output,
             error_message=error_message,
+            usage=control_reply_usage(payload),
         )
 
     async def get_logs(
