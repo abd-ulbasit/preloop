@@ -1330,3 +1330,85 @@ def test_register_rejects_non_object_config(client: TestClient, db_session, test
     detail = response.json()["detail"]
     assert detail == ("config must be an object (deprecated; send connection_details)")
     assert "Invalid request format" not in detail
+
+
+@pytest.mark.asyncio
+@patch("preloop.api.endpoints.trackers.create_tracker_client")
+async def test_list_projects_for_org_maps_provider_failure_to_502(
+    mock_create_tracker_client, client: TestClient, db_session, test_user
+):
+    """A provider failure is a short 502, not a 500 (preloop#1762)."""
+    mock_tracker_client = AsyncMock()
+    mock_tracker_client.get_projects.side_effect = RuntimeError(
+        "upstream said no\nTraceback detail"
+    )
+    mock_create_tracker_client.return_value = mock_tracker_client
+
+    response = client.post(
+        "/api/v1/trackers/list-projects-for-org",
+        json={
+            "tracker_type": "gitlab",
+            "url": "https://gitlab.com",
+            "api_key": "test-key",
+            "organization_identifier": "test-org",
+        },
+    )
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "The tracker could not list projects: upstream said no"
+    )
+
+
+@pytest.mark.asyncio
+@patch("preloop.api.endpoints.trackers.create_tracker_client")
+async def test_list_projects_for_org_releases_db_before_provider_call(
+    mock_create_tracker_client, client: TestClient, db_session, test_user
+):
+    """The DB session is closed before the provider round trip (preloop#1762)."""
+    events: list[str] = []
+    real_close = Session.close
+
+    def tracking_close(self, *args, **kwargs):
+        events.append("db_close")
+        return real_close(self, *args, **kwargs)
+
+    async def get_projects(org):
+        events.append("provider")
+        return []
+
+    mock_tracker_client = AsyncMock()
+    mock_tracker_client.get_projects.side_effect = get_projects
+    mock_create_tracker_client.return_value = mock_tracker_client
+
+    with patch.object(Session, "close", tracking_close):
+        response = client.post(
+            "/api/v1/trackers/list-projects-for-org",
+            json={
+                "tracker_type": "gitlab",
+                "url": "https://gitlab.com",
+                "api_key": "test-key",
+                "organization_identifier": "test-org",
+            },
+        )
+    assert response.status_code == 200
+    assert "provider" in events
+    assert events.index("db_close") < events.index("provider")
+
+
+@pytest.mark.asyncio
+@patch("preloop.api.endpoints.trackers.create_tracker_client")
+async def test_list_projects_for_org_keeps_400_when_client_missing(
+    mock_create_tracker_client, client: TestClient, db_session, test_user
+):
+    """An HTTPException inside the listing is not rewrapped as 502."""
+    mock_create_tracker_client.return_value = None
+    response = client.post(
+        "/api/v1/trackers/list-projects-for-org",
+        json={
+            "tracker_type": "gitlab",
+            "url": "https://gitlab.com",
+            "api_key": "test-key",
+            "organization_identifier": "test-org",
+        },
+    )
+    assert response.status_code == 400
