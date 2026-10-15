@@ -247,6 +247,16 @@ export class AddTrackerModal extends LitElement {
   private managedRepository = '';
 
   @state()
+  private managedRepositoriesState: 'idle' | 'loading' | 'loaded' | 'failed' =
+    'idle';
+
+  @state()
+  private managedRepositoriesError = '';
+
+  private managedRepositoriesRequest = 0;
+  private managedRepositoriesWorkspace = '';
+
+  @state()
   private managedBusy = false;
 
   /** Tracker created by the managed completion (before any scope is saved). */
@@ -637,6 +647,9 @@ export class AddTrackerModal extends LitElement {
       ) {
         this.managedWorkspace = this.managedDiscovery.workspaces[0].slug;
       }
+      if (this.managedWorkspace) {
+        await this.loadManagedRepositories(this.managedWorkspace);
+      }
     } catch (error: any) {
       this.errorMessage =
         error?.message || 'Failed to complete the Bitbucket connection';
@@ -647,20 +660,41 @@ export class AddTrackerModal extends LitElement {
   }
 
   private async loadManagedRepositories(workspace: string) {
+    if (
+      this.managedRepositoriesState === 'loading' &&
+      this.managedRepositoriesWorkspace === workspace
+    ) {
+      return;
+    }
+    this.managedRepositoriesWorkspace = workspace;
+    // Invalidate in-flight results before clearing the previous workspace's options.
+    const request = ++this.managedRepositoriesRequest;
+    this.managedRepositoriesError = '';
+    this.managedRepositoriesState = 'idle';
+    if (this.managedDiscovery) {
+      this.managedDiscovery = { ...this.managedDiscovery, repositories: null };
+    }
     if (!this.managedTrackerId || !workspace) {
       return;
     }
-    this.managedBusy = true;
+    this.managedRepositoriesState = 'loading';
     try {
-      this.managedDiscovery = await this._api.getBitbucketDiscovery(
+      const discovery = await this._api.getBitbucketDiscovery(
         this.managedTrackerId,
         workspace
       );
+      if (request !== this.managedRepositoriesRequest) {
+        return;
+      }
+      this.managedDiscovery = discovery;
+      this.managedRepositoriesState = 'loaded';
     } catch (error: any) {
-      this.errorMessage =
+      if (request !== this.managedRepositoriesRequest) {
+        return;
+      }
+      this.managedRepositoriesError =
         error?.message || 'Failed to list accessible Bitbucket repositories';
-    } finally {
-      this.managedBusy = false;
+      this.managedRepositoriesState = 'failed';
     }
   }
 
@@ -794,6 +828,13 @@ export class AddTrackerModal extends LitElement {
       this.managedStatus = await this._api.getBitbucketConnectionStatus(
         this.managedTrackerId
       );
+      if (this.managedWorkspace) {
+        await this.loadManagedRepositories(this.managedWorkspace);
+      } else {
+        this.managedDiscovery = await this._api.getBitbucketDiscovery(
+          this.managedTrackerId
+        );
+      }
     } catch (error) {
       console.error('Failed to read the Bitbucket connection status:', error);
     }
@@ -1676,8 +1717,9 @@ export class AddTrackerModal extends LitElement {
           )}
         </ul>
         <p class="managed-capability-note">
-          Discovery succeeded; push, approval and webhook capability are not
-          tested until first use.
+          Capabilities reflect consented scopes. Push, approval and webhook
+          operations are not tested until first use.
+          ${status.state === 'disconnected' ? 'Reconnect before using these capabilities.' : ''}
         </p>
       </sl-alert>
     `;
@@ -1732,7 +1774,7 @@ export class AddTrackerModal extends LitElement {
     `;
   }
 
-  /** Workspace/repository selection from discovery, or plain inputs. */
+  /** Workspace and repository choices from the server-held grant. */
   renderManagedBitbucketSelection() {
     const workspaces = this.managedDiscovery?.workspaces ?? [];
     const repositories = this.managedDiscovery?.repositories ?? null;
@@ -1765,42 +1807,55 @@ export class AddTrackerModal extends LitElement {
                 label="Workspace"
                 name="bitbucket_managed_workspace"
                 .value=${this.managedWorkspace}
-                @sl-input=${(e: any) => (this.managedWorkspace = e.target.value)}
+                @sl-change=${(e: any) => {
+                  this.managedWorkspace = e.target.value;
+                  this.managedRepository = '';
+                  if (this.bitbucketCloudOAuthEnabled) {
+                    void this.loadManagedRepositories(e.target.value);
+                  }
+                }}
                 help-text="The workspace ID from bitbucket.org/<workspace>."
                 required
               ></sl-input>
             `
       }
+      <sl-select
+        label="Repository"
+        name="bitbucket_managed_repository"
+        .value=${this.managedRepository}
+        clearable
+        ?disabled=${this.managedRepositoriesState !== 'loaded' || !repositories?.length}
+        help-text=${
+          this.managedRepositoriesState === 'loading'
+            ? 'Loading accessible repositories...'
+            : this.managedRepositoriesState === 'failed'
+              ? 'Repository discovery failed. Retry to choose a repository.'
+              : this.managedRepositoriesState === 'loaded' &&
+                  !repositories?.length
+                ? 'No accessible repositories in this workspace.'
+                : !this.managedWorkspace
+                  ? 'Select a workspace to list its repositories.'
+                  : 'Optional: limit the tracker to one accessible repository.'
+        }
+        @sl-change=${(e: any) => (this.managedRepository = e.target.value ?? '')}
+      >
+        ${(repositories ?? []).map(
+          (repo) =>
+            html`<sl-option value=${repo.slug}
+              >${repo.full_name || repo.slug}</sl-option
+            >`
+        )}
+      </sl-select>
       ${
-        repositories && repositories.length > 0
-          ? html`
-              <sl-select
-                label="Repository"
-                name="bitbucket_managed_repository"
-                .value=${this.managedRepository}
-                clearable
-                help-text="Optional: limit the tracker to one accessible repository."
-                @sl-change=${(e: any) =>
-                  (this.managedRepository = e.target.value ?? '')}
-              >
-                ${repositories.map(
-                  (repo) => html`
-                    <sl-option value=${repo.slug}
-                      >${repo.full_name || repo.slug}</sl-option
-                    >
-                  `
-                )}
-              </sl-select>
-            `
-          : html`
-              <sl-input
-                label="Repository"
-                name="bitbucket_managed_repository"
-                .value=${this.managedRepository}
-                @sl-input=${(e: any) => (this.managedRepository = e.target.value)}
-                help-text="Optional: limit the tracker to one repository slug."
-              ></sl-input>
-            `
+        this.managedRepositoriesState === 'failed'
+          ? html`<p role="alert">${this.managedRepositoriesError}</p>
+              <sl-button
+                name="bitbucket-repositories-retry"
+                size="small"
+                @click=${() => this.loadManagedRepositories(this.managedWorkspace)}
+                >Retry repositories</sl-button
+              >`
+          : ''
       }
     `;
   }
@@ -2573,7 +2628,9 @@ export class AddTrackerModal extends LitElement {
         orgId,
         this.trackerUrl,
         this.trackerUsername,
-        this.tracker?.id,
+        this.tracker?.id ??
+          (this.isManagedBitbucket ? this.managedTrackerId : undefined) ??
+          (this.isManagedJira ? this.jiraManagedTrackerId : undefined),
         this.connectionOptions()
       );
       this.projects = { ...this.projects, [orgId]: projects };

@@ -371,6 +371,148 @@ describe('AddTrackerModal managed Bitbucket Cloud', () => {
       expect(root.textContent).to.not.contain('opaque-handle');
     });
 
+    it('loads repositories when the only workspace is selected automatically', async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        bitbucket_cloud_oauth: true,
+      });
+      stubs.getBitbucketDiscovery.callsFake(
+        async (_id: string, workspace?: string) => ({
+          workspaces: [{ slug: 'ws', name: 'Workspace' }],
+          repositories: workspace
+            ? [{ slug: 'repo', full_name: 'ws/repo' }]
+            : null,
+        })
+      );
+      element = await fixture(
+        html`<add-tracker-modal
+          ._api=${stubbedApi}
+          .bitbucketConnectHandle=${'handle'}
+        ></add-tracker-modal>`
+      );
+      await waitUntil(() => !(element as any).isLoading);
+      await element.updateComplete;
+      expect(stubs.getBitbucketDiscovery).to.have.been.calledWith(
+        'managed-1',
+        'ws'
+      );
+      expect(
+        element.shadowRoot?.querySelector(
+          'sl-select[name="bitbucket_managed_repository"] sl-option[value="repo"]'
+        )
+      ).to.exist;
+      expect(
+        element.shadowRoot?.querySelector(
+          'sl-input[name="bitbucket_managed_repository"]'
+        )
+      ).to.not.exist;
+    });
+
+    it('clears stale repository choices and retries a failed listing only explicitly', async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        bitbucket_cloud_oauth: true,
+      });
+      element = await fixture(
+        html`<add-tracker-modal
+          ._api=${stubbedApi}
+          .bitbucketConnectHandle=${'handle'}
+        ></add-tracker-modal>`
+      );
+      await waitUntil(() => (element as any).managedDiscovery !== null);
+      const modal = element as any;
+      modal.managedWorkspace = 'ws';
+      await modal.loadManagedRepositories('ws');
+      modal.managedRepository = 'repo';
+      await element.updateComplete;
+      let reject!: (error: Error) => void;
+      stubs.getBitbucketDiscovery.callsFake(
+        () =>
+          new Promise((_resolve, rejectRequest) => {
+            reject = rejectRequest;
+          })
+      );
+      const workspace = element.shadowRoot!.querySelector<any>(
+        'sl-select[name="bitbucket_managed_workspace"]'
+      )!;
+      workspace.value = 'other';
+      workspace.dispatchEvent(new Event('sl-change'));
+      await element.updateComplete;
+      expect(modal.managedRepository).to.equal('');
+      const repository = () =>
+        element.shadowRoot!.querySelector<any>(
+          'sl-select[name="bitbucket_managed_repository"]'
+        )!;
+      expect(repository().disabled).to.be.true;
+      expect(repository().helpText).to.contain('Loading');
+      expect(repository().querySelectorAll('sl-option').length).to.equal(0);
+      await modal.loadManagedRepositories('other');
+      expect(stubs.getBitbucketDiscovery.callCount).to.equal(3);
+      reject(new Error('Repository discovery unavailable'));
+      await waitUntil(() => modal.managedRepositoriesState === 'failed');
+      for (let i = 0; i < 3; i++) {
+        element.requestUpdate();
+        await element.updateComplete;
+      }
+      expect(stubs.getBitbucketDiscovery.callCount).to.equal(3);
+      expect(
+        element.shadowRoot!.querySelector('[role="alert"]')?.textContent
+      ).to.contain('Repository discovery unavailable');
+      stubs.getBitbucketDiscovery.resolves({
+        workspaces: [{ slug: 'other' }],
+        repositories: [],
+      });
+      element
+        .shadowRoot!.querySelector<HTMLElement>(
+          'sl-button[name="bitbucket-repositories-retry"]'
+        )!
+        .click();
+      await waitUntil(() => modal.managedRepositoriesState === 'loaded');
+      await element.updateComplete;
+      expect(stubs.getBitbucketDiscovery.callCount).to.equal(4);
+      expect(repository().disabled).to.be.true;
+      expect(repository().helpText).to.contain('No accessible repositories');
+      expect(
+        element.shadowRoot!.querySelector(
+          'sl-input[name="bitbucket_managed_repository"]'
+        )
+      ).to.not.exist;
+    });
+
+    it('ignores repository responses from a previously selected workspace', async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        bitbucket_cloud_oauth: true,
+      });
+      element = await fixture(
+        html`<add-tracker-modal
+          ._api=${stubbedApi}
+          .bitbucketConnectHandle=${'handle'}
+        ></add-tracker-modal>`
+      );
+      await waitUntil(() => (element as any).managedDiscovery !== null);
+      const modal = element as any;
+      let resolveOld!: (discovery: api.BitbucketDiscovery) => void;
+      stubs.getBitbucketDiscovery.callsFake((_id: string, workspace: string) =>
+        workspace === 'ws'
+          ? new Promise((resolve) => {
+              resolveOld = resolve;
+            })
+          : Promise.resolve({
+              workspaces: [{ slug: 'ws' }, { slug: 'other' }],
+              repositories: [{ slug: 'new-repo' }],
+            })
+      );
+      const old = modal.loadManagedRepositories('ws');
+      await modal.loadManagedRepositories('other');
+      resolveOld({
+        workspaces: [{ slug: 'ws' }],
+        repositories: [{ slug: 'old-repo' }],
+      });
+      await old;
+      expect(modal.managedDiscovery.repositories).to.deep.equal([
+        { slug: 'new-repo' },
+      ]);
+      expect(modal.managedRepositoriesState).to.equal('loaded');
+    });
+
     it('renders unknown capabilities when the provider reports none', async () => {
       const { stubs, api: stubbedApi } = buildApi(sandbox, {
         bitbucket_cloud_oauth: true,
@@ -424,6 +566,16 @@ describe('AddTrackerModal managed Bitbucket Cloud', () => {
         repository: 'repo',
       });
       expect((element as any).step).to.equal(2);
+
+      await element.loadProjects('ws');
+      const projectArgs = stubs.listProjectsForOrg.firstCall.args;
+      expect(projectArgs[0]).to.equal('bitbucket');
+      expect(projectArgs[1]).to.equal('');
+      expect(projectArgs[5]).to.equal('managed-1');
+      expect(projectArgs[6].connectionDetails).to.deep.equal({
+        workspace: 'ws',
+        repository: 'repo',
+      });
 
       await element.handleSave();
       expect(stubs.addTracker).to.not.have.been.called;
@@ -487,6 +639,35 @@ describe('AddTrackerModal managed Bitbucket Cloud', () => {
   });
 
   describe('editing', () => {
+    it('does not claim discovery succeeded for a disconnected grant', async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        bitbucket_cloud_oauth: true,
+      });
+      stubs.getBitbucketConnectionStatus.resolves({
+        ...connectedStatus,
+        state: 'disconnected',
+        expires_at: null,
+      });
+      element = await fixture(
+        html`<add-tracker-modal
+          ._api=${stubbedApi}
+          .tracker=${managedTracker}
+        ></add-tracker-modal>`
+      );
+      await waitUntil(
+        () => (element as any).managedStatus?.state === 'disconnected'
+      );
+      await element.updateComplete;
+      const note = element.shadowRoot!.querySelector(
+        '.managed-capability-note'
+      )!;
+      expect(note.textContent).to.not.contain('Discovery succeeded');
+      expect(note.textContent).to.contain(
+        'Capabilities reflect consented scopes'
+      );
+      expect(note.textContent).to.contain('Reconnect before using');
+    });
+
     it('shows managed status with reconnect/disconnect and no token fields', async () => {
       const { stubs, api: stubbedApi } = buildApi(sandbox, {
         bitbucket_cloud_oauth: true,
