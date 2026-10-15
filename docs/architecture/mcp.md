@@ -265,6 +265,14 @@ connection on these paths.
 
 The `preloop tools list|describe|exec` CLI commands reuse this same `/mcp/v1` surface, so the backend remains the single source of truth for tool visibility and policy enforcement.
 
+## Flow agent browsers
+
+A flow agent that drives Chromium inside an execution environment does not
+send that traffic through this MCP endpoint. Origin enforcement for that
+browser is the egress proxy, documented in
+[Browser access for flow agents](../guide/flows/browser-access.md). Tool
+filtering and `allowed_mcp_tools` on this page are not a network boundary.
+
 ## Governed usage rows
 
 Each governed tool call writes one `runtime_session_activity` row. `status` is `succeeded`, `refused` (a policy or approval denial), or `failed` (the handler or the upstream server errored). Older rows may still say `success`; readers treat any status that starts with `succ` as success. The row does not store the argument payload. `metadata.arguments_summary` is key names and sizes, and `metadata.arguments_hash` distinguishes same-shape calls for loop detection. `metadata.started_at` is the call start, so a timeline can match a parsed "detected" marker (stamped at start) to the row (stamped at end) for calls longer than a few seconds. The execution detail's `mcp_usage_logs` entries expose `status`, `summary`, `error`, and `arguments_summary` rather than the raw metadata object.

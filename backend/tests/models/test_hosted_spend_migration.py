@@ -36,4 +36,8 @@ def test_upgrade_creates_ledger_shape_but_no_existing_account_credit(db_session)
                 model.__tablename__
             )
         }
-        assert actual == {column.name for column in model.__table__.columns}
+        expected = {column.name for column in model.__table__.columns}
+        # credit_reserved and price_multiplier arrive in a later revision.
+        if model.__tablename__ == "hosted_spend_reservation":
+            expected -= {"credit_reserved", "price_multiplier"}
+        assert actual == expected

@@ -233,6 +233,7 @@ nav:
           - Delegation object shapes: guide/flow-delegation-shapes.md
           - Approvals in child executions: guide/flow-delegation-child-approvals.md
       - Environments and recovery: guide/flows/environments-and-recovery.md
+      - Browser access: guide/flows/browser-access.md
       - Workspace recovery acceptance: guide/flows/workspace-recovery-acceptance.md
       - Presets:
           - Pull request review: guide/flows/pull-request-review.md

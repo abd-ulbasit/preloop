@@ -70,3 +70,11 @@ class HostedSpendReservation(Base):
     reserved: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
     actual: Mapped[Decimal | None] = mapped_column(Numeric(20, 10), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved")
+    # Allowance stays on ``reserved``. Credit held for the same operation is
+    # separate so every existing reader of ``reserved`` keeps its meaning.
+    credit_reserved: Mapped[Decimal] = mapped_column(
+        Numeric(20, 10), nullable=False, default=Decimal(0), server_default="0"
+    )
+    price_multiplier: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )

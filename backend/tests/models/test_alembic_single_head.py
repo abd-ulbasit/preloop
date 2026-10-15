@@ -383,4 +383,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert model_detail.down_revision == "20261016_governance_review"
     candidate = script.get_revision("20261017_gov_candidate_idx")
     assert candidate.down_revision == "20261014_model_detail_idx"
-    assert script.get_heads() == ["20261017_gov_candidate_idx"]
+    hosted_credit = script.get_revision("20261018_hosted_credit")
+    assert hosted_credit.down_revision == "20261017_gov_candidate_idx"
+    assert script.get_heads() == ["20261018_hosted_credit"]

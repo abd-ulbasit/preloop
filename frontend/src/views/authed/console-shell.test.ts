@@ -375,6 +375,52 @@ describe('ConsoleShell', () => {
     }
   });
 
+  it('scrolls the sidebar menu so Settings stays reachable', async () => {
+    const el = (await fixture(
+      html`<console-shell style="height: 220px"></console-shell>`
+    )) as ConsoleShell;
+
+    await waitUntil(
+      () =>
+        el.shadowRoot?.querySelector(
+          'a[href="/console/settings/notification-preferences"]'
+        ) !== null,
+      'Settings links did not render'
+    );
+
+    const settings = Array.from(
+      el.shadowRoot!.querySelectorAll('details.nav-section')
+    ).find(
+      (section) =>
+        section.querySelector('summary .sidebar-label')?.textContent?.trim() ===
+        'Settings'
+    ) as HTMLDetailsElement;
+    settings.open = true;
+    await el.updateComplete;
+
+    const menu = el.shadowRoot!.querySelector(
+      '#console-nav > ul.nav-list'
+    ) as HTMLElement;
+    const link = el.shadowRoot!.querySelector(
+      'a[href="/console/settings/notification-preferences"]'
+    ) as HTMLElement;
+    const menuStyle = getComputedStyle(menu);
+
+    expect(menuStyle.overflowY).to.equal('auto');
+    expect(menu.scrollHeight).to.be.greaterThan(menu.clientHeight);
+
+    const box = () => menu.getBoundingClientRect();
+    expect(link.getBoundingClientRect().bottom).to.be.greaterThan(box().bottom);
+
+    menu.scrollTop = menu.scrollHeight;
+    const visible = link.getBoundingClientRect();
+    expect(visible.top).to.be.at.least(box().top - 1);
+    expect(visible.bottom).to.be.at.most(box().bottom + 1);
+
+    const page = el.shadowRoot!.querySelector('.main-content') as HTMLElement;
+    expect(getComputedStyle(page).overflowY).to.equal('auto');
+  });
+
   it('puts the sidebar on the card rung, hairline away from the page', async () => {
     document.documentElement.style.setProperty(
       '--console-surface',

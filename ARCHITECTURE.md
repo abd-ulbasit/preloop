@@ -178,6 +178,8 @@ graph LR
 
 Execution environment profiles and hosted checkpoint recovery are documented in
 [Environments and recovery](docs/guide/flows/environments-and-recovery.md).
+What enforces browser network access for a flow agent is
+[Browser access](docs/guide/flows/browser-access.md).
 Workspace checkpoint capture streams individual files and enforces its
 compressed size cap during packing. Dependency directories and caches are
 excluded; oversized captures leave the last complete checkpoint available.
@@ -527,6 +529,11 @@ the allowance display, including outstanding holds and the monthly reset date;
 one-time credit has no reset. Subscription details live on Plan, while Account
 links to that view. Gateway events preserve the billing path and actual resolved
 model row captured at request time, so later alias changes cannot relabel history.
+
+Prepaid credit is a separate ledger (`hosted_credit_account`,
+`hosted_credit_ledger`, `hosted_credit_purchase`) with one lot per purchase.
+The allowance balance above is unchanged: `reserve` and `settle` do not spend
+credit yet. An absent `hosted_credit_topup_setting` row means auto top-up is off.
 
 `preloop models list` separates your models from Preloop-hosted models and reports
 the allowance when supported. Before adding a system alias, operators can run

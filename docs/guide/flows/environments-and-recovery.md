@@ -152,6 +152,9 @@ unpacked (1.07 GB to 1.52 GB compressed).
 
 ## Browser profile
 
+What enforces network access for this profile, and what does not, is
+[Browser access for flow agents](browser-access.md).
+
 `preloop-browser` in `environments/preloop/profile.json.example` uses the same
 image as the component profile and adds an `egress-proxy` sidecar. The proxy
 contract (listen port, `EGRESS_ALLOWED_ORIGINS`, `EGRESS_ALLOW_PRIVATE_CIDRS`,

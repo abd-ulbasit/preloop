@@ -38,6 +38,15 @@ machine. The runner never reads, copies or forwards harness credentials. See
 `docs/guide/runners/remote-sessions.md` and the threat model in
 `docs/security/personal-runners.md`.
 
+**Prepaid credit** has an append-only ledger, per-purchase lots, and balance
+cache in the open-source models. Empty tables do not change allowance
+behaviour. Stripe and the purchase UI are not in this tree.
+**Browser access for flow agents** is documented in
+`docs/guide/flows/browser-access.md`: the egress proxy is the network
+boundary, and tool allowlists are not.
+The console sidebar scrolls its own menu, so Settings stays reachable
+after the page scroller moved to the content area.
+
 ### Breaking or behavior changes
 
 - **Hosted Codex image.** The default is the digest-pinned universal image
