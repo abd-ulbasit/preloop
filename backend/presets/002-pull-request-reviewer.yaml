@@ -10,7 +10,9 @@ description: >-
   follow-ups. Honors a repository review policy (`.preloop/review-policy.md`,
   or the flow's review_instructions when the repository cannot carry that
   file) as blocking rules, and runs a declared version linter when matching
-  files change. Maintains a Changes Summary in the PR body that updates on each review.
+  files change. Publishes a Checks section: every detected checker is quoted
+  with its result, or marked not run with the preflight reason. Not run is
+  never a pass. Maintains a Changes Summary in the PR body that updates on each review.
 icon: code-square
 trigger_event_source: null
 # Event types use underscore notation (e.g., pull_request_opened, pull_request_updated)
@@ -51,6 +53,27 @@ prompt_template: |
   ═══════════════════════════════════════════════════════════
   PHASE 1: GATHER CONTEXT & PREVIOUS REVIEW STATE
   ═══════════════════════════════════════════════════════════
+
+  **Step 1.0: Toolchain preflight** *(every scope, including FAST_PATH and clone_less)*
+
+  Run `preloop-preflight --json` if on PATH and the workspace has a working
+  tree (ephemeral or persistent_checkout). Run it from the repository root.
+  Read `/tmp/preloop-preflight.json`. Each object is one declared checker:
+  tool, language, status, version, reason, and suggested command.
+
+  If `preloop-preflight` is not on PATH, do not invent checker results. The
+  Checks section still has this line: `preloop-preflight`: not run: binary
+  not on PATH.
+
+  If workspace.mode is clone_less and there is no working tree, do not
+  pretend the command ran. One Checks line: `preloop-preflight`: not run:
+  no working tree in clone-less mode.
+
+  For each detected checker, either run the suggested command and quote one
+  result line, or mark it not run and copy the preflight reason. Status
+  `missing`, `version_mismatch`, `deps_missing`, or `not_applicable` means
+  not run. Status `available` means you may run it. If you do not run it,
+  it stays not run. Not run never counts as a pass.
 
   **Step 1.1: Fetch PR Details with ALL Comments**
 
@@ -104,9 +127,10 @@ prompt_template: |
   1. **FAST_PATH** — the diff from Step 1.1 has fewer than ~50 changed lines
      AND there are no previous Preloop comments on the PR.
      → Skip Steps 1.3, 1.4 (still read agent-instruction files: CLAUDE.md,
-     AGENTS.md, .cursorrules, .clinerules), Step 2.6, and Phase 5. Step 1.4.1
-     and Step 2.5.1 still run: a small diff is where a compatibility rule
-     is usually violated. Run the security and quality checks (Steps 2.1-2.5
+     AGENTS.md, .cursorrules, .clinerules), Step 2.6, and Phase 5. Step 1.0,
+     Step 1.4.1 and Step 2.5.1 still run: a small diff is where a compatibility
+     rule is usually violated, and a checker that was not run is not a pass.
+     Run the security and quality checks (Steps 2.1-2.5
      and Step 2.5.1) on the diff hunks, then proceed to Phase 4 onward as
      normal. Phase 3 is trivially empty.
 
@@ -800,6 +824,21 @@ prompt_template: |
 
   [1-2 sentence overview of the PR and your assessment]
 
+  ### Checks
+
+  One line per checker detected by Step 1.0. Required in every scope,
+  including FAST_PATH. Copy every checker. Do not drop one because the
+  diff looks unrelated to it.
+
+  - `<tool>` (`<language>`): ran `<command>`: <one result line>
+  - `<tool>` (`<language>`): not run: <preflight reason>
+
+  A missing `preloop-preflight` binary is a line of its own:
+  `preloop-preflight`: not run: binary not on PATH.
+
+  Not run never counts as a pass. Do not write pass, ok, or clean for a
+  checker you did not run.
+
   ### ✅ What Looks Good
   - [Positive aspects — include this section ONLY when the review action is
     approve or comment; omit it entirely when requesting changes]
@@ -1118,6 +1157,13 @@ prompt_template: |
   - A PARTIAL verdict is information, not a blocker: it never changes the
     review action and never blocks a merge.
   - No referenced issue means no Issue Coverage section at all.
+
+  ⚠️ **CHECKS**
+  - The summary Checks section lists every checker Step 1.0 detected.
+  - Quote the command and one result line when you ran it.
+  - A checker you did not run is "not run" with the preflight reason.
+  - Not run never counts as a pass.
+  - A missing preloop-preflight binary is reported. It is not a pass.
 
   ⚠️ **REPOSITORY REVIEW POLICY**
   - A violation of `.preloop/review-policy.md` or `review_instructions` is

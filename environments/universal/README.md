@@ -14,7 +14,10 @@ or the workflow publishes, as does `workflow_dispatch` on main and a `v*`
 tag. Published tags are `sha-<12 hex chars of the commit>` and, on a version
 tag, `vX.Y.Z`. The job summary prints
 `ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`. The hosted
-default image is unchanged. The preflight script is a separate issue. The
+default image is unchanged. `environments/universal/bin/preloop-preflight`
+is installed at `/usr/local/bin/preloop-preflight`. It writes
+`/tmp/preloop-preflight.json`. The schema is
+`environments/universal/bin/preloop-preflight.schema.json`. The
 opt-in Perl image under `environments/perl/` stays available for private
 runners.
 
