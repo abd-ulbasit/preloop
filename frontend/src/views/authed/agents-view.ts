@@ -414,7 +414,12 @@ export class AgentsView extends LitElement {
       css`
         :host {
           display: block;
+        }
+        /* The canvas fills the window the shell hands it. List and cards
+           grow, and the shell content area is what scrolls. */
+        :host(.canvas-fill) {
           height: 100%;
+          min-height: 0;
         }
         .canvas-bubbles-overlay {
           position: absolute;
@@ -433,8 +438,6 @@ export class AgentsView extends LitElement {
           display: flex;
           flex-direction: column;
           gap: var(--sl-spacing-large);
-          height: 100%;
-          overflow-y: auto;
         }
         .cards {
           display: grid;
@@ -1223,6 +1226,7 @@ export class AgentsView extends LitElement {
 
   updated(changedProperties: Map<string, unknown>) {
     super.updated?.(changedProperties);
+    this.classList.toggle('canvas-fill', this.effectiveView === 'canvas');
     if (
       changedProperties.has('currentView') ||
       changedProperties.has('narrowViewport')

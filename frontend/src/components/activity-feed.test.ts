@@ -1244,9 +1244,8 @@ describe('activity-feed', () => {
       const list = el.shadowRoot!.querySelector<HTMLElement>('.rows')!;
       const styles = getComputedStyle(list);
       expect(styles.overflowY).to.equal('auto');
-      // The stop is the same 360px floor the rail gives the card, and it
-      // does not depend on how wide the window is: a card nobody has
-      // bounded stops there whatever the viewport.
+      // A card nobody has lifted the stop on stays at 360px, whatever the
+      // viewport. Overview is the page that lifts it.
       expect(styles.maxHeight).to.equal('360px');
       expect(list.clientHeight).to.be.at.most(360);
       expect(list.scrollHeight).to.be.greaterThan(list.clientHeight);
@@ -1254,9 +1253,8 @@ describe('activity-feed', () => {
 
     it('lets a column that bounds it lift the stop', async () => {
       const el = await feed();
-      // What the Overview rail does: it is sticky, stretched and capped at
-      // one viewport, so it owns the height and the card's own stop would
-      // only leave part of the rail empty.
+      // A parent that both lifts the stop and hands the card a height owns
+      // the list. The stop would only leave part of that height empty.
       el.style.setProperty('--activity-feed-list-max-height', 'none');
       el.style.height = '640px';
       for (let index = 0; index < FEED_CAP; index += 1) {

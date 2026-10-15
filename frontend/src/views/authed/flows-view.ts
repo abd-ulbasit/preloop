@@ -1794,6 +1794,7 @@ export class FlowsView extends LitElement {
           .rowActions=${(row: FlowListRow) => this.getRowActions(row)}
           .rowLabel=${(row: FlowListRow) => row.name}
           .rowClass=${() => 'flow-row'}
+          .stickyHeader=${false}
           table-class="flows-table"
           label="Flows"
           noun="flows"

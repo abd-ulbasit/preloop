@@ -136,6 +136,7 @@ describe('Agents page geometry', () => {
       updateComplete: Promise<unknown>;
     };
     await view.updateComplete;
+    expect(view.classList.contains('canvas-fill')).to.equal(true);
     const band = view.shadowRoot!.querySelector('.content-bounds')!;
     // Full bleed means no shell padding to inherit, so the canvas page draws
     // the box itself: the 1280px column centred in 1440 (80px each side)
@@ -171,4 +172,54 @@ describe('Agents page geometry', () => {
       expect(agents.titleLeft, 'agents adds no inset of its own').to.equal(0);
     });
   }
+
+  it('lets the agents list grow so the shell content area scrolls', async () => {
+    const wrapper = (await fixture(html`
+      <div style="width: 1440px; height: 800px; display: flex;">
+        <agents-view></agents-view>
+      </div>
+    `)) as HTMLElement;
+    const view = wrapper.firstElementChild as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    view.style.width = '100%';
+    await view.updateComplete;
+    await waitUntil(
+      () => view.shadowRoot?.querySelector('sl-card.table-card') != null
+    );
+    const page = view.shadowRoot!.querySelector('.page') as HTMLElement;
+    const pageStyle = getComputedStyle(page);
+    // height: 100% plus overflow-y: auto made this box the scroller, so the
+    // wheel never reached the shell content area around it.
+    expect(pageStyle.overflowY).to.equal('visible');
+    expect(page.getBoundingClientRect().height).to.be.lessThan(
+      wrapper.getBoundingClientRect().height
+    );
+    expect(view.classList.contains('canvas-fill')).to.equal(false);
+  });
+
+  it('lets the flows list grow so the shell content area scrolls', async () => {
+    const wrapper = (await fixture(html`
+      <div style="width: 1440px; height: 800px; display: flex;">
+        <flows-view></flows-view>
+      </div>
+    `)) as HTMLElement;
+    const view = wrapper.firstElementChild as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    view.style.width = '100%';
+    await view.updateComplete;
+    let scroll: HTMLElement | null = null;
+    await waitUntil(() => {
+      scroll = view.shadowRoot?.querySelector(
+        '.data-table-scroll'
+      ) as HTMLElement | null;
+      return scroll !== null;
+    });
+    const box = (scroll as unknown as HTMLElement).closest('.data-table')!;
+    expect(box.classList.contains('sticky')).to.equal(false);
+    expect(
+      getComputedStyle(scroll as unknown as HTMLElement).maxHeight
+    ).to.equal('none');
+  });
 });

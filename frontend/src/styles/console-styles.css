@@ -90,11 +90,10 @@ sl-badge:focus-visible,
 
 /* Dashboard-specific layout with responsive 2-column ratio.
 
-   The side column is a rail: from 1200px up it sits beside the main column,
-   sticks under the shell header and is never taller than what the operator
-   can see (see .side-column below and the Overview's own sheet). Below that
-   it is a plain stack. 1200 rather than 1400 because the rail needs about
-   290px to hold the Usage card, which it has from 1200 up. */
+   From 1200px the side column sits beside the main column. Both stay in
+   normal flow, so the shell content area scrolls them together. Below
+   1200px it is a plain stack. 1200 rather than 1400 because the column
+   needs about 290px to hold the Usage card. */
 .column-layout.dashboard {
     grid-template-columns: 1fr; /* Default: stacked */
 }
