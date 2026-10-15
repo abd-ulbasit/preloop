@@ -1127,7 +1127,7 @@ export class TrackerDetailView extends LitElement {
     if (!status) {
       return nothing;
     }
-    const chip = this._managedStateChip(status.state as any);
+    const chip = this._managedStateChip(status.state);
     const busy = this._managedBusy;
     return html`
       <sl-card
@@ -1258,10 +1258,14 @@ export class TrackerDetailView extends LitElement {
     }
   }
 
-  private _managedStateChip(state: BitbucketConnectionStatus['state']) {
+  private _managedStateChip(
+    state: BitbucketConnectionStatus['state'] | JiraConnectionStatus['state']
+  ) {
     switch (state) {
       case 'connected':
         return { text: 'Managed: connected', variant: 'success' };
+      case 'site_required':
+        return { text: 'Managed: site required', variant: 'warning' };
       case 'workspace_required':
         return { text: 'Managed: workspace required', variant: 'warning' };
       case 'reconnect_required':
@@ -1283,22 +1287,29 @@ export class TrackerDetailView extends LitElement {
 
   /** Status chip for a managed grant; the manual expiry chip never applies. */
   private _renderManagedChip() {
-    if (!this._isManagedBitbucket()) {
+    const jira = this._isManagedJira();
+    if (!this._isManagedBitbucket() && !jira) {
       return nothing;
     }
-    if (!this._managedFeatureEnabled()) {
+    const provider = jira ? 'Jira' : 'Bitbucket';
+    if (!(jira ? this._jiraFeatureEnabled() : this._managedFeatureEnabled())) {
       return html`<sl-badge
         class="chip managed-connection"
         variant="warning"
         pill
         data-state="unavailable"
-        title="This deployment has no managed Bitbucket provider configured"
+        title=${`This deployment has no managed ${provider} provider configured`}
         >Managed: provider unavailable</sl-badge
       >`;
     }
-    const status = this._managedStatus;
+    const status = jira ? this._jiraStatus : this._managedStatus;
     if (!status) {
-      return nothing;
+      return html`<sl-badge
+        class="chip managed-connection"
+        variant="neutral"
+        pill
+        >Connection status unknown</sl-badge
+      >`;
     }
     const chip = this._managedStateChip(status.state);
     return html`<sl-badge
@@ -1415,8 +1426,9 @@ export class TrackerDetailView extends LitElement {
         <p
           style="color: var(--console-meta-color); font-size: var(--sl-font-size-small); margin: 0.5rem 0 0 0;"
         >
-          Discovery succeeded. Push, approval and webhook capability are derived
-          from consented scopes and are not tested until first use.
+          Capabilities reflect consented scopes. Push, approval and webhook
+          operations are not tested until first use.
+          ${status.state === 'disconnected' ? 'Reconnect before using these capabilities.' : ''}
         </p>
       </sl-card>
     `;
@@ -2197,12 +2209,16 @@ export class TrackerDetailView extends LitElement {
         <div class="main-column">
           <div class="tracker-header">
             <sl-icon class="tracker-icon" name=${icon}></sl-icon>
-            <sl-badge
-              class="chip"
-              variant=${tracker.is_valid ? 'success' : 'warning'}
-              pill
-              >${tracker.is_valid ? 'Connected' : 'Not validated'}</sl-badge
-            >
+            ${
+              this._isManagedBitbucket() || this._isManagedJira()
+                ? nothing
+                : html`<sl-badge
+                    class="chip"
+                    variant=${tracker.is_valid ? 'success' : 'warning'}
+                    pill
+                    >${tracker.is_valid ? 'Connected' : 'Not validated'}</sl-badge
+                  >`
+            }
             ${this._renderTokenExpiry(tracker)} ${this._renderManagedChip()}
           </div>
 

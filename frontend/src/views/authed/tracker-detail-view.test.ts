@@ -1102,6 +1102,34 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     resetConfirmDialogForTests();
   });
 
+  it('uses disconnected grant status instead of stale tracker validation in the header', async () => {
+    const status = {
+      ...managedStatus,
+      state: 'disconnected',
+      expires_at: null,
+    };
+    fetchStub = stubManaged({ flag: true, status }).stub;
+    const el = await mountView();
+    await waitUntil(() =>
+      el.shadowRoot?.querySelector(
+        '.managed-connection[data-state="disconnected"]'
+      )
+    );
+    const root = el.shadowRoot!;
+    expect(root.querySelector('.tracker-header')?.textContent).to.contain(
+      'Managed: disconnected'
+    );
+    expect(root.querySelector('.tracker-header')?.textContent).to.not.contain(
+      'Connected'
+    );
+    expect(
+      root.querySelector('.managed-connection-panel')?.textContent
+    ).to.not.contain('Discovery succeeded');
+    expect(
+      root.querySelector('.managed-connection-panel')?.textContent
+    ).to.contain('Reconnect before using');
+  });
+
   it('flag off: managed tracker is marked unavailable, no status call, no manual chip', async () => {
     const { stub, calls } = stubManaged({ flag: false });
     fetchStub = stub;
@@ -1135,7 +1163,7 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
 describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
   let fetchStub: sinon.SinonStub;
 
-  function stubJira(flag: boolean) {
+  function stubJira(flag: boolean, state = 'connected') {
     const calls: string[] = [];
     const stub = sinon
       .stub(window, 'fetch')
@@ -1156,7 +1184,7 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
             name: 'Jira Cloud',
             provider: 'jira',
             managed: true,
-            state: 'connected',
+            state,
             consumer_configured: true,
             cloud_id: 'cloud-1',
             site_url: 'https://example-site.atlassian.net',
@@ -1226,6 +1254,19 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
     expect(calls.some((c) => c.includes('/auth/jira/trackers/'))).to.equal(
       true
     );
+  });
+
+  it('shows a disconnected grant in the header even if tracker validation is stale', async () => {
+    fetchStub = stubJira(true, 'disconnected').stub;
+    const el = await mountView();
+    await waitUntil(() =>
+      el.shadowRoot?.querySelector(
+        '.managed-connection[data-state="disconnected"]'
+      )
+    );
+    const header = el.shadowRoot!.querySelector('.tracker-header')!;
+    expect(header.textContent).to.contain('Managed: disconnected');
+    expect(header.textContent).to.not.contain('Connected');
   });
 
   it('flag off: warns and never calls the provider', async () => {

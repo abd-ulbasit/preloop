@@ -458,6 +458,13 @@ normal authenticated account scoping; URL account context grants no access.
 
 Managed tracker OAuth persistence uses the [provider-neutral storage contract](docs/architecture/managed-oauth-storage.md),
 with tenant-bound connection transactions and serialized token-pair rotation.
+The console creates a managed tracker at consent completion, before scope is
+saved. Subsequent Bitbucket repository and Jira project discovery carries that
+tracker's id so the backend can recover its server-held grant even when the
+browser has no token. Bitbucket repository choices load for the selected
+workspace; changing workspaces clears stale choices and failures require an
+explicit retry. Managed detail headers use the grant state rather than the
+tracker's historical validation flag.
 Consumption is the resolver contract in `preloop.services.managed_credentials`:
 a tracker with `auth_type == "managed_oauth"` stores no token, and every
 caller (tracker factory and scanner clients, `api.common.get_tracker_client`

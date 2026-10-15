@@ -228,6 +228,12 @@ describe('AddTrackerModal managed Jira Cloud', () => {
     expect(args[4]).to.equal('jira-managed-1');
     expect((element as any).step).to.equal(2);
 
+    await element.loadProjects('example-site.atlassian.net');
+    const projectArgs = stubs.listProjectsForOrg.firstCall.args;
+    expect(projectArgs[0]).to.equal('jira');
+    expect(projectArgs[1]).to.equal('');
+    expect(projectArgs[5]).to.equal('jira-managed-1');
+
     await element.handleSave();
     expect(stubs.addTracker.called).to.be.false;
     const [id, body] = stubs.updateTracker.firstCall.args;
