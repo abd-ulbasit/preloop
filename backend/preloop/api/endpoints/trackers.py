@@ -933,7 +933,9 @@ async def register_tracker(
             )
 
         # Send NATS event
-        await event_bus_service.publish_task("poll_tracker", str(new_tracker.id))
+        await event_bus_service.publish_task(
+            "poll_tracker_on_demand", str(new_tracker.id)
+        )
 
         types_after = get_tracker_types(account, db)
         unlocked = unlocked_tool_names_after_tracker(
@@ -1246,7 +1248,7 @@ async def update_tracker(
         )
 
         # Send NATS event (convert UUID to string for JSON serialization)
-        await event_bus_service.publish_task("poll_tracker", str(tracker.id))
+        await event_bus_service.publish_task("poll_tracker_on_demand", str(tracker.id))
 
         return tracker
     except IntegrityError as e:
@@ -1288,7 +1290,7 @@ async def sync_tracker(
             detail="Tracker not found or access denied",
         )
 
-    await event_bus_service.publish_task("poll_tracker", str(tracker.id))
+    await event_bus_service.publish_task("poll_tracker_on_demand", str(tracker.id))
     return {"status": "queued", "tracker_id": str(tracker.id)}
 
 

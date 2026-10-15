@@ -517,7 +517,9 @@ async def test_register_tracker_success(
     assert "estimate_compliance" not in response_json["unlocked_tool_names"]
     assert "improve_compliance" not in response_json["unlocked_tool_names"]
 
-    mock_publish_task.assert_called_once()
+    mock_publish_task.assert_called_once_with(
+        "poll_tracker_on_demand", response_json["id"]
+    )
     mock_send_email.assert_called_once()
 
     # Security: the credential must be encrypted at rest, not in the plaintext
@@ -910,7 +912,7 @@ async def test_update_tracker_success(
     assert response_json["name"] == "Updated Tracker Name"
 
     # UUID is converted to string for JSON serialization
-    mock_publish_task.assert_called_once_with("poll_tracker", str(tracker.id))
+    mock_publish_task.assert_called_once_with("poll_tracker_on_demand", str(tracker.id))
 
 
 @pytest.mark.asyncio
@@ -932,7 +934,7 @@ async def test_sync_tracker_success(
     response = client.post(f"/api/v1/trackers/{tracker.id}/sync")
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
-    mock_publish_task.assert_called_once_with("poll_tracker", str(tracker.id))
+    mock_publish_task.assert_called_once_with("poll_tracker_on_demand", str(tracker.id))
 
 
 def test_unique_tracker_name_appends_suffix(db_session, test_user):

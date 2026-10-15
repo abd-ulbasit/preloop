@@ -129,10 +129,19 @@ class PreloopSyncNatsWorker:
         """
         dispatchable_tasks = tasks.DISPATCHABLE_TASKS
 
+        # Keep both polling lanes in the same pool. Existing deployments only
+        # name poll_tracker; allowing or excluding either alias must cover both
+        # so WORKQUEUE filters stay disjoint and the shared slot bounds scans.
+        polling_tasks = {"poll_tracker", "poll_tracker_on_demand"}
+
         if self.tasks_allowlist:
-            names = list(self.tasks_allowlist)
+            names = list(dict.fromkeys(self.tasks_allowlist))
+            if polling_tasks.intersection(names):
+                names.extend(sorted(polling_tasks - set(names)))
         elif self.tasks_excludelist:
             excluded = set(self.tasks_excludelist)
+            if polling_tasks.intersection(excluded):
+                excluded.update(polling_tasks)
             names = [task for task in dispatchable_tasks if task not in excluded]
             unknown = excluded - set(dispatchable_tasks)
             if unknown:
