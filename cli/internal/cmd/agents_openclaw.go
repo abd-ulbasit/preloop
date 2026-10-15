@@ -4306,6 +4306,7 @@ func buildOpenClawManagedMCPEnrollmentPlan(
 		SanitizedManaged:    sanitizedManaged,
 		ManagedServerName:   "preloop",
 		ManagedServerURL:    managedServerURL,
+		MCPRoutes:           inventoryRoutesForDocument(managedDoc),
 		ManagedControlWSURL: managedAgentControlWebSocketURL(baseURL),
 		ManagedModelAlias:   managedModelAlias,
 		ManagedProviderName: openClawManagedProviderID,

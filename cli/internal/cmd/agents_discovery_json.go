@@ -5,16 +5,17 @@ import "github.com/spf13/cobra"
 // discoveryJSON is deliberately separate from AgentConfig, which retains raw
 // configuration for onboarding. Never add free-form fields to this DTO.
 type discoveryJSON struct {
-	Name                 string `json:"name"`
-	AppID                string `json:"app_id"`
-	MCPServerCount       int    `json:"mcp_server_count"`
-	IsOnboarded          bool   `json:"is_onboarded,omitempty"`
-	OnboardingState      string `json:"onboarding_state,omitempty"`
-	AuthState            string `json:"auth_state,omitempty"`
-	SupportLevel         string `json:"support_level,omitempty"`
-	RuntimeState         string `json:"runtime_state,omitempty"`
-	ConfigDrift          bool   `json:"config_drift,omitempty"`
-	ReonboardRecommended bool   `json:"reonboard_recommended,omitempty"`
+	Name                 string             `json:"name"`
+	AppID                string             `json:"app_id"`
+	MCPServerCount       int                `json:"mcp_server_count"`
+	MCPRoutes            inventoryMCPRoutes `json:"mcp_routes"`
+	IsOnboarded          bool               `json:"is_onboarded,omitempty"`
+	OnboardingState      string             `json:"onboarding_state,omitempty"`
+	AuthState            string             `json:"auth_state,omitempty"`
+	SupportLevel         string             `json:"support_level,omitempty"`
+	RuntimeState         string             `json:"runtime_state,omitempty"`
+	ConfigDrift          bool               `json:"config_drift,omitempty"`
+	ReonboardRecommended bool               `json:"reonboard_recommended,omitempty"`
 	// ModelRoute is set for Claude Desktop only: direct, apps-gateway or
 	// mcp-only, read from the OS managed configuration.
 	ModelRoute string `json:"model_route,omitempty"`
@@ -39,7 +40,7 @@ func safeDiscoveryJSON(agents []AgentConfig) []discoveryJSON {
 			continue
 		}
 		result = append(result, discoveryJSON{
-			Name: agent.Name, AppID: id, MCPServerCount: len(agent.MCPServers),
+			Name: agent.Name, AppID: id, MCPServerCount: len(agent.MCPServers), MCPRoutes: inventoryDiscoveryRoutes(agent),
 			IsOnboarded:     agent.IsOnboarded,
 			OnboardingState: allowDiscoveryEnum(agent.OnboardingState, "fully_onboarded", "mcp_proxy_only", "gateway_only", "incomplete"),
 			AuthState:       allowDiscoveryEnum(agent.AuthState, "ready", "not_logged_in", "unknown"),
