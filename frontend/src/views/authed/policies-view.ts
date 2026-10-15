@@ -39,6 +39,7 @@ import type { Tool, ApprovalWorkflow } from '../../components/tool-card';
 import '../../components/policy-generate-dialog';
 import '../../components/sensitive-data-panel';
 import '../../components/policy-simulator';
+import '../../components/governance-policy-panel';
 import type {
   AgentOption,
   SensitiveDataPanel,
@@ -253,6 +254,8 @@ export class PoliciesView extends LitElement {
   @state() private _loading = false;
   @state() private _error: string | null = null;
   @state() private _permissionDenied = false;
+  /** Read-only governance editor for members without `manage_policies`. */
+  @state() private _canManagePolicies = true;
   @state() private _features: { [key: string]: boolean | string[] } = {};
 
   // Access policies state
@@ -857,7 +860,11 @@ export class PoliciesView extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     const accessTab = new URLSearchParams(window.location.search).get('tab');
-    if (accessTab === 'access-rules' || accessTab === 'files')
+    if (
+      accessTab === 'access-rules' ||
+      accessTab === 'files' ||
+      accessTab === 'governance'
+    )
       this._activeTab = accessTab;
     void this._loadIfPermitted();
   }
@@ -925,6 +932,10 @@ export class PoliciesView extends LitElement {
         this._loading = false;
         return;
       }
+      this._canManagePolicies = hasPermission(
+        profile?.permissions,
+        'manage_policies'
+      );
     } catch {
       // Profile unavailable: fall through and let the API answer.
     }
@@ -3752,6 +3763,18 @@ defaults:
                           </sl-tab>`
                         : ''
                     }
+                    ${
+                      // The governance review is an extension plugin too.
+                      hasCapability(this._features, 'governance_review')
+                        ? html`<sl-tab
+                            slot="nav"
+                            panel="governance"
+                            ?active=${this._activeTab === 'governance'}
+                          >
+                            Governance policy
+                          </sl-tab>`
+                        : ''
+                    }
 
                     <sl-tab-panel name="rules">
                       ${this.renderRulesTab()}
@@ -3788,6 +3811,19 @@ defaults:
                                       ).get('resource_id'),
                                     }}
                                   ></capability-extension>`
+                                : ''
+                            }
+                          </sl-tab-panel>`
+                        : ''
+                    }
+                    ${
+                      hasCapability(this._features, 'governance_review')
+                        ? html`<sl-tab-panel name="governance">
+                            ${
+                              this._activeTab === 'governance'
+                                ? html`<governance-policy-panel
+                                    .canManage=${this._canManagePolicies}
+                                  ></governance-policy-panel>`
                                 : ''
                             }
                           </sl-tab-panel>`

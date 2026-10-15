@@ -8708,3 +8708,150 @@ export async function evaluatePolicy(
   }
   return response.json();
 }
+
+// Governance review (#1712). Served by the governance_review extension plugin;
+// the console calls these only when /features reports the capability.
+
+export type GovernanceReviewMode =
+  'on_platform' | 'on_own_model' | 'off' | 'off_over_budget';
+
+export type GovernanceRuleClass = 'must' | 'prefer';
+
+export interface GovernanceWatchlistRule {
+  rule_ref: string;
+  class: GovernanceRuleClass;
+  kind: string;
+  check: string;
+  source?: string | null;
+  signals: string[];
+  thresholds: Record<string, unknown>;
+}
+
+export interface GovernanceWatchlist {
+  policy_document_version: number;
+  fingerprint: string;
+  rules: GovernanceWatchlistRule[];
+}
+
+export interface GovernancePolicyVersion {
+  id: string;
+  version: number;
+  body_markdown: string;
+  is_active: boolean;
+  source: string;
+  created_by_id?: string | null;
+  created_at: string;
+  watchlist_fingerprint: string;
+}
+
+export interface GovernancePolicyDocument extends GovernancePolicyVersion {
+  watchlist: GovernanceWatchlist;
+}
+
+export interface GovernanceReviewSettings {
+  mode: GovernanceReviewMode;
+  analysis_model_id?: string | null;
+  analysis_model_alias?: string | null;
+  platform_analysis_model?: string | null;
+  own_model_exempt: boolean;
+  mode_changed_at?: string | null;
+  mode_changed_by_id?: string | null;
+  privacy_line: string;
+}
+
+const GOVERNANCE_BASE = '/api/v1/governance-review';
+
+async function governanceJson<T>(
+  path: string,
+  fallback: string,
+  init: AuthFetchOptions = {}
+): Promise<T> {
+  const response = await fetchWithAuth(`${GOVERNANCE_BASE}${path}`, init);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(extractErrorMessage(errorData, fallback));
+  }
+  return response.json() as Promise<T>;
+}
+
+function jsonBody(method: string, body: unknown): AuthFetchOptions {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+/** The active policy. The first read seeds the default template. */
+export function getGovernancePolicy(): Promise<GovernancePolicyDocument> {
+  return governanceJson('/policy', 'Failed to load the governance policy');
+}
+
+/** Saving always inserts a new version; the server compiles its rules. */
+export function saveGovernancePolicy(
+  bodyMarkdown: string
+): Promise<GovernancePolicyDocument> {
+  return governanceJson(
+    '/policy',
+    'Failed to save the governance policy',
+    jsonBody('PUT', { body_markdown: bodyMarkdown })
+  );
+}
+
+/** Versions, newest first. */
+export function listGovernancePolicyVersions(
+  limit = 50,
+  offset = 0
+): Promise<GovernancePolicyVersion[]> {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return governanceJson(
+    `/policy/versions?${query}`,
+    'Failed to load policy versions'
+  );
+}
+
+/** Copies an old body into a new active version. */
+export function restoreGovernancePolicyVersion(
+  version: number
+): Promise<GovernancePolicyDocument> {
+  return governanceJson(
+    `/policy/versions/${encodeURIComponent(String(version))}/restore`,
+    'Failed to restore the policy version',
+    { method: 'POST' }
+  );
+}
+
+export function getGovernanceReviewSettings(): Promise<GovernanceReviewSettings> {
+  return governanceJson('/settings', 'Failed to load review settings');
+}
+
+export function updateGovernanceReviewSettings(body: {
+  mode: GovernanceReviewMode;
+  analysis_model_id?: string | null;
+}): Promise<GovernanceReviewSettings> {
+  return governanceJson(
+    '/settings',
+    'Failed to save review settings',
+    jsonBody('PUT', body)
+  );
+}
+
+/**
+ * The one-click answer to `off_over_budget`. Without a model the server picks
+ * the account's default gateway model.
+ */
+export function keepGovernanceReviewOn(
+  analysisModelId?: string | null
+): Promise<GovernanceReviewSettings> {
+  return governanceJson(
+    '/keep-on',
+    'Failed to keep the review on',
+    jsonBody(
+      'POST',
+      analysisModelId ? { analysis_model_id: analysisModelId } : {}
+    )
+  );
+}
