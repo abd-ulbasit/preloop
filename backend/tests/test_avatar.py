@@ -439,6 +439,34 @@ class TestAnonymousProviderAvatar:
     def test_fetch_refuses_a_non_google_host(self):
         assert fetch_avatar_bytes("https://example.com/a.png") is None
 
+    def test_shared_client_does_not_follow_redirects(self):
+        avatar_service._http_client = None
+        try:
+            client = avatar_service.avatar_http_client()
+            assert client.follow_redirects is False
+        finally:
+            avatar_service._http_client = None
+
+    def test_cdn_fetch_follows_redirects(self, monkeypatch):
+        seen: dict[str, object] = {}
+
+        class _Response:
+            status_code = 200
+            url = "https://lh3.googleusercontent.com/a-/landed"
+            content = b"\x89PNG\r\n\x1a\nxxxx"
+
+        class _Client:
+            def get(self, url: str, **kwargs: object) -> _Response:
+                seen["follow_redirects"] = kwargs.get("follow_redirects")
+                return _Response()
+
+        monkeypatch.setattr(avatar_service, "avatar_http_client", lambda: _Client())
+        fetched = avatar_service.fetch_google_avatar(
+            "https://lh3.googleusercontent.com/a-/start"
+        )
+        assert fetched is not None
+        assert seen["follow_redirects"] is True
+
 
 # ---------------------------------------------------------------------------
 # Precedence

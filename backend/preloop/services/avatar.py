@@ -193,12 +193,16 @@ def avatar_http_client() -> Any:
 
     Opening a new client per request on the profile path spends a connection
     setup on every console load. ``httpx.Client`` is safe to share across threads.
+
+    Redirects stay off. The shared client also sends Google bearer tokens and
+    refresh secrets, and a 307/308 would forward those to the redirect target.
+    Only the public CDN fetch opts in.
     """
     global _http_client
     if _http_client is None:
         import httpx
 
-        _http_client = httpx.Client(timeout=2.0, follow_redirects=True)
+        _http_client = httpx.Client(timeout=2.0, follow_redirects=False)
     return _http_client
 
 
@@ -216,7 +220,7 @@ def fetch_google_avatar(url: str) -> Optional[tuple[bytes, str]]:
     if not is_google_avatar_host(url):
         return None
     try:
-        response = avatar_http_client().get(url)
+        response = avatar_http_client().get(url, follow_redirects=True)
     except Exception:
         logger.debug("Avatar fetch failed", exc_info=True)
         return None
