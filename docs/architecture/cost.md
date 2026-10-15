@@ -335,6 +335,8 @@ entry keeps the numbers its rule recorded, including imported dollars;
 overlapping findings are never summed into an account total. It is the section
 for the weekly digest service, which is resolved through the plugin registry
 and lives outside this repository.
+The weekly governance review will add a governance section to the same
+digest; see the [weekly governance review guide](../guide/governance-review.md).
 
 **Imported spend.** Spend that does not pass through the gateway enters
 through `register_imported_spend_source`. Cards and digest entries that

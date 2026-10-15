@@ -58,6 +58,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "preloop.executionEnv" . | nindent 12 }}
+            {{- include "preloop.governanceReviewEnv" . | nindent 12 }}
             - name: PRELOOP_URL
               value: {{ .Values.environment.preloopUrl | quote }}
             - name: HOST

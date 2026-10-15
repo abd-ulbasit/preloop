@@ -438,6 +438,16 @@ deployments. See `docs/guide/observability-otlp.md`.
 | `otlp.resource.deploymentEnvironment` | Resource `deployment.environment` | `""` |
 | `otlp.samplerRatio` | Parent-based TraceIdRatioBased sampler ratio in `[0, 1]` | `1.0` |
 
+### Governance review parameters
+
+Each value renders its environment variable on the API, worker and scheduler
+deployments only when set. See `docs/guide/governance-review.md`.
+
+| Name | Description | Value |
+| ---- | ----------- | ----- |
+| `governanceReview.enabled` | `GOVERNANCE_REVIEW_ENABLED`: schedule the hourly digest sweep and the Monday review. Unset keeps the application default, `true` | `null` |
+| `governanceReview.analysisModel` | `PRELOOP_GOVERNANCE_ANALYSIS_MODEL`: gateway alias of the self-hosted analysis model | `""` |
+
 ### Resource management parameters
 
 Resources are configured per-component to allow fine-grained control:

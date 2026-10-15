@@ -57,6 +57,7 @@ spec:
             - name: DEBUG
               value: {{ .Values.environment.debug | quote }}
             {{- include "preloop.databaseUrlEnv" . | nindent 12 }}
+            {{- include "preloop.governanceReviewEnv" . | nindent 12 }}
             - name: DATABASE_POOL_SIZE
               value: {{ .Values.database.pool.worker.size | quote }}
             - name: DATABASE_MAX_OVERFLOW
