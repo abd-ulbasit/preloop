@@ -480,7 +480,12 @@ def ensure_release_workflow_ready() -> None:
 
 
 def python_package_version(version: str) -> str:
-    """Return the PEP 440 name used for the wheel and sdist."""
+    """Return the PEP 440 name used for the wheel and sdist.
+
+    The release workflow calls this function. Keeping a second copy in the
+    workflow would make the post-publish asset check look for a name the
+    build never produced.
+    """
     match = re.fullmatch(
         r"(?P<core>\d+\.\d+\.\d+)"
         r"(?:-(?P<label>alpha|beta|rc)\.(?P<num>\d+))?"

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "release_script", REPO_ROOT / "scripts" / "release.py"
 )
@@ -15,6 +14,33 @@ assert SPEC is not None and SPEC.loader is not None
 release_script = importlib.util.module_from_spec(SPEC)
 sys.modules["release_script"] = release_script
 SPEC.loader.exec_module(release_script)
+
+# The v0.16.0 create-release job passed the changelog through the environment
+# and published from an inline body. Inlined so CI does not need that tag.
+_V0_16_CREATE_RELEASE = """
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Finalize changelog
+        env:
+          CHANGELOG_CONTENT: ${{ steps.changelog.outputs.content }}
+        run: printf '%s\\n' "$CHANGELOG_CONTENT"
+      - uses: actions/attest-build-provenance@abc
+        with:
+          subject-path: 'release-assets/*'
+      - run: python3 scripts/release_assets.py verify release-assets
+      - run: cp "$BUNDLE_PATH" "release-assets/preloop-${GITHUB_REF_NAME}.intoto.jsonl"
+      - uses: softprops/action-gh-release@abc
+        with:
+          files: release-assets/*
+          body: |
+            notes
+          draft: false
+"""
 
 
 def _workflow_text() -> str:
@@ -30,6 +56,13 @@ def _create_release_job() -> str:
 def test_current_workflow_can_publish_signed_assets() -> None:
     """The checkout's create-release job passes the pre-push check."""
     assert release_script.workflow_release_problems(_create_release_job()) == []
+
+
+def test_package_version_comes_from_the_release_helper() -> None:
+    """The workflow must not keep a second PEP 440 implementation."""
+    job = _create_release_job()
+    assert "from release import python_package_version" in job
+    assert "label_map" not in job
 
 
 def test_extract_job_stops_at_the_job_boundary() -> None:
@@ -52,15 +85,8 @@ def test_changelog_in_the_environment_is_rejected() -> None:
 
 
 def test_v0_16_0_tag_workflow_is_rejected() -> None:
-    """The workflow that published v0.16.0 must fail the local check."""
-    text = subprocess.check_output(
-        ["git", "show", "v0.16.0:.github/workflows/release.yml"],
-        cwd=REPO_ROOT,
-        text=True,
-    )
-    problems = release_script.workflow_release_problems(
-        release_script.extract_job(text, "create-release")
-    )
+    """The v0.16.0 release job shape fails the local check without that tag."""
+    problems = release_script.workflow_release_problems(_V0_16_CREATE_RELEASE)
     assert any("changelog text" in item for item in problems)
 
 

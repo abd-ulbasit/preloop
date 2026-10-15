@@ -741,23 +741,12 @@ jobs:
         id: version
         run: |
           package_version="${GITHUB_REF_NAME#v}"
-          python_package_version="$(python3 - "$package_version" <<'PY'
-          import re
-          import sys
-
-          version = sys.argv[1]
-          match = re.fullmatch(
-              r"(?P<core>\d+\.\d+\.\d+)(?:-(?P<label>alpha|beta|rc)\.(?P<num>\d+))?(?:\+[0-9A-Za-z.-]+)?",
-              version,
-          )
-          if match and match.group("label"):
-              label_map = {"alpha": "a", "beta": "b", "rc": "rc"}
-              print(
-                  f"{match.group('core')}{label_map[match.group('label')]}{match.group('num')}"
-              )
-          else:
-              print(version)
-          PY
+          # scripts/release.py is the only PEP 440 normalization. A second
+          # copy here would make release.sh expect an asset the build never
+          # produced.
+          python_package_version="$(
+            python3 -c 'import sys; sys.path.insert(0, "scripts"); from release import python_package_version; print(python_package_version(sys.argv[1]))' \
+              "$package_version"
           )"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
           echo "python_package_version=$python_package_version" >> "$GITHUB_OUTPUT"
