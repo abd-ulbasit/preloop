@@ -48,3 +48,5 @@ The OSS store for the weekly governance review is five account-scoped tables: `g
 *   `governance_weekly_review` on Monday at 07:00 UTC.
 
 An account with no settings row takes a deployment default. The hosted service (`PRELOOP_HOSTED`) defaults to `on_platform`. A self-hosted install defaults to `off` until `PRELOOP_GOVERNANCE_ANALYSIS_MODEL` is set to the analysis model alias, which switches that default to `on_own_model`. A stored settings row overrides the default.
+
+Operators: see the [weekly governance review guide](../guide/governance-review.md) for what is sent to the analysis model, the cost rules, and the Helm values.

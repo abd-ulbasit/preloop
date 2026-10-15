@@ -725,6 +725,18 @@ otlp:
     deploymentEnvironment: ""
   samplerRatio: 1.0
 
+# Weekly governance review (Enterprise). Both values are unset by default
+# and then render no env, so the application defaults apply. See
+# docs/guide/governance-review.md.
+governanceReview:
+  # true or false sets GOVERNANCE_REVIEW_ENABLED (the hourly digest sweep and
+  # the Monday review schedule). Unset keeps the default, which is on.
+  enabled: null
+  # Gateway alias of the analysis model, as PRELOOP_GOVERNANCE_ANALYSIS_MODEL.
+  # A self-hosted install has no platform model, so the review stays off for
+  # accounts without their own model until this is set.
+  analysisModel: ""
+
 # Performance profiling configuration
 profiling:
   enabled: false
