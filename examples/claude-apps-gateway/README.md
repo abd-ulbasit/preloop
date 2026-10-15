@@ -116,3 +116,8 @@ sign-in flow for CI. The harness is not wired into CI; run it locally.
   `/Library/Managed Preferences`, the Windows registry or
   `/etc/claude-desktop`.
 - All secrets are placeholders from `.env.example`.
+
+For an opt-in actual Claude Code native-action hook pilot, see
+[app verification](../claude-app-verification/README.md). It uses an isolated
+local model stub and records explicit gaps; it does not promote gateway probes
+to application or managed-control verification.

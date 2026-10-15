@@ -1,0 +1,9 @@
+**
+!cli/
+!cli/**/
+!cli/**/*.go
+!cli/go.mod
+!cli/go.sum
+!examples/
+!examples/claude-app-verification/
+!examples/claude-app-verification/rig.py
