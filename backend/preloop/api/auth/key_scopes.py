@@ -38,6 +38,16 @@ from preloop.config import settings
 logger = logging.getLogger(__name__)
 
 MCP_SCOPE_PREFIX = "mcp:"
+ENROLLMENT_PROVISION_SCOPE = "enrollment:provision"
+ENROLLMENT_APPLIED_PATH = "/api/v1/agents/enrollment/applied"
+ENROLLMENT_EXCHANGE_PATH = "/api/v1/agents/enrollment/exchange"
+
+
+def is_enrollment_authority(api_key: Any) -> bool:
+    """Any provisioning scope is confined, including malformed mixed scopes."""
+    scopes = getattr(api_key, "scopes", None)
+    return isinstance(scopes, (list, tuple)) and ENROLLMENT_PROVISION_SCOPE in scopes
+
 
 #: Error code returned in ``detail.code`` when a key's scopes do not cover
 #: the route.
@@ -94,7 +104,11 @@ def is_single_purpose_api_key(api_key: Any) -> bool:
     Returns:
         True when the key must be refused outside its own routes.
     """
-    return is_device_scoped_api_key(api_key) or is_telemetry_ingest_api_key(api_key)
+    return (
+        is_device_scoped_api_key(api_key)
+        or is_telemetry_ingest_api_key(api_key)
+        or is_enrollment_authority(api_key)
+    )
 
 
 def is_device_scoped_api_key(api_key: Any) -> bool:
@@ -181,6 +195,37 @@ def enforce_api_key_route_scope(api_key: Any, request: Optional[Request]) -> Non
     Raises:
         HTTPException: 403 with ``detail.code`` ``api_key_scope_denied``.
     """
+    if is_enrollment_authority(api_key):
+        if (
+            request is not None
+            and request.method == "POST"
+            and request.url.path.rstrip("/") == ENROLLMENT_EXCHANGE_PATH
+            and api_key.scopes == [ENROLLMENT_PROVISION_SCOPE]
+        ):
+            return
+        raise HTTPException(
+            403,
+            detail={
+                "code": API_KEY_SCOPE_DENIED,
+                "message": "Enrollment exchange only",
+            },
+        )
+    context = getattr(api_key, "context_data", None)
+    if isinstance(context, dict) and "unattended_enrollment" in context:
+        if (
+            request is not None
+            and request.method == "POST"
+            and request.url.path.rstrip("/") == ENROLLMENT_APPLIED_PATH
+            and api_key.scopes == ["mcp:read", "mcp:write"]
+        ):
+            return
+        raise HTTPException(
+            403,
+            detail={
+                "code": API_KEY_SCOPE_DENIED,
+                "message": "App runtime credential only",
+            },
+        )
     if is_device_scoped_api_key(api_key):
         _enforce_device_key_route(api_key, request)
         return
@@ -279,6 +324,11 @@ def api_key_allowed_on_channel(api_key: Any, channel: str) -> bool:
     Returns:
         False when the key must be refused.
     """
-    if is_single_purpose_api_key(api_key):
+    context = getattr(api_key, "context_data", None)
+    if (
+        is_single_purpose_api_key(api_key)
+        or isinstance(context, dict)
+        and "unattended_enrollment" in context
+    ):
         return False
     return not _mode_denies(api_key, channel)

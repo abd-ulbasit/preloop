@@ -563,3 +563,14 @@ func (c *Client) Token() string {
 func (c *Client) BaseURL() string {
 	return c.baseURL
 }
+
+// NewEnrollmentClient uses only the supplied authority and refuses redirects.
+// Provisioning secrets must never follow a redirect to a different transport,
+// including an HTTPS-to-HTTP redirect on the same hostname.
+func NewEnrollmentClient(baseURL, token string) *Client {
+	client := NewClientWithToken(baseURL, token)
+	client.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
+}

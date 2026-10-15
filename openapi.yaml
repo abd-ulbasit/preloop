@@ -1184,6 +1184,101 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/agents/enrollment/authorities:
+    post:
+      tags:
+      - Agent enrollment
+      summary: Create Authority
+      description: Issue a short-lived token once to an authenticated administrator.
+      operationId: create_authority_api_v1_agents_enrollment_authorities_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentGrantRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentGrantResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/agents/enrollment/exchange:
+    post:
+      tags:
+      - Agent enrollment
+      summary: Exchange
+      description: Accept provisioning authority only, never report or app runtime
+        keys.
+      operationId: exchange_api_v1_agents_enrollment_exchange_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentExchangeRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentExchangeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/agents/enrollment/applied:
+    post:
+      tags:
+      - Agent enrollment
+      summary: Applied
+      description: Acknowledge local config using the app's own active credential
+        only.
+      operationId: applied_api_v1_agents_enrollment_applied_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentApplyResponse'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
   /api/v1/agents/discovery-salt:
     get:
       tags:
@@ -28791,6 +28886,169 @@ components:
       - data
       title: EmbeddingRawResponse
       description: Response model for the raw embeddings endpoint.
+    EnrollmentAppCredential:
+      properties:
+        app:
+          type: string
+          enum:
+          - claude_code
+          - codex
+          - cursor
+          title: App
+        agent_id:
+          type: string
+          format: uuid
+          title: Agent Id
+        runtime_principal_id:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          title: Runtime Principal Id
+        enrollment_id:
+          type: string
+          format: uuid
+          title: Enrollment Id
+        token:
+          type: string
+          title: Token
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - app
+      - agent_id
+      - runtime_principal_id
+      - enrollment_id
+      - token
+      - expires_at
+      title: EnrollmentAppCredential
+      description: Device/user/app-scoped credential returned exactly once.
+    EnrollmentApplyResponse:
+      properties:
+        state:
+          type: string
+          const: configured
+          title: State
+          default: configured
+      type: object
+      title: EnrollmentApplyResponse
+      description: Acknowledgment of local config apply, without runtime validation
+        claims.
+    EnrollmentExchangeRequest:
+      properties:
+        workstation_fingerprint:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          title: Workstation Fingerprint
+        user_ref:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          title: User Ref
+        device_ref_hash:
+          anyOf:
+          - type: string
+            pattern: ^[a-f0-9]{64}$
+          - type: 'null'
+          title: Device Ref Hash
+        apps:
+          items:
+            type: string
+            enum:
+            - claude_code
+            - codex
+            - cursor
+          type: array
+          maxItems: 3
+          minItems: 1
+          title: Apps
+      additionalProperties: false
+      type: object
+      required:
+      - workstation_fingerprint
+      - user_ref
+      - apps
+      title: EnrollmentExchangeRequest
+      description: Pseudonymous target identity; raw OS and MDM identifiers stay local.
+    EnrollmentExchangeResponse:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        apps:
+          items:
+            $ref: '#/components/schemas/EnrollmentAppCredential'
+          type: array
+          title: Apps
+      type: object
+      required:
+      - apps
+      title: EnrollmentExchangeResponse
+      description: Credential checkpoint for local config application.
+    EnrollmentGrantRequest:
+      properties:
+        apps:
+          items:
+            type: string
+            enum:
+            - claude_code
+            - codex
+            - cursor
+          type: array
+          maxItems: 3
+          minItems: 1
+          title: Apps
+        expires_minutes:
+          type: integer
+          maximum: 60.0
+          minimum: 1.0
+          title: Expires Minutes
+          default: 15
+        credential_hours:
+          type: integer
+          maximum: 2160.0
+          minimum: 1.0
+          title: Credential Hours
+          default: 720
+        allowed_mcp_tools:
+          items:
+            type: string
+          type: array
+          maxItems: 100
+          title: Allowed Mcp Tools
+      additionalProperties: false
+      type: object
+      required:
+      - apps
+      title: EnrollmentGrantRequest
+      description: Administrative grant with no implicit tools or inference access.
+    EnrollmentGrantResponse:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        token:
+          type: string
+          title: Token
+        salt:
+          type: string
+          title: Salt
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - token
+      - salt
+      - expires_at
+      title: EnrollmentGrantResponse
+      description: One-time token-file envelope, delivered separately from managed
+        settings.
     ExecutionContinuationNavigation:
       properties:
         original_execution_id:

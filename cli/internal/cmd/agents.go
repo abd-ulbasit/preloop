@@ -760,6 +760,7 @@ type remoteServerSyncResult struct {
 }
 
 type localEnrollmentState struct {
+	Unattended          bool                   `json:"unattended,omitempty"`
 	AgentName           string                 `json:"agent_name"`
 	DisplayName         string                 `json:"display_name,omitempty"`
 	RuntimePrincipalID  string                 `json:"runtime_principal_id"`
@@ -865,6 +866,11 @@ func init() {
 	agentsDiscoverCmd.Flags().String("device-ref", "", "opaque administrative device reference to hash for opt-in discovery reporting")
 	agentsDiscoverCmd.Flags().Bool("report", false, "opt in: send salted hashes of what was found to Preloop (also PRELOOP_DISCOVERY_REPORT=1); see docs/guide/agent-discovery-reporting.md")
 	_ = agentsDiscoverCmd.Flags().MarkDeprecated("add", "use 'preloop agents onboard [agent]'")
+	agentsEnrollCmd.Flags().Bool("unattended", false, "enroll explicitly selected apps using single-use provisioning authority")
+	agentsEnrollCmd.Flags().String("enrollment-token-file", "", "protected one-time enrollment authority JSON file")
+	agentsEnrollCmd.Flags().StringSlice("apps", nil, "explicit unattended apps: claude_code,codex,cursor")
+	agentsEnrollCmd.Flags().String("target-user", "", "explicit OS target user (required on Linux)")
+	agentsEnrollCmd.Flags().String("device-ref", "", "MDM device reference; only its account-salted hash is sent")
 	agentsEnrollCmd.Flags().Bool("no-credential-import", false, "refuse upstream credential import before any apply mutation")
 	agentsEnrollCmd.Flags().Bool("dry-run", false, "preview account and config changes without writing")
 	agentsEnrollCmd.Flags().BoolP("yes", "y", false, "skip the onboarding confirmation prompt")
@@ -1380,6 +1386,14 @@ func isAutoApprove(cmd *cobra.Command) bool {
 }
 
 func runAgentsEnroll(cmd *cobra.Command, args []string) error {
+	if isUnattendedEnrollmentCommand(cmd) {
+		return runUnattendedEnrollment(cmd, args)
+	}
+	for _, flag := range []string{"enrollment-token-file", "apps", "target-user", "device-ref"} {
+		if cmd.Flags().Changed(flag) {
+			return fmt.Errorf("--%s requires --unattended", flag)
+		}
+	}
 	if err := rejectRouteOnlyFlagsWithoutModelRoute(cmd); err != nil {
 		return err
 	}
@@ -5893,6 +5907,7 @@ func managedAgentLookupSourceTypes(agent AgentConfig) []string {
 func runtimePrincipalIDCandidates(agent AgentConfig) []string {
 	seen := map[string]struct{}{}
 	candidates := []string{
+		runtimePrincipalIDForAgent(agent),
 		stableRuntimePrincipalIDForAgent(agent, identitySaltForAgent(agent)),
 		generatedRuntimePrincipalID(resolveAgentDisplayName(agent), agent.ConfigPath),
 		legacyRuntimePrincipalIDForAgent(agent),
