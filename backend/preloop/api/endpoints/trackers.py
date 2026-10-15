@@ -37,6 +37,7 @@ from preloop.models import models
 
 from preloop.models.crud import (
     crud_account,
+    crud_managed_oauth,
     crud_oauth_app_installation,
     crud_organization,
     crud_tracker,
@@ -52,6 +53,7 @@ from preloop.services.dynamic_mcp_server import get_tracker_types, has_tracker
 from preloop.services.managed_credentials import (
     MANAGED_AUTH_TYPE,
     is_managed_tracker,
+    get_managed_resolver,
     tracker_credential_source,
 )
 from preloop.services.tracker_tool_unlock import (
@@ -985,12 +987,57 @@ async def register_tracker(
         )
 
 
+def _tracker_responses(db: Session, trackers: List[Tracker]) -> List[TrackerResponse]:
+    """Project authorization separately from validation without provider requests."""
+    managed = [tracker for tracker in trackers if is_managed_tracker(tracker)]
+    states = (
+        crud_managed_oauth.grant_statuses(
+            db,
+            account_id=managed[0].account_id,
+            tracker_ids=[tracker.id for tracker in managed],
+        )
+        if managed
+        else {}
+    )
+    result = []
+    for tracker in trackers:
+        payload = TrackerResponse.model_validate(tracker)
+        if is_managed_tracker(tracker):
+            details = tracker.connection_details or {}
+            resolver = get_managed_resolver(tracker.tracker_type)
+            grant = states.get(tracker.id)
+            if resolver is None or not getattr(resolver, "is_configured", False):
+                state = "unavailable"
+            elif grant == "active":
+                binding = "cloud_id" if tracker.tracker_type == "jira" else "workspace"
+                state = (
+                    "connected"
+                    if details.get(binding)
+                    else (
+                        "site_required"
+                        if binding == "cloud_id"
+                        else "workspace_required"
+                    )
+                )
+            elif grant == "invalidated":
+                state = "reconnect_required"
+            else:
+                state = (
+                    "disconnected"
+                    if details.get("managed_state") == "disconnected"
+                    else "reconnect_required"
+                )
+            payload.authorization_state = state
+        result.append(payload)
+    return result
+
+
 @router.get("/trackers", response_model=List[TrackerResponse])
 @require_permission("view_trackers")
 def list_trackers(
     current_user: AuthUserResponse = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
-) -> List[Tracker]:
+) -> List[TrackerResponse]:
     """List all non-deleted trackers for the current user."""
     account = crud_account.get(db, id=current_user.account_id)
     if not account:
@@ -1000,7 +1047,7 @@ def list_trackers(
 
     # Use CRUD layer to get trackers
     trackers = crud_tracker.get_for_account(db, account_id=account.id)
-    return trackers  # FastAPI handles conversion via response_model
+    return _tracker_responses(db, trackers)
 
 
 @router.get("/trackers/{tracker_id}", response_model=TrackerResponse)
@@ -1033,9 +1080,7 @@ def get_tracker(
         tracker,
         include_secret=has_permission(current_user, "manage_trackers", db),
     )
-    if manual is None:
-        return tracker
-    payload = TrackerResponse.model_validate(tracker)
+    payload = _tracker_responses(db, [tracker])[0]
     payload.jira_manual_webhook = manual
     return payload
 

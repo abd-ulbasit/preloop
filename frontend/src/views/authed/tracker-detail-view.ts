@@ -1,3 +1,7 @@
+import {
+  renderTrackerStatus,
+  authorizationStatus,
+} from '../../utils/tracker-status';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { LitElement, html, css, unsafeCSS, nothing } from 'lit';
@@ -74,6 +78,8 @@ interface TrackerDetail {
   created: string;
   last_updated: string;
   is_valid: boolean;
+  last_validation?: string | null;
+  authorization_state?: string | null;
   validation_message?: string;
   url?: string;
   auth_type?: string;
@@ -1261,69 +1267,13 @@ export class TrackerDetailView extends LitElement {
   private _managedStateChip(
     state: BitbucketConnectionStatus['state'] | JiraConnectionStatus['state']
   ) {
-    switch (state) {
-      case 'connected':
-        return { text: 'Managed: connected', variant: 'success' };
-      case 'site_required':
-        return { text: 'Managed: site required', variant: 'warning' };
-      case 'workspace_required':
-        return { text: 'Managed: workspace required', variant: 'warning' };
-      case 'reconnect_required':
-        return { text: 'Managed: reconnect required', variant: 'danger' };
-      case 'disconnected':
-        return { text: 'Managed: disconnected', variant: 'neutral' };
-      case 'unavailable':
-        return { text: 'Managed: provider unavailable', variant: 'warning' };
-      default:
-        return { text: 'Managed', variant: 'neutral' };
-    }
+    return authorizationStatus(state);
   }
 
   private _capabilityLabel(value: boolean | null | undefined): string {
     if (value === true) return 'granted';
     if (value === false) return 'missing';
     return 'unknown';
-  }
-
-  /** Status chip for a managed grant; the manual expiry chip never applies. */
-  private _renderManagedChip() {
-    const jira = this._isManagedJira();
-    if (!this._isManagedBitbucket() && !jira) {
-      return nothing;
-    }
-    const provider = jira ? 'Jira' : 'Bitbucket';
-    if (!(jira ? this._jiraFeatureEnabled() : this._managedFeatureEnabled())) {
-      return html`<sl-badge
-        class="chip managed-connection"
-        variant="warning"
-        pill
-        data-state="unavailable"
-        title=${`This deployment has no managed ${provider} provider configured`}
-        >Managed: provider unavailable</sl-badge
-      >`;
-    }
-    const status = jira ? this._jiraStatus : this._managedStatus;
-    if (!status) {
-      return html`<sl-badge
-        class="chip managed-connection"
-        variant="neutral"
-        pill
-        >Connection status unknown</sl-badge
-      >`;
-    }
-    const chip = this._managedStateChip(status.state);
-    return html`<sl-badge
-      class="chip managed-connection"
-      variant=${chip.variant as any}
-      pill
-      data-state=${status.state}
-      title=${
-        status.expires_at
-          ? `Access token expires ${formatLocalDateTime(status.expires_at)}`
-          : ''
-      }
-      >${chip.text}</sl-badge
-    >`;
   }
 
   /** Managed connection panel: actor, selection, actual expiry, capabilities. */
@@ -2142,6 +2092,12 @@ export class TrackerDetailView extends LitElement {
     }
 
     const tracker = this._tracker;
+    const authorizationState =
+      (this._isManagedJira() && !this._jiraFeatureEnabled()) ||
+      (this._isManagedBitbucket() && !this._managedFeatureEnabled())
+        ? 'unavailable'
+        : ((this._isManagedJira() ? this._jiraStatus : this._managedStatus)
+            ?.state ?? tracker.authorization_state);
     // Relative in the line, exact in the title: "2d ago" is the fact an
     // operator is checking, a date is what they check it against.
     const createdDate = formatRelativeTime(tracker.created);
@@ -2209,18 +2165,27 @@ export class TrackerDetailView extends LitElement {
         <div class="main-column">
           <div class="tracker-header">
             <sl-icon class="tracker-icon" name=${icon}></sl-icon>
-            ${
-              this._isManagedBitbucket() || this._isManagedJira()
-                ? nothing
-                : html`<sl-badge
-                    class="chip"
-                    variant=${tracker.is_valid ? 'success' : 'warning'}
-                    pill
-                    >${tracker.is_valid ? 'Connected' : 'Not validated'}</sl-badge
-                  >`
-            }
-            ${this._renderTokenExpiry(tracker)} ${this._renderManagedChip()}
+            ${renderTrackerStatus({
+              ...tracker,
+              authorization_state: authorizationState,
+            })}
+            ${this._renderTokenExpiry(tracker)}
           </div>
+
+          ${
+            tracker.auth_type === 'managed_oauth' &&
+            !tracker.is_valid &&
+            !tracker.last_validation &&
+            !tracker.validation_message
+              ? html`<p class="initial-sync-help">
+                  ${
+                    authorizationState === 'connected'
+                      ? 'Authorization succeeded. Projects will appear after the first sync completes.'
+                      : 'This tracker has not synced yet. Complete authorization and use Sync now to request a sync.'
+                  }
+                </p>`
+              : nothing
+          }
 
           <div class="tracker-meta">
             <span>

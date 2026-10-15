@@ -1,3 +1,4 @@
+import { renderTrackerStatus } from '../utils/tracker-status';
 import { tableScrollStyles } from '../styles/table-scroll';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
@@ -669,7 +670,6 @@ export class TrackerList extends LitElement {
   private renderListRow(tracker: Tracker) {
     const projects = trackerProjectsCount(tracker);
     const lastChecked = trackerLastCheckedAt(tracker);
-    const connected = tracker.is_valid !== false;
     return html`
       <tr
         class="tracker-row"
@@ -700,14 +700,7 @@ export class TrackerList extends LitElement {
               : projects
           }
         </td>
-        <td>
-          <sl-badge
-            class="chip"
-            variant=${connected ? 'success' : 'danger'}
-            pill
-            >${connected ? 'Connected' : 'Action required'}</sl-badge
-          >
-        </td>
+        <td>${renderTrackerStatus(tracker)}</td>
         <td
           class="muted-cell"
           title=${lastChecked ? formatLocalDateTime(lastChecked) : nothing}

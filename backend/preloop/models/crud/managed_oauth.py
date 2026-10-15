@@ -554,6 +554,21 @@ class CRUDManagedOAuth:
             db.flush()
             return tracker.id
 
+    def grant_statuses(
+        self, db: Session, *, account_id: UUID, tracker_ids: list[UUID]
+    ) -> dict[UUID, str]:
+        """Read only grant states for an account's trackers in one bounded query."""
+        if not tracker_ids:
+            return {}
+        rows = db.execute(
+            select(models.OAuthToken.tracker_id, models.OAuthToken.status).where(
+                models.OAuthToken.account_id == account_id,
+                models.OAuthToken.auth_mode == "managed_oauth",
+                models.OAuthToken.tracker_id.in_(tracker_ids),
+            )
+        )
+        return {tracker_id: state for tracker_id, state in rows}
+
     def get_grant(
         self,
         *,

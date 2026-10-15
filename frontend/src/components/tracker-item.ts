@@ -1,3 +1,4 @@
+import { renderTrackerStatus } from '../utils/tracker-status';
 import { parseUTCDate } from '../utils/date';
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -15,6 +16,8 @@ export interface Tracker {
   tracker_type: string;
   created: string;
   is_valid: boolean;
+  validation_message?: string | null;
+  authorization_state?: string | null;
   url?: string | null;
   last_validation?: string | null;
   last_updated?: string;
@@ -191,13 +194,7 @@ export class TrackerItem extends LitElement {
           ></sl-icon>
           <h3 class="tracker-name">${this.tracker.name}</h3>
           <p class="tracker-type">${this.tracker.tracker_type}</p>
-          <sl-badge
-            variant=${this.tracker.is_valid !== false ? 'success' : 'danger'}
-            size="small"
-            style="margin-top: var(--sl-spacing-2x-small);"
-          >
-            ${this.tracker.is_valid !== false ? 'Connected' : 'Action Required'}
-          </sl-badge>
+          ${renderTrackerStatus(this.tracker)}
           <div class="tracker-created">Created: ${createdAt}</div>
         </div>
         <div slot="footer">
