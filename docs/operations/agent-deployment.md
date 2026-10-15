@@ -203,3 +203,8 @@ account, checked when the view is created and again when the viewer connects.
 which needs `manage_agents`; re-running it reuses the stored credential for
 the same agent (`--rotate-credential` mints a new one). API replicas join the two halves
 of a view over NATS, so no sticky routing is required.
+
+## Managed employee endpoints
+
+For existing employee workstations, use the separate [staged MDM recipes](mdm-recipes.md).
+They cover managed-file delivery and scoped inventory rather than remote runtime installation.

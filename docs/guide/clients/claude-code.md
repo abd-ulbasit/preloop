@@ -259,3 +259,7 @@ Synthetic export and adapter tests do not prove live application enforcement on
 any OS or plan. Managed configuration is not device attestation: ordinary local
 software remains controllable by local administrators. Protected resources need
 independent enforcement when that threat is in scope.
+
+For staged Jamf, Fleet, Intune and Kandji delivery, use the
+[MDM recipes](../../operations/mdm-recipes.md) and review the
+[coverage boundaries](../endpoint-coverage.md).

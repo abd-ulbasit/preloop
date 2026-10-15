@@ -38,6 +38,7 @@ jobs:
       # Silence the MkDocs 2 notice printed by mkdocs-material.
       NO_MKDOCS_2_WARNING: 'true'
       DISABLE_MKDOCS_2_WARNING: 'true'
+      PRELOOP_DISABLE_TELEMETRY: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,3 +54,25 @@ jobs:
 
       - name: Build the site
         run: mkdocs build --strict
+
+      - name: Set up Go for MDM recipe fixtures
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Check MDM templates against the CLI
+        run: |
+          (cd cli && go build -o ../build/preloop ./cmd/preloop)
+          sh docs/scripts/test_mdm_recipes.sh "$PWD/build/preloop"
+          shellcheck docs/assets/mdm-recipes/*.sh docs/scripts/test_mdm_recipes.sh
+
+      - name: Parse Windows inventory template (no execution)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            "$env:GITHUB_WORKSPACE/docs/assets/mdm-recipes/inventory-user.ps1",
+            [ref]$tokens, [ref]$parseErrors)
+          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }

@@ -199,3 +199,9 @@ turn reporting on without `--report` or the existing opt-in environment flag.
 Matching hashes correlate administrative identifiers and do not attest a device,
 its executable identity or effective governance. Candidate-only reports establish
 receipt history, not collection completeness or trusted control verification.
+
+## Deployment and coverage
+
+See the [MDM recipes](../operations/mdm-recipes.md) for staged delivery and separate
+credential provisioning, and the [coverage and threat model](endpoint-coverage.md)
+for evidence boundaries, bypass risks and data minimization.

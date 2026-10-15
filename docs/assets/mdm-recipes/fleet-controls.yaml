@@ -1,0 +1,6 @@
+# Merge into a reviewed team YAML. This fragment registers, not schedules, a script.
+# Fleet scripts run as root; use this only to demonstrate the refusal boundary.
+# For collection, configure a separately reviewed app-user scheduler first.
+controls:
+  scripts:
+    - path: ./inventory-user.sh

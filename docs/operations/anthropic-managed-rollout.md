@@ -82,16 +82,15 @@ honoring those semantics in a real app is still unverified.
 ## Staged MDM recipes
 
 These are operator delivery recipes, not verified vendor-tenant integrations.
-Detailed staged templates and tenant validation are tracked in
-[#1181](https://github.com/preloop/preloop/issues/1181); application-level pilot
+Detailed [staged templates](mdm-recipes.md) are available; vendor-tenant validation
+remains pending under [#1181](https://github.com/preloop/preloop/issues/1181). Application-level pilot
 verification is tracked in [#1182](https://github.com/preloop/preloop/issues/1182)
-and coverage/threat-model documentation in
-[#1347](https://github.com/preloop/preloop/issues/1347). This guide coordinates
+and the [coverage/threat-model guide](../guide/endpoint-coverage.md) explains the boundaries. This guide coordinates
 those scopes and does not close their acceptance gates.
 
 | Platform and delivery | Practical staging action | Required tenant/app evidence |
 | --- | --- | --- |
-| Jamf Pro macOS | Deliver signed CLI/package plus root-owned reviewed managed file using supported package/script mechanisms; separate app-user credential provisioning | Effective source, ownership, restart and harmless allow/deny/outage/rollback on a pinned macOS/app version |
+| Jamf Pro macOS | Deliver reviewed CLI binary plus root-owned reviewed managed file using supported package/script mechanisms; separate app-user credential provisioning | Effective source, ownership, restart and harmless allow/deny/outage/rollback on a pinned macOS/app version |
 | Fleet macOS/Linux | Use supported GitOps/package/script delivery for the reviewed file; schedule collection in the intended app user's context | Actual Fleet tenant delivery and scoped user inventory; Linux distribution explicitly recorded |
 | Intune macOS | Use supported macOS package/script delivery for Code file; use Desktop's documented preference payload for Desktop | Effective managed source and app-user helper/credential access |
 | Intune Windows | Deploy CLI and reviewed Code file using a supported Win32 app/script; Desktop uses its documented machine registry policy | Local `.exe` path, PowerShell hook support, execution context and app restart |
@@ -124,9 +123,9 @@ For discovery scheduling, use the separate
 [report-only token and data-minimization contract](../guide/agent-discovery-reporting.md).
 Run in the intended app user's context; root-only inventory does not prove that
 user's configuration was inspected. Record incomplete scans truthfully and
-avoid printing credentials. Endpoint custody work under
-[#1183](https://github.com/preloop/preloop/issues/1183) is unpublished and is not
-a supported release recipe here.
+avoid printing credentials. Selected-app MCP [unattended enrollment](../guide/cli.md#unattended-enrollment)
+is available in current source. Verify candidate/release availability separately;
+it does not supply hook or model credentials, and live MDM acceptance is pending.
 
 ## Pilot gate and coverage limits
 
