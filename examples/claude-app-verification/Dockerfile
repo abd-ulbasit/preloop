@@ -10,10 +10,8 @@ COPY examples/claude-app-verification/package.json examples/claude-app-verificat
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm ci --omit=dev --prefix /opt/claude-code \
-    && mkdir -p /usr/local/lib \
-    && rm -rf /usr/local/lib/node_modules \
-    && cp -a /opt/claude-code/node_modules /usr/local/lib/node_modules \
-    && ln -s /usr/local/lib/node_modules/.bin/claude /usr/local/bin/claude \
+    && cp -a /opt/claude-code/node_modules/@anthropic-ai /usr/local/lib/node_modules/ \
+    && ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
     && rm -rf /opt/claude-code \
     && claude --version
 COPY --from=cli /preloop /usr/local/bin/preloop

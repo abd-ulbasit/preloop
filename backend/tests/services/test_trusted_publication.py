@@ -375,7 +375,15 @@ def test_limit_helper_drops_linker_path_before_exec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The helper can start under LD_LIBRARY_PATH; Git must not keep it."""
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/toolcache/Python/lib")
+    # A relocated setup-python build loads libpython only through the job's
+    # real linker path. Replacing that path makes this process's interpreter
+    # exit 127, which is the failure this PR is fixing. Prepend a sentinel
+    # so the assertion still sees a distinctive value.
+    real = os.environ.get("LD_LIBRARY_PATH")
+    sentinel = "/toolcache/Python/lib"
+    monkeypatch.setenv(
+        "LD_LIBRARY_PATH", f"{sentinel}{os.pathsep}{real}" if real else sentinel
+    )
     monkeypatch.setenv("PRELOOP_GIT_TOKEN_1", "old-agent-token")
     probe = tmp_path / "probe.sh"
     probe.write_text(
@@ -388,7 +396,8 @@ def test_limit_helper_drops_linker_path_before_exec(
     seen_linker = tmp_path / "linker"
     seen_token = tmp_path / "token"
     env = _git_helper_env({"PATH": os.defpath, "HOME": str(tmp_path)})
-    assert env["LD_LIBRARY_PATH"] == "/toolcache/Python/lib"
+    assert env["LD_LIBRARY_PATH"] == os.environ["LD_LIBRARY_PATH"]
+    assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == sentinel
     assert "PRELOOP_GIT_TOKEN_1" not in env
     subprocess.run(
         [

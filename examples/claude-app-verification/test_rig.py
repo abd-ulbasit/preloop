@@ -14,6 +14,10 @@ def test_image_installs_the_locked_claude_code_with_npm_ci() -> None:
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     assert "npm install" not in dockerfile
     assert "npm ci --omit=dev --prefix /opt/claude-code" in dockerfile
+    assert "rm -rf /usr/local/lib/node_modules" not in dockerfile
+    assert (
+        "cp -a /opt/claude-code/node_modules/@anthropic-ai /usr/local/lib/node_modules/"
+    ) in dockerfile
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
     assert package["dependencies"]["@anthropic-ai/claude-code"] == "2.1.296"
     lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
