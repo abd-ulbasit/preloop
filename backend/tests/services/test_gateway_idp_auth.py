@@ -8,6 +8,7 @@ Each threat model bullet of #1414 maps to tests here or in
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import httpx
@@ -604,3 +605,39 @@ def test_no_store_gets_the_ttl_floor():
     assert idp.clamp_ttl(idp._max_age("no-store")) == idp.MIN_JWKS_TTL_SECONDS
     assert idp.clamp_ttl(idp._max_age("no-cache, max-age=0")) == 300
     assert idp._max_age("public, max-age=1200") == 1200
+
+
+def test_idp_logs_omit_the_bearer_and_the_issuer_claim(caplog, monkeypatch):
+    """Rejection and validation-error logs fingerprint the bearer and issuer.
+
+    CodeQL py/clear-text-logging-sensitive-data (alerts 282 and 283) flags
+    the issuer because it is parsed out of the unverified JWT.
+    """
+    issuer = "https://idp.example.com/realms/one"
+    token = jwt.encode({"iss": issuer, "sub": "user-1"}, "secret", algorithm="HS256")
+    log_name = "preloop.services.gateway_idp_auth"
+
+    with caplog.at_level(logging.INFO, logger=log_name):
+        idp._log_rejection(token, "invalid_token", issuer)
+    assert token not in caplog.text
+    assert issuer not in caplog.text
+    assert idp._issuer_log_label(issuer) in caplog.text
+    caplog.clear()
+
+    async def explode(*_args, **_kwargs):
+        raise RuntimeError("discovery failed")
+
+    monkeypatch.setattr(idp, "validate_idp_token", explode)
+    monkeypatch.setattr(idp, "_load_providers", lambda _db, _issuer: [object()])
+
+    async def run_inline(fn):
+        return fn()
+
+    monkeypatch.setattr("preloop.api.loop_safety.run_db_off_loop", run_inline)
+
+    with caplog.at_level(logging.ERROR, logger=log_name):
+        with pytest.raises(idp.ModelGatewayAPIError):
+            asyncio.run(idp.authenticate_idp_bearer(token, object()))
+    assert token not in caplog.text
+    assert issuer not in caplog.text
+    assert idp._issuer_log_label(issuer) in caplog.text

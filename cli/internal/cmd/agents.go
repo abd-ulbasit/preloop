@@ -763,6 +763,7 @@ type remoteServerSyncResult struct {
 }
 
 type localEnrollmentState struct {
+	Unattended          bool                   `json:"unattended,omitempty"`
 	AgentName           string                 `json:"agent_name"`
 	DisplayName         string                 `json:"display_name,omitempty"`
 	RuntimePrincipalID  string                 `json:"runtime_principal_id"`
@@ -868,6 +869,11 @@ func init() {
 	agentsDiscoverCmd.Flags().String("device-ref", "", "opaque administrative device reference to hash for opt-in discovery reporting")
 	agentsDiscoverCmd.Flags().Bool("report", false, "opt in: send salted hashes of what was found to Preloop (also PRELOOP_DISCOVERY_REPORT=1); see docs/guide/agent-discovery-reporting.md")
 	_ = agentsDiscoverCmd.Flags().MarkDeprecated("add", "use 'preloop agents onboard [agent]'")
+	agentsEnrollCmd.Flags().Bool("unattended", false, "enroll explicitly selected apps using single-use provisioning authority")
+	agentsEnrollCmd.Flags().String("enrollment-token-file", "", "protected one-time enrollment authority JSON file")
+	agentsEnrollCmd.Flags().StringSlice("apps", nil, "explicit unattended apps: claude_code,codex,cursor")
+	agentsEnrollCmd.Flags().String("target-user", "", "explicit OS target user (required on Linux)")
+	agentsEnrollCmd.Flags().String("device-ref", "", "MDM device reference; only its account-salted hash is sent")
 	agentsEnrollCmd.Flags().Bool("no-credential-import", false, "refuse upstream credential import before any apply mutation")
 	agentsEnrollCmd.Flags().Bool("dry-run", false, "preview account and config changes without writing")
 	agentsEnrollCmd.Flags().BoolP("yes", "y", false, "skip the onboarding confirmation prompt")
@@ -1384,6 +1390,14 @@ func isAutoApprove(cmd *cobra.Command) bool {
 }
 
 func runAgentsEnroll(cmd *cobra.Command, args []string) error {
+	if isUnattendedEnrollmentCommand(cmd) {
+		return runUnattendedEnrollment(cmd, args)
+	}
+	for _, flag := range []string{"enrollment-token-file", "apps", "target-user", "device-ref"} {
+		if cmd.Flags().Changed(flag) {
+			return fmt.Errorf("--%s requires --unattended", flag)
+		}
+	}
 	if err := rejectRouteOnlyFlagsWithoutModelRoute(cmd); err != nil {
 		return err
 	}
@@ -5902,6 +5916,7 @@ func managedAgentLookupSourceTypes(agent AgentConfig) []string {
 func runtimePrincipalIDCandidates(agent AgentConfig) []string {
 	seen := map[string]struct{}{}
 	candidates := []string{
+		runtimePrincipalIDForAgent(agent),
 		stableRuntimePrincipalIDForAgent(agent, identitySaltForAgent(agent)),
 		generatedRuntimePrincipalID(resolveAgentDisplayName(agent), agent.ConfigPath),
 		legacyRuntimePrincipalIDForAgent(agent),
@@ -6281,7 +6296,20 @@ func (a genericManagedMCPAdapter) Key() string {
 	return runtimeSessionSourceTypeForAgent(a.agent.Name)
 }
 
+func isClaudeCodeUserMCPConfig(agent AgentConfig) bool {
+	return isClaudeCodeAgent(agent) && filepath.Base(agent.ConfigPath) == ".claude.json"
+}
+
 func (a genericManagedMCPAdapter) EnsureServerContainer(doc map[string]interface{}) (map[string]interface{}, error) {
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		// Native user-scoped MCP registration belongs only in mcpServers.
+		if servers, ok := asObjectMap(doc["mcpServers"]); ok {
+			return servers, nil
+		}
+		created := make(map[string]interface{})
+		doc["mcpServers"] = created
+		return created, nil
+	}
 	if strings.EqualFold(strings.TrimSpace(a.agent.Name), "codex cli") {
 		// Codex reads MCP servers from the top-level [mcp_servers] table.
 		// It ignores an [mcp] table entirely (verified on Codex 0.142.5), so
@@ -6344,6 +6372,12 @@ func (a genericManagedMCPAdapter) EnsureServerContainer(doc map[string]interface
 
 func (a genericManagedMCPAdapter) BuildManagedServer(baseURL, token string) map[string]interface{} {
 	url := strings.TrimRight(baseURL, "/") + "/mcp/v1"
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		return map[string]interface{}{
+			"type": "http", "url": url,
+			"headers": map[string]interface{}{"Authorization": "Bearer " + token},
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(a.agent.Name)) {
 	case "codex cli":
 		// Codex reads the [mcp_servers.preloop] table with `url` +
@@ -6449,6 +6483,9 @@ func (a genericManagedMCPAdapter) BuildManagedServer(baseURL, token string) map[
 
 func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface{}, baseURL string) map[string]interface{} {
 	container := lookupMCPServerContainer(doc)
+	if isClaudeCodeUserMCPConfig(a.agent) {
+		container, _ = asObjectMap(doc["mcpServers"])
+	}
 	preloop, ok := container["preloop"].(map[string]interface{})
 	expectedURL := strings.TrimRight(baseURL, "/") + "/mcp/v1"
 	result := map[string]interface{}{
@@ -6485,7 +6522,7 @@ func (a genericManagedMCPAdapter) ValidateManagedConfig(doc map[string]interface
 		// Devin defaults to Streamable HTTP and takes no transport field.
 		result["transport_ok"] = true
 	}
-	if isCopilotCLIAgent(a.agent) {
+	if isCopilotCLIAgent(a.agent) || isClaudeCodeUserMCPConfig(a.agent) {
 		result["transport_ok"] = strings.EqualFold(
 			strings.TrimSpace(fmt.Sprint(preloop["type"])),
 			"http",

@@ -110,9 +110,26 @@ preloop agents restore <agent>           # restore the most recent local config 
 preloop agents offboard <agent>          # restore config + remove managed enrollment
 preloop agents offboard --all -y --remove-model yes --remove-mcp-servers yes
 preloop agents starter-policy <mcp-server> [-o file] [--apply]
+preloop agents onboard --unattended \
+  --enrollment-token-file /private/authority.json \
+  --apps claude_code,codex \
+  --url https://preloop.example.com
 ```
 
-`discover --json` emits only allowlisted summaries (`name`, `app_id`, `mcp_server_count`, `mcp_routes`, `auth_state`, `runtime_state`). `mcp_routes` counts configured declarations: `managed`, `direct_remote`, `direct_stdio`, `unknown`, and `completeness`. A managed count means a recognizable Preloop entry, not a trusted account binding or proof that the entry can run. These fields carry no server names or endpoints. `agents status <agent> --json` reuses that agent allowlist and adds enrollment health: local apply state, remote lifecycle, validation booleans, and model credential status. It does not emit MCP env, headers, auth, config paths, tokens, or raw local or remote config. `--inventory` writes an offline `preloop.inventory.v1` envelope of known-app presence and aggregate MCP counts. Each app also includes `mcp_routes` (the same counts) and `controls` for `model_route`, `native_actions`, and `managed_mcp`. A control reports `supported`, `configured`, `configuration_evidence`, `verification`, and `evidence_kind` from a fixed vocabulary. Offline inventory stores no prior verification, so `verification` is `unverified` and `evidence_kind` is `unavailable`. None of these fields is a name, endpoint, secret, path, or a claim about actual usage.
+### Unattended enrollment
+
+An MDM or other privileged installer can enroll selected local apps without a person at the machine. The command above is the whole device-side step. It does not discover apps and it does not use an account login.
+
+1. An administrator issues a short-lived, single-use authority with `POST /api/v1/agents/enrollment/authorities` and writes that JSON to a regular file. On Unix the file is mode `0600`, owned by the caller or root, and not a symlink. `--enrollment-token-file -` reads the same JSON from stdin. Windows carries it in a temporary SYSTEM-owned envelope with a restricted DACL and launches without inherited handles across sessions.
+2. The device runs `preloop agents onboard --unattended`. Linux requires `--target-user`. A privileged macOS run uses the console user, and Windows uses the single active session. If no interactive user is selected, the run stays pending and does not consume the authority.
+3. The CLI exchanges the authority at `POST /api/v1/agents/enrollment/exchange`. That creates separate device, user, and app credentials with explicit MCP tool grants. The authority cannot read account data, report discovery, call MCP, or invoke inference. A revoked credential cannot mint another one.
+4. The CLI writes only the MCP config for the named apps and acknowledges it with `POST /api/v1/agents/enrollment/applied`, using the app credential. Claude Code is `~/.claude.json` under `mcpServers` with `"type": "http"`. Codex CLI is `~/.codex/config.toml`. Cursor is `~/.cursor/mcp.json`. Credentials are checkpointed in the target user's OS credential store, so an interrupted apply can resume. An unchanged rerun makes no API call and no config change.
+
+`--apps` accepts `claude_code`, `codex`, and `cursor` (one positional app name works too). `--device-ref` may carry an MDM device reference; only an account-salted hash of it is sent. `--url` must be `https://host` with no userinfo, query, or fragment.
+
+This path configures MCP access only. It does not read or import upstream provider credentials, execute application binaries, or transfer subscription OAuth. Local acknowledgment records that the config was written. Application login and runtime validation stay unknown. A symlinked app config is refused by name; attended onboarding is the path that follows the link and keeps the target. Account tokens, `--token`, profiles, config-file overrides, and attended flags such as `--all`, `--dry-run`, and `--model` are rejected. Live Jamf and Intune acceptance is not verified yet.
+
+`discover --json` emits only allowlisted summaries (`name`, `app_id`, `mcp_server_count`, `auth_state`, `runtime_state`). `agents status <agent> --json` reuses that agent allowlist and adds enrollment health: local apply state, remote lifecycle, validation booleans, and model credential status. It does not emit MCP env, headers, auth, config paths, tokens, or raw local or remote config. `--inventory` writes an offline `preloop.inventory.v1` envelope of known-app presence and aggregate MCP counts, with no credentials, prompts, or network calls.
 
 `discover --all-users` requires either `--inventory` or an explicit `--report`,
 plus root on Linux/macOS or an elevated administrator on Windows. For example,

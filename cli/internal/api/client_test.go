@@ -543,3 +543,23 @@ func TestPostRaw_ReturnsNon2xxWithHeaders(t *testing.T) {
 		t.Fatalf("body not returned: %s", resp.Body)
 	}
 }
+
+func TestEnrollmentClientDoesNotFollowRedirectsOrRefresh(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/unexpected", http.StatusTemporaryRedirect)
+			return
+		}
+		t.Errorf("provisioning client followed redirect to %s", r.URL.Path)
+	}))
+	defer server.Close()
+	client := NewEnrollmentClient(server.URL, "enr_synthetic")
+	if err := client.Post("/redirect", map[string]string{}, nil); !IsStatus(err, http.StatusTemporaryRedirect) {
+		t.Fatalf("got %v", err)
+	}
+	if calls != 1 || client.refreshEnabled || client.persistTokens {
+		t.Fatalf("calls=%d refresh=%v persist=%v", calls, client.refreshEnabled, client.persistTokens)
+	}
+}

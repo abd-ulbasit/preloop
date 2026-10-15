@@ -7491,6 +7491,14 @@ func configPathsForAgentSpec(home string, spec agentSpec) []string {
 		paths = append(paths, cleaned)
 	}
 
+	// Unattended Claude Code enrollment writes its native user MCP file
+	// without executing the app. Keep status/offboard on that same identity.
+	if spec.Name == "Claude Code" {
+		native := AgentConfig{Name: spec.Name, ConfigPath: filepath.Join(home, ".claude.json")}
+		if state, err := loadLocalEnrollmentState(native); err == nil && state.Unattended {
+			addPath(native.ConfigPath)
+		}
+	}
 	if spec.Name == devinAgentName {
 		if path, err := devinConfigPath("mcp_config.json"); err == nil {
 			addPath(path)

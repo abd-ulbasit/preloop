@@ -243,7 +243,11 @@ def _resolve_bearer_context(
             and getattr(presented_key, "requires_machine_authorization", False) is True
         ):
             return None
-        if is_single_purpose_api_key(presented_key):
+        presented_context = getattr(presented_key, "context_data", None)
+        if is_single_purpose_api_key(presented_key) or (
+            isinstance(presented_context, dict)
+            and "unattended_enrollment" in presented_context
+        ):
             logger.info(
                 "Denied device-scoped API key %s on the model gateway",
                 getattr(presented_key, "id", None),
