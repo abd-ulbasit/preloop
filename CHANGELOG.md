@@ -114,6 +114,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Added
 
+- `preloop agents discover --json` includes `mcp_routes` (managed, direct
+  remote, direct stdio, unknown, and completeness). Offline inventory apps
+  include the same counts plus `controls` for model route, native actions,
+  and managed MCP. Offline `verification` stays `unverified` because this
+  collector has no stored verification. The fields contain no names,
+  endpoints, secrets, or paths. See the [CLI reference](docs/guide/cli.md).
 - Persistent flows on Claude Code can run in an authorized host directory
   (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
   flow's Claude model, and wait for the flow timeout instead of a fixed 5

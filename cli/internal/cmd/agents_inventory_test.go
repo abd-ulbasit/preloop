@@ -76,7 +76,7 @@ func TestSafeDiscoveryJSONAllowlist(t *testing.T) {
 	}
 	for key := range rows[0] {
 		switch key {
-		case "name", "app_id", "mcp_server_count", "auth_state", "runtime_state":
+		case "name", "app_id", "mcp_server_count", "auth_state", "runtime_state", "mcp_routes":
 		default:
 			t.Errorf("unexpected key %q", key)
 		}

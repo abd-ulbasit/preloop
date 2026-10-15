@@ -39,6 +39,8 @@ type AgentConfig struct {
 	MCPServers         map[string]MCPDef `json:"mcp_servers,omitempty"`
 	IsOnboarded        bool              `json:"is_onboarded,omitempty"`
 	OnboardingState    string            `json:"onboarding_state,omitempty"`
+	// Aggregate raw-config facts preserve unknown entries the legacy parser drops.
+	inventoryRoutes *inventoryMCPRoutes
 	// AuthState is the pre-onboarding readiness probe result
 	// (ready / not_logged_in / unknown) — see detectAgentAuthState.
 	AuthState  string `json:"auth_state,omitempty"`
@@ -743,6 +745,7 @@ type managedMCPEnrollmentPlan struct {
 	ManagedControlWSURL string
 	ManagedModelAlias   string
 	ManagedProviderName string
+	MCPRoutes           inventoryMCPRoutes
 	// MCPConfigSkipped is set when the plan deliberately writes no managed
 	// Preloop MCP entry (currently only Claude Desktop when the npx/node
 	// runtime for the mcp-remote stdio bridge is missing). The reason and
@@ -988,6 +991,7 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 			fmt.Printf("     Runtime: %s\n", runtimeLabel)
 		}
 		fmt.Printf("     Support: %s\n", agentSupportListingLabel(agent))
+		fmt.Printf("     %s\n", inventoryRouteSummary(inventoryDiscoveryRoutes(agent)))
 		if label := claudeDesktopModelRouteLabel(agent.ModelRoute); label != "" {
 			fmt.Printf("     Model route: %s\n", label)
 		}
@@ -3691,9 +3695,10 @@ func discoverAgents(w io.Writer, printWarnings bool) ([]AgentConfig, error) {
 				continue
 			}
 			discovered = append(discovered, AgentConfig{
-				Name:       spec.Name,
-				ConfigPath: fullPath,
-				MCPServers: servers,
+				Name:            spec.Name,
+				ConfigPath:      fullPath,
+				MCPServers:      servers,
+				inventoryRoutes: inventoryReadConfigRoutes(spec.Name, fullPath),
 			})
 			discovered[len(discovered)-1] = withDetectedRuntimeState(withDetectedAuthState(
 				normalizeDiscoveredAgent(discovered[len(discovered)-1]),
@@ -3706,9 +3711,10 @@ func discoverAgents(w io.Writer, printWarnings bool) ([]AgentConfig, error) {
 		}
 		if fallbackPath, ok := detectInstalledAgent(home, spec); ok {
 			discovered = append(discovered, withDetectedRuntimeState(withDetectedAuthState(normalizeDiscoveredAgent(AgentConfig{
-				Name:       spec.Name,
-				ConfigPath: fallbackPath,
-				MCPServers: map[string]MCPDef{},
+				Name:            spec.Name,
+				ConfigPath:      fallbackPath,
+				MCPServers:      map[string]MCPDef{},
+				inventoryRoutes: inventoryReadConfigRoutes(spec.Name, fallbackPath),
 			}))))
 		}
 	}
@@ -4076,6 +4082,7 @@ func printEnrollmentPlan(plan managedMCPEnrollmentPlan, dryRun bool) {
 		fmt.Printf("  Agent Control config target: %s\n", plan.ManagedControlWSURL)
 		fmt.Println("  Agent Control runtime plugin: install/verify when supported")
 	}
+	fmt.Println("  " + inventoryRouteSummary(plan.MCPRoutes))
 	discoveredNames := sortedServerNames(plan.Agent.MCPServers)
 	if len(discoveredNames) > 0 {
 		fmt.Printf("  Existing MCP servers: %s\n", strings.Join(discoveredNames, ", "))
@@ -4242,12 +4249,14 @@ func buildManagedMCPEnrollmentPlan(agent AgentConfig, baseURL, token string) (ma
 		ManagedServerName:   "preloop",
 		ManagedServerURL:    strings.TrimRight(baseURL, "/") + "/mcp/v1",
 		ManagedControlWSURL: controlWSURL,
+		MCPRoutes:           inventoryRoutesForDocument(managedDoc),
 		MCPConfigSkipped:    mcpConfigSkipped,
 		Notes:               notes,
 	}, nil
 }
 
 func refreshManagedPlanSnapshots(plan managedMCPEnrollmentPlan) (managedMCPEnrollmentPlan, error) {
+	plan.MCPRoutes = inventoryRoutesForDocument(plan.ManagedDocument)
 	sanitizedManaged, err := deepCopyMap(plan.ManagedDocument)
 	if err != nil {
 		return managedMCPEnrollmentPlan{}, err

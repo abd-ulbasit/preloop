@@ -21,7 +21,7 @@
     "observation_id": "00000000-0000-4000-8000-000000000001",
     "collector_version": "0.0.0-test",
     "os_family": "linux",
-    "detector_version": "1",
+    "detector_version": "2",
     "source_environment": "unknown",
     "started_at": "2026-01-02T03:04:05Z",
     "ended_at": "2026-01-02T03:04:05Z",
