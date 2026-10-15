@@ -200,6 +200,12 @@ def test_gateway_spend_is_an_index_only_scan(db_session):
     from preloop.models.models import ApiUsage
 
     accounts = _seed_usage_and_events(db_session)
+    # ix_api_usage_account_action_ts matches account, action and time without
+    # covering estimated_cost. On a table whose visibility map is cold, that
+    # narrower index is cheaper than an index-only scan, so the planner never
+    # touches the covering indexes. Hide it for this EXPLAIN; the drop rolls
+    # back with the test transaction.
+    db_session.execute(text("DROP INDEX ix_api_usage_account_action_ts"))
     query = (
         select(ApiUsage.account_id, func.sum(ApiUsage.estimated_cost))
         .where(
