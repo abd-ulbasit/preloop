@@ -124,4 +124,51 @@ describe('resource editors above actual page controls', function () {
         expect(api.calls.filter((c) => c.method !== 'GET')).to.have.length(0);
       });
     }
+  it('uses a desktop dialog fallback when native popovers are unavailable', async () => {
+    await setViewport({ width: 1440, height: 900 });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'showPopover'
+    )!;
+    delete (HTMLElement.prototype as { showPopover?: unknown }).showPopover;
+    try {
+      api = mockApi({
+        capabilities: ['resource_access', 'abac_rules'],
+        routes: [
+          { path: /\/access\/resources\//, body: resourceSummary() },
+          { path: /\/tags\//, body: { tags: { env: 'review' } } },
+          ...directoryRoutes,
+        ],
+        fallback: { status: 200, body: [] },
+      });
+      view = resourceAccessView('managed_agent');
+      document.body.append(view);
+      await waitUntil(
+        () => !!view.shadowRoot!.querySelector('resource-access-panel')
+      );
+      const panel = view.shadowRoot!.querySelector<ResourceAccessPanel>(
+        'resource-access-panel'
+      )!;
+      await waitUntil(
+        () =>
+          !!control(panel, 'access-control') && !!control(panel, 'tags-control')
+      );
+      for (const name of ['access', 'tags']) {
+        const trigger = control(panel, `${name}-control`);
+        trigger.focus();
+        await sendKeys({ press: 'Enter' });
+        await waitUntil(
+          () => !!panel.shadowRoot!.querySelector('sl-dialog[open]')
+        );
+        expect(panel.shadowRoot!.querySelector('.desktop-overlay')).to.equal(
+          null
+        );
+        await pointerClick(control(panel, 'editor-cancel'));
+        await waitUntil(() => !control(panel, 'editor-cancel'));
+        expect(panel.shadowRoot!.activeElement).to.equal(trigger);
+      }
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'showPopover', descriptor);
+    }
+  });
 });
