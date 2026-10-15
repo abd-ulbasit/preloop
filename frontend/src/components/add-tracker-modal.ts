@@ -1717,8 +1717,9 @@ export class AddTrackerModal extends LitElement {
           )}
         </ul>
         <p class="managed-capability-note">
-          Discovery succeeded; push, approval and webhook capability are not
-          tested until first use.
+          Capabilities reflect consented scopes. Push, approval and webhook
+          operations are not tested until first use.
+          ${status.state === 'disconnected' ? 'Reconnect before using these capabilities.' : ''}
         </p>
       </sl-alert>
     `;

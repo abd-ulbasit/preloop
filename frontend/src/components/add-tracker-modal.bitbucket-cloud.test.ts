@@ -639,6 +639,35 @@ describe('AddTrackerModal managed Bitbucket Cloud', () => {
   });
 
   describe('editing', () => {
+    it('does not claim discovery succeeded for a disconnected grant', async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        bitbucket_cloud_oauth: true,
+      });
+      stubs.getBitbucketConnectionStatus.resolves({
+        ...connectedStatus,
+        state: 'disconnected',
+        expires_at: null,
+      });
+      element = await fixture(
+        html`<add-tracker-modal
+          ._api=${stubbedApi}
+          .tracker=${managedTracker}
+        ></add-tracker-modal>`
+      );
+      await waitUntil(
+        () => (element as any).managedStatus?.state === 'disconnected'
+      );
+      await element.updateComplete;
+      const note = element.shadowRoot!.querySelector(
+        '.managed-capability-note'
+      )!;
+      expect(note.textContent).to.not.contain('Discovery succeeded');
+      expect(note.textContent).to.contain(
+        'Capabilities reflect consented scopes'
+      );
+      expect(note.textContent).to.contain('Reconnect before using');
+    });
+
     it('shows managed status with reconnect/disconnect and no token fields', async () => {
       const { stubs, api: stubbedApi } = buildApi(sandbox, {
         bitbucket_cloud_oauth: true,
