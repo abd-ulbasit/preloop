@@ -163,6 +163,36 @@ def test_grant_is_idempotent_and_starts_a_twelve_month_clock(
             _grant(db, account_id, amount="9", key="grant-1")
 
 
+def test_grant_refuses_to_replay_a_hold_that_reused_the_key(
+    db_engine: Any, account_id: UUID
+) -> None:
+    with Session(db_engine) as db:
+        _grant(db, account_id, amount="10", key="pool")
+        credit.hold(
+            db,
+            account_id=account_id,
+            amount="4",
+            operation_key="shared",
+            actor=ACTOR,
+        )
+        db.commit()
+        before = credit.balance(db, account_id=account_id)
+        with pytest.raises(HostedSpendUnavailableError, match="Conflicting"):
+            credit.grant(
+                db,
+                account_id=account_id,
+                amount="4",
+                operation_key="shared",
+                kind="adjustment",
+                actor=ACTOR,
+                now=NOW,
+            )
+        db.rollback()
+        after = credit.balance(db, account_id=account_id)
+        assert after["purchased"] == before["purchased"] == Decimal("10")
+        assert after["reserved"] == Decimal("4")
+
+
 def test_grant_clears_a_negative_balance_before_the_lot_is_spendable(
     db_engine: Any, account_id: UUID
 ) -> None:

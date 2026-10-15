@@ -58,7 +58,11 @@ Without them the browser can open connections that never pass the allowlist.
 loopback is not a path around the proxy. `environments/preloop/browser/selfcheck.sh`
 refuses to launch unless all three are present, then probes
 `http://169.254.169.254/`, `https://example.org/`, and a listener on
-`127.0.0.1`. Each probe must fail with `egress_denied` or a Chromium
+`127.0.0.1`. The metadata probe is expected to fail before a dial:
+`--host-resolver-rules` maps that literal to `~NOTFOUND`, so
+`classify()` accepts `ERR_NAME_NOT_RESOLVED` or
+`chrome-error://chromewebdata` when no response committed. The hostname
+and loopback probes must fail with `egress_denied` or a Chromium
 proxy/tunnel error. Any other outcome, including a missing proxy variable,
 exits `browser_egress_not_enforced` and aborts profile setup.
 

@@ -210,6 +210,13 @@ def _open_lot(
     purchase_id: Any,
     now: datetime | None,
 ) -> models.HostedCreditPurchase:
+    """Open the lot a grant draws down.
+
+    ``source`` is only the ingestion channel (``checkout`` or
+    ``auto_topup``). A lot created here has no Stripe session, so the
+    channel is ``checkout``. The ledger ``kind`` is what distinguishes a
+    paid purchase, a promotional grant, and an adjustment.
+    """
     stamp = _aware(now) if now is not None else datetime.now(UTC)
     lot: models.HostedCreditPurchase | None
     if purchase_id is None:
@@ -279,7 +286,9 @@ def grant(
 
     When the balance is negative the lot keeps only ``amount + balance``
     (or zero, when the grant does not cover the deficit). The ledger entry
-    is still the full amount. A repeated key returns that same entry.
+    is still the full amount. A repeated key returns that same entry only
+    when kind, amount, and note match. A hold or release marker that reused
+    the key is a conflict, not a replay.
     """
     amount = _amount(amount)
     operation_key = _operation_key(operation_key, limit=128)
@@ -292,7 +301,16 @@ def grant(
     lock_account(db, account_id)
     existing = _entry(db, account_id, operation_key)
     if existing is not None:
-        if existing.kind != kind or existing.amount != amount:
+        # Hold and release share this key space and are stored as
+        # adjustments. Matching kind and amount is not enough to replay one
+        # of those markers as a grant.
+        marker = (existing.note or "").startswith((HOLD_NOTE, RELEASE_NOTE))
+        if (
+            marker
+            or existing.kind != kind
+            or existing.amount != amount
+            or existing.note != note
+        ):
             raise HostedSpendUnavailableError("Conflicting hosted credit grant")
         return existing
     account = _credit_row(db, account_id, lock=True)
