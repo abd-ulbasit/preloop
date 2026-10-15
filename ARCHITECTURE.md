@@ -601,7 +601,9 @@ and Tags controls. Sharing requires the server's `resource_sharing` capability
 and a supported model, MCP server, or managed-agent kind; hierarchy alone never
 advertises sharing. Flows, policy baselines, and runner pools retain independent
 `abac_rules` tag controls. Editors use persisted drafts with explicit Save/Cancel,
-an anchored desktop popover, and a phone dialog. Account defaults describe policy
+an anchored desktop popover in the browser top layer, and a phone dialog. Model
+metadata controls mount only after ownership is known; global provider models
+without an account do not expose unsupported Access or Tags endpoints. Account defaults describe policy
 configuration, and sharing summaries describe intent rather than effective access.
 Sharing targets reference existing sharing permits. The independent
 `resource_access` capability adds People & teams, applied-rule provenance and
