@@ -521,6 +521,11 @@ one-time credit has no reset. Subscription details live on Plan, while Account
 links to that view. Gateway events preserve the billing path and actual resolved
 model row captured at request time, so later alias changes cannot relabel history.
 
+Prepaid credit is a separate ledger (`hosted_credit_account`,
+`hosted_credit_ledger`, `hosted_credit_purchase`) with one lot per purchase.
+The allowance balance above is unchanged: `reserve` and `settle` do not spend
+credit yet. An absent `hosted_credit_topup_setting` row means auto top-up is off.
+
 `preloop models list` separates your models from Preloop-hosted models and reports
 the allowance when supported. Before adding a system alias, operators can run
 `preloop models check-hosted-alias ALIAS` for aggregate collision warnings.

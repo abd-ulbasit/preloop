@@ -38,6 +38,10 @@ machine. The runner never reads, copies or forwards harness credentials. See
 `docs/guide/runners/remote-sessions.md` and the threat model in
 `docs/security/personal-runners.md`.
 
+**Prepaid credit** has an append-only ledger, per-purchase lots, and balance
+cache in the open-source models. Empty tables do not change allowance
+behaviour. Stripe and the purchase UI are not in this tree.
+
 ### Breaking or behavior changes
 
 - **Hosted Codex image.** The default is the digest-pinned universal image

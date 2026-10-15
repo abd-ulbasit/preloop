@@ -162,6 +162,12 @@ from .oauth_mcp_token import (
 from .budget import BudgetPolicy, BudgetSpendActivity, BudgetPeriod
 from .billing_operation import BillingOperation
 from .hosted_spend import HostedSpendAccount, HostedSpendMonth, HostedSpendReservation
+from .hosted_credit import (
+    HostedCreditAccount,
+    HostedCreditLedger,
+    HostedCreditPurchase,
+    HostedCreditTopupSetting,
+)
 
 from .issue_cost import IssueCostExecution, IssueCostPullRequest, IssueCostRollup
 from .issue_lifecycle import IssueLifecycle
@@ -197,6 +203,10 @@ __all__ = [
     "HostedSpendAccount",
     "HostedSpendMonth",
     "HostedSpendReservation",
+    "HostedCreditAccount",
+    "HostedCreditLedger",
+    "HostedCreditPurchase",
+    "HostedCreditTopupSetting",
     "FlowFeedback",
     "FlowThread",
     "IssueCostExecution",
