@@ -49,11 +49,12 @@ from preloop.sync.trackers.jira import (
     WEBHOOK_STATUS_MANUAL_REQUIRED,
 )
 
+from preloop.plugins.base import get_plugin_manager
 from preloop.services.dynamic_mcp_server import get_tracker_types, has_tracker
 from preloop.services.managed_credentials import (
     MANAGED_AUTH_TYPE,
     is_managed_tracker,
-    get_managed_resolver,
+    managed_feature_flag,
     tracker_credential_source,
 )
 from preloop.services.tracker_tool_unlock import (
@@ -999,14 +1000,18 @@ def _tracker_responses(db: Session, trackers: List[Tracker]) -> List[TrackerResp
         if managed
         else {}
     )
+    features = (
+        get_plugin_manager().get_enabled_features().get("features", {})
+        if managed
+        else {}
+    )
     result = []
     for tracker in trackers:
         payload = TrackerResponse.model_validate(tracker)
         if is_managed_tracker(tracker):
             details = tracker.connection_details or {}
-            resolver = get_managed_resolver(tracker.tracker_type)
             grant = states.get(tracker.id)
-            if resolver is None or not getattr(resolver, "is_configured", False):
+            if not features.get(managed_feature_flag(tracker.tracker_type), False):
                 state = "unavailable"
             elif grant == "active":
                 binding = "cloud_id" if tracker.tracker_type == "jira" else "workspace"

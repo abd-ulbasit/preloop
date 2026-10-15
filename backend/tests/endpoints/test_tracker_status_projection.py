@@ -72,8 +72,12 @@ def test_authorization_projection(
             return_value={tracker.id: grant} if grant else {},
         ) as batch,
         patch(
-            "preloop.api.endpoints.trackers.get_managed_resolver",
-            return_value=MagicMock(is_configured=configured),
+            "preloop.api.endpoints.trackers.get_plugin_manager",
+            return_value=MagicMock(
+                get_enabled_features=lambda: {
+                    "features": {f"{provider}_cloud_oauth": True} if configured else {}
+                }
+            ),
         ),
     ):
         payload = _tracker_responses(MagicMock(), [tracker])[0]
