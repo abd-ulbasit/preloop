@@ -67,6 +67,46 @@ test("send_message text is delivered and reply text returned", async () => {
   sidecar.stop();
 });
 
+test("start_new_session ignores a prior session id so the model is applied", async () => {
+  const opened = [];
+  const factory = async ({ prompt, options }) => {
+    opened.push(options);
+    return {
+      async interrupt() {},
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "fresh-1" };
+        for await (const userMessage of prompt) {
+          yield {
+            type: "result",
+            subtype: "success",
+            result: `ok: ${userMessage.message.content}`,
+            usage: { input_tokens: 1, output_tokens: 1 },
+            total_cost_usd: 0.0001,
+          };
+        }
+      },
+    };
+  };
+  const sidecar = new PreloopClaudeSidecar(undefined, factory);
+  sidecar.configure(baseConfig);
+  const reply = await sidecar.dispatch({
+    type: "command",
+    name: "send_message",
+    message_id: "flow-1",
+    payload: {
+      text: "dream",
+      start_new_session: true,
+      runtime_session_id: "should-not-resume",
+      metadata: { model: "anthropic/claude-opus-5-5" },
+    },
+  });
+  assert.equal(reply, "ok: dream");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].model, "anthropic/claude-opus-5-5");
+  assert.equal("resume" in opened[0], false);
+  sidecar.stop();
+});
+
 test("voice transcripts are delivered as auditable text turns", async () => {
   const { sidecar, state } = makeSidecar();
   const result = await sidecar.dispatch({
@@ -175,6 +215,7 @@ function fakeSocket({ open = true } = {}) {
       }
       sent.push(JSON.parse(data));
     },
+    close() {},
   };
 }
 
@@ -191,6 +232,68 @@ test("sendOn is a no-op when the socket is not OPEN", async () => {
     }),
   );
   assert.deepEqual(socket.sent, []);
+  sidecar.stop();
+});
+
+test("reconnect replays only outcomes that missed delivery", async () => {
+  const opened = [];
+  const factory = async ({ prompt }) => {
+    opened.push(true);
+    return {
+      async interrupt() {},
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "s-1" };
+        for await (const userMessage of prompt) {
+          yield {
+            type: "result",
+            subtype: "success",
+            result: `ok: ${userMessage.message.content}`,
+            usage: { input_tokens: 4, output_tokens: 2 },
+            total_cost_usd: 0.002,
+          };
+        }
+      },
+    };
+  };
+  const sidecar = new PreloopClaudeSidecar(undefined, factory);
+  sidecar.configure(baseConfig);
+  const closed = fakeSocket({ open: false });
+  await sidecar.handleFrame(
+    closed,
+    JSON.stringify({
+      type: "command",
+      name: "send_message",
+      message_id: "missed-1",
+      payload: { text: "while offline" },
+    }),
+  );
+  assert.deepEqual(closed.sent, []);
+  assert.equal(opened.length, 1);
+
+  // A second completed command delivered on a live socket must not be
+  // replayed later just because it sits in the dedupe map.
+  const live = fakeSocket();
+  sidecar.socket = live;
+  await sidecar.handleFrame(
+    live,
+    JSON.stringify({
+      type: "command",
+      name: "send_message",
+      message_id: "live-1",
+      payload: { text: "while online" },
+    }),
+  );
+  assert.equal(live.sent.length, 1);
+  assert.equal(live.sent[0].name, "command_result");
+  assert.equal(live.sent[0].payload.reply_text, "ok: while online");
+
+  const reconnected = fakeSocket();
+  sidecar.replayCommandOutcomes(reconnected);
+  assert.equal(reconnected.sent.length, 1);
+  assert.equal(reconnected.sent[0].name, "command_result");
+  assert.equal(reconnected.sent[0].message_id, "missed-1");
+  assert.equal(reconnected.sent[0].payload.reply_text, "ok: while offline");
+  assert.equal(reconnected.sent[0].payload.usage.total_tokens, 6);
   sidecar.stop();
 });
 

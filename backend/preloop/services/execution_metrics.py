@@ -3,7 +3,7 @@
 import logging
 import re
 import uuid
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -665,6 +665,17 @@ class ExecutionMetricsService:
         )
 
         return count
+
+    def estimate_token_cost(
+        self, execution: models.FlowExecution, token_usage: Dict[str, int]
+    ) -> Optional[float]:
+        """Return a USD cost for ``token_usage``, or None when unpriced.
+
+        Public wrapper for callers that already know the token totals (for
+        example a persistent sidecar reply) and only need the priced amount.
+        """
+        cost, has_pricing = self._calculate_cost(execution, token_usage)
+        return cost if has_pricing else None
 
     def _calculate_cost(
         self, execution: models.FlowExecution, token_usage: Dict[str, int]

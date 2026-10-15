@@ -223,6 +223,11 @@ test("turn timeout follows the flow, bounded by turn_timeout_ms", () => {
 test("flowModel accepts model names and drops malformed values", () => {
   assert.equal(flowModel({ model: "claude-opus-5-5" }), "claude-opus-5-5");
   assert.equal(flowModel({ model: "anthropic/claude-opus-5-5" }), "anthropic/claude-opus-5-5");
+  // gateway.model is not a fallback: that would bypass the Claude-only guard.
+  assert.equal(
+    flowModel({ gateway: { model: "openai/gpt-5.4" } }),
+    undefined,
+  );
   assert.equal(flowModel({ model: "--dangerous flag" }), undefined);
   assert.equal(flowModel({ model: 5 }), undefined);
   assert.equal(flowModel(undefined), undefined);

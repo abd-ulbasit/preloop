@@ -172,7 +172,14 @@ or a directory containing it, credential directories, and a dirty tree unless
 `allow_dirty` is true. The sidecar no longer reads `cwd` from the payload or
 metadata. It passes `metadata.model` to the Agent SDK as `options.model` and
 uses `run_limits.max_duration_seconds` (else `timeout_seconds`) as the turn
-timeout, bounded above by `turn_timeout_ms` when that is set.
+timeout, bounded above by `turn_timeout_ms` when that is set. Only
+`metadata.model` is read for the override (not `gateway.model`), so a
+non-Claude flow model cannot slip through on a shared Claude Code target.
+
+A successful `command_result` may include a `usage` object (`input_tokens`,
+`output_tokens`, `total_tokens`, `total_cost_usd`) from the Agent SDK turn.
+The orchestrator folds that into the execution's token and cost totals when
+the run has no gateway-attributed usage rows.
 
 A flow's `agent_config.approval_policy` (`mode: auto_allow`, `tools`,
 `paths`, and `commands` prefixes for Bash) auto-approves covered native tool calls for one execution. The

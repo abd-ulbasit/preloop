@@ -110,11 +110,12 @@ a message cannot point a session at a directory the host owner did not list.
 
 ## Model
 
-When the flow's model is a Claude model (Anthropic provider, or an identifier
-containing `claude`), Preloop sends its name as `metadata.model`: the gateway
-alias for gateway-routed models, else the model identifier. The Claude sidecar
-starts the session with that model. Other models are not sent, and the host's
-own Claude Code setting applies.
+When the flow's model is a Claude model (Anthropic provider, an identifier
+containing `claude`, or a row named `Claude Code <alias>`), Preloop sends its
+name as `metadata.model`: the gateway alias for gateway-routed models, else
+the alias embedded in that display name, else the model identifier. The Claude
+sidecar starts the session with that model (`options.model` / `--model`).
+Other models are not sent, and the host's own Claude Code setting applies.
 
 ## Turn timeout
 

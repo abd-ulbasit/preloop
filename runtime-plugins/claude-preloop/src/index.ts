@@ -28,7 +28,12 @@ import {
   loadConfigDetailed,
   verifyConfig,
 } from "./config.js";
-import { QueryFactory, SessionManager, sdkQueryFactory } from "./sessions.js";
+import {
+  QueryFactory,
+  SessionManager,
+  TurnUsage,
+  sdkQueryFactory,
+} from "./sessions.js";
 import { SessionActivity, TranscriptObserver } from "./observer.js";
 import { LauncherBridge, OwnershipMode } from "./mode.js";
 import { GitRunner, WorkspaceManager, WorkspaceSpec } from "./workspace.js";
@@ -70,6 +75,7 @@ export type OperatorCommand = {
     input_mode?: string;
     metadata?: Record<string, unknown>;
     interrupt?: boolean;
+    start_new_session?: boolean;
     target_session_id?: string;
     session_source_id?: string;
     session_reference?: string;
@@ -117,6 +123,9 @@ export class PreloopClaudeSidecar {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private commandOutcomes = new Map<string, StoredCommandOutcome>();
+  /** Outcomes that finished while no socket could deliver them. */
+  private undeliveredOutcomes = new Set<string>();
+  private turnUsageByMessage = new Map<string, TurnUsage>();
   private inFlightMessageIds = new Set<string>();
   private logger: (message: string) => void = () => {};
 
@@ -268,6 +277,7 @@ export class PreloopClaudeSidecar {
         },
       });
       this.startHeartbeat(config);
+      this.replayCommandOutcomes(socket);
     });
 
     socket.on("message", (data) => {
@@ -322,12 +332,7 @@ export class PreloopClaudeSidecar {
     // converted into already-handled.
     if (command.message_id && this.commandOutcomes.has(command.message_id)) {
       const outcome = this.commandOutcomes.get(command.message_id)!;
-      this.sendOn(socket, {
-        type: "status",
-        name: outcome.name,
-        message_id: command.message_id,
-        payload: outcome.payload,
-      });
+      this.deliverOutcome(socket, command.message_id, outcome);
       return;
     }
     if (command.message_id && this.inFlightMessageIds.has(command.message_id)) {
@@ -344,25 +349,30 @@ export class PreloopClaudeSidecar {
       if (command.message_id) {
         this.workspaceByMessage.delete(command.message_id);
       }
+      const usage = command.message_id
+        ? this.turnUsageByMessage.get(command.message_id)
+        : undefined;
+      if (command.message_id) {
+        this.turnUsageByMessage.delete(command.message_id);
+      }
       const payload: Record<string, unknown> = {
         command_id: command.message_id,
         status: "completed",
         result,
         reply_text: typeof result === "string" ? result : "",
       };
+      if (
+        usage &&
+        (usage.total_tokens > 0 || usage.total_cost_usd !== undefined)
+      ) {
+        payload.usage = usage;
+      }
       if (workspacePath) {
         payload.metadata = { workspace_path: workspacePath };
       }
-      this.rememberOutcome(command.message_id, {
-        name: "command_result",
-        payload,
-      });
-      this.sendOn(socket, {
-        type: "status",
-        name: "command_result",
-        message_id: command.message_id,
-        payload,
-      });
+      const completed = { name: "command_result" as const, payload };
+      this.rememberOutcome(command.message_id, completed);
+      this.deliverOutcome(socket, command.message_id, completed);
       if (workspacePath) {
         this.sendOn(socket, {
           type: "event",
@@ -382,16 +392,9 @@ export class PreloopClaudeSidecar {
         status: "failed",
         error: errorMessage(error),
       };
-      this.rememberOutcome(command.message_id, {
-        name: "command_error",
-        payload,
-      });
-      this.sendOn(socket, {
-        type: "status",
-        name: "command_error",
-        message_id: command.message_id,
-        payload,
-      });
+      const failed = { name: "command_error" as const, payload };
+      this.rememberOutcome(command.message_id, failed);
+      this.deliverOutcome(socket, command.message_id, failed);
     } finally {
       if (command.message_id) {
         this.inFlightMessageIds.delete(command.message_id);
@@ -410,8 +413,16 @@ export class PreloopClaudeSidecar {
       });
     }
     const payload = command.payload ?? {};
-    const targetSessionId = resolveTargetSessionId(payload);
-    const resumeSessionId = resolveResumeSessionId(payload);
+    // A flow asks for a new session so its model is applied to a fresh
+    // Claude Code process. A stray runtime session id must not resume the
+    // host default instead.
+    const startNew = payload.start_new_session === true;
+    const targetSessionId = startNew
+      ? undefined
+      : resolveTargetSessionId(payload);
+    const resumeSessionId = startNew
+      ? undefined
+      : resolveResumeSessionId(payload);
 
     if (command.name === "request_takeover") {
       return this.takeOver(targetSessionId ?? resumeSessionId);
@@ -469,7 +480,7 @@ export class PreloopClaudeSidecar {
       this.workspaces?.hold(cwd);
     }
     try {
-      return await this.sessions.sendMessage({
+      const turn = await this.sessions.completeTurn({
         text,
         targetSessionId,
         resumeSessionId,
@@ -478,6 +489,10 @@ export class PreloopClaudeSidecar {
         cwd,
         model: flowModel(payload.metadata),
       });
+      if (messageId && turn.usage) {
+        this.turnUsageByMessage.set(messageId, turn.usage);
+      }
+      return turn.text;
     } finally {
       if (preparedCheckout && cwd) {
         this.workspaces?.release(cwd);
@@ -566,6 +581,48 @@ export class PreloopClaudeSidecar {
   private sendEnvelope(envelope: Record<string, unknown>): void {
     if (this.socket && this.socket.readyState === this.socket.OPEN) {
       this.sendOn(this.socket, envelope);
+    }
+  }
+
+  /** Send a stored command outcome on the socket that can still deliver it. */
+  deliverOutcome(
+    socket: WebSocket,
+    messageId: string | undefined,
+    outcome: StoredCommandOutcome,
+  ): boolean {
+    const live = socket.readyState === socket.OPEN ? socket : this.socket;
+    if (!live || live.readyState !== live.OPEN) {
+      if (messageId) {
+        this.undeliveredOutcomes.add(messageId);
+      }
+      return false;
+    }
+    this.sendOn(live, {
+      type: "status",
+      name: outcome.name,
+      message_id: messageId,
+      payload: outcome.payload,
+    });
+    if (messageId) {
+      this.undeliveredOutcomes.delete(messageId);
+    }
+    return true;
+  }
+
+  /**
+   * Replay outcomes that finished while the control socket was down.
+   *
+   * Only undelivered ids are resent so a reconnect does not re-emit the
+   * whole dedupe map as account realtime events.
+   */
+  replayCommandOutcomes(socket: WebSocket): void {
+    for (const messageId of [...this.undeliveredOutcomes]) {
+      const outcome = this.commandOutcomes.get(messageId);
+      if (!outcome) {
+        this.undeliveredOutcomes.delete(messageId);
+        continue;
+      }
+      this.deliverOutcome(socket, messageId, outcome);
     }
   }
 

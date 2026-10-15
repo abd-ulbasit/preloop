@@ -31,7 +31,22 @@ export type SdkMessage = {
   /** Set on a result message when the turn ended on an error. */
   is_error?: boolean;
   errors?: string[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+  total_cost_usd?: number;
   message?: { content?: Array<{ type: string; text?: string }> };
+};
+
+/** Token and cost totals from one SDK result message. */
+export type TurnUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens: number;
+  total_cost_usd?: number;
+};
+
+export type TurnOutcome = {
+  text: string;
+  usage?: TurnUsage;
 };
 
 export type SdkQueryHandle = AsyncIterable<SdkMessage> & {
@@ -95,7 +110,7 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 }
 
 type TurnWaiter = {
-  resolve: (replyText: string) => void;
+  resolve: (outcome: TurnOutcome) => void;
   reject: (error: Error) => void;
   settled: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -149,7 +164,7 @@ class OwnedSession {
               new Error(`Claude Code turn failed: ${resultErrorText(message)}`),
             );
           } else {
-            this.settleNextWaiter(reply ?? "");
+            this.settleNextWaiter(reply ?? "", readTurnUsage(message));
           }
         }
       }
@@ -175,7 +190,7 @@ class OwnedSession {
   /** Consume exactly one result per waiter in FIFO order. If the front
    * waiter already timed out, drop this reply so a later waiter cannot
    * receive the previous turn's text. */
-  private settleNextWaiter(reply: string): void {
+  private settleNextWaiter(reply: string, usage?: TurnUsage): void {
     const waiter = this.turnWaiters.shift();
     if (!waiter) {
       return;
@@ -185,7 +200,7 @@ class OwnedSession {
     }
     waiter.settled = true;
     clearTimeout(waiter.timer);
-    waiter.resolve(reply);
+    waiter.resolve(usage ? { text: reply, usage } : { text: reply });
   }
 
   private endError?: Error;
@@ -211,12 +226,15 @@ class OwnedSession {
     return !this.ended;
   }
 
-  /** Queue an operator turn and resolve with the assistant's reply text. */
-  send(text: string, timeoutMs: number = DEFAULT_TURN_TIMEOUT_MS): Promise<string> {
+  /** Queue an operator turn and resolve with the assistant reply. */
+  send(
+    text: string,
+    timeoutMs: number = DEFAULT_TURN_TIMEOUT_MS,
+  ): Promise<TurnOutcome> {
     if (this.ended) {
       return Promise.reject(new Error("Claude Code session ended"));
     }
-    const reply = new Promise<string>((resolve, reject) => {
+    const reply = new Promise<TurnOutcome>((resolve, reject) => {
       const waiter: TurnWaiter = { resolve, reject, settled: false };
       waiter.timer = setTimeout(() => {
         if (!waiter.settled) {
@@ -262,6 +280,34 @@ export type SessionManagerOptions = {
   /** Which Claude Code binary to run; tests replace it. */
   resolveExecutable?: () => Promise<ClaudeExecutable>;
 };
+
+function finiteNonNegative(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
+/** Token and cost fields a flow execution can settle from one result. */
+export function readTurnUsage(message: SdkMessage): TurnUsage | undefined {
+  const input = finiteNonNegative(message.usage?.input_tokens);
+  const output = finiteNonNegative(message.usage?.output_tokens);
+  const cost = finiteNonNegative(message.total_cost_usd);
+  if (input === undefined && output === undefined && cost === undefined) {
+    return undefined;
+  }
+  const usage: TurnUsage = { total_tokens: (input ?? 0) + (output ?? 0) };
+  if (input !== undefined) {
+    usage.input_tokens = input;
+  }
+  if (output !== undefined) {
+    usage.output_tokens = output;
+  }
+  if (cost !== undefined) {
+    usage.total_cost_usd = cost;
+  }
+  return usage;
+}
 
 /** A result message that ended its turn on an error. */
 function resultIsError(message: SdkMessage): boolean {
@@ -451,6 +497,11 @@ export class SessionManager {
 
   /** Deliver an operator message; returns the assistant reply text. */
   async sendMessage(params: SendMessageParams): Promise<string> {
+    return (await this.completeTurn(params)).text;
+  }
+
+  /** Deliver one turn and return its text plus any SDK usage totals. */
+  async completeTurn(params: SendMessageParams): Promise<TurnOutcome> {
     const target = params.targetSessionId;
     const resume = params.resumeSessionId ?? target;
     let session = target ? this.findBySessionId(target) : undefined;
@@ -483,20 +534,22 @@ export class SessionManager {
     const started = Date.now();
     const owned = session;
     const label = () => owned.sessionId ?? owned.key;
+    const modelLabel = params.model ?? "default";
+    const executionLabel = flowExecutionId(params.metadata) ?? "-";
     this.log(
-      `turn start session=${label()} binary=${binary} timeout_ms=${timeoutMs}`,
+      `turn start session=${label()} model=${modelLabel} execution_id=${executionLabel} binary=${binary} timeout_ms=${timeoutMs}`,
     );
     try {
       const reply = await session.send(params.text, timeoutMs);
       this.log(
-        `turn end session=${label()} outcome=completed duration_ms=${Date.now() - started} binary=${binary}`,
+        `turn end session=${label()} outcome=completed duration_ms=${Date.now() - started} model=${modelLabel} execution_id=${executionLabel} binary=${binary}`,
       );
       return reply;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const outcome = /timed out/.test(message) ? "timeout" : "failed";
       this.log(
-        `turn error session=${label()} outcome=${outcome} duration_ms=${Date.now() - started} binary=${binary} error=${JSON.stringify(message.slice(0, 500))}`,
+        `turn error session=${label()} outcome=${outcome} duration_ms=${Date.now() - started} model=${modelLabel} execution_id=${executionLabel} binary=${binary} error=${JSON.stringify(message.slice(0, 500))}`,
       );
       if (!owned.isLive()) {
         this.sessions.delete(owned.key);

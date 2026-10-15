@@ -5,6 +5,8 @@
 [![PyPI](https://img.shields.io/pypi/v/preloop)](https://pypi.org/project/preloop/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15223/badge)](https://www.bestpractices.dev/projects/15223)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/preloop/preloop/badge)](https://scorecard.dev/viewer/?uri=github.com/preloop/preloop)
 
 **The open-source AI agent control plane.** See them, govern them, cut their cost.
 

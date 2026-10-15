@@ -57,6 +57,9 @@ class AgentExecutionResult:
     # transient/terminal verdict — this carries it to the retry decision.
     failure_analysis: Optional["AgentFailureAnalysis"] = None
     termination: Optional[ContainerTermination] = None
+    # Token and cost totals reported by a persistent control reply. Gateway
+    # attribution still wins when the execution has its own usage rows.
+    usage: Optional[Dict[str, Any]] = None
 
 
 class AgentExecutor(ABC):

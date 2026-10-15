@@ -147,6 +147,12 @@ async def test_start_and_poll_succeeds_when_command_completes(
                 COMMAND_RESULT_ENVELOPE_KEY: {
                     "status": "completed",
                     "reply_text": "Review posted",
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "total_tokens": 150,
+                        "total_cost_usd": 0.02,
+                    },
                 }
             }
         return command
@@ -208,6 +214,12 @@ async def test_start_and_poll_succeeds_when_command_completes(
     result = await orchestrator._monitor_agent_execution(reference, executor)
     assert result["status"] == "SUCCEEDED"
     assert result.get("output_summary") == "Review posted"
+    assert result.get("control_usage") == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+        "estimated_cost": 0.02,
+    }
 
 
 @pytest.mark.asyncio
