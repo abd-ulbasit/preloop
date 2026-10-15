@@ -603,8 +603,17 @@ advertises sharing. Flows, policy baselines, and runner pools retain independent
 `abac_rules` tag controls. Editors use persisted drafts with explicit Save/Cancel,
 an anchored desktop popover, and a phone dialog. Account defaults describe policy
 configuration, and sharing summaries describe intent rather than effective access.
-Rule targets reference existing sharing permits; the component never creates
-standing rules or changes RBAC/ABAC enforcement.
+Sharing targets reference existing sharing permits. The independent
+`resource_access` capability adds People & teams, applied-rule provenance and
+conditional explanations on supported resources, including accounts without
+subaccounts. Local action gates and their designated UUID-targeted permits use
+server preview tokens and document versions before Save; drafts survive conflicts
+and rebase only on an explicit reload. Sharing saves remain a separate operation.
+The shared visual rule form preserves advanced selectors/conditions as complete
+YAML and keeps inherited rules read-only. The account-wide builder uses per-rule
+versions and distinguishes additive permits from restrictive gates; account-mode
+changes use their separate policy-only preview API. Explanations identify RBAC
+and runtime ceilings rather than promising final effective access.
 
 
 The optional ticket-readiness observer uses account-scoped immutable policy and gate-evidence records, historical first-ready series, durable per-PR leases and round-robin reconciliation. Its credentialed fetch and offline object-only Git probe run in separate constrained containers. Reporting labels configured-policy coverage explicitly and preserves existing cycle-time intervals; see [sampled ticket readiness](docs/guide/ticket-readiness.md).

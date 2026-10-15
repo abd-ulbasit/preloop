@@ -856,6 +856,9 @@ export class PoliciesView extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    const accessTab = new URLSearchParams(window.location.search).get('tab');
+    if (accessTab === 'access-rules' || accessTab === 'files')
+      this._activeTab = accessTab;
     void this._loadIfPermitted();
   }
 
@@ -3776,6 +3779,14 @@ defaults:
                               this._activeTab === 'access-rules'
                                 ? html`<capability-extension
                                     name="access-rules"
+                                    .context=${{
+                                      resourceType: new URLSearchParams(
+                                        window.location.search
+                                      ).get('resource_type'),
+                                      resourceId: new URLSearchParams(
+                                        window.location.search
+                                      ).get('resource_id'),
+                                    }}
                                   ></capability-extension>`
                                 : ''
                             }

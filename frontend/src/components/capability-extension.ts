@@ -31,7 +31,7 @@ export const CAPABILITY_EXTENSIONS: Record<string, ExtensionEntry> = {
     load: () => import('../views/authed/hierarchy/account-switcher'),
   },
   'resource-access': {
-    capabilities: ['resource_sharing', 'abac_rules'],
+    capabilities: ['resource_sharing', 'abac_rules', 'resource_access'],
     tag: 'resource-access-panel',
     load: () => import('../views/authed/hierarchy/resource-access-panel'),
   },

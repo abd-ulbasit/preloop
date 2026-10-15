@@ -1,252 +1,272 @@
-import { html, fixture, expect, waitUntil } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import './access-rules-panel';
+import { invalidateApiCaches } from '../../../api';
 import type { AccessRulesPanel } from './access-rules-panel';
+import type { AccessRuleForm } from './access-rule-form';
 import {
   mockApi,
   signInForTest,
-  toastCount,
   type MockApi,
 } from '../../../test-helpers/capability-api';
-
+import {
+  policyRule,
+  directoryRoutes,
+  RULE_ID,
+  RESOURCE_ID,
+  USER_ID,
+} from '../../../test-helpers/access-policy';
+import { ruleDefinition, type PolicyRule } from '../../../access-policy-api';
 const RULES = '/api/v1/access/rules';
-const PREVIEW = '/api/v1/access/modes/preview';
-const MODE = '/api/v1/access/modes/tool%3Acall';
-
-const ruleSet = {
-  rules: [
+const MODES = '/api/v1/access/modes';
+const modePreview = () => ({
+  action: 'tool:call',
+  mode: 'require_permit',
+  generation: 8,
+  losing_subjects: [
     {
-      name: 'no-prod-tools',
-      effect: 'forbid',
-      actions: ['tool:call'],
-      scope: 'self',
+      kind: 'user',
+      id: USER_ID,
+      resources: [{ type: 'mcp_tool', id: RESOURCE_ID }],
     },
   ],
-  inherited: [
-    {
-      name: 'parent-guard',
-      effect: 'forbid',
-      actions: ['model:invoke'],
-      scope: 'subaccounts',
-      account_name: 'Parent Co',
-    },
-  ],
-  modes: {},
-};
-
-const baseRoutes = [
-  { path: RULES, body: ruleSet },
-  { path: `${RULES}/export`, body: { yaml: 'rules: []\n' } },
+  expires_at: '2099-01-01T00:00:00Z',
+  preview_token: 'mode-preview',
+});
+const base = [
+  {
+    path: RULES,
+    body: [
+      policyRule(),
+      {
+        ...policyRule(),
+        id: 'parent-rule',
+        name: 'Parent guard',
+        inherited: true,
+        editable: false,
+        account_id: 'parent-account',
+      },
+    ],
+  },
+  { path: '/api/v1/policies/export', body: { access_rule_mode: {} } },
+  ...directoryRoutes,
 ];
-
+const q = (el: AccessRulesPanel, test: string) =>
+  el.shadowRoot!.querySelector<HTMLButtonElement>(`[data-testid="${test}"]`)!;
 async function mount() {
   const el = await fixture<AccessRulesPanel>(
     html`<access-rules-panel></access-rules-panel>`
   );
-  await waitUntil(() => el.shadowRoot!.querySelector('[data-testid="rules"]'));
-  await el.updateComplete;
+  await waitUntil(() => !!q(el, 'rules'));
+  await waitUntil(
+    () => !!el.shadowRoot!.querySelector('tr[data-action="tool:call"]')
+  );
   return el;
 }
-
-const row = (el: AccessRulesPanel, action: string) =>
-  el.shadowRoot!.querySelector(`tr[data-action="${action}"]`)!;
-
-async function choose(el: AccessRulesPanel, action: string, mode: string) {
-  const select = row(el, action).querySelector(
-    'sl-select'
-  ) as HTMLSelectElement;
+async function choose(el: AccessRulesPanel, mode: string) {
+  const select = el.shadowRoot!.querySelector<HTMLSelectElement>(
+    'tr[data-action="tool:call"] select'
+  )!;
   select.value = mode;
-  select.dispatchEvent(new CustomEvent('sl-change'));
+  select.dispatchEvent(new Event('change'));
   await el.updateComplete;
 }
-
-const saveButton = (el: AccessRulesPanel, action: string) =>
-  row(el, action).querySelector(
-    '[data-testid="mode-save"]'
-  ) as HTMLButtonElement;
-
-describe('access-rules-panel', () => {
+function form(el: AccessRulesPanel) {
+  return el.shadowRoot!.querySelector<AccessRuleForm>('access-rule-form')!;
+}
+describe('access-rules-panel real EE contract', () => {
   let api: MockApi;
   beforeEach(() => signInForTest());
   afterEach(() => {
     api?.restore();
     localStorage.clear();
   });
-
-  it('lists own rules editable and inherited rules read-only', async () => {
-    api = mockApi({ capabilities: ['abac_rules'], routes: baseRoutes });
-    const el = await mount();
-    const own = el.shadowRoot!.querySelector('tr[data-inherited="false"]')!;
-    const inherited = el.shadowRoot!.querySelector(
-      'tr[data-inherited="true"]'
-    )!;
-    expect(own.textContent).to.contain('no-prod-tools');
-    expect(own.querySelector('sl-button')).to.exist;
-    expect(inherited.textContent).to.contain('parent-guard');
-    expect(inherited.textContent).to.contain('Inherited from Parent Co');
-    expect(inherited.querySelector('sl-button')).to.be.null;
-  });
-
-  it('cannot save require_permit until the preview has been shown', async () => {
-    api = mockApi({
-      capabilities: ['abac_rules'],
-      routes: [
-        ...baseRoutes,
-        {
-          method: 'POST',
-          path: PREVIEW,
-          body: {
-            action: 'tool:call',
-            mode: 'require_permit',
-            losing_access: [{ kind: 'agent', id: 'ag-1', name: 'Reviewer' }],
-            preview_token: 'pv-123',
-          },
-        },
-        { method: 'PUT', path: MODE, status: 204 },
-      ],
-    });
-    const el = await mount();
-    expect(saveButton(el, 'tool:call').disabled).to.equal(true);
-
-    await choose(el, 'tool:call', 'require_permit');
-    expect(saveButton(el, 'tool:call').disabled).to.equal(true);
-    expect(el.canSaveMode('tool:call')).to.equal(false);
-    // Calling save directly does nothing either.
-    await el.saveMode('tool:call');
-    expect(api.callsTo(MODE, 'PUT')).to.have.length(0);
-
-    (
-      row(el, 'tool:call').querySelector(
-        '[data-testid="mode-preview"]'
-      ) as HTMLElement
-    ).click();
-    await waitUntil(() =>
-      row(el, 'tool:call').querySelector('[data-testid="mode-preview-result"]')
+  it('hides a missing collection route as capability-off without showing an item error', async () => {
+    api = mockApi({ capabilities: ['abac_rules'] });
+    const el = await fixture<AccessRulesPanel>(
+      html`<access-rules-panel></access-rules-panel>`
     );
-    expect(row(el, 'tool:call').textContent).to.contain('Reviewer');
-    expect(api.callsTo(PREVIEW, 'POST')[0].body).to.eql({
-      action: 'tool:call',
-      mode: 'require_permit',
+    let hidden = false;
+    el.addEventListener('capability-off', () => {
+      hidden = true;
     });
-    expect(saveButton(el, 'tool:call').disabled).to.equal(false);
-
-    await el.saveMode('tool:call');
-    expect(api.callsTo(MODE, 'PUT')[0].body).to.eql({
-      mode: 'require_permit',
-      preview_token: 'pv-123',
-    });
+    await waitUntil(() => hidden);
+    await el.updateComplete;
+    expect(q(el, 'rules')).to.equal(null);
+    expect(el.shadowRoot!.textContent).not.to.contain('unavailable');
+    expect(api.callsTo('/api/v1/policies/export')).to.have.length(0);
   });
-
-  it('drops the preview when the choice changes', async () => {
-    api = mockApi({
-      capabilities: ['abac_rules'],
-      routes: [
-        ...baseRoutes,
-        {
-          method: 'POST',
-          path: PREVIEW,
-          body: {
-            action: 'tool:call',
-            mode: 'require_permit',
-            losing_access: [],
-            preview_token: 'pv-1',
-          },
-        },
-      ],
-    });
+  it('lists real bare-list rules with inherited provenance and no inherited controls', async () => {
+    api = mockApi({ capabilities: ['abac_rules'], routes: base });
     const el = await mount();
-    await choose(el, 'tool:call', 'require_permit');
-    (
-      row(el, 'tool:call').querySelector(
-        '[data-testid="mode-preview"]'
-      ) as HTMLElement
-    ).click();
-    await waitUntil(() => el.canSaveMode('tool:call'));
-    await choose(el, 'tool:call', 'additive');
-    await choose(el, 'tool:call', 'require_permit');
-    expect(el.canSaveMode('tool:call')).to.equal(false);
-  });
-
-  it('explains a decision', async () => {
-    api = mockApi({
-      capabilities: ['abac_rules'],
-      routes: [
-        ...baseRoutes,
-        {
-          method: 'POST',
-          path: '/api/v1/access/explain',
-          body: { effect: 'deny', reason: 'forbid rule no-prod-tools matched' },
-        },
-      ],
-    });
-    const el = await mount();
-    const set = (id: string, v: string) =>
-      (el.shadowRoot!.querySelector<HTMLInputElement>(`#${id}`)!.value = v);
-    set('explain-subject', 'agent:ag-1');
-    set('explain-action', 'tool:call');
-    set('explain-resource', 'tool:t-1');
-    const button = [
-      ...el.shadowRoot!.querySelectorAll('[data-testid="explain"] sl-button'),
-    ][0] as HTMLElement;
-    button.click();
-    await waitUntil(() =>
-      el.shadowRoot!.querySelector('[data-testid="explain-result"]')
+    expect(q(el, 'rules').textContent).to.contain('Permit (additive)');
+    expect(q(el, 'rules').textContent).to.contain(
+      'Inherited from account parent-account'
     );
     expect(
-      el.shadowRoot!.querySelector('[data-testid="explain-result"]')!
-        .textContent
-    ).to.contain('Denied');
-    expect(api.callsTo('/api/v1/access/explain', 'POST')[0].body).to.eql({
-      subject: 'agent:ag-1',
-      action: 'tool:call',
-      resource: 'tool:t-1',
-    });
+      el.shadowRoot!.querySelector('tr[data-inherited="true"] button')
+    ).to.equal(null);
   });
-
-  it('saves rules with the version read and reloads on a concurrent change', async () => {
-    let body: Record<string, unknown> = { ...ruleSet, version: 'r1' };
+  it('preselects the exact resource supplied by the resource-page link', async () => {
+    api = mockApi({ capabilities: ['abac_rules'], routes: base });
+    const el = await fixture<AccessRulesPanel>(
+      html`<access-rules-panel
+        .context=${{ resourceType: 'ai_model', resourceId: RESOURCE_ID }}
+      ></access-rules-panel>`
+    );
+    await waitUntil(() => !!form(el));
+    expect(form(el).rule.resource_type).to.equal('ai_model');
+    expect(form(el).rule.resource_selector).to.eql({ ids: [RESOURCE_ID] });
+    expect(form(el).rule.actions).to.eql([]);
+    expect(api.callsTo(RULES, 'POST')).to.have.length(0);
+  });
+  it('creates exactly one typed rule and preserves all unrelated rules', async () => {
+    api = mockApi({
+      capabilities: ['abac_rules'],
+      routes: [...base, { method: 'POST', path: RULES, body: policyRule() }],
+    });
+    const el = await mount();
+    q(el, 'add-rule').click();
+    await el.updateComplete;
+    const rule = ruleDefinition(policyRule());
+    form(el).dispatchEvent(
+      new CustomEvent<PolicyRule>('rule-submit', {
+        detail: rule,
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await waitUntil(() => api.callsTo(RULES, 'POST').length === 1);
+    const expected = { ...rule };
+    delete expected.id;
+    expect(api.callsTo(RULES, 'POST')[0].body).to.eql(expected);
+    expect(api.callsTo(RULES, 'PUT')).to.have.length(0);
+  });
+  it('edits advanced rules with their per-rule version and keeps the draft on409', async () => {
+    const advanced = policyRule();
+    advanced.conditions = { unless: { sameTag: 'blocked' } };
     api = mockApi({
       capabilities: ['abac_rules'],
       routes: [
-        { path: RULES, body: () => body },
-        { path: `${RULES}/export`, body: { yaml: '' } },
-        { method: 'PUT', path: RULES, status: 409, body: { detail: 'stale' } },
+        { path: RULES, body: [advanced] },
+        ...base.slice(1),
+        { method: 'PUT', path: `${RULES}/${RULE_ID}`, status: 409 },
       ],
     });
     const el = await mount();
-    body = {
-      ...ruleSet,
-      rules: [
-        ...ruleSet.rules,
-        { name: 'added-elsewhere', effect: 'forbid', actions: ['flow:run'] },
-      ],
-      version: 'r2',
-    };
-    const remove = el.shadowRoot!.querySelector(
-      'tr[data-inherited="false"] sl-button'
-    ) as HTMLElement;
-    remove.click();
-    await waitUntil(() => el.shadowRoot!.querySelector('.error'));
-    expect(api.callsTo(RULES, 'PUT')[0].body).to.eql({
-      rules: [],
-      version: 'r1',
-    });
-    expect(el.shadowRoot!.querySelector('.error')!.textContent).to.contain(
-      'changed while you were editing'
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      'tr[data-inherited="false"] button'
+    )!.click();
+    await el.updateComplete;
+    expect(form(el).shadowRoot!.querySelector('[data-testid="rule-yaml"]')).to
+      .exist;
+    form(el).dispatchEvent(
+      new CustomEvent('rule-submit', {
+        detail: ruleDefinition(advanced),
+        bubbles: true,
+        composed: true,
+      })
     );
-    expect(el.shadowRoot!.textContent).to.contain('added-elsewhere');
+    await waitUntil(() => !!el.shadowRoot!.querySelector('.error'));
+    expect(
+      (
+        api.callsTo(`${RULES}/${RULE_ID}`, 'PUT')[0].body as Record<
+          string,
+          unknown
+        >
+      ).expected_version
+    ).to.equal(2);
+    expect(form(el)).to.exist;
+    expect(el.shadowRoot!.textContent).to.contain('Your draft is kept');
   });
-
-  it('reports capability-off without a toast when the endpoint is missing', async () => {
-    api = mockApi();
-    const before = toastCount();
-    let off = 0;
-    const el = await fixture<AccessRulesPanel>(
-      html`<access-rules-panel
-        @capability-off=${() => off++}
-      ></access-rules-panel>`
+  it('deletes with expected_version instead of replacing the collection', async () => {
+    api = mockApi({
+      capabilities: ['abac_rules'],
+      routes: [
+        ...base,
+        { method: 'DELETE', path: `${RULES}/${RULE_ID}`, status: 204 },
+      ],
+    });
+    const el = await mount();
+    const remove = [
+      ...el.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+        'tr[data-inherited="false"] button'
+      ),
+    ].find((button) => button.textContent === 'Remove')!;
+    remove.click();
+    await waitUntil(
+      () => api.callsTo(`${RULES}/${RULE_ID}`, 'DELETE').length === 1
     );
-    await waitUntil(() => off === 1);
-    expect(el.shadowRoot!.textContent!.trim()).to.equal('');
-    expect(toastCount()).to.equal(before);
+    expect(api.callsTo(`${RULES}/${RULE_ID}`, 'DELETE')[0].search).to.equal(
+      '?expected_version=2'
+    );
+  });
+  it('requires preview and uses actual losing_subjects DTO and modes route', async () => {
+    api = mockApi({
+      capabilities: ['abac_rules'],
+      routes: [
+        ...base,
+        { method: 'POST', path: MODES + '/preview', body: modePreview() },
+        {
+          method: 'PUT',
+          path: MODES,
+          body: { action: 'tool:call', mode: 'require_permit' },
+        },
+      ],
+    });
+    const el = await mount();
+    await choose(el, 'require_permit');
+    expect(el.canSaveMode('tool:call')).to.equal(false);
+    await el.saveMode('tool:call');
+    expect(api.callsTo(MODES, 'PUT')).to.have.length(0);
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      'tr[data-action="tool:call"] [data-testid="mode-preview"]'
+    )!.click();
+    await waitUntil(() => el.canSaveMode('tool:call'));
+    expect(q(el, 'mode-preview-result').textContent).to.contain(USER_ID);
+    await el.saveMode('tool:call');
+    expect(api.callsTo(MODES, 'PUT')[0].body).to.eql({
+      action: 'tool:call',
+      mode: 'require_permit',
+      preview_token: 'mode-preview',
+    });
+  });
+  it('invalidates mode preview on selection changes', async () => {
+    api = mockApi({
+      capabilities: ['abac_rules'],
+      routes: [
+        ...base,
+        { method: 'POST', path: MODES + '/preview', body: modePreview() },
+      ],
+    });
+    const el = await mount();
+    await choose(el, 'require_permit');
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      'tr[data-action="tool:call"] [data-testid="mode-preview"]'
+    )!.click();
+    await waitUntil(() => el.canSaveMode('tool:call'));
+    await choose(el, 'additive');
+    expect(el.canSaveMode('tool:call')).to.equal(false);
+  });
+  it('gates management and makes zero access requests without capability', async () => {
+    api = mockApi({
+      capabilities: ['abac_rules'],
+      profile: { account_id: 'account', permissions: ['view_policies'] },
+      routes: base,
+    });
+    let el = await mount();
+    expect(q(el, 'add-rule')).to.equal(null);
+    expect(el.shadowRoot!.querySelector('[data-testid="mode-save"]')).to.equal(
+      null
+    );
+    api.restore();
+    invalidateApiCaches();
+    signInForTest();
+    api = mockApi();
+    el = await fixture<AccessRulesPanel>(
+      html`<access-rules-panel></access-rules-panel>`
+    );
+    await waitUntil(() => api.callsTo('/api/v1/features').length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(api.callsTo(/^\/api\/v1\/access\//)).to.have.length(0);
   });
 });

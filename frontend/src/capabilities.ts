@@ -27,6 +27,7 @@ export const CAPABILITIES = [
   'multi_account',
   'account_hierarchy',
   'resource_sharing',
+  'resource_access',
   'abac_rules',
   'chat_connections',
   'anthropic_inference_hooks',
