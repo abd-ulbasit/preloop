@@ -149,6 +149,9 @@ func inventoryObserveLocalControls(controls []inventoryControl, appName string, 
 					continue
 				}
 			} else if strings.ContainsAny(executable, " \t\"'") {
+				// Older writers can emit an unquoted path with spaces. That
+				// shell command does not identify the intended executable;
+				// preserve unknown rather than affirming a broken hook.
 				continue
 			}
 			executable = strings.ReplaceAll(executable, "\\", "/")

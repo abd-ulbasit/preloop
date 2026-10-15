@@ -142,6 +142,7 @@ func TestInventoryHookRecognitionRejectsShellWrappers(t *testing.T) {
 		{`"/opt/Example App/preloop" agents permission-hook --source claude_code`, "true"},
 		{`false && /opt/example/preloop agents permission-hook --source claude_code`, "unknown"},
 		{`echo /opt/example/preloop agents permission-hook --source claude_code`, "unknown"},
+		{`/opt/Example App/preloop agents permission-hook --source claude_code`, "unknown"},
 		{`$(echo /opt/example)/preloop agents permission-hook --source claude_code`, "unknown"},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
