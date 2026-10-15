@@ -244,6 +244,9 @@ class ApiUsageMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup logic
     logger.info("Starting up application and database...")
+    from preloop.agents.images import warn_codex_image_tag_once
+
+    warn_codex_image_tag_once()
     service_role = os.getenv("PRELOOP_SERVICE_ROLE", "all").lower()
     is_testing = os.getenv("TESTING") == "true"
     is_api_role = service_role in {"all", "api"}

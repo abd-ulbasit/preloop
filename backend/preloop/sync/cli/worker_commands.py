@@ -1,6 +1,9 @@
-import click
 import asyncio
 import logging
+
+import click
+
+from preloop.agents.images import warn_codex_image_tag_once
 from preloop.sync.services.nats_worker import main
 
 
@@ -31,11 +34,12 @@ from preloop.sync.services.nats_worker import main
     default=None,
 )
 @click.command(name="worker")
-def worker_cmd(log_level: str, tasks: str, exclude_tasks: str):
+def worker_cmd(log_level: str, tasks: str, exclude_tasks: str) -> None:
     """
     Start the Preloop Sync worker service in the foreground.
     """
     logging.basicConfig(level=log_level)
+    warn_codex_image_tag_once()
     tasks_list = tasks.split(",") if tasks else []
     exclude_list = exclude_tasks.split(",") if exclude_tasks else []
     if tasks_list and exclude_list:

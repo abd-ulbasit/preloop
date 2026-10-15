@@ -14,9 +14,9 @@ or the workflow publishes, as does `workflow_dispatch` on main and a `v*`
 tag. Published tags are `sha-<12 hex chars of the commit>` and, on a version
 tag, `vX.Y.Z`. The job summary prints
 `ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`. The hosted
-default image is unchanged. The preflight script is a separate issue. The
-opt-in Perl image under `environments/perl/` stays available for private
-runners.
+default is the digest pinned in `backend/preloop/agents/images.py`. The
+preflight script is a separate issue. The opt-in Perl image under
+`environments/perl/` stays available for private runners.
 
 ## Build
 

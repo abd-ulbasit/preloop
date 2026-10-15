@@ -87,17 +87,19 @@ Executors do not share one override. The precedence below is what the code
 does today (`backend/preloop/agents/images.py`, `container.py`,
 `remote_runner.py`) and is pinned by `backend/tests/agents/test_agent_images.py`.
 
-**Hosted Codex (Docker or Kubernetes).** Set `CODEX_IMAGE` on the process
-that launches agents (the API/worker deployment):
+**Hosted Codex (Docker or Kubernetes).** The shipped default already
+includes this toolchain: the digest-pinned universal image. This recipe is
+for private runners. Hosted executors ignore a flow's `agent_config.image`
+and `docker_image`. Override the default with `CODEX_IMAGE` on the API and
+worker, or Helm `agents.codexImage`:
 
 ```bash
 CODEX_IMAGE=<registry>/preloop-codex-perl@sha256:<digest>
 ```
 
 Order: an approved `environment_profile` image, then `CODEX_IMAGE`, then
-`ghcr.io/openai/codex-universal:latest`. A flow's `agent_config.image` or
-`docker_image` is ignored by hosted executors. `CODEX_IMAGE` applies to
-every hosted Codex flow on that deployment.
+the digest pinned in `backend/preloop/agents/images.py`. `CODEX_IMAGE`
+applies to every hosted Codex flow on that deployment.
 
 **Private Docker runner.** Set the image on the flow's agent config:
 

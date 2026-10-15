@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from typing import Optional
 
-# Fallback tags used when the matching *_IMAGE env var is unset. Keep these
-# in one place so RemoteRunnerExecutor injects the same image the hosted
-# executor would have started.
+logger = logging.getLogger(__name__)
+
+# Index digest published by Publish Universal Image when #1716 merged
+# (run 38650782681). The attestation subject is this same digest.
+_HOSTED_CODEX_IMAGE = (
+    "ghcr.io/preloop/preloop-codex-universal@sha256:"
+    "2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de"
+)
+_DIGEST_PIN = re.compile(r"@sha256:[0-9a-f]{64}\Z")
+_codex_tag_warning_emitted = False
+
+# Fallback images used when the matching *_IMAGE env var is unset. Keep
+# these in one place so RemoteRunnerExecutor injects the same image the
+# hosted executor would have started. Codex is pinned by digest.
 DEFAULT_AGENT_IMAGES: dict[str, str] = {
     "pi": "node:22-bookworm",
     "deepseek": "node:22-bookworm",
     "opencode": "docker/sandbox-templates:opencode",
-    "codex": "ghcr.io/openai/codex-universal:latest",
+    "codex": _HOSTED_CODEX_IMAGE,
     "aider": "dustinwashington/aider-ce:v0.88.6",
     "gemini": "docker/sandbox-templates:gemini",
     "openhands": "spacebridge/openhands:latest-tmux",
@@ -36,14 +49,41 @@ def default_agent_image(agent_type: str) -> Optional[str]:
         agent_type: Agent harness name (case-insensitive).
 
     Returns:
-        Image reference, honoring the matching ``*_IMAGE`` environment
-        variable, or ``None`` when the agent type has no default.
+        Image reference, honoring a non-empty matching ``*_IMAGE``
+        environment variable, or ``None`` when the agent type has no
+        default. A blank override is treated as unset.
     """
     key = (agent_type or "").strip().lower()
     fallback = DEFAULT_AGENT_IMAGES.get(key)
     if fallback is None:
         return None
-    return os.getenv(_IMAGE_ENV_VARS[key], fallback)
+    override = os.environ.get(_IMAGE_ENV_VARS[key])
+    if override is None or not override.strip():
+        return fallback
+    return override
+
+
+def warn_codex_image_tag_once() -> None:
+    """Log one warning when ``CODEX_IMAGE`` is a tag rather than a digest.
+
+    An unset or blank variable uses the digest in ``DEFAULT_AGENT_IMAGES``
+    and does not warn. Repeated calls in one process log at most once.
+    """
+    global _codex_tag_warning_emitted
+    if _codex_tag_warning_emitted:
+        return
+    raw = os.environ.get("CODEX_IMAGE")
+    if raw is None or not raw.strip():
+        return
+    reference = raw.strip()
+    if _DIGEST_PIN.search(reference) is not None:
+        return
+    _codex_tag_warning_emitted = True
+    logger.warning(
+        "CODEX_IMAGE is a tag (%s), not a digest. Pin it as "
+        "name@sha256:<64 hex chars> so the image can be cached.",
+        reference,
+    )
 
 
 def agent_config_has_image(agent_config: dict[str, object]) -> bool:
