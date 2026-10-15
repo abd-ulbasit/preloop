@@ -5,6 +5,7 @@ import '@shoelace-style/shoelace/dist/components/checkbox/checkbox.js';
 import '@shoelace-style/shoelace/dist/components/dialog/dialog.js';
 import type SlDialog from '@shoelace-style/shoelace/dist/components/dialog/dialog.component.js';
 import '@shoelace-style/shoelace/dist/components/popup/popup.js';
+import type SlPopup from '@shoelace-style/shoelace/dist/components/popup/popup.component.js';
 import '@shoelace-style/shoelace/dist/components/radio/radio.js';
 import '@shoelace-style/shoelace/dist/components/radio-group/radio-group.js';
 import '@shoelace-style/shoelace/dist/components/switch/switch.js';
@@ -121,8 +122,16 @@ export class ResourceAccessPanel extends LitElement {
       font-size: var(--sl-font-size-small);
       text-align: start;
     }
-    sl-popup {
-      z-index: 1000;
+    .desktop-overlay {
+      position: fixed;
+      inset: 0 auto auto 0;
+      width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      overflow: visible;
+      background: transparent;
     }
     sl-dialog {
       --width: min(28rem, calc(100vw - 2rem));
@@ -428,7 +437,9 @@ export class ResourceAccessPanel extends LitElement {
   private async open(editor: Editor, event: Event): Promise<void> {
     if (this.saving) return;
     this.trigger = event.currentTarget as HTMLButtonElement;
-    this.narrow = window.matchMedia('(max-width: 640px)').matches;
+    this.narrow =
+      window.matchMedia('(max-width: 640px)').matches ||
+      !('showPopover' in HTMLElement.prototype);
     this.error = '';
     this.saveNotice = '';
     this.seedShareDraft();
@@ -452,10 +463,23 @@ export class ResourceAccessPanel extends LitElement {
         await dialog.updateComplete;
         void dialog.show();
       }
-    } else
+    } else {
+      // Native top layer escapes the page header and tab stacking contexts.
+      this.renderRoot
+        .querySelector<HTMLElement>('.desktop-overlay')
+        ?.showPopover();
+      const popup = this.renderRoot.querySelector<SlPopup>('sl-popup');
+      if (popup) {
+        await popup.updateComplete;
+        await popup.reposition();
+      }
       this.renderRoot
         .querySelector<HTMLElement>('[data-editor] [autofocus]')
-        ?.focus();
+        ?.focus({ preventScroll: true });
+      const editorBody =
+        this.renderRoot.querySelector<HTMLElement>('[data-editor]');
+      if (editorBody) editorBody.scrollTop = 0;
+    }
     if (
       editor === 'access' &&
       this.policyState === 'on' &&
@@ -1004,22 +1028,24 @@ export class ResourceAccessPanel extends LitElement {
                 }}
                 >${this.renderEditor()}</sl-dialog
               >`
-            : html`<sl-popup
-                .anchor=${this.trigger}
-                active
-                placement="bottom-end"
-                distance="8"
-                flip
-                shift
-                strategy="fixed"
-                ><div
-                  id="resource-editor"
-                  role="dialog"
-                  aria-labelledby="editor-title"
+            : html`<div class="desktop-overlay" popover="manual">
+                <sl-popup
+                  .anchor=${this.trigger}
+                  active
+                  placement="bottom-end"
+                  distance="8"
+                  flip
+                  shift
+                  strategy="fixed"
+                  ><div
+                    id="resource-editor"
+                    role="dialog"
+                    aria-labelledby="editor-title"
+                  >
+                    ${this.renderEditor()}
+                  </div></sl-popup
                 >
-                  ${this.renderEditor()}
-                </div></sl-popup
-              >`
+              </div>`
           : nothing
       }`;
   }

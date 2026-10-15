@@ -3,7 +3,7 @@ import { parseUTCDate } from '../../../utils/date';
 import { formatUsd, formatUsdExact } from '../../../utils/money';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import { EditPermissions } from '../../../controllers/edit-permissions';
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css, unsafeCSS, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { Router } from '../../../router';
 
@@ -2752,21 +2752,26 @@ export class AIModelDetailView extends LitElement {
           class="header-actions"
           style="display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sl-spacing-small); min-width: 0;"
         >
-          <capability-extension
-            name="resource-access"
-            style="display: contents;"
-            .context=${{
-              kind: 'ai_model',
-              resourceId: this.modelId,
-              sharedFrom: this.model?.is_shared
-                ? this.model?.owner_name
-                : undefined,
-              readOnly:
-                this.model?.read_only ||
-                this.model?.is_shared ||
-                this.model?.is_built_in,
-            }}
-          ></capability-extension>
+          ${
+            this.model?.id === this.modelId &&
+            (this.model.account_id || this.model.is_shared)
+              ? html` <capability-extension
+                  name="resource-access"
+                  style="display: contents;"
+                  .context=${{
+                    kind: 'ai_model',
+                    resourceId: this.modelId,
+                    sharedFrom: this.model?.is_shared
+                      ? this.model?.owner_name
+                      : undefined,
+                    readOnly:
+                      this.model?.read_only ||
+                      this.model?.is_shared ||
+                      this.model?.is_built_in,
+                  }}
+                ></capability-extension>`
+              : nothing
+          }
           <resource-actions
             .collapseOverflow=${false}
             .actions=${[

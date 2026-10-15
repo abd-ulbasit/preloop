@@ -88,6 +88,11 @@ export function describeSubject(
   );
 }
 
+interface FixedResource {
+  type: string;
+  id: string;
+}
+
 @customElement('access-rule-form')
 export class AccessRuleForm extends LitElement {
   static styles = css`
@@ -152,10 +157,13 @@ export class AccessRuleForm extends LitElement {
   @property({ attribute: false }) rule: PolicyRule = emptyRule();
   @property({ attribute: false }) subjects: SubjectOption[] = [];
   @property({ attribute: false }) actions: Action[] = [];
-  @property({ attribute: false }) fixedResource: {
-    type: string;
-    id: string;
-  } | null = null;
+  @property({
+    attribute: false,
+    // Parent renders may supply a new object while directory options load.
+    hasChanged: (value: FixedResource | null, previous: FixedResource | null) =>
+      value?.type !== previous?.type || value?.id !== previous?.id,
+  })
+  fixedResource: FixedResource | null = null;
   @property({ type: Boolean }) busy = false;
   @state() private draft: PolicyRule = emptyRule();
   @state() private advanced = false;
@@ -365,12 +373,13 @@ export class AccessRuleForm extends LitElement {
               <label
                 >Who<select
                   data-testid="rule-who"
-                  .value=${this.who}
                   @change=${(e: Event) => (this.who = (e.target as HTMLSelectElement).value)}
                   ?disabled=${this.busy}
                 >
-                  <option value="tags">Subjects matching tags</option>
-                  ${!known && this.who !== 'tags' ? html`<option value=${this.who}>${this.who} (name unavailable)</option>` : nothing}${options.map((s) => html`<option value=${`${s.kind}:${s.id}`}>${s.kind}: ${s.label}</option>`)}
+                  <option value="tags" .selected=${this.who === 'tags'}>
+                    Subjects matching tags
+                  </option>
+                  ${!known && this.who !== 'tags' ? html`<option value=${this.who} .selected=${true}>${this.who} (name unavailable)</option>` : nothing}${options.map((s) => html`<option value=${`${s.kind}:${s.id}`} .selected=${this.who === `${s.kind}:${s.id}`}>${s.kind}: ${s.label}</option>`)}
                 </select></label
               >
               ${

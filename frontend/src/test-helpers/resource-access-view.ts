@@ -48,6 +48,7 @@ export function resourceAccessView(kind: ResourceAccessViewKind): LitElement {
         modelId: 'model-1',
         model: {
           id: 'model-1',
+          account_id: 'acc-root',
           name: 'Review model',
           model_identifier: 'review-model',
           provider_name: 'Example provider',
