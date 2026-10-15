@@ -834,3 +834,18 @@ A quarantined migration identity displays an unavailable state without exposing
 a generated membership alias or relaxing authentication. Account seat counts
 continue to count active membership rows. No presentation migration is required;
 apply the identity schema/backfill and authentication changes first.
+
+### Governance findings console
+
+The `governance_review` capability registers lazy `/console/governance` and
+`/console/governance/findings/:findingId` views. They read the Enterprise plugin's
+account-scoped runs and findings, with kind, severity, developer and week filters.
+Coverage is explicit even before the first summary; partial runs show their stop
+reason. Evidence links to sessions and individual audit events. Dismissal and
+restore require `manage_policies` and visibility of the finding's kind.
+
+The core governance CRUD supplies paged run history, permission-filtered finding
+pages and segment counts over each run's half-open window. Segment availability
+and the earliest retained summary date are derived from stored segments; reviewed
+session counts and stop reasons come from the persisted run. No analyser is
+required to browse fixture or existing findings.

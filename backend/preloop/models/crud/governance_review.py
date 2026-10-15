@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from preloop.models import models
 from preloop.models.models import governance_review as gov
 
 from .base import CRUDBase
@@ -788,6 +789,60 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
 class CRUDGovernanceReviewRun(CRUDBase[GovernanceReviewRun]):
     """Create an idempotent weekly run and finish it."""
 
+    def list_runs(
+        self, db: Session, *, account_id: UUID, limit: int = 25, offset: int = 0
+    ) -> list[GovernanceReviewRun]:
+        """Return an account's run history, newest review window first."""
+        return (
+            db.query(GovernanceReviewRun)
+            .filter(GovernanceReviewRun.account_id == account_id)
+            .order_by(GovernanceReviewRun.window_start.desc(), GovernanceReviewRun.id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def segment_counts(
+        self, db: Session, *, account_id: UUID, run_ids: Sequence[UUID]
+    ) -> dict[UUID, int]:
+        """Count stored segments in each run's half-open review window.
+
+        Counts describe available data, including deterministic-only segments.
+        Reviewed-session coverage comes from the run's persisted counters.
+        """
+        if not run_ids:
+            return {}
+        rows = (
+            db.query(GovernanceReviewRun.id, func.count(GovernanceSessionDigest.id))
+            .outerjoin(
+                GovernanceSessionDigest,
+                (GovernanceSessionDigest.account_id == GovernanceReviewRun.account_id)
+                & (
+                    GovernanceSessionDigest.window_end
+                    >= GovernanceReviewRun.window_start
+                )
+                & (GovernanceSessionDigest.window_end < GovernanceReviewRun.window_end),
+            )
+            .filter(
+                GovernanceReviewRun.account_id == account_id,
+                GovernanceReviewRun.id.in_(run_ids),
+            )
+            .group_by(GovernanceReviewRun.id)
+            .all()
+        )
+        return {run_id: count for run_id, count in rows}
+
+    def summaries_started_at(
+        self, db: Session, *, account_id: UUID
+    ) -> Optional[datetime]:
+        """Return the first stored segment date, or None before the first sweep."""
+        return cast(
+            Optional[datetime],
+            db.query(func.min(GovernanceSessionDigest.created_at))
+            .filter(GovernanceSessionDigest.account_id == account_id)
+            .scalar(),
+        )
+
     def create_run(
         self,
         db: Session,
@@ -948,6 +1003,19 @@ class CRUDGovernanceReviewRun(CRUDBase[GovernanceReviewRun]):
 class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
     """Insert findings once per fingerprint, list them, and dismiss them."""
 
+    def member_names(
+        self, db: Session, *, account_id: UUID, user_ids: Sequence[UUID]
+    ) -> dict[UUID, str]:
+        """Resolve finding authors and dismissers in one account-scoped read."""
+        if not user_ids:
+            return {}
+        rows = (
+            db.query(models.User.id, models.User.full_name, models.User.username)
+            .filter(models.User.account_id == account_id, models.User.id.in_(user_ids))
+            .all()
+        )
+        return {user_id: full_name or username for user_id, full_name, username in rows}
+
     def insert_findings(
         self,
         db: Session,
@@ -1104,6 +1172,9 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
         dismissed: Optional[bool] = None,
+        allowed_kinds: Optional[Sequence[str]] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> list[GovernanceFinding]:
         """List findings for an account.
 
@@ -1116,13 +1187,18 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             run_id: Filter to one run.
             dismissed: True for dismissed rows, False for open rows, None
                 for both.
+            allowed_kinds: Permission scope. An empty sequence returns no rows.
+            limit: Maximum rows, or None for existing unpaged callers.
+            offset: Rows to skip after applying every filter.
 
         Returns:
-            Matching findings, oldest first.
+            Matching findings, oldest first. Permission filtering precedes paging.
         """
         query = db.query(GovernanceFinding).filter(
             GovernanceFinding.account_id == account_id
         )
+        if allowed_kinds is not None:
+            query = query.filter(GovernanceFinding.kind.in_(allowed_kinds))
         if kind is not None:
             query = query.filter(GovernanceFinding.kind == kind)
         if severity is not None:
@@ -1135,10 +1211,13 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             query = query.filter(GovernanceFinding.dismissed_at.is_not(None))
         elif dismissed is False:
             query = query.filter(GovernanceFinding.dismissed_at.is_(None))
-        return query.order_by(
+        query = query.order_by(
             GovernanceFinding.created_at.asc(),
             GovernanceFinding.id.asc(),
-        ).all()
+        ).offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
 
     def dismiss(
         self,

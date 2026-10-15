@@ -644,3 +644,142 @@ def test_dismiss_returns_none_for_a_foreign_account(
 
     assert missing is None
     assert finding.dismissed_at is None
+
+
+def test_run_history_and_segment_coverage_are_account_scoped(
+    db_session: Session, test_user: User
+) -> None:
+    """Empty runs stay visible; boundary segments belong to the next week."""
+    from datetime import timedelta
+
+    start, end = _window()
+    account_id = test_user.account_id
+    other = crud_account.create(
+        db_session, obj_in={"organization_name": "Other example"}, commit=False
+    )
+    runs = [
+        crud_governance_review_run.create_run(
+            db_session,
+            account_id=owner,
+            window_start=window,
+            window_end=window + timedelta(days=7),
+            commit=False,
+        )
+        for owner, window in [(account_id, start), (account_id, end), (other.id, start)]
+    ]
+    assert (
+        crud_governance_review_run.summaries_started_at(
+            db_session, account_id=account_id
+        )
+        is None
+    )
+    assert crud_governance_review_run.segment_counts(
+        db_session, account_id=account_id, run_ids=[row.id for row in runs]
+    ) == {runs[0].id: 0, runs[1].id: 0}
+    session = _session(db_session, account_id)
+    for index, window_end in enumerate([start, end - timedelta(seconds=1), end]):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=account_id,
+            runtime_session_id=session.id,
+            segment_index=index,
+            window_start=start,
+            window_end=window_end,
+            digest={"intent": "Review an example change"},
+            commit=False,
+        )
+    counts = crud_governance_review_run.segment_counts(
+        db_session, account_id=account_id, run_ids=[row.id for row in runs]
+    )
+    assert counts == {runs[0].id: 2, runs[1].id: 1}
+    assert (
+        crud_governance_review_run.segment_counts(
+            db_session, account_id=account_id, run_ids=[]
+        )
+        == {}
+    )
+    assert (
+        crud_governance_review_run.summaries_started_at(
+            db_session, account_id=account_id
+        )
+        is not None
+    )
+    page = crud_governance_review_run.list_runs(
+        db_session, account_id=account_id, limit=1, offset=0
+    )
+    assert [row.id for row in page] == [runs[1].id]
+    page = crud_governance_review_run.list_runs(
+        db_session, account_id=account_id, limit=1, offset=1
+    )
+    assert [row.id for row in page] == [runs[0].id]
+
+
+def test_finding_kind_permissions_apply_before_pagination(
+    db_session: Session, test_user: User
+) -> None:
+    """A page does not shrink or expose rows from a forbidden kind or tenant."""
+    start, end = _window()
+    run = crud_governance_review_run.create_run(
+        db_session,
+        account_id=test_user.account_id,
+        window_start=start,
+        window_end=end,
+        commit=False,
+    )
+    rows = [
+        {**_finding(run.id, f"example-{index}"), "kind": kind}
+        for index, kind in enumerate(["violation", "inefficiency", "anomaly"])
+    ]
+    crud_governance_finding.insert_findings(
+        db_session,
+        account_id=test_user.account_id,
+        findings=rows,
+        commit=False,
+    )
+    for row in crud_governance_finding.list_findings(
+        db_session, account_id=test_user.account_id
+    ):
+        row.created_at = start.replace(
+            hour={"violation": 0, "inefficiency": 1, "anomaly": 2}[row.kind]
+        )
+    db_session.flush()
+    page = crud_governance_finding.list_findings(
+        db_session,
+        account_id=test_user.account_id,
+        allowed_kinds=["violation", "anomaly"],
+        limit=1,
+        offset=1,
+    )
+    assert [row.kind for row in page] == ["anomaly"]
+    assert (
+        crud_governance_finding.list_findings(
+            db_session, account_id=test_user.account_id, allowed_kinds=[]
+        )
+        == []
+    )
+    assert (
+        crud_governance_finding.list_findings(
+            db_session, account_id=uuid4(), allowed_kinds=["violation", "anomaly"]
+        )
+        == []
+    )
+
+
+def test_finding_member_names_exclude_other_accounts(
+    db_session: Session, test_user: User
+) -> None:
+    assert crud_governance_finding.member_names(
+        db_session, account_id=test_user.account_id, user_ids=[test_user.id]
+    ) == {test_user.id: test_user.full_name or test_user.username}
+    assert (
+        crud_governance_finding.member_names(
+            db_session, account_id=uuid4(), user_ids=[test_user.id]
+        )
+        == {}
+    )
+    assert (
+        crud_governance_finding.member_names(
+            db_session, account_id=test_user.account_id, user_ids=[]
+        )
+        == {}
+    )

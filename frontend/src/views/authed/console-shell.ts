@@ -52,6 +52,7 @@ const NAV_PERMISSIONS: Record<string, string[]> = {
   '/console/settings/inference-hooks': ['manage_policies'],
   '/console/tools': ['view_tools', 'view_policies'],
   '/console/policies': ['view_policies'],
+  '/console/governance': ['view_policies', 'view_cost'],
   '/console/trackers': ['view_trackers'],
   '/console/ai-models': ['view_ai_models'],
   '/console/runtime-sessions': ['view_runtime_sessions'],
@@ -1231,6 +1232,23 @@ export class ConsoleShell extends LitElement {
                                 <span class="sidebar-label">Policies</span>
                               </span>
                             `
+                          )
+                        : nothing
+                    }
+                    ${
+                      hasCapability(this.features, 'governance_review') &&
+                      this._canAccess('/console/governance')
+                        ? this._renderNavLink(
+                            '/console/governance',
+                            html`<span class="nav-row"
+                              ><sl-icon
+                                name="clipboard-check"
+                                slot="prefix"
+                              ></sl-icon
+                              ><span class="sidebar-label"
+                                >Governance</span
+                              ></span
+                            >`
                           )
                         : nothing
                     }
