@@ -910,12 +910,14 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     authType?: string;
     status?: Record<string, unknown>;
     statusCode?: number;
+    isValid?: boolean;
   }) {
     const {
       flag,
       authType = 'managed_oauth',
       status = managedStatus,
       statusCode = 200,
+      isValid = true,
     } = opts;
     const calls: string[] = [];
     const stub = sinon
@@ -957,7 +959,7 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
             auth_type: authType,
             created: '2026-01-01T00:00:00Z',
             last_updated: '2026-01-02T00:00:00Z',
-            is_valid: true,
+            is_valid: isValid,
             token_expires_at:
               authType === 'managed_oauth' ? null : '2020-01-01',
             token_expiry_status:
@@ -989,6 +991,18 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     window.history.replaceState({}, '', '/');
   });
 
+  it('explains first sync without claiming it is running', async () => {
+    fetchStub = stubManaged({ flag: true, isValid: false }).stub;
+    const el = await mountView();
+    await waitUntil(() => el.shadowRoot?.textContent?.includes('Authorized'));
+    expect(
+      el.shadowRoot!.querySelector('.tracker-header')!.textContent
+    ).to.contain('Not synced yet');
+    expect(
+      el.shadowRoot!.querySelector('.initial-sync-help')!.textContent
+    ).to.contain('Authorization succeeded');
+  });
+
   it('shows state, actor, server expiry and unknown-aware capabilities', async () => {
     const { stub, calls } = stubManaged({ flag: true });
     fetchStub = stub;
@@ -997,7 +1011,7 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     const chip = root.querySelector('.managed-connection');
     expect(chip).to.exist;
     expect(chip?.getAttribute('data-state')).to.equal('connected');
-    expect(chip?.textContent).to.contain('connected');
+    expect(chip?.textContent).to.contain('Authorized');
     // The manual expiry chip never applies to a managed grant.
     expect(root.querySelector('.token-expiry')).to.not.exist;
     const panel = root.querySelector('.managed-connection-panel');
@@ -1117,7 +1131,7 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
     );
     const root = el.shadowRoot!;
     expect(root.querySelector('.tracker-header')?.textContent).to.contain(
-      'Managed: disconnected'
+      'Disconnected'
     );
     expect(root.querySelector('.tracker-header')?.textContent).to.not.contain(
       'Connected'
@@ -1163,7 +1177,7 @@ describe('TrackerDetailView managed Bitbucket connection (issue #1065)', () => {
 describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
   let fetchStub: sinon.SinonStub;
 
-  function stubJira(flag: boolean, state = 'connected') {
+  function stubJira(flag: boolean, state = 'connected', isValid = true) {
     const calls: string[] = [];
     const stub = sinon
       .stub(window, 'fetch')
@@ -1205,7 +1219,7 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
             auth_type: 'managed_oauth',
             created: '2026-01-01T00:00:00Z',
             last_updated: '2026-01-02T00:00:00Z',
-            is_valid: true,
+            is_valid: isValid,
             token_expires_at: null,
             token_expiry_status: null,
           });
@@ -1256,6 +1270,15 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
     );
   });
 
+  it('shows Jira first sync separately from successful authorization', async () => {
+    fetchStub = stubJira(true, 'connected', false).stub;
+    const el = await mountView();
+    await waitUntil(() => el.shadowRoot?.textContent?.includes('Authorized'));
+    const header = el.shadowRoot!.querySelector('.tracker-header')!;
+    expect(header.textContent).to.contain('Not synced yet');
+    expect(header.textContent).to.contain('Authorized');
+  });
+
   it('shows a disconnected grant in the header even if tracker validation is stale', async () => {
     fetchStub = stubJira(true, 'disconnected').stub;
     const el = await mountView();
@@ -1265,7 +1288,7 @@ describe('TrackerDetailView managed Jira connection (issue #1579)', () => {
       )
     );
     const header = el.shadowRoot!.querySelector('.tracker-header')!;
-    expect(header.textContent).to.contain('Managed: disconnected');
+    expect(header.textContent).to.contain('Disconnected');
     expect(header.textContent).to.not.contain('Connected');
   });
 

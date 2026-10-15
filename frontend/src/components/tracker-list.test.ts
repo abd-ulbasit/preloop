@@ -221,7 +221,7 @@ describe('TrackerList', () => {
       expect(badge.hasAttribute('pill')).to.be.true;
       expect(badge.classList.contains('solid')).to.be.false;
     }
-    expect(el.shadowRoot!.textContent).to.contain('Connected');
+    expect(el.shadowRoot!.textContent).to.contain('Last check passed');
     expect(el.shadowRoot!.textContent).to.not.contain('Action Required');
   });
 

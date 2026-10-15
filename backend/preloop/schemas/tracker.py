@@ -251,6 +251,10 @@ class TrackerResponse(TrackerBase):
         None,
         description="Login of the account the bound installation targets (OAuth auth types only)",
     )
+    authorization_state: Optional[str] = Field(
+        None,
+        description="Managed grant authorization state, independent of sync validation",
+    )
     jira_manual_webhook: Optional[JiraManualWebhook] = Field(
         None,
         description=(

@@ -45329,6 +45329,12 @@ components:
           title: Github Installation Target Login
           description: Login of the account the bound installation targets (OAuth
             auth types only)
+        authorization_state:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization State
+          description: Managed grant authorization state, independent of sync validation
         jira_manual_webhook:
           anyOf:
           - $ref: '#/components/schemas/JiraManualWebhook'
