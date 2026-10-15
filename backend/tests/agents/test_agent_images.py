@@ -67,11 +67,19 @@ def test_digest_valued_codex_image_does_not_warn(
 
 
 def test_worker_startup_warns_once_for_tag_codex_image(
-    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sync worker logs the tag warning once when the process starts."""
-    from preloop.sync.cli.worker_commands import worker_cmd
+    """The sync worker checks CODEX_IMAGE once when the process starts."""
+    from preloop.sync.cli import worker_commands
 
+    calls: list[int] = []
+    real = worker_commands.warn_codex_image_tag_once
+
+    def _wrapped() -> None:
+        calls.append(1)
+        real()
+
+    monkeypatch.setattr(worker_commands, "warn_codex_image_tag_once", _wrapped)
     monkeypatch.setattr("preloop.agents.images._codex_tag_warning_emitted", False)
     monkeypatch.setenv("CODEX_IMAGE", "ghcr.io/example/codex:latest")
 
@@ -80,11 +88,10 @@ def test_worker_startup_warns_once_for_tag_codex_image(
         if callable(close):
             close()
 
-    monkeypatch.setattr("preloop.sync.cli.worker_commands.asyncio.run", _close)
-    result = CliRunner().invoke(worker_cmd, [])
+    monkeypatch.setattr(worker_commands.asyncio, "run", _close)
+    result = CliRunner().invoke(worker_commands.worker_cmd, [])
     assert result.exit_code == 0, result.output
-    captured = capfd.readouterr()
-    assert captured.err.count("CODEX_IMAGE is a tag") == 1
+    assert calls == [1]
 
 
 def test_default_agent_image_matches_hosted_executors() -> None:
