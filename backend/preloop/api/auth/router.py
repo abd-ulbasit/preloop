@@ -289,6 +289,7 @@ def _runner_policy_for(user: UserModel, db: Session) -> RunnerPolicy:
 def _build_auth_user_response(user: UserModel, db: Session) -> AuthUserResponse:
     """Build the profile payload returned by the ``/users/me`` endpoints."""
     from preloop.models.crud import crud_person
+    from preloop.services.sso_avatar import refresh_anonymous_sso_avatar
 
     try:
         profile = crud_person.profile_for_membership(db, membership_id=user.id)
@@ -298,6 +299,17 @@ def _build_auth_user_response(user: UserModel, db: Session) -> AuthUserResponse:
             detail="Identity is unavailable",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+    try:
+        if refresh_anonymous_sso_avatar(
+            db,
+            membership_id=user.id,
+            person_id=profile.person_id,
+            avatar_url=profile.avatar_url,
+            avatar_source=profile.avatar_source,
+        ):
+            profile = crud_person.profile_for_membership(db, membership_id=user.id)
+    except Exception:
+        logger.exception("Could not restore an SSO profile photo")
     return AuthUserResponse(
         id=user.id,
         person_id=profile.person_id,
