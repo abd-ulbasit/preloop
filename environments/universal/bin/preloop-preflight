@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+"""Report which declared checkers a repository can actually run.
+
+The script is Python stdlib only so the universal Codex image can run it
+before project dependencies are installed. It writes
+``/tmp/preloop-preflight.json`` and prints a table, or JSON with ``--json``.
+
+A checker is ``version_mismatch`` when its installed major version differs
+from the lock pin (mypy 1.20.2 against a 2.3.1 pin). A same-major pin
+difference stays ``available`` and the reason still quotes the pin, which is
+how ruff 0.15.12 stays available against a 0.16.x lock. ``deps_missing`` for
+Python means a top-level lock dependency cannot be imported. For Node it
+means ``node_modules`` is absent. Both facts are reported together when they
+both apply: ``status`` keeps the version result and ``dependency_status``
+plus the reason carry ``deps_missing``.
+
+Partial-mode typecheck runs and installing dependencies are out of scope.
+"""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import TypedDict
+
+OUTPUT_PATH = Path("/tmp/preloop-preflight.json")
+
+SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svn",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "site-packages",
+        "target",
+        "vendor",
+        "venv",
+    }
+)
+
+ESLINT_CONFIGS = frozenset(
+    {
+        ".eslintrc",
+        ".eslintrc.cjs",
+        ".eslintrc.js",
+        ".eslintrc.json",
+        ".eslintrc.mjs",
+        ".eslintrc.yaml",
+        ".eslintrc.yml",
+        "eslint.config.cjs",
+        "eslint.config.js",
+        "eslint.config.mjs",
+        "eslint.config.mts",
+        "eslint.config.ts",
+    }
+)
+
+VERSION_ARGV: dict[str, tuple[str, ...]] = {
+    "eslint": ("eslint", "--version"),
+    "golangci-lint": ("golangci-lint", "version"),
+    "mypy": ("mypy", "--version"),
+    "perlcritic": ("perlcritic", "--version"),
+    "perlver": (
+        "perl",
+        "-MPerl::MinimumVersion",
+        "-e",
+        "print $Perl::MinimumVersion::VERSION, chr(10)",
+    ),
+    "ruff": ("ruff", "--version"),
+    "shellcheck": ("shellcheck", "--version"),
+    "tsc": ("tsc", "--version"),
+}
+
+# A review policy can name a version_linter. Only these programs may be
+# suggested. Anything else stays in the report as not applicable, with an
+# empty command, so a pull request cannot point the reviewer at `rm`.
+KNOWN_CHECKERS = frozenset(
+    {
+        "eslint",
+        "golangci-lint",
+        "mypy",
+        "perlcritic",
+        "perlver",
+        "ruff",
+        "shellcheck",
+        "tsc",
+    }
+)
+
+SUGGESTED_COMMANDS: dict[str, str] = {
+    "eslint": "eslint .",
+    "golangci-lint": "golangci-lint run",
+    "mypy": "mypy",
+    "perlcritic": "perlcritic",
+    "perlver": "perlver --blame",
+    "ruff": "ruff check",
+    "shellcheck": "shellcheck",
+    "tsc": "tsc --noEmit",
+}
+
+IMPORT_OVERRIDES = {
+    "attrs": "attr",
+    "beautifulsoup4": "bs4",
+    "pillow": "PIL",
+    "protobuf": "google.protobuf",
+    "pyjwt": "jwt",
+    "pymdown-extensions": "pymdownx",
+    "python-dateutil": "dateutil",
+    "python-dotenv": "dotenv",
+    "python-multipart": "multipart",
+    "pyyaml": "yaml",
+    "typing-extensions": "typing_extensions",
+}
+
+PIN_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][0-9A-Za-z._+]*)",
+    re.MULTILINE,
+)
+VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
+DEP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
+YAML_BLOCK_RE = re.compile(r"```(?:yaml|yml)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+UNSAFE_COMMAND_CHARS = set("|;&`$<>\n\\")
+
+STATUS_MISSING = "missing"
+STATUS_VERSION_MISMATCH = "version_mismatch"
+STATUS_DEPS_MISSING = "deps_missing"
+STATUS_AVAILABLE = "available"
+STATUS_NOT_APPLICABLE = "not_applicable"
+
+
+class Check(TypedDict):
+    """One declared checker and whether this sandbox can run it."""
+
+    tool: str
+    language: str
+    path: str
+    status: str
+    version: str | None
+    expected_version: str | None
+    dependency_status: str
+    reason: str
+    command: str
+
+
+class Report(TypedDict):
+    """JSON document written to ``/tmp/preloop-preflight.json``."""
+
+    root: str
+    languages: list[str]
+    checks: list[Check]
+
+
+class _Signals:
+    """Manifests and declared checkers found under one repository root."""
+
+    def __init__(self) -> None:
+        self.languages: set[str] = set()
+        self.python_projects: list[Path] = []
+        self.node_projects: list[Path] = []
+        self.eslint_configs: set[Path] = set()
+        self.ts_projects: list[Path] = []
+        self.golangci: list[Path] = []
+        self.perl_projects: list[Path] = []
+        self.perlcritic: list[Path] = []
+        self.shell: bool = False
+
+
+class Environment:
+    """How the script sees installed tools and importable modules.
+
+    Tests supply a subclass. The command-line default probes the real PATH.
+    """
+
+    def tool_version(self, tool: str) -> str | None:
+        """Return an installed version, ``""`` if present but unparsed, or None.
+
+        Args:
+            tool: Checker program name.
+
+        Returns:
+            None when the tool cannot be run.
+        """
+        raise NotImplementedError
+
+    def missing_imports(self, distributions: Sequence[str]) -> list[str]:
+        """Return distribution names that cannot be imported.
+
+        Args:
+            distributions: Top-level project dependencies, in declaration order.
+
+        Returns:
+            The subset that ``importlib`` cannot find.
+        """
+        raise NotImplementedError
+
+    def has_node_modules(self, project: Path) -> bool:
+        """Return whether a Node project has installed its packages.
+
+        Args:
+            project: Directory that contains ``package.json``.
+
+        Returns:
+            True when ``node_modules`` is a directory.
+        """
+        return (project / "node_modules").is_dir()
+
+
+class RealEnvironment(Environment):
+    """Probe the current process PATH and the current interpreter."""
+
+    def tool_version(self, tool: str) -> str | None:
+        """Run the checker's version command.
+
+        Args:
+            tool: Checker program name.
+
+        Returns:
+            A dotted version, an empty string when the binary exists but
+            prints no version, or None when it is not runnable. ``perlver``
+            is read from ``Perl::MinimumVersion`` because perlver 1.40
+            rejects ``--version``.
+        """
+        argv = VERSION_ARGV.get(tool, (tool, "--version"))
+        if shutil.which(argv[0]) is None:
+            if tool == "perlver" and shutil.which("perlver") is not None:
+                return ""
+            return None
+        try:
+            completed = subprocess.run(
+                list(argv),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        probed = version_from_probe(
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+        if probed is not None:
+            return probed
+        # The module probe failed. A perlver binary on PATH is still the
+        # checker; do not invent a version from perl's stderr.
+        if tool == "perlver" and shutil.which("perlver") is not None:
+            return ""
+        return None
+
+    def missing_imports(self, distributions: Sequence[str]) -> list[str]:
+        """Find top-level distributions this interpreter cannot import.
+
+        Args:
+            distributions: Project dependency names.
+
+        Returns:
+            Names whose import spec is missing.
+        """
+        missing: list[str] = []
+        for distribution in distributions:
+            module = import_name(distribution)
+            try:
+                spec = importlib.util.find_spec(module)
+            except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
+                missing.append(distribution)
+                continue
+            if spec is None:
+                missing.append(distribution)
+        return missing
+
+
+def import_name(distribution: str) -> str:
+    """Map a distribution name to the module a type checker would import.
+
+    Args:
+        distribution: Name as declared in a lock or ``pyproject.toml``.
+
+    Returns:
+        An importable module name.
+    """
+    key = distribution.lower()
+    if key in IMPORT_OVERRIDES:
+        return IMPORT_OVERRIDES[key]
+    return key.replace("-", "_")
+
+
+def build_report(root: Path, environment: Environment | None = None) -> Report:
+    """Detect languages and declared checkers under ``root``.
+
+    Args:
+        root: Repository root to scan.
+        environment: Tool and import probe. The real PATH is used when omitted.
+
+    Returns:
+        A report that validates against ``preloop-preflight.schema.json``.
+    """
+    env = environment if environment is not None else RealEnvironment()
+    resolved = root.resolve()
+    signals = _scan(resolved)
+    pins = _lock_pins(resolved)
+    checks = _checks_for(resolved, signals, pins, env)
+    return {
+        "root": str(resolved),
+        "languages": sorted(signals.languages),
+        "checks": checks,
+    }
+
+
+def format_checks_section(
+    checks: Sequence[Check] | None,
+    results: Mapping[tuple[str, str], str] | None = None,
+) -> str:
+    """Render the review summary Checks section.
+
+    ``main`` prints this after the table. A result keyed by ``(tool, path)``
+    is a checker the reviewer actually ran. Every other checker stays
+    "not run". Not run is never described as a pass.
+
+    Args:
+        checks: Checkers the preflight detected. None means the
+            ``preloop-preflight`` binary itself was not on PATH.
+        results: Optional map of ``(tool, path)`` to one result line.
+
+    Returns:
+        Markdown whose heading is ``### Checks``.
+    """
+    lines = ["### Checks", ""]
+    if checks is None:
+        lines.append("- `preloop-preflight`: not run: binary not on PATH")
+    elif not checks:
+        lines.append("- `preloop-preflight`: no declared checkers detected")
+    else:
+        quoted = results or {}
+        for item in checks:
+            lines.append(
+                _format_check_line(
+                    item,
+                    quoted.get((item["tool"], item["path"])),
+                )
+            )
+    lines.append("")
+    lines.append("Not run never counts as a pass.")
+    return "\n".join(lines)
+
+
+def _format_check_line(item: Check, result: str | None) -> str:
+    where = f" `{item['path']}`" if item["path"] else ""
+    if result is not None:
+        return (
+            f"- `{item['tool']}` ({item['language']}){where}: "
+            f"ran `{item['command']}`: {result}"
+        )
+    command = ""
+    if item["command"]:
+        command = f" Suggested command: `{item['command']}`."
+    return (
+        f"- `{item['tool']}` ({item['language']}){where}: "
+        f"not run: {item['reason']}.{command}"
+    )
+
+
+def format_table(report: Report) -> str:
+    """Render the human-readable table printed without ``--json``.
+
+    Args:
+        report: Report to print.
+
+    Returns:
+        The table, ending with a newline.
+    """
+    lines = [
+        f"root: {report['root']}",
+        f"languages: {', '.join(report['languages']) or '(none)'}",
+        "",
+    ]
+    if not report["checks"]:
+        lines.append("(no declared checkers)")
+    for item in report["checks"]:
+        version = item["version"] or "-"
+        path = item["path"] or "."
+        lines.append(
+            f"{item['status']}\t{item['tool']}\t{item['language']}\t"
+            f"{path}\t{version}\t{item['command']}"
+        )
+        lines.append(f"  {item['reason']}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Parse arguments, write the JSON report, and print it.
+
+    Args:
+        argv: Arguments excluding the program name. Defaults to ``sys.argv``.
+
+    Returns:
+        Process exit status. 0 after a report is written, 2 for a bad root,
+        1 when the output file cannot be written.
+    """
+    parser = argparse.ArgumentParser(prog="preloop-preflight")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the report as JSON instead of a table",
+    )
+    parser.add_argument(
+        "root",
+        nargs="?",
+        default=".",
+        help="repository root (default: the working directory)",
+    )
+    args = parser.parse_args(None if argv is None else list(argv))
+    root = Path(args.root)
+    if not root.is_dir():
+        print(f"not a directory: {root}", file=sys.stderr)
+        return 2
+    report = build_report(root, RealEnvironment())
+    payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    try:
+        OUTPUT_PATH.write_text(payload, encoding="utf-8")
+    except OSError as exc:
+        print(f"could not write {OUTPUT_PATH}: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        sys.stdout.write(payload)
+    else:
+        sys.stdout.write(format_table(report))
+        sys.stdout.write(format_checks_section(report["checks"]))
+        sys.stdout.write("\n")
+    return 0
+
+
+def _scan(root: Path) -> _Signals:
+    signals = _Signals()
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(name for name in dirnames if name not in SKIP_DIRS)
+        names = set(filenames)
+        current = Path(directory)
+        if "pyproject.toml" in names or "setup.py" in names or "setup.cfg" in names:
+            signals.languages.add("python")
+            signals.python_projects.append(current)
+        elif any(
+            name.startswith("requirements") and name.endswith(".txt") for name in names
+        ):
+            signals.languages.add("python")
+        if "package.json" in names:
+            signals.languages.add("javascript")
+            signals.node_projects.append(current)
+        if names & ESLINT_CONFIGS:
+            signals.eslint_configs.add(current)
+            signals.languages.add("javascript")
+        if "tsconfig.json" in names:
+            signals.languages.add("typescript")
+            signals.ts_projects.append(current)
+        if "go.mod" in names:
+            signals.languages.add("go")
+        if ".golangci.yml" in names or ".golangci.yaml" in names:
+            signals.languages.add("go")
+            signals.golangci.append(current)
+        if "Cargo.toml" in names:
+            signals.languages.add("rust")
+        if "pom.xml" in names or "build.gradle" in names or "build.gradle.kts" in names:
+            signals.languages.add("java")
+        if "cpanfile" in names or "Makefile.PL" in names:
+            signals.languages.add("perl")
+            signals.perl_projects.append(current)
+        if ".perlcriticrc" in names:
+            signals.languages.add("perl")
+            signals.perlcritic.append(current)
+        for name in names:
+            if name.endswith((".pm", ".pl", ".t")):
+                signals.languages.add("perl")
+                if current not in signals.perl_projects:
+                    signals.perl_projects.append(current)
+            elif name.endswith(".sh"):
+                signals.languages.add("shell")
+                signals.shell = True
+    if not signals.perl_projects and "perl" in signals.languages:
+        signals.perl_projects.append(root)
+    return signals
+
+
+def _checks_for(
+    root: Path,
+    signals: _Signals,
+    pins: Mapping[str, str],
+    environment: Environment,
+) -> list[Check]:
+    found: dict[tuple[str, str], Check] = {}
+    for project in signals.python_projects:
+        data = _load_toml(project / "pyproject.toml")
+        tools = set(_declared_python_tools(project, data))
+        distributions = _python_distributions(project, data)
+        for tool in sorted(tools):
+            needs_imports = tool == "mypy"
+            item = _tool_check(
+                root=root,
+                project=project,
+                tool=tool,
+                language="python",
+                environment=environment,
+                expected=_pin(pins, tool),
+                distributions=distributions if needs_imports else [],
+                node_deps=False,
+                declared=True,
+                undeclared_reason="",
+            )
+            found[(tool, item["path"])] = item
+    for project in signals.node_projects:
+        eslint_declared = _eslint_declared(project, signals)
+        if eslint_declared or project in signals.ts_projects:
+            found[("eslint", _rel(root, project))] = _tool_check(
+                root=root,
+                project=project,
+                tool="eslint",
+                language="javascript",
+                environment=environment,
+                expected=_package_pin(project, "eslint"),
+                distributions=[],
+                node_deps=eslint_declared,
+                declared=eslint_declared,
+                undeclared_reason=f"no eslint config in {_rel(root, project) or '.'}",
+            )
+    for project in signals.ts_projects:
+        found[("tsc", _rel(root, project))] = _tool_check(
+            root=root,
+            project=project,
+            tool="tsc",
+            language="typescript",
+            environment=environment,
+            expected=_package_pin(project, "typescript"),
+            distributions=[],
+            node_deps=True,
+            declared=True,
+            undeclared_reason="",
+        )
+    for project in signals.golangci:
+        found[("golangci-lint", _rel(root, project))] = _tool_check(
+            root=root,
+            project=project,
+            tool="golangci-lint",
+            language="go",
+            environment=environment,
+            expected=_pin(pins, "golangci-lint"),
+            distributions=[],
+            node_deps=False,
+            declared=True,
+            undeclared_reason="",
+        )
+    if signals.perlcritic or signals.perl_projects:
+        if signals.perlcritic:
+            perl_root = signals.perlcritic[0]
+        else:
+            perl_root = signals.perl_projects[0]
+        if signals.perlcritic:
+            found[("perlcritic", _rel(root, perl_root))] = _tool_check(
+                root=root,
+                project=perl_root,
+                tool="perlcritic",
+                language="perl",
+                environment=environment,
+                expected=None,
+                distributions=[],
+                node_deps=False,
+                declared=True,
+                undeclared_reason="",
+            )
+        found[("perlver", _rel(root, perl_root))] = _tool_check(
+            root=root,
+            project=perl_root,
+            tool="perlver",
+            language="perl",
+            environment=environment,
+            expected=None,
+            distributions=[],
+            node_deps=False,
+            declared=True,
+            undeclared_reason="",
+        )
+    if signals.shell:
+        found[("shellcheck", "")] = _tool_check(
+            root=root,
+            project=root,
+            tool="shellcheck",
+            language="shell",
+            environment=environment,
+            expected=None,
+            distributions=[],
+            node_deps=False,
+            declared=True,
+            undeclared_reason="",
+        )
+    for linter in _policy_linters(root):
+        key = (linter.program, "")
+        if key in found or not linter.program:
+            continue
+        if not linter.safe:
+            found[key] = _make_check(
+                tool=linter.program,
+                language=linter.language or "policy",
+                path="",
+                status=STATUS_NOT_APPLICABLE,
+                version=None,
+                expected=None,
+                dependency_status=STATUS_NOT_APPLICABLE,
+                reason=linter.reason,
+                command="",
+            )
+            continue
+        found[key] = _tool_check(
+            root=root,
+            project=root,
+            tool=linter.program,
+            language=linter.language or "policy",
+            environment=environment,
+            expected=_pin(pins, linter.program),
+            distributions=[],
+            node_deps=False,
+            declared=True,
+            undeclared_reason="",
+            command=linter.command,
+        )
+    return sorted(
+        found.values(),
+        key=lambda item: (item["language"], item["path"], item["tool"]),
+    )
+
+
+def _tool_check(
+    *,
+    root: Path,
+    project: Path,
+    tool: str,
+    language: str,
+    environment: Environment,
+    expected: str | None,
+    distributions: Sequence[str],
+    node_deps: bool,
+    declared: bool,
+    undeclared_reason: str,
+    command: str | None = None,
+) -> Check:
+    present, version = _presence(environment.tool_version(tool))
+    dependency_status, missing = _dependency_status(
+        environment=environment,
+        project=project,
+        distributions=distributions,
+        node_deps=node_deps,
+        apply=declared,
+    )
+    status = _choose_status(
+        declared=declared,
+        present=present,
+        version=version,
+        expected=expected,
+        dependency_status=dependency_status,
+    )
+    rel = _rel(root, project)
+    reason = _reason(
+        tool=tool,
+        declared=declared,
+        present=present,
+        version=version,
+        expected=expected,
+        dependency_status=dependency_status,
+        missing=missing,
+        node_deps=node_deps,
+        undeclared_reason=undeclared_reason,
+        path=rel,
+    )
+    return _make_check(
+        tool=tool,
+        language=language,
+        path=rel,
+        status=status,
+        version=version,
+        expected=expected,
+        dependency_status=dependency_status,
+        reason=reason,
+        command=command if command is not None else SUGGESTED_COMMANDS.get(tool, tool),
+    )
+
+
+def _make_check(
+    *,
+    tool: str,
+    language: str,
+    path: str,
+    status: str,
+    version: str | None,
+    expected: str | None,
+    dependency_status: str,
+    reason: str,
+    command: str,
+) -> Check:
+    return {
+        "tool": tool,
+        "language": language,
+        "path": path,
+        "status": status,
+        "version": version,
+        "expected_version": expected,
+        "dependency_status": dependency_status,
+        "reason": reason,
+        "command": command,
+    }
+
+
+def _presence(raw: str | None) -> tuple[bool, str | None]:
+    if raw is None:
+        return False, None
+    if raw == "":
+        return True, None
+    return True, raw
+
+
+def _choose_status(
+    *,
+    declared: bool,
+    present: bool,
+    version: str | None,
+    expected: str | None,
+    dependency_status: str,
+) -> str:
+    if not declared:
+        return STATUS_NOT_APPLICABLE
+    if not present:
+        return STATUS_MISSING
+    if _majors_differ(version, expected):
+        return STATUS_VERSION_MISMATCH
+    if dependency_status == STATUS_DEPS_MISSING:
+        return STATUS_DEPS_MISSING
+    return STATUS_AVAILABLE
+
+
+def _dependency_status(
+    *,
+    environment: Environment,
+    project: Path,
+    distributions: Sequence[str],
+    node_deps: bool,
+    apply: bool,
+) -> tuple[str, list[str]]:
+    if not apply:
+        return STATUS_NOT_APPLICABLE, []
+    if distributions:
+        missing = list(environment.missing_imports(distributions))
+        if missing:
+            return STATUS_DEPS_MISSING, missing
+        return STATUS_AVAILABLE, []
+    if node_deps:
+        if environment.has_node_modules(project):
+            return STATUS_AVAILABLE, []
+        return STATUS_DEPS_MISSING, []
+    return STATUS_NOT_APPLICABLE, []
+
+
+def _reason(
+    *,
+    tool: str,
+    declared: bool,
+    present: bool,
+    version: str | None,
+    expected: str | None,
+    dependency_status: str,
+    missing: Sequence[str],
+    node_deps: bool,
+    undeclared_reason: str,
+    path: str,
+) -> str:
+    parts: list[str] = []
+    if path:
+        parts.append(f"path {path}")
+    if not declared:
+        parts.append(undeclared_reason or f"no {tool} config")
+    elif not present:
+        parts.append(f"{tool} is not on PATH")
+    elif _majors_differ(version, expected):
+        parts.append(f"version_mismatch ({version} vs {expected})")
+    else:
+        shown = version or "unknown version"
+        pin_note = ""
+        if expected and version and expected != version:
+            pin_note = f"; lock pins {expected}"
+        # The binary can be on PATH while dependencies are not. Only call it
+        # available when dependency readiness does not block a run.
+        label = "available"
+        if dependency_status == STATUS_DEPS_MISSING:
+            label = "present"
+        parts.append(f"{tool} {shown} is on PATH ({label}){pin_note}")
+    if dependency_status == STATUS_DEPS_MISSING:
+        if missing:
+            shown_names = ", ".join(missing[:8])
+            extra = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
+            parts.append(
+                "deps_missing: top-level lock dependencies are not "
+                f"importable: {shown_names}{extra}"
+            )
+        elif node_deps:
+            parts.append("deps_missing: node_modules is absent")
+    return "; ".join(parts)
+
+
+def _majors_differ(installed: str | None, pinned: str | None) -> bool:
+    if not installed or not pinned:
+        return False
+    left = _major(installed)
+    right = _major(pinned)
+    if left is None or right is None:
+        return False
+    return left != right
+
+
+def _major(version: str) -> int | None:
+    match = re.match(r"(\d+)", version)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _declared_python_tools(project: Path, data: Mapping[str, object]) -> set[str]:
+    found: set[str] = set()
+    tool = data.get("tool")
+    if isinstance(tool, Mapping):
+        if "mypy" in tool:
+            found.add("mypy")
+        if "ruff" in tool:
+            found.add("ruff")
+    setup_cfg = project / "setup.cfg"
+    if setup_cfg.is_file():
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(setup_cfg, encoding="utf-8")
+        except (OSError, configparser.Error):
+            return found
+        for section in parser.sections():
+            lowered = section.lower()
+            if lowered in {"mypy", "tool:mypy"}:
+                found.add("mypy")
+            if lowered in {"ruff", "tool:ruff"}:
+                found.add("ruff")
+    return found
+
+
+def _python_distributions(project: Path, data: Mapping[str, object]) -> list[str]:
+    names = _pyproject_dependencies(data)
+    if names:
+        return names
+    names = []
+    for path in sorted(project.glob("requirements*.txt")):
+        names.extend(_pins_in(path).keys())
+    return _unique(names)
+
+
+def _pyproject_dependencies(data: Mapping[str, object]) -> list[str]:
+    project = data.get("project")
+    if not isinstance(project, Mapping):
+        return []
+    names: list[str] = []
+    dependencies = project.get("dependencies")
+    if isinstance(dependencies, list):
+        names.extend(_dep_name(item) for item in dependencies if isinstance(item, str))
+    extras = project.get("optional-dependencies")
+    if isinstance(extras, Mapping):
+        for group in extras.values():
+            if isinstance(group, list):
+                names.extend(_dep_name(item) for item in group if isinstance(item, str))
+    return _unique(name for name in names if name)
+
+
+def _dep_name(spec: str) -> str:
+    match = DEP_NAME_RE.match(spec.strip())
+    if match is None:
+        return ""
+    return match.group(0)
+
+
+def _eslint_declared(project: Path, signals: _Signals) -> bool:
+    if project in signals.eslint_configs:
+        return True
+    package_json = _load_json(project / "package.json")
+    eslint_config = package_json.get("eslintConfig")
+    if isinstance(eslint_config, Mapping) and eslint_config:
+        return True
+    for section in ("dependencies", "devDependencies"):
+        deps = package_json.get(section)
+        if isinstance(deps, Mapping) and "eslint" in deps:
+            return True
+    return False
+
+
+def _package_pin(project: Path, package: str) -> str | None:
+    package_json = _load_json(project / "package.json")
+    for section in ("dependencies", "devDependencies"):
+        deps = package_json.get(section)
+        if not isinstance(deps, Mapping):
+            continue
+        raw = deps.get(package)
+        if isinstance(raw, str) and re.fullmatch(r"\d+\.\d+\.\d+", raw):
+            return raw
+    return None
+
+
+class _PolicyLinter:
+    def __init__(
+        self,
+        language: str,
+        command: str,
+        program: str,
+        safe: bool,
+        reason: str,
+    ) -> None:
+        self.language = language
+        self.command = command
+        self.program = program
+        self.safe = safe
+        self.reason = reason
+
+
+def _policy_linters(root: Path) -> list[_PolicyLinter]:
+    path = root / ".preloop" / "review-policy.md"
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    match = YAML_BLOCK_RE.search(text)
+    if match is None:
+        return []
+    language = ""
+    found: list[_PolicyLinter] = []
+    for line in match.group(1).splitlines():
+        language_match = re.match(r"\s*-\s*language:\s*(.+)", line)
+        if language_match:
+            language = _unquote(language_match.group(1).strip())
+            continue
+        linter_match = re.match(r"\s*version_linter:\s*(.+)", line)
+        if linter_match is None:
+            continue
+        command = _unquote(linter_match.group(1).strip())
+        tokens = command.split()
+        program = tokens[0] if tokens else ""
+        safe, reason = _policy_command_status(command, program)
+        if not _program_is_safe(program):
+            program = "version_linter"
+        found.append(
+            _PolicyLinter(
+                language or "policy",
+                command if safe else "",
+                program,
+                safe,
+                reason,
+            )
+        )
+    return found
+
+
+def version_from_probe(returncode: int, stdout: str, _stderr: str) -> str | None:
+    """Return a version only when the probe exited 0.
+
+    Args:
+        returncode: Probe process status.
+        stdout: Probe stdout. The only stream a version is read from.
+        _stderr: Probe stderr. Ignored, so an ``@INC`` path cannot look
+            like a successful version.
+
+    Returns:
+        A dotted version, an empty string when the probe succeeded
+        without a version line, or None when the probe failed.
+    """
+    if returncode != 0:
+        return None
+    return _first_version(stdout) or ""
+
+
+def _policy_command_status(command: str, program: str) -> tuple[bool, str]:
+    """Decide whether a review-policy version_linter may be suggested.
+
+    Args:
+        command: The ``version_linter`` value from the policy file.
+        program: The first token of that command.
+
+    Returns:
+        ``(True, "")`` when the command is a known checker with a safe
+        argument shape. Otherwise ``(False, reason)`` and the caller
+        stores an empty command.
+    """
+    if not _program_is_safe(program) or not _command_is_safe(command):
+        return False, "version_linter command is unsafe"
+    if program not in KNOWN_CHECKERS:
+        return False, "version_linter program is not a known checker"
+    return True, ""
+
+
+def _command_is_safe(command: str) -> bool:
+    if not command or any(character in UNSAFE_COMMAND_CHARS for character in command):
+        return False
+    return all(_token_is_safe(token) for token in command.split())
+
+
+def _token_is_safe(token: str) -> bool:
+    if token.startswith("-"):
+        return re.fullmatch(r"-+[A-Za-z0-9][A-Za-z0-9._-]*", token) is not None
+    return _program_is_safe(token)
+
+
+def _program_is_safe(program: str) -> bool:
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9._+-]*", program) is not None
+
+
+def _unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1].strip()
+    return value.split("#", 1)[0].strip()
+
+
+def _lock_pins(root: Path) -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+        for name in filenames:
+            path = Path(directory) / name
+            if not _is_lock_file(path, root):
+                continue
+            for package, version in _pins_in(path).items():
+                previous = pins.get(package)
+                if previous is None or _version_key(version) > _version_key(previous):
+                    pins[package] = version
+    return pins
+
+
+def _is_lock_file(path: Path, root: Path) -> bool:
+    if path.suffix != ".txt":
+        return False
+    if path.name.startswith("requirements"):
+        return True
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    return "requirements" in parts
+
+
+def _pins_in(path: Path) -> dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    pins: dict[str, str] = {}
+    for match in PIN_RE.finditer(text):
+        pins[match.group(1).lower()] = match.group(2)
+    return pins
+
+
+def _pin(pins: Mapping[str, str], tool: str) -> str | None:
+    return pins.get(tool.lower())
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in version.split("."):
+        match = re.match(r"(\d+)", piece)
+        parts.append(int(match.group(1)) if match else 0)
+    return tuple(parts)
+
+
+def _load_toml(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("rb") as handle:
+            loaded = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    if isinstance(loaded, dict):
+        return loaded
+    return {}
+
+
+def _load_json(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    if isinstance(loaded, dict):
+        return loaded
+    return {}
+
+
+def _rel(root: Path, path: Path) -> str:
+    if path == root:
+        return ""
+    return path.relative_to(root).as_posix()
+
+
+def _unique(names: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in names:
+        key = name.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(name)
+    return ordered
+
+
+def _first_version(text: str) -> str | None:
+    match = VERSION_RE.search(text)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

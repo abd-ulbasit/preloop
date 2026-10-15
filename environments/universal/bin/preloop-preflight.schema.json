@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://preloop.ai/schemas/preloop-preflight.json",
+  "title": "preloop-preflight report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["root", "languages", "checks"],
+  "properties": {
+    "root": {"type": "string", "minLength": 1},
+    "languages": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "checks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/check"}
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool",
+        "language",
+        "path",
+        "status",
+        "version",
+        "expected_version",
+        "dependency_status",
+        "reason",
+        "command"
+      ],
+      "properties": {
+        "tool": {"type": "string", "minLength": 1},
+        "language": {"type": "string", "minLength": 1},
+        "path": {"type": "string"},
+        "status": {
+          "type": "string",
+          "enum": [
+            "available",
+            "missing",
+            "version_mismatch",
+            "deps_missing",
+            "not_applicable"
+          ]
+        },
+        "version": {"type": ["string", "null"]},
+        "expected_version": {"type": ["string", "null"]},
+        "dependency_status": {
+          "type": "string",
+          "enum": ["available", "deps_missing", "not_applicable"]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "command": {"type": "string"}
+      }
+    }
+  }
+}
