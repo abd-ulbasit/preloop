@@ -41,6 +41,9 @@ machine. The runner never reads, copies or forwards harness credentials. See
 **Prepaid credit** has an append-only ledger, per-purchase lots, and balance
 cache in the open-source models. Empty tables do not change allowance
 behaviour. Stripe and the purchase UI are not in this tree.
+**Browser access for flow agents** is documented in
+`docs/guide/flows/browser-access.md`: the egress proxy is the network
+boundary, and tool allowlists are not.
 
 ### Breaking or behavior changes
 

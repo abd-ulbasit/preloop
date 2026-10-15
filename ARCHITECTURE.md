@@ -178,6 +178,8 @@ graph LR
 
 Execution environment profiles and hosted checkpoint recovery are documented in
 [Environments and recovery](docs/guide/flows/environments-and-recovery.md).
+What enforces browser network access for a flow agent is
+[Browser access](docs/guide/flows/browser-access.md).
 Workspace checkpoint capture streams individual files and enforces its
 compressed size cap during packing. Dependency directories and caches are
 excluded; oversized captures leave the last complete checkpoint available.
