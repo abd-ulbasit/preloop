@@ -1032,7 +1032,7 @@ func beginLeasedJob(
 	env["PRELOOP_RUNNER_SCRIPT"] = launch["script"].(string)
 	env["PRELOOP_MCP_URL"] = strings.TrimRight(apiURL, "/") + "/mcp/v1"
 	opts.Launch = true
-	opts.PreserveEntrypoint = image == "ghcr.io/openai/codex-universal:latest"
+	opts.PreserveEntrypoint = preserveCodexUniversalEntrypoint(image)
 	if cfg, ok := job["agent_config"].(map[string]any); ok {
 		if runner, ok := cfg["runner"].(map[string]any); ok {
 			if preserve, ok := runner["preserve_image_entrypoint"].(bool); ok {

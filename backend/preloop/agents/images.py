@@ -79,11 +79,10 @@ def warn_codex_image_tag_once() -> None:
     if _DIGEST_PIN.search(reference) is not None:
         return
     _codex_tag_warning_emitted = True
-    shown = reference or "<empty>"
     logger.warning(
         "CODEX_IMAGE is a tag (%s), not a digest. Pin it as "
         "name@sha256:<64 hex chars> so the image can be cached.",
-        shown,
+        reference,
     )
 
 

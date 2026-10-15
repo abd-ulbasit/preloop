@@ -365,17 +365,18 @@ after a successful socket write but before server persistence can lose that
 batch. The runner does not maintain an unbounded replay queue.
 
 When the flow omits `image` / `docker_image`, the control plane uses the hosted
-Codex/OpenCode default. The default Codex image
-`ghcr.io/preloop/preloop-codex-universal` keeps the base entrypoint, which
-initializes language runtimes. Custom
-images normally run with `/bin/bash` as the entrypoint. They must provide
-Bash, Python 3, Git, Node/npm, writable `/workspace`, a writable home directory,
-and the dependencies required by repository setup/tests. The shared bootstrap
-installs the configured CLI version. An image whose own entrypoint initializes
-its environment and delegates arguments to Bash can opt into
-`agent_config.runner.preserve_image_entrypoint: true` (also use this for pinned
-or mirrored codex-universal images). Images that cannot execute this bootstrap
-fail explicitly; an idle shell cannot be reported as successful work.
+Codex/OpenCode default. The runner keeps the entrypoint of
+`ghcr.io/preloop/preloop-codex-universal` and
+`ghcr.io/openai/codex-universal` (a tag or a digest), because that entrypoint
+initializes language runtimes. Custom images normally run with `/bin/bash` as
+the entrypoint. They must provide Bash, Python 3, Git, Node/npm, writable
+`/workspace`, a writable home directory, and the dependencies required by
+repository setup/tests. The shared bootstrap installs the configured CLI
+version. An image whose own entrypoint initializes its environment and
+delegates arguments to Bash can opt into
+`agent_config.runner.preserve_image_entrypoint: true` (use this for a mirror
+under another name). Images that cannot execute this bootstrap fail
+explicitly; an idle shell cannot be reported as successful work.
 
 ## Harnesses are detected automatically
 

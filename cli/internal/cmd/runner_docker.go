@@ -60,6 +60,35 @@ func defaultNewRunnerJobCmd(image string, env map[string]string, opts runnerDock
 	return cmd
 }
 
+// preserveCodexUniversalEntrypoint reports whether image is the upstream
+// Codex universal image or the Preloop image built from it. Both initialize
+// language runtimes in their entrypoint, so a launch must not replace it
+// with /bin/bash. A tag or a digest of either repository matches. A mirror
+// under another name still needs preserve_image_entrypoint.
+func preserveCodexUniversalEntrypoint(image string) bool {
+	switch imageRepository(image) {
+	case "ghcr.io/openai/codex-universal", "ghcr.io/preloop/preloop-codex-universal":
+		return true
+	default:
+		return false
+	}
+}
+
+// imageRepository strips a digest and a tag. A colon that belongs to a
+// registry host:port is kept.
+func imageRepository(image string) string {
+	ref := image
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	slash := strings.LastIndex(ref, "/")
+	colon := strings.LastIndex(ref, ":")
+	if colon > slash {
+		ref = ref[:colon]
+	}
+	return ref
+}
+
 // dockerRunArgs passes env keys with bare -e flags so values are read
 // from the runner process environment and never show up in `ps` output.
 func dockerRunArgs(image string, env map[string]string, opts runnerDockerOpts) []string {
