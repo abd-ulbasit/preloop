@@ -179,7 +179,7 @@ func inventoryConfigRoutes(appName, path string, data []byte) (inventoryMCPRoute
 }
 
 // One document parse supplies both legacy structural counts and route facts.
-// Validation and container precedence match inventoryMCPServerCount.
+// The count-only compatibility helper also delegates here.
 func inventoryConfigSummary(appName, path string, data []byte) (inventoryMCPRoutes, int, error) {
 	result := inventoryMCPRoutes{Completeness: "complete"}
 	decode := json.Unmarshal
