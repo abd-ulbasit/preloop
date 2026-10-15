@@ -84,6 +84,8 @@ GATEWAY_USAGE_PURPOSES = frozenset(
     }
 )
 
+GATEWAY_USAGE_FUNDING = frozenset({"platform", "account"})
+
 # Replay-validation re-executions are Preloop-driven measurement traffic: real
 # spend, but not the account's agent traffic. They are excluded from the
 # user-facing usage aggregations below and from budget-bucket accumulation
@@ -3137,7 +3139,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         """
         if purpose is not None and purpose not in GATEWAY_USAGE_PURPOSES:
             raise ValueError(f"Invalid gateway usage purpose: {purpose!r}")
-        if funding is not None and funding not in {"platform", "account"}:
+        if funding is not None and funding not in GATEWAY_USAGE_FUNDING:
             raise ValueError(f"Invalid gateway usage funding: {funding!r}")
         query = db.query(
             func.coalesce(func.sum(self.model.estimated_cost), 0.0)
