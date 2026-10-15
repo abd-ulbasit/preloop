@@ -132,7 +132,22 @@ func inventoryObserveLocalControls(controls []inventoryControl, appName string, 
 			if hook.Type != "command" || !strings.HasSuffix(hook.Command, suffix) {
 				continue
 			}
-			executable := strings.Trim(strings.TrimSuffix(hook.Command, suffix), "\"'")
+			executable := strings.TrimSuffix(hook.Command, suffix)
+			if strings.ContainsAny(executable, "\r\n;&|`$<>") {
+				continue
+			}
+			if strings.HasPrefix(executable, "\"") || strings.HasPrefix(executable, "'") {
+				quote := executable[:1]
+				if len(executable) < 2 || !strings.HasSuffix(executable, quote) {
+					continue
+				}
+				executable = executable[1 : len(executable)-1]
+				if strings.Contains(executable, quote) {
+					continue
+				}
+			} else if strings.ContainsAny(executable, " \t\"'") {
+				continue
+			}
 			executable = strings.ReplaceAll(executable, "\\", "/")
 			if filepath.Base(executable) == "preloop" || filepath.Base(executable) == "preloop.exe" {
 				inventorySetConfigured(controls, "native_actions", "true")

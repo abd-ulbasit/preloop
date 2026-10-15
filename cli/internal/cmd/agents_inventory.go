@@ -184,7 +184,7 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 					continue
 				}
 				routes, routeErr := inventoryConfigRoutes(spec.Name, path, data)
-				if routeErr != nil {
+				if routeErr != nil || routes.Completeness == "partial" {
 					addProbe("config", "error", "config_malformed")
 					continue
 				}

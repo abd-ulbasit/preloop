@@ -117,3 +117,40 @@ func TestInventoryManagedConfigurationUncertainty(t *testing.T) {
 		})
 	}
 }
+
+func TestInventoryMalformedRouteContainerIsProbeFailure(t *testing.T) {
+	home := t.TempDir()
+	writeInventoryFixture(t, home, ".cursor/mcp.json", `{"mcpServers":false}`)
+	scan := collectAgentInventory(inventoryTestDependencies(t, home))
+	if scan.Completeness != "partial" {
+		t.Fatal(scan.Completeness)
+	}
+	for _, probe := range scan.ProbeResults {
+		if probe.AppID == "cursor" && probe.Kind == "config" && probe.Status == "error" && probe.ErrorCode == "config_malformed" {
+			return
+		}
+	}
+	t.Fatal("malformed route container had no failed config probe")
+}
+
+func TestInventoryHookRecognitionRejectsShellWrappers(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    string
+	}{
+		{`/opt/example/preloop agents permission-hook --source claude-code`, "true"},
+		{`"/opt/Example App/preloop" agents permission-hook --source claude-code`, "true"},
+		{`false && /opt/example/preloop agents permission-hook --source claude-code`, "unknown"},
+		{`echo /opt/example/preloop agents permission-hook --source claude-code`, "unknown"},
+		{`$(echo /opt/example)/preloop agents permission-hook --source claude-code`, "unknown"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			controls := inventoryControls(AgentConfig{Name: "Claude Code"})
+			data, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{map[string]any{"type": "command", "command": tc.command}}}}}})
+			inventoryObserveLocalControls(controls, "Claude Code", data)
+			if controls[1].Configured != tc.want {
+				t.Fatalf("got %+v", controls[1])
+			}
+		})
+	}
+}
