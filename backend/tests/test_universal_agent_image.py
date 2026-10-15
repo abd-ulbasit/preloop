@@ -101,7 +101,13 @@ def test_recipe_pins_the_base_and_adds_perl_plus_shellcheck() -> None:
     assert "*@sha256:*" in text, "a mutable base tag must be refused"
     name, _, digest = BASE.partition("@sha256:")
     assert re.fullmatch(r"[a-f0-9]{64}", digest)
-    assert name == DEFAULT_AGENT_IMAGES["codex"].rsplit(":", 1)[0]
+    assert name == "ghcr.io/openai/codex-universal"
+    hosted = DEFAULT_AGENT_IMAGES["codex"]
+    assert re.fullmatch(
+        r"ghcr.io/preloop/preloop-codex-universal@sha256:[a-f0-9]{64}",
+        hosted,
+    )
+    assert hosted.split("@", 1)[0] != name
     assert _apt_install_packages(text) == [*PACKAGES, "shellcheck"]
     assert text.count("apt-get install") == 1
     assert all("=" not in package for package in _apt_install_packages(text))

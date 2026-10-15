@@ -96,6 +96,23 @@ def test_default_agent_image_matches_hosted_executors() -> None:
     assert default_agent_image("unknown") is None
 
 
+def test_blank_codex_image_uses_the_pinned_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A blank CODEX_IMAGE is unset: the digest default, and no warning."""
+    monkeypatch.setattr("preloop.agents.images._codex_tag_warning_emitted", False)
+    monkeypatch.setenv("CODEX_IMAGE", "  ")
+    with caplog.at_level(logging.WARNING, logger="preloop.agents.images"):
+        warn_codex_image_tag_once()
+    assert default_agent_image("codex") == HOSTED_CODEX_IMAGE
+    assert CodexAgent({}).image == HOSTED_CODEX_IMAGE
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "CODEX_IMAGE" in record.getMessage()
+    ]
+
+
 def test_default_agent_image_honors_env_overrides() -> None:
     with patch.dict(
         os.environ,

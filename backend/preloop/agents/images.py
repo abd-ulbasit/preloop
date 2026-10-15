@@ -49,27 +49,31 @@ def default_agent_image(agent_type: str) -> Optional[str]:
         agent_type: Agent harness name (case-insensitive).
 
     Returns:
-        Image reference, honoring the matching ``*_IMAGE`` environment
-        variable, or ``None`` when the agent type has no default.
+        Image reference, honoring a non-empty matching ``*_IMAGE``
+        environment variable, or ``None`` when the agent type has no
+        default. A blank override is treated as unset.
     """
     key = (agent_type or "").strip().lower()
     fallback = DEFAULT_AGENT_IMAGES.get(key)
     if fallback is None:
         return None
-    return os.getenv(_IMAGE_ENV_VARS[key], fallback)
+    override = os.environ.get(_IMAGE_ENV_VARS[key])
+    if override is None or not override.strip():
+        return fallback
+    return override
 
 
 def warn_codex_image_tag_once() -> None:
     """Log one warning when ``CODEX_IMAGE`` is a tag rather than a digest.
 
-    An unset variable uses the digest in ``DEFAULT_AGENT_IMAGES`` and does
-    not warn. Repeated calls in one process log at most once.
+    An unset or blank variable uses the digest in ``DEFAULT_AGENT_IMAGES``
+    and does not warn. Repeated calls in one process log at most once.
     """
     global _codex_tag_warning_emitted
     if _codex_tag_warning_emitted:
         return
     raw = os.environ.get("CODEX_IMAGE")
-    if raw is None:
+    if raw is None or not raw.strip():
         return
     reference = raw.strip()
     if _DIGEST_PIN.search(reference) is not None:
