@@ -5,7 +5,7 @@ Editions: Cloud, Enterprise. The schedule and the storage tables ship in OSS, bu
 The weekly governance review checks each week's agent sessions against a policy document that your account owns. It reports what it finds and never blocks work. This page is for operators. It covers what the review reads and sends, what it costs, how to choose the analysis model, and how to edit the policy.
 
 !!! note "What ships today"
-    Stage A (session summaries), the policy document, the review settings and the budget cut-off are available now. Stage B (the weekly pass that writes findings), the governance section of the Monday digest and the console findings page arrive in later 0.18.0 changes. This page marks each part that has not shipped yet.
+    Stage A (session summaries), the policy document, the review settings and the budget cut-off are available now. Stage B (the weekly pass that writes findings), the governance section of the Monday digest and the console page that lists findings arrive in later 0.18.0 changes. This page marks each part that has not shipped yet.
 
 ## Privacy
 
