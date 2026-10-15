@@ -49,7 +49,7 @@ PY
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nprintf "0\\n"\n' > "$tmp/bin/id"
 chmod +x "$tmp/bin/id"
-if PATH="$tmp/bin:$PATH" sh "$root/docs/assets/mdm-recipes/inventory-user.sh" > "$tmp/refusal" 2>&1; then
+if PATH="$tmp/bin:$PATH" sh "$root/docs/assets/mdm-recipes/inventory-user.sh" /usr/bin/true > "$tmp/refusal" 2>&1; then
     echo 'Root context was unexpectedly accepted' >&2
     exit 1
 fi
