@@ -1522,27 +1522,19 @@ async def list_projects_for_org(
     db.close()
     if project_data.url and not project_data.url.endswith("/"):
         project_data.url = project_data.url + "/"
-    try:
-        client = await create_tracker_client(
-            tracker_type=project_data.tracker_type.value,
-            tracker_id="list-projects",
-            api_key=project_data.api_key,
-            connection_details={
-                "url": str(project_data.url) if project_data.url else None,
-                **(project_data.connection_details or {}),
-                **auth_details,
-            },
-            credential_source=credential_source,
-        )
-    except ValueError as e:
-        # create_tracker_client raises ValueError for client configuration
-        # problems (missing key, no credential resolver): a client error.
-        raise HTTPException(
-            status_code=400, detail=f"Could not create tracker client: {_first_line(e)}"
-        )
-    except Exception as e:
-        logger.exception(f"Error creating tracker client for user {username}: {e}")
-        raise HTTPException(status_code=500, detail="Could not create tracker client")
+    # create_tracker_client swallows configuration errors and returns None,
+    # which is the 400 below.
+    client = await create_tracker_client(
+        tracker_type=project_data.tracker_type.value,
+        tracker_id="list-projects",
+        api_key=project_data.api_key,
+        connection_details={
+            "url": str(project_data.url) if project_data.url else None,
+            **(project_data.connection_details or {}),
+            **auth_details,
+        },
+        credential_source=credential_source,
+    )
     if not client:
         raise HTTPException(status_code=400, detail="Could not create tracker client")
     try:
