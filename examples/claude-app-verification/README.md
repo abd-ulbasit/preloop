@@ -10,7 +10,7 @@ The app version is pinned in `Dockerfile` and checked at runtime. The initial
 pin matches the version available when this pilot was developed; updating it
 requires reviewing the fixture protocol and repeating actual-app validation.
 The fixture contract is `cooperative-hook-v1`; the report includes the running
-rig hash, CLI binary hash and configuration revisions. Python unit tests exercise
+rig hash, installed app package hash, CLI binary hash and configuration revisions. Python unit tests exercise
 the fixture and evidence checks only and cannot establish application coverage.
 
 ## Run
@@ -54,8 +54,9 @@ A case passes only if the actual app exits successfully, the fixture sent the
 Bash call and received its correlated tool result, the expected marker state
 matches, and the real hook made a correlated permission request. Denied probes
 require absent marker files. The no-hook profile case instead requires no
-permission request and a present marker, reported as `boundary_gap`. Restoring
-the original synthetic settings must restore denial. This is local configuration
+permission request and a present marker, reported as `boundary_gap`. The restoration case first runs the app with the hook absent, records the bypass,
+then clears the marker and runs the app again with restored settings in the same
+profile. Both config hashes and full app results are retained. This is local configuration
 rollback, not OAuth credential rollback.
 
 Covered cases:

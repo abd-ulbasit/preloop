@@ -47,6 +47,19 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def bundle_digest(root: Path) -> str:
+    """Hash installed package paths and contents to detect same-version drift."""
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError("application package is empty")
+    result = hashlib.sha256()
+    for path in files:
+        result.update(str(path.relative_to(root)).encode() + b"\0")
+        with path.open("rb") as source:
+            result.update(hashlib.file_digest(source, "sha256").digest())
+    return result.hexdigest()
+
+
 def fresh(report: dict[str, Any], revisions: dict[str, str], now: datetime) -> bool:
     """Reject stale or incomplete evidence; 24 hours is a fixture-only lifetime."""
     try:
@@ -239,22 +252,27 @@ def assess(
     }
 
 
-def run_case(name: str, root: Path) -> dict[str, Any]:
+def run_case(name: str, root: Path, reuse: Path | None = None) -> dict[str, Any]:
     """Run the real app in a fresh synthetic profile against loopback fixtures."""
-    work = root / name
-    work.mkdir()
+    work = reuse or root / name
+    before = None
+    if name == "restored_profile":
+        before = run_case("alternate_profile", root, reuse=work)
+    work.mkdir(exist_ok=True)
     home = work / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     profile = home / ".claude"
-    profile.mkdir()
+    profile.mkdir(exist_ok=True)
     marker = work / "marker"
+    if before is not None:
+        marker.unlink(missing_ok=True)
     status, decision, fail_open, _ = CASES[name]
     server = Fixture(marker, status, decision)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     credentials = home / ".preloop" / "agents" / "fixture"
-    credentials.mkdir(parents=True)
+    credentials.mkdir(parents=True, exist_ok=True)
     (credentials / "permission_hook.json").write_text(
         json.dumps(
             {
@@ -277,10 +295,8 @@ def run_case(name: str, root: Path) -> dict[str, Any]:
     original = json.dumps(settings)
     settings_path = profile / "settings.json"
     settings_path.write_text(original)
-    if name in ("alternate_profile", "restored_profile"):
+    if name == "alternate_profile":
         settings_path.write_text("{}")
-    if name == "restored_profile":
-        settings_path.write_text(original)
     env = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": str(home),
@@ -342,6 +358,13 @@ def run_case(name: str, root: Path) -> dict[str, Any]:
                 "config_sha256": digest(settings_path.read_bytes()),
             }
         )
+        if before is not None:
+            record["before_restoration"] = before
+            if (
+                before["result"] != "boundary_gap"
+                or before.get("config_sha256") == record["config_sha256"]
+            ):
+                record["result"] = "failed"
         return record
     except subprocess.TimeoutExpired:
         return {
@@ -386,7 +409,9 @@ def main() -> int:
             "verified_at": now.isoformat(),
             "expires_at": (now + timedelta(hours=24)).isoformat(),
             "revisions": {
-                "app": APP_VERSION,
+                "app": bundle_digest(
+                    Path("/usr/local/lib/node_modules/@anthropic-ai/claude-code")
+                ),
                 "cli": digest(Path("/usr/local/bin/preloop").read_bytes()),
                 "config": digest(json.dumps(CASES, sort_keys=True).encode()),
                 "policy": FIXTURE_VERSION,

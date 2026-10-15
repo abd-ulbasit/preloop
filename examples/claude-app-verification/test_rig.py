@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from rig import CASES, Fixture, assess, events, fresh
+from rig import CASES, Fixture, assess, bundle_digest, events, fresh
 
 
 def test_denied_marker_absence_without_app_is_not_a_pass(tmp_path: Path) -> None:
@@ -104,3 +104,66 @@ def test_allow_requires_exact_marker_content(tmp_path: Path) -> None:
         )
         fixture.marker.write_text("unexpected")
         assert assess("allow", fixture, fixture.marker, 0)["result"] == "failed"
+
+
+def test_bundle_hash_detects_content_and_path_drift(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    with pytest.raises(ValueError):
+        bundle_digest(package)
+    entry = package / "cli.js"
+    entry.write_text("first")
+    original = bundle_digest(package)
+    entry.write_text("second")
+    assert bundle_digest(package) != original
+    entry.write_text("first")
+    entry.rename(package / "different.js")
+    assert bundle_digest(package) != original
+
+
+def test_restoration_runs_both_profiles_and_clears_prior_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    import rig
+
+    calls = []
+
+    def fake_app(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        work = Path(kwargs["cwd"])
+        settings = json.loads((work / "home/.claude/settings.json").read_text())
+        calls.append((work, settings))
+        marker = work / "marker"
+        if len(calls) == 1:
+            assert settings == {}
+            marker.write_text("fixture")
+        else:
+            assert "hooks" in settings
+            assert not marker.exists(), "old bypass marker must not contaminate deny"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": "FIXTURE_COMPLETE",
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(rig.subprocess, "run", fake_app)
+    monkeypatch.setattr(
+        rig,
+        "assess",
+        lambda name, *args: {
+            "result": "boundary_gap" if name == "alternate_profile" else "passed",
+        },
+    )
+    result = rig.run_case("restored_profile", tmp_path)
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0]
+    assert result["before_restoration"]["config_sha256"] != result["config_sha256"]
