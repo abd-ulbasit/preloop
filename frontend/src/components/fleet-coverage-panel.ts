@@ -340,7 +340,7 @@ export class FleetCoveragePanel extends LitElement {
                     Installed: ${app.installed}; configured: ${app.configured};
                     observed active: ${app.observed_active}.
                   </p>
-                  ${app.controls.map((control) => html`<p>${label(control.axis)}: requested ${control.requested}, applied ${control.applied} (collector assertions); effective ${control.effective}, verification ${control.verification}.</p>`)}
+                  ${app.controls.map((control) => html`<p>${label(control.axis)}: requested ${control.requested}, applied ${control.applied} (collector assertions); supported ${control.supported}, method ${label(control.method)}; effective unknown, verification unverified.</p>`)}
                 </div>`
             )
           : nothing

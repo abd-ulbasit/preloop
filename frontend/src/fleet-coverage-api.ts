@@ -11,8 +11,8 @@ export interface FleetApplication {
     axis: string;
     requested: string;
     applied: string;
-    effective: string;
-    verification: string;
+    supported: string;
+    method: string;
   }>;
 }
 export interface FleetSource {

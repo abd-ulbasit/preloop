@@ -293,8 +293,8 @@ describe('fleet coverage', () => {
             axis: 'model_route',
             requested: 'true',
             applied: 'true',
-            effective: 'unknown',
-            verification: 'unverified',
+            supported: 'true',
+            method: 'local_config',
           },
         ],
       },
@@ -315,6 +315,7 @@ describe('fleet coverage', () => {
       'Retained observations: 1 of 3',
       'Capped evidence list',
       'Codex',
+      'supported true, method Local config',
       'effective unknown, verification unverified',
     ])
       expect(text(el)).to.contain(value);
