@@ -433,21 +433,28 @@ def test_authorization_refuses_in_progress_policy_writer_without_waiting(
     restricted_database: Engine, approved_policy: SimpleNamespace
 ) -> None:
     """An in-progress revoke cannot leave timed-out auth workers holding DB slots."""
+    # NOWAIT must return before lock_timeout. The bound is half of that
+    # timeout, not one absolute second: the queries before the lock already
+    # took longer than a second on a busy CI database without waiting.
+    lock_timeout_seconds = 15
     with Session(restricted_database) as db:
         grant = _issue(db, approved_policy)
         db.commit()
     with Session(restricted_database) as writer:
         _revoke(writer, approved_policy)
         with Session(restricted_database) as reader:
-            reader.execute(text("SET LOCAL lock_timeout = '2s'"))
+            reader.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout_seconds}s'"))
             started = time.monotonic()
-            with pytest.raises(authority.RestrictedRuntimeDeniedError):
+            with pytest.raises(
+                authority.RestrictedRuntimeDeniedError,
+                match="runtime_policy_unavailable",
+            ):
                 authority.authorize(
                     reader,
                     account_id=approved_policy.account_id,
                     api_key_id=grant.api_key_id,
                     now=NOW,
                 )
-            assert time.monotonic() - started < 1
+            assert time.monotonic() - started < lock_timeout_seconds / 2
             assert reader.execute(text("SELECT 1")).scalar_one() == 1
         writer.rollback()
