@@ -1520,9 +1520,9 @@ async def list_projects_for_org(
     # connection before the (slow, possibly failing) provider round trip so a
     # misbehaving client cannot exhaust the pool (preloop#1762).
     db.close()
+    if project_data.url and not project_data.url.endswith("/"):
+        project_data.url = project_data.url + "/"
     try:
-        if project_data.url and not project_data.url.endswith("/"):
-            project_data.url = project_data.url + "/"
         client = await create_tracker_client(
             tracker_type=project_data.tracker_type.value,
             tracker_id="list-projects",
@@ -1534,17 +1534,30 @@ async def list_projects_for_org(
             },
             credential_source=credential_source,
         )
-        if not client:
-            raise HTTPException(
-                status_code=400, detail="Could not create tracker client"
-            )
+    except ValueError as e:
+        # create_tracker_client raises ValueError for client configuration
+        # problems (missing key, no credential resolver): a client error.
+        raise HTTPException(
+            status_code=400, detail=f"Could not create tracker client: {_first_line(e)}"
+        )
+    except Exception as e:
+        logger.exception(f"Error creating tracker client for user {username}: {e}")
+        raise HTTPException(status_code=500, detail="Could not create tracker client")
+    if not client:
+        raise HTTPException(status_code=400, detail="Could not create tracker client")
+    try:
         return await client.get_projects(project_data.organization_identifier)
     except HTTPException:
         raise
     except Exception as e:
+        # Only the provider round trip maps to a gateway failure.
         logger.exception(f"Error listing projects for org for user {username}: {e}")
-        reason = (str(e).splitlines() or [type(e).__name__])[0][:200]
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"The tracker could not list projects: {reason}",
+            detail=f"The tracker could not list projects: {_first_line(e)}",
         )
+
+
+def _first_line(error: Exception) -> str:
+    """A short, single-line error reason for API responses."""
+    return (str(error).splitlines() or [type(error).__name__])[0][:200]

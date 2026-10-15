@@ -1412,3 +1412,25 @@ async def test_list_projects_for_org_keeps_400_when_client_missing(
         },
     )
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+@patch("preloop.api.endpoints.trackers.create_tracker_client")
+async def test_list_projects_for_org_maps_client_config_error_to_400(
+    mock_create_tracker_client, client: TestClient, db_session, test_user
+):
+    """A client configuration ValueError is a 400, not a gateway failure."""
+    mock_create_tracker_client.side_effect = ValueError("API key is required")
+    response = client.post(
+        "/api/v1/trackers/list-projects-for-org",
+        json={
+            "tracker_type": "gitlab",
+            "url": "https://gitlab.com",
+            "api_key": "test-key",
+            "organization_identifier": "test-org",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Could not create tracker client: API key is required"
+    )

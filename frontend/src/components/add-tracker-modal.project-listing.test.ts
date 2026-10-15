@@ -108,4 +108,30 @@ describe('AddTrackerModal project listing', () => {
     expect((element as any).projects['ws-b']).to.have.length(1);
     expect(listProjects.callCount).to.equal(3);
   });
+
+  it('blocks Save while a selected org listing has failed', async () => {
+    const addTracker = sandbox.stub().resolves({ id: 't1' });
+    const updateTracker = sandbox.stub().resolves({ id: 't1' });
+    element._api = { ...element._api, addTracker, updateTracker };
+    await openScopeStep();
+    await waitUntil(() => errorRows().length === 2);
+    await element.handleSave();
+    expect(addTracker).not.to.have.been.called;
+    expect(updateTracker).not.to.have.been.called;
+    expect((element as any).errorMessage).to.equal(
+      'Projects for Workspace A, Workspace B could not be listed. Retry, or deselect them before saving.'
+    );
+  });
+
+  it('makes no listing calls in the offline managed edit', async () => {
+    const state = element as any;
+    state.managedOfflineEdit = true;
+    await openScopeStep();
+    for (let i = 0; i < 3; i++) {
+      element.requestUpdate();
+      await element.updateComplete;
+      await aTimeout(100);
+    }
+    expect(listProjects).not.to.have.been.called;
+  });
 });

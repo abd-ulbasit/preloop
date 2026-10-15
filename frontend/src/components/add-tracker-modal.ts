@@ -1084,7 +1084,12 @@ export class AddTrackerModal extends LitElement {
    * load state so re-renders never re-fire a listing.
    */
   private loadSelectedOrgProjects() {
-    if (this.step !== 2 || this.authMethod === 'github_app') {
+    // Offline managed edit never renders the tree and makes no provider calls.
+    if (
+      this.step !== 2 ||
+      this.authMethod === 'github_app' ||
+      this.managedOfflineEdit
+    ) {
       return;
     }
     for (const org of this.orgs) {
@@ -2724,6 +2729,21 @@ export class AddTrackerModal extends LitElement {
         this.isLoading = false;
         return;
       }
+    }
+    // An org whose listing failed has no project selection; saving it would
+    // silently widen a project-level scope to the whole organization.
+    const unlisted = this.orgs.filter(
+      (org: any) =>
+        this.selectedOrgs[org.id] && this.projectLoadState[org.id] === 'failed'
+    );
+    if (unlisted.length > 0) {
+      this.errorMessage = `Projects for ${unlisted
+        .map((org: any) => org.name)
+        .join(', ')} could not be listed. Retry, or deselect ${
+        unlisted.length > 1 ? 'them' : 'it'
+      } before saving.`;
+      this.isLoading = false;
+      return;
     }
     const scopeRules = [];
     for (const org of this.orgs) {
