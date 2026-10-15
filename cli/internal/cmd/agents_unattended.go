@@ -299,6 +299,15 @@ func applyUnattendedEnrollment(opts unattendedOptions, home, uid, keyID string, 
 		}
 		container["preloop"] = adapter.BuildManagedServer(opts.URL, credential.Token)
 		state, stateErr := loadLocalEnrollmentState(agent)
+		if stateErr == nil && (state.RestoredAt != nil || state.OffboardArchived) {
+			return errors.New("selected app was restored or offboarded; operator recovery required")
+		}
+		if stateErr == nil && state.EnrollmentID != credential.EnrollmentID {
+			return errors.New("selected app belongs to another enrollment; refusing to replace its credential")
+		}
+		if credential.Applied && stateErr != nil {
+			return errors.New("applied enrollment has no usable local state; operator recovery required")
+		}
 		if reflect.DeepEqual(doc, managed) && stateErr == nil && state.EnrollmentID == credential.EnrollmentID {
 			if err := acknowledgeUnattendedApply(opts.URL, &checkpoint, index, keyID); err != nil {
 				return err

@@ -142,14 +142,23 @@ func TestUnattendedSelectedAppsOnlyAndRerunUnchanged(t *testing.T) {
 func TestUnattendedCheckpointRecoversAfterInterruptedLocalApply(t *testing.T) {
 	home := testenv.SetTempHome(t)
 	keyring.MockInit()
-	app := unattendedAppCredential{Applied: true, App: "cursor", AgentID: "synthetic-agent", RuntimePrincipalID: strings.Repeat("a", 64), EnrollmentID: "synthetic-enrollment", Token: "agt_synthetic", ExpiresAt: api.Time{Time: time.Now().Add(time.Hour)}}
+	app := unattendedAppCredential{App: "cursor", AgentID: "synthetic-agent", RuntimePrincipalID: strings.Repeat("a", 64), EnrollmentID: "synthetic-enrollment", Token: "agt_synthetic", ExpiresAt: api.Time{Time: time.Now().Add(time.Hour)}}
 	checkpoint := unattendedCheckpoint{SchemaVersion: 1, Apps: []unattendedAppCredential{app}}
 	raw, _ := json.Marshal(checkpoint)
 	const keyID = "synthetic-recovery"
 	if err := keyring.Set(enrollmentKeyringService, keyID, string(raw)); err != nil {
 		t.Fatal(err)
 	}
-	opts := unattendedOptions{URL: "https://example.com", TokenFile: "missing", Apps: []string{"cursor"}}
+	ackCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ackCalls++
+		if r.URL.Path != "/api/v1/agents/enrollment/applied" {
+			t.Errorf("unexpected recovery request %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"state":"configured"}`))
+	}))
+	defer server.Close()
+	opts := unattendedOptions{URL: server.URL, TokenFile: "missing", Apps: []string{"cursor"}}
 	if err := applyUnattendedEnrollment(opts, home, "synthetic-user", keyID, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +172,9 @@ func TestUnattendedCheckpointRecoversAfterInterruptedLocalApply(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if !bytes.Contains(data, []byte(app.Token)) {
 		t.Fatal("checkpoint did not restore config")
+	}
+	if ackCalls != 1 {
+		t.Fatalf("acknowledged unchanged recovery %d times", ackCalls)
 	}
 }
 
@@ -264,5 +276,40 @@ func TestUnattendedClaudeCodeDiscoveryAndIdentityUseNativeConfig(t *testing.T) {
 	matching := managedAgentSummary{ID: "synthetic-agent", SessionSourceType: "claude_code", SessionSourceID: state.RuntimePrincipalID}
 	if found := findManagedAgentForDiscovered([]managedAgentSummary{matching}, normalized); found == nil {
 		t.Fatal("cannot find unattended identity for status/offboard")
+	}
+}
+
+func TestUnattendedDoesNotResurrectOffboardedOrReplacedEnrollment(t *testing.T) {
+	for _, mode := range []string{"offboarded", "restored", "missing_state", "replaced"} {
+		t.Run(mode, func(t *testing.T) {
+			home := testenv.SetTempHome(t)
+			keyring.MockInit()
+			agent, _ := unattendedAgent("cursor", home)
+			state := &localEnrollmentState{AgentName: agent.Name, ConfigPath: agent.ConfigPath, Unattended: true, EnrollmentID: "synthetic-original"}
+			switch mode {
+			case "offboarded":
+				state.OffboardArchived = true
+			case "restored":
+				now := time.Now()
+				state.RestoredAt = &now
+			case "replaced":
+				state.EnrollmentID = "synthetic-replacement"
+			}
+			if mode != "missing_state" {
+				if err := saveLocalEnrollmentState(state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			checkpoint := unattendedCheckpoint{SchemaVersion: 1, Apps: []unattendedAppCredential{{Applied: true, App: "cursor", AgentID: "synthetic-agent", RuntimePrincipalID: strings.Repeat("a", 64), EnrollmentID: "synthetic-original", Token: "agt_synthetic", ExpiresAt: api.Time{Time: time.Now().Add(time.Hour)}}}}
+			raw, _ := json.Marshal(checkpoint)
+			_ = keyring.Set(enrollmentKeyringService, "synthetic-terminal", string(raw))
+			err := applyUnattendedEnrollment(unattendedOptions{URL: "https://example.com", TokenFile: "unused", Apps: []string{"cursor"}}, home, "synthetic-user", "synthetic-terminal", &bytes.Buffer{})
+			if err == nil {
+				t.Fatal("resurrected terminal or replaced enrollment")
+			}
+			if _, err := os.Stat(agent.ConfigPath); !os.IsNotExist(err) {
+				t.Fatal("changed config after terminal enrollment")
+			}
+		})
 	}
 }
