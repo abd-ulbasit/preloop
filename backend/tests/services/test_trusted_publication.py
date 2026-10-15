@@ -6,7 +6,9 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
+import sys
 import tarfile
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,8 @@ from preloop.services.publication_verification import (
     require_verified_publication,
 )
 from preloop.services.trusted_publisher import (
+    _LIMIT_AND_EXEC,
+    _git_helper_env,
     CleanGitRepository,
     PublicationBinding,
     PublicationError,
@@ -358,12 +362,51 @@ def test_bundle_import_does_not_import_config_or_execute_checkout(
     repo = CleanGitRepository(clean)
     repo.import_bundle(bundle, head)
     assert "PRELOOP_GIT_TOKEN_1" not in repo.environment
+    assert "LD_LIBRARY_PATH" not in repo.environment
     assert repo.environment["GIT_CONFIG_COUNT"] == "0"
     assert "credential" not in (clean / "config").read_text()
     assert not (clean / "file").exists()
     assert not marker.exists()
     with pytest.raises(PublicationError):
         repo.import_bundle(bundle, "f" * 40)
+
+
+def test_limit_helper_drops_linker_path_before_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The helper can start under LD_LIBRARY_PATH; Git must not keep it."""
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/toolcache/Python/lib")
+    monkeypatch.setenv("PRELOOP_GIT_TOKEN_1", "old-agent-token")
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\' "${LD_LIBRARY_PATH-unset}" > "$1"\n'
+        'printf \'%s\' "${PRELOOP_GIT_TOKEN_1-}" > "$2"\n',
+        encoding="utf-8",
+    )
+    probe.chmod(probe.stat().st_mode | stat.S_IEXEC)
+    seen_linker = tmp_path / "linker"
+    seen_token = tmp_path / "token"
+    env = _git_helper_env({"PATH": os.defpath, "HOME": str(tmp_path)})
+    assert env["LD_LIBRARY_PATH"] == "/toolcache/Python/lib"
+    assert "PRELOOP_GIT_TOKEN_1" not in env
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _LIMIT_AND_EXEC,
+            str(probe),
+            str(seen_linker),
+            str(seen_token),
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert seen_linker.read_text(encoding="utf-8") == "unset"
+    assert seen_token.read_text(encoding="utf-8") == ""
 
 
 def test_publication_rejects_concurrent_remote_and_non_fast_forward(

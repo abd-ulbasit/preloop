@@ -33,6 +33,41 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{40}")
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
+# Resource limits in a child, never preexec_fn in a multithreaded server.
+# ``-I`` skips startup hooks. actions/setup-python's Linux build has a
+# RUNPATH of ``/opt/hostedtoolcache/...``. Self-hosted runners install that
+# build elsewhere and export ``LD_LIBRARY_PATH`` so libpython loads. The
+# helper needs that variable to start, then drops it so Git cannot be
+# pointed at those libraries.
+_LIMIT_AND_EXEC = (
+    "import os, resource, sys; "
+    "resource.setrlimit(resource.RLIMIT_CPU, (60, 60)); "
+    "resource.setrlimit(resource.RLIMIT_FSIZE, (268435456, 268435456)); "
+    "resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128)); "
+    "resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); "
+    "resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912)) "
+    "if sys.platform.startswith('linux') else None; "
+    "os.environ.pop('LD_LIBRARY_PATH', None); "
+    "os.execv(sys.argv[1], sys.argv[1:])"
+)
+
+
+def _git_helper_env(base: dict[str, str]) -> dict[str, str]:
+    """Environment for the limit helper, not the sanitized Git environment.
+
+    Args:
+        base: The publisher's Git environment. Ambient secrets are already
+            absent. ``LD_LIBRARY_PATH`` is added only when the current
+            process has it, so a relocated interpreter can start.
+
+    Returns:
+        A copy of ``base`` plus the linker path when one is set.
+    """
+    env = dict(base)
+    linker = os.environ.get("LD_LIBRARY_PATH")
+    if linker:
+        env["LD_LIBRARY_PATH"] = linker
+    return env
 
 
 class PublicationError(ValueError):
@@ -194,7 +229,7 @@ class CleanGitRepository:
         strip_output: bool = True,
     ) -> str:
         """Run only publisher-authored Git arguments with bounded time/output."""
-        environment = dict(self.environment)
+        environment = _git_helper_env(self.environment)
         if lease:
             # Bitbucket git-over-HTTPS pairs an access token with the static
             # ``x-token-auth`` user; GitHub App leases use ``x-access-token``.
@@ -229,19 +264,7 @@ class CleanGitRepository:
             str(self.directory),
             *args,
         ]
-        # Apply resource limits in a dedicated child, never preexec_fn in a
-        # multithreaded server. -I prevents Python startup/PYTHONPATH hooks.
-        limit_script = (
-            "import os, resource, sys; "
-            "resource.setrlimit(resource.RLIMIT_CPU, (60, 60)); "
-            "resource.setrlimit(resource.RLIMIT_FSIZE, (268435456, 268435456)); "
-            "resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128)); "
-            "resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); "
-            "resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912)) "
-            "if sys.platform.startswith('linux') else None; "
-            "os.execv(sys.argv[1], sys.argv[1:])"
-        )
-        command = [sys.executable, "-I", "-c", limit_script, *command]
+        command = [sys.executable, "-I", "-c", _LIMIT_AND_EXEC, *command]
         try:
             # No stderr from Git escapes this boundary: it may include auth data.
             result = subprocess.run(

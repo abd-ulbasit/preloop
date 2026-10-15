@@ -351,6 +351,26 @@ def _evidence_client_stub(client: Path, calls: Path) -> None:
     )
 
 
+def _interpreter_shell_env(**extra: str) -> dict[str, str]:
+    """Minimal shell env that can still exec this process's interpreter.
+
+    Agent images ship a normal ``python3``. These tests point ``PATH`` at
+    the CI interpreter instead. actions/setup-python links that binary
+    with a RUNPATH of ``/opt/hostedtoolcache``; self-hosted runners keep
+    the build elsewhere and export ``LD_LIBRARY_PATH``. A replacement env
+    that drops it makes ``python3`` exit 127 before the evidence client
+    runs.
+    """
+    env = {
+        "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin",
+        **extra,
+    }
+    linker = os.environ.get("LD_LIBRARY_PATH")
+    if linker:
+        env["LD_LIBRARY_PATH"] = linker
+    return env
+
+
 def _run_wrapper_over_inner(
     tmp_path: Path, inner: str
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -372,13 +392,12 @@ def _run_wrapper_over_inner(
     )
     proc = subprocess.run(
         ["bash", "-c", script],
-        env={
-            "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin",
-            "PRELOOP_INNER_SCRIPT": inner.replace(
+        env=_interpreter_shell_env(
+            PRELOOP_INNER_SCRIPT=inner.replace(
                 "/tmp/preloop-checkpoint-client.py", str(client)
             ),
-            "PRELOOP_EVIDENCE_PUT_TOKEN": "scoped-token",
-        },
+            PRELOOP_EVIDENCE_PUT_TOKEN="scoped-token",
+        ),
         capture_output=True,
         text=True,
         check=False,
@@ -434,10 +453,7 @@ def test_docker_trap_uploads_evidence_once_without_wrapper(tmp_path: Path) -> No
     ).replace("/tmp/preloop-checkpoint-client.py", str(client))
     proc = subprocess.run(
         ["bash", "-c", script],
-        env={
-            "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin",
-            "PRELOOP_EVIDENCE_PUT_TOKEN": "scoped-token",
-        },
+        env=_interpreter_shell_env(PRELOOP_EVIDENCE_PUT_TOKEN="scoped-token"),
         capture_output=True,
         text=True,
         check=False,

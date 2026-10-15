@@ -145,6 +145,12 @@ def test_matching_system_python_uses_a_venv(tmp_path: Path) -> None:
     result = _run_script(tmp_path, python_version=minor, path=str(bin_dir))
     assert result.returncode == 0, result.stderr + result.stdout
     assert _output_value(result.github_output, "use_setup") == "false"
+    # home must be the real prefix, not the PATH symlink's directory.
+    # A relocated setup-python build only finds its stdlib that way.
+    home = (result.runner_temp / "preloop-python" / "pyvenv.cfg").read_text(
+        encoding="utf-8"
+    )
+    assert f"home = {real.parent}" in home
     venv_python = result.runner_temp / "preloop-python" / "bin" / "python"
     assert venv_python.is_file()
     github_path = result.github_path.read_text(encoding="utf-8")
