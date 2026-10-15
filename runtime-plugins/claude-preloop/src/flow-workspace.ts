@@ -313,30 +313,21 @@ export function selectTurnTimeoutMs(
 
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
 
-function modelToken(value: unknown): string | undefined {
+/**
+ * The flow's model name from send_message metadata, when well formed.
+ *
+ * Only `metadata.model` is used. The backend's `persistent_model_name`
+ * already decides whether a Claude Code target may override the host
+ * default; reading `gateway.model` here would bypass that guard for a
+ * shared/employee dispatch whose flow model is not Claude.
+ */
+export function flowModel(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const value = metadata?.["model"];
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
   return MODEL_NAME.test(trimmed) ? trimmed : undefined;
-}
-
-/**
- * The flow's model name from send_message metadata, when well formed.
- *
- * The dispatch writes `metadata.model`. A gateway block's `model` is the
- * same alias when the top-level field was omitted.
- */
-export function flowModel(
-  metadata: Record<string, unknown> | undefined,
-): string | undefined {
-  const direct = modelToken(metadata?.["model"]);
-  if (direct) {
-    return direct;
-  }
-  const gateway = metadata?.["gateway"];
-  if (!gateway || typeof gateway !== "object") {
-    return undefined;
-  }
-  return modelToken((gateway as Record<string, unknown>)["model"]);
 }

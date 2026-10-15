@@ -123,6 +123,8 @@ export class PreloopClaudeSidecar {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private commandOutcomes = new Map<string, StoredCommandOutcome>();
+  /** Outcomes that finished while no socket could deliver them. */
+  private undeliveredOutcomes = new Set<string>();
   private turnUsageByMessage = new Map<string, TurnUsage>();
   private inFlightMessageIds = new Set<string>();
   private logger: (message: string) => void = () => {};
@@ -587,10 +589,13 @@ export class PreloopClaudeSidecar {
     socket: WebSocket,
     messageId: string | undefined,
     outcome: StoredCommandOutcome,
-  ): void {
+  ): boolean {
     const live = socket.readyState === socket.OPEN ? socket : this.socket;
     if (!live || live.readyState !== live.OPEN) {
-      return;
+      if (messageId) {
+        this.undeliveredOutcomes.add(messageId);
+      }
+      return false;
     }
     this.sendOn(live, {
       type: "status",
@@ -598,11 +603,25 @@ export class PreloopClaudeSidecar {
       message_id: messageId,
       payload: outcome.payload,
     });
+    if (messageId) {
+      this.undeliveredOutcomes.delete(messageId);
+    }
+    return true;
   }
 
-  /** Replay terminal replies after a reconnect so a long turn is not lost. */
+  /**
+   * Replay outcomes that finished while the control socket was down.
+   *
+   * Only undelivered ids are resent so a reconnect does not re-emit the
+   * whole dedupe map as account realtime events.
+   */
   replayCommandOutcomes(socket: WebSocket): void {
-    for (const [messageId, outcome] of this.commandOutcomes) {
+    for (const messageId of [...this.undeliveredOutcomes]) {
+      const outcome = this.commandOutcomes.get(messageId);
+      if (!outcome) {
+        this.undeliveredOutcomes.delete(messageId);
+        continue;
+      }
       this.deliverOutcome(socket, messageId, outcome);
     }
   }

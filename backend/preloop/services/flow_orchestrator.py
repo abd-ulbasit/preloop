@@ -9315,26 +9315,36 @@ class FlowExecutionOrchestrator:
                     total_tokens=self.total_tokens,
                     estimated_cost=self.estimated_cost,
                 )
+                # Persist sidecar tokens even when pricing lookup fails.
+                self.total_tokens = tokens
+                self.estimated_cost = cost
                 if (
                     control_usage is not None
                     and not int(final_metrics.get("api_requests") or 0)
                     and control_usage.get("estimated_cost") is None
                     and tokens
                 ):
-                    priced, has_pricing = metrics_service._calculate_cost(
-                        self.execution_log,
-                        {
-                            "total_tokens": tokens,
-                            "input_tokens": int(control_usage.get("input_tokens") or 0),
-                            "output_tokens": int(
-                                control_usage.get("output_tokens") or 0
-                            ),
-                        },
-                    )
-                    if has_pricing:
-                        cost = priced
-                self.total_tokens = tokens
-                self.estimated_cost = cost
+                    try:
+                        priced = metrics_service.estimate_token_cost(
+                            self.execution_log,
+                            {
+                                "total_tokens": tokens,
+                                "input_tokens": int(
+                                    control_usage.get("input_tokens") or 0
+                                ),
+                                "output_tokens": int(
+                                    control_usage.get("output_tokens") or 0
+                                ),
+                            },
+                        )
+                        if priced is not None:
+                            self.estimated_cost = priced
+                    except Exception:
+                        logger.warning(
+                            "Could not price sidecar token usage for %s",
+                            self.execution_log.id,
+                            exc_info=True,
+                        )
             except Exception as e:
                 logger.error(f"Failed to calculate final metrics for execution: {e}")
 

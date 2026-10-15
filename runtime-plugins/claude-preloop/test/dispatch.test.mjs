@@ -215,6 +215,7 @@ function fakeSocket({ open = true } = {}) {
       }
       sent.push(JSON.parse(data));
     },
+    close() {},
   };
 }
 
@@ -231,6 +232,68 @@ test("sendOn is a no-op when the socket is not OPEN", async () => {
     }),
   );
   assert.deepEqual(socket.sent, []);
+  sidecar.stop();
+});
+
+test("reconnect replays only outcomes that missed delivery", async () => {
+  const opened = [];
+  const factory = async ({ prompt }) => {
+    opened.push(true);
+    return {
+      async interrupt() {},
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "s-1" };
+        for await (const userMessage of prompt) {
+          yield {
+            type: "result",
+            subtype: "success",
+            result: `ok: ${userMessage.message.content}`,
+            usage: { input_tokens: 4, output_tokens: 2 },
+            total_cost_usd: 0.002,
+          };
+        }
+      },
+    };
+  };
+  const sidecar = new PreloopClaudeSidecar(undefined, factory);
+  sidecar.configure(baseConfig);
+  const closed = fakeSocket({ open: false });
+  await sidecar.handleFrame(
+    closed,
+    JSON.stringify({
+      type: "command",
+      name: "send_message",
+      message_id: "missed-1",
+      payload: { text: "while offline" },
+    }),
+  );
+  assert.deepEqual(closed.sent, []);
+  assert.equal(opened.length, 1);
+
+  // A second completed command delivered on a live socket must not be
+  // replayed later just because it sits in the dedupe map.
+  const live = fakeSocket();
+  sidecar.socket = live;
+  await sidecar.handleFrame(
+    live,
+    JSON.stringify({
+      type: "command",
+      name: "send_message",
+      message_id: "live-1",
+      payload: { text: "while online" },
+    }),
+  );
+  assert.equal(live.sent.length, 1);
+  assert.equal(live.sent[0].name, "command_result");
+  assert.equal(live.sent[0].payload.reply_text, "ok: while online");
+
+  const reconnected = fakeSocket();
+  sidecar.replayCommandOutcomes(reconnected);
+  assert.equal(reconnected.sent.length, 1);
+  assert.equal(reconnected.sent[0].name, "command_result");
+  assert.equal(reconnected.sent[0].message_id, "missed-1");
+  assert.equal(reconnected.sent[0].payload.reply_text, "ok: while offline");
+  assert.equal(reconnected.sent[0].payload.usage.total_tokens, 6);
   sidecar.stop();
 });
 
