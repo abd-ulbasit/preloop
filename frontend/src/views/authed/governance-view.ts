@@ -683,7 +683,7 @@ export class GovernanceView extends LitElement {
       ${
         row.session_ids.length
           ? html`<ul>
-              ${row.session_ids.map((id) => html`<li><a href=${`/console/sessions/${encodeURIComponent(id)}`}>Session ${id.slice(0, 8)}</a></li>`)}
+              ${row.session_ids.map((id) => html`<li><a href=${`/console/runtime-sessions?sessionId=${encodeURIComponent(id)}`}>Session ${id.slice(0, 8)}</a></li>`)}
             </ul>`
           : html`<p>Account-wide finding.</p>`
       }

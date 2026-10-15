@@ -59,7 +59,7 @@ const BASE = '/api/v1/governance-review';
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetchWithAuth(`${BASE}${path}`, {
     ...options,
-    passive: true,
+    passive: !options?.method || options.method === 'GET',
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

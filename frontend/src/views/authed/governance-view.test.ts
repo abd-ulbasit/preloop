@@ -147,7 +147,9 @@ describe('Governance findings', () => {
   it('drills down to session and audit evidence, quotes the rule and restores dismissal', async () => {
     const el = await mount('finding-1');
     expect(
-      el.shadowRoot!.querySelector('a[href="/console/sessions/session-1"]')
+      el.shadowRoot!.querySelector(
+        'a[href="/console/runtime-sessions?sessionId=session-1"]'
+      )
     ).to.exist;
     expect(
       el.shadowRoot!.querySelector('a[href="/console/audit?event=event-1"]')
