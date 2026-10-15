@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Iterator
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import Numeric, and_, cast, func, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,7 @@ def run_spend(
     rows = (
         db.query(
             usage.meta_data["funding"].astext,
-            func.coalesce(func.sum(usage.estimated_cost), 0.0),
+            func.coalesce(func.sum(cast(usage.estimated_cost, Numeric)), 0.0),
         )
         .filter(
             usage.account_id == account_id,
