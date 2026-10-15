@@ -89,8 +89,8 @@ async function mount(
   return el;
 }
 async function click(el: FleetCoveragePanel, label: string) {
-  const button = [...el.shadowRoot!.querySelectorAll('button')].find((button) =>
-    button.textContent?.includes(label)
+  const button = [...el.shadowRoot!.querySelectorAll('sl-button')].find(
+    (button) => button.textContent?.includes(label)
   );
   expect(button, label).to.exist;
   button!.click();
@@ -121,23 +121,23 @@ describe('fleet coverage', () => {
     expect(calls).to.deep.equal([]);
     await click(el, 'Show');
     for (const value of [
-      'Expected devices: 1',
-      'Reporting fresh: 1',
+      'Expected devices 1',
+      'Reporting fresh 1',
       'Unknown compliance: 1',
       'Governed and ungoverned counts: unknown',
-      'user_config',
+      'User configuration',
       '0.17.0',
       '1 explicitly reported',
       'Applications found: 1',
     ])
       expect(text(el)).to.contain(value);
-    const select = el.shadowRoot!.querySelector('select')!;
+    const select = el.shadowRoot!.querySelector('sl-select')!;
     select.value = '3600';
-    select.dispatchEvent(new Event('change'));
+    select.dispatchEvent(new Event('sl-change'));
     await aTimeout(0);
     await el.updateComplete;
     expect(calls).to.deep.equal([86400, 3600]);
-    expect(text(el)).to.contain('freshness 3600 seconds');
+    expect(text(el)).to.contain('freshness 1h');
   });
   it('preserves stale partial sources and failed profiles beside a fresh source', async () => {
     const first = source();
@@ -165,12 +165,12 @@ describe('fleet coverage', () => {
     const el = await mount(async () => p);
     await click(el, 'Show');
     for (const value of [
-      'Reporting fresh: 1',
-      'Stale: 1',
+      'Reporting fresh 1',
+      'Stale 1',
       'other',
-      'partial',
-      'profile_unreadable',
-      'permission_denied',
+      'Partial',
+      'Profile unreadable',
+      'Permission denied',
     ])
       expect(text(el)).to.contain(value);
   });
@@ -187,7 +187,7 @@ describe('fleet coverage', () => {
       })
     );
     await click(el, 'Show');
-    expect(text(el)).to.contain('Never reported: 1');
+    expect(text(el)).to.contain('Never reported 1');
     expect(text(el)).to.contain(
       'Scope, collector version and application count are unknown'
     );
@@ -205,7 +205,7 @@ describe('fleet coverage', () => {
     };
     const el = await mount(async () => p);
     await click(el, 'Show');
-    expect(text(el)).to.contain('Expected devices: 0');
+    expect(text(el)).to.contain('Expected devices 0');
     expect(text(el)).to.contain(
       'empty roster does not establish fleet coverage'
     );
@@ -231,8 +231,8 @@ describe('fleet coverage', () => {
       for (const value of [
         'Showing 1 of 5',
         'Partial or capped coverage',
-        'Expected devices: 5',
-        'Unmatched reports: 1',
+        'Expected devices 5',
+        'Unmatched reports 1',
         'Reporting ratio: unknown',
       ])
         expect(text(el)).to.contain(value);
@@ -248,7 +248,7 @@ describe('fleet coverage', () => {
     void el.refresh();
     pending[0](page());
     await aTimeout(0);
-    expect(text(el)).not.to.contain('Expected devices: 1');
+    expect(text(el)).not.to.contain('Expected devices 1');
     expect(signals[0].aborted).to.equal(true);
     window.dispatchEvent(new Event('auth-change'));
     pending[1](page());
@@ -270,7 +270,7 @@ describe('fleet coverage', () => {
     expect(text(el)).to.contain('Permission denied');
     expect(text(el)).not.to.contain(hash);
     expect(
-      [...el.shadowRoot!.querySelectorAll('button')].find((button) =>
+      [...el.shadowRoot!.querySelectorAll('sl-button')].find((button) =>
         button.textContent?.includes('Export')
       )!.disabled
     ).to.equal(true);
@@ -283,7 +283,7 @@ describe('fleet coverage', () => {
     const appSource = source();
     appSource.evidence.applications = [
       {
-        agent_kind: 'codex',
+        agent_kind: 'Codex',
         app_version: '1.2',
         installed: 'true',
         configured: 'true',
@@ -314,7 +314,7 @@ describe('fleet coverage', () => {
     for (const value of [
       'Retained observations: 1 of 3',
       'Capped evidence list',
-      'codex',
+      'Codex',
       'effective unknown, verification unverified',
     ])
       expect(text(el)).to.contain(value);
@@ -370,9 +370,9 @@ describe('fleet coverage', () => {
     p.items[0].states = ['unknown', 'incomplete'];
     const el = await mount(async () => p);
     await click(el, 'Show');
-    expect(text(el)).to.contain('future_collection_window');
+    expect(text(el)).to.contain('Future collection window');
     expect(text(el)).to.contain('unknown (not reported)');
-    expect(text(el)).to.contain('failed');
+    expect(text(el)).to.contain('Failed');
   });
   it('shows empty and failed application reads without implying no apps installed', async () => {
     const el = await mount();
