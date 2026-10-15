@@ -70,17 +70,16 @@ updates:
   # the top of each .txt file. The "requirements resolve" job in ci.yml is the
   # backstop for anything that still slips through.
   #
-  # environments/scanner/fixtures/vulnerable/requirements.txt is excluded for
-  # a different reason. It pins Django 2.2.0 and requests 2.19.0 so the
-  # scanner image smoke test can find known vulnerabilities with networking
-  # disabled. A patched bump (Django 5.2.17, requests 2.33.0) makes
-  # publish-scanner-image.yml fail with zero findings.
+  # The scanner smoke fixture (Django 2.2.0 and requests 2.19.0) is not a
+  # committed requirements file. The image build writes it so Trivy can find
+  # known vulnerabilities offline. A patched bump there would make
+  # publish-scanner-image.yml fail with zero findings, and a committed
+  # requirements.txt is what OpenSSF Scorecard reports as project vulns.
   - package-ecosystem: pip
     directory: /
     exclude-paths:
       - requirements/**
       - .github/requirements/**
-      - environments/scanner/fixtures/vulnerable/**
     schedule:
       interval: weekly
       day: monday
