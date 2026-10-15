@@ -518,6 +518,11 @@ callback evaluation. The console accepts write-only secrets, clears them after
 submission/disconnection, and preserves unverified coverage and pending pilot
 states even when callbacks are observed. It creates no grants or policy DSL.
 
+The weekly governance review's policy document, version history and review
+settings render as a "Governance policy" tab on the Policies page, an OSS Lit
+component gated by the `governance_review` capability. `view_policies` reads,
+`manage_policies` edits; the extension plugin owns storage and rule compilation.
+
 
 ### Hosted model visibility and request billing attribution
 

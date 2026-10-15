@@ -42,6 +42,7 @@ describe('PoliciesView', () => {
       modelIORules?: unknown[];
       toolsFail?: boolean;
       emptyVersions?: boolean;
+      features?: Record<string, boolean>;
     } = {}
   ) {
     return sinon
@@ -62,7 +63,7 @@ describe('PoliciesView', () => {
         }
 
         if (url.includes('/api/v1/features')) {
-          return json({ plugins: [], features: {} });
+          return json({ plugins: [], features: opts.features ?? {} });
         }
 
         if (
@@ -244,6 +245,66 @@ describe('PoliciesView', () => {
 
     expect((element as any)._permissionDenied).to.equal(false);
     expect(element.shadowRoot?.querySelector('sl-tab-group')).to.exist;
+  });
+
+  async function mountWithProfile(
+    permissions: string[],
+    features: Record<string, boolean>
+  ): Promise<PoliciesView> {
+    fetchStub = createFetchStub({ features });
+    fetchStub
+      .withArgs(
+        sinon.match((url: unknown) =>
+          String(url).endsWith('/api/v1/auth/users/me')
+        )
+      )
+      .callsFake(async () =>
+        json({
+          username: 'jane',
+          email: 'jane@example.com',
+          email_verified: true,
+          permissions,
+        })
+      );
+    const element = (await fixture(
+      html`<policies-view></policies-view>`
+    )) as PoliciesView;
+    await waitUntil(() => !(element as any)._loading, 'still loading');
+    await element.updateComplete;
+    return element;
+  }
+
+  it('hides the governance tab without the governance_review capability', async () => {
+    const element = await mountWithProfile(['view_policies'], {});
+    expect(
+      element.shadowRoot!.querySelector('sl-tab[panel="governance"]')
+    ).to.equal(null);
+    expect(
+      element.shadowRoot!.querySelector('sl-tab-panel[name="governance"]')
+    ).to.equal(null);
+  });
+
+  it('shows the governance tab, read only for view_policies members', async () => {
+    const element = await mountWithProfile(['view_policies'], {
+      governance_review: true,
+    });
+    const tab = element.shadowRoot!.querySelector('sl-tab[panel="governance"]');
+    expect(tab?.textContent?.trim()).to.equal('Governance policy');
+    (element as any)._activeTab = 'governance';
+    await element.updateComplete;
+    const panel = element.shadowRoot!.querySelector('governance-policy-panel');
+    expect(panel?.canManage).to.equal(false);
+  });
+
+  it('lets manage_policies members edit the governance policy', async () => {
+    const element = await mountWithProfile(
+      ['view_policies', 'manage_policies'],
+      { governance_review: true }
+    );
+    (element as any)._activeTab = 'governance';
+    await element.updateComplete;
+    const panel = element.shadowRoot!.querySelector('governance-policy-panel');
+    expect(panel?.canManage).to.equal(true);
   });
 
   it('renders the Policies header and tabs after load', async () => {
