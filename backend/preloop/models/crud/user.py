@@ -428,8 +428,9 @@ class CRUDUser(CRUDBase[models.User]):
     ) -> models.User:
         """Set the avatar from an SSO provider, respecting precedence.
 
-        Manual uploads take precedence: if the user's current avatar_source
-        is ``"manual"``, the SSO URL is silently ignored.
+        Manual uploads take precedence: if the canonical person's
+        ``avatar_source`` is ``"manual"``, the SSO URL is ignored. Google's
+        anonymous silhouette is ignored too, so it cannot replace a real photo.
 
         Args:
             db: Database session.
@@ -440,10 +441,16 @@ class CRUDUser(CRUDBase[models.User]):
         Returns:
             The (possibly updated) user.
         """
+        from preloop.services.avatar import is_anonymous_provider_avatar
+
         from .person import crud_person
 
         person = crud_person.resolve_for_membership(db, membership_id=user.id)
         if person.avatar_source == "manual":
+            return user
+        if is_anonymous_provider_avatar(avatar_url):
+            return user
+        if person.avatar_url == avatar_url and person.avatar_source == "sso":
             return user
         crud_person.update_profile(
             db,

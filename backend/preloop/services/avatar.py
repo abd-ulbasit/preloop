@@ -5,9 +5,12 @@ profile images. Produces a bounded square PNG stored as a base64 data URI.
 """
 
 import base64
+import hashlib
 import io
 import logging
+import time
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,128 @@ def process_avatar(data: bytes, content_type: str) -> str:
     img.save(buf, format="PNG", optimize=True)
     encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+# SHA-256 of the PNG Google serves for ``/a/default-user=s96-c``. A rotted
+# or private ``lh3.googleusercontent.com`` picture URL returns this exact
+# file with HTTP 200, so the console would otherwise paint a blank person
+# glyph and look like the profile photo disappeared.
+GOOGLE_ANONYMOUS_AVATAR_SHA256 = (
+    "653f73dde99fede7a5ebaed7a14dad72c299935d3b9a0bad7420769cc8186a32"
+)
+_GOOGLE_AVATAR_HOSTS = {
+    "lh3.googleusercontent.com",
+    "lh4.googleusercontent.com",
+    "lh5.googleusercontent.com",
+    "lh6.googleusercontent.com",
+}
+_AVATAR_FETCH_BYTES = 1024 * 1024
+_ANON_CACHE_REAL_SECONDS = 3600.0
+_ANON_CACHE_MISS_SECONDS = 60.0
+_anon_cache: dict[str, tuple[float, bool]] = {}
+
+
+def is_google_avatar_host(url: str) -> bool:
+    """Return whether ``url`` points at Google's profile-photo CDN."""
+    host = urlparse(url).hostname
+    return host in _GOOGLE_AVATAR_HOSTS
+
+
+def image_media_type(data: bytes) -> Optional[str]:
+    """Return a processable image type from magic bytes, or None."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _default_user_path(url: str) -> bool:
+    path = urlparse(url).path
+    return "/a/default-user" in path
+
+
+def _cached_anonymous(url: str) -> Optional[bool]:
+    cached = _anon_cache.get(url)
+    if cached is None:
+        return None
+    expires_at, anonymous = cached
+    if time.monotonic() >= expires_at:
+        _anon_cache.pop(url, None)
+        return None
+    return anonymous
+
+
+def _remember_anonymous(url: str, anonymous: bool, *, ttl: float) -> None:
+    if len(_anon_cache) > 256:
+        _anon_cache.clear()
+    _anon_cache[url] = (time.monotonic() + ttl, anonymous)
+
+
+def fetch_avatar_bytes(url: str) -> Optional[bytes]:
+    """Download an https avatar from Google's photo CDN.
+
+    Args:
+        url: Candidate avatar URL.
+
+    Returns:
+        Image bytes, or None when the host is not allowed or the fetch fails.
+        Redirects that leave the CDN are discarded.
+    """
+    if not is_google_avatar_host(url):
+        return None
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx is a declared dependency
+        return None
+    try:
+        with httpx.Client(timeout=2.0, follow_redirects=True) as client:
+            response = client.get(url)
+    except Exception:
+        logger.debug("Avatar fetch failed", exc_info=True)
+        return None
+    if response.status_code != 200 or not is_google_avatar_host(str(response.url)):
+        return None
+    body = response.content
+    if not body or len(body) > _AVATAR_FETCH_BYTES:
+        return None
+    return body
+
+
+def is_anonymous_provider_avatar(url: str) -> bool:
+    """Return whether ``url`` is Google's anonymous person glyph.
+
+    The literal ``default-user`` path is anonymous without a download. Any
+    other Google photo URL is anonymous when its bytes match the known
+    default image. A failed download is not treated as anonymous, so a CDN
+    blip cannot wipe a real photo. Confirmed real photos are remembered for
+    an hour so the console profile read does not download them on every page.
+
+    Args:
+        url: Avatar URL stored for the person or offered by a provider.
+
+    Returns:
+        True when the URL is Google's placeholder silhouette.
+    """
+    if not is_google_avatar_host(url):
+        return False
+    if _default_user_path(url):
+        return True
+    cached = _cached_anonymous(url)
+    if cached is not None:
+        return cached
+    body = fetch_avatar_bytes(url)
+    if body is None:
+        _remember_anonymous(url, False, ttl=_ANON_CACHE_MISS_SECONDS)
+        return False
+    anonymous = hashlib.sha256(body).hexdigest() == GOOGLE_ANONYMOUS_AVATAR_SHA256
+    if not anonymous:
+        _remember_anonymous(url, False, ttl=_ANON_CACHE_REAL_SECONDS)
+    return anonymous
 
 
 def extract_sso_avatar_url(provider: str, user_info: dict) -> Optional[str]:

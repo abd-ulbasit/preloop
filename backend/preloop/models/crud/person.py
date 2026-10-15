@@ -150,6 +150,17 @@ class CRUDPerson:
             auth_generation=person.auth_generation,
         )
 
+    def provider_subject(
+        self, db: Session, *, person_id: Any, provider: str
+    ) -> str | None:
+        """Return one linked provider subject, or None when it is not linked."""
+        return db.scalar(
+            select(models.PersonAuthIdentity.subject).where(
+                models.PersonAuthIdentity.person_id == person_id,
+                models.PersonAuthIdentity.provider == provider,
+            )
+        )
+
     def list_memberships(self, db: Session, *, person_id: Any) -> list[models.User]:
         """Explicit identity expansion, for already authorized session selection."""
         return list(

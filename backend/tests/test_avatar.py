@@ -3,6 +3,7 @@
 Covers upload validation, precedence rules, and per-provider SSO claim mapping.
 """
 
+import hashlib
 import io
 import pytest
 from uuid import uuid4
@@ -13,8 +14,11 @@ from preloop.models import models
 from preloop.models.crud import crud_user
 
 from preloop.services.avatar import (
+    GOOGLE_ANONYMOUS_AVATAR_SHA256,
     AvatarValidationError,
     extract_sso_avatar_url,
+    fetch_avatar_bytes,
+    is_anonymous_provider_avatar,
     process_avatar,
     validate_content_type,
     validate_size,
@@ -22,6 +26,7 @@ from preloop.services.avatar import (
     MAX_UPLOAD_BYTES,
     SSO_AVATAR_CLAIMS,
 )
+from preloop.services import avatar as avatar_service
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +351,56 @@ class TestExtractSsoAvatarUrl:
         assert "gitlab" in SSO_AVATAR_CLAIMS
 
 
+class TestAnonymousProviderAvatar:
+    """Google's default silhouette is not a profile photo."""
+
+    def setup_method(self) -> None:
+        avatar_service._anon_cache.clear()
+
+    def test_default_user_path_is_anonymous_without_a_download(self, monkeypatch):
+        def fail(url: str) -> bytes:
+            raise AssertionError(url)
+
+        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", fail)
+        url = "https://lh3.googleusercontent.com/a/default-user=s96-c"
+        assert is_anonymous_provider_avatar(url) is True
+
+    def test_matching_bytes_are_anonymous(self, monkeypatch):
+        body = b"default-silhouette"
+        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: body)
+        monkeypatch.setattr(
+            avatar_service,
+            "GOOGLE_ANONYMOUS_AVATAR_SHA256",
+            hashlib.sha256(body).hexdigest(),
+        )
+        url = "https://lh3.googleusercontent.com/a-/rotten=s96-c"
+        assert is_anonymous_provider_avatar(url) is True
+
+    def test_other_image_bytes_are_kept(self, monkeypatch):
+        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: b"face")
+        url = "https://lh3.googleusercontent.com/a-/real=s96-c"
+        assert is_anonymous_provider_avatar(url) is False
+        assert GOOGLE_ANONYMOUS_AVATAR_SHA256
+
+    def test_download_failure_is_not_anonymous(self, monkeypatch):
+        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", lambda url: None)
+        url = "https://lh4.googleusercontent.com/a-/maybe=s96-c"
+        assert is_anonymous_provider_avatar(url) is False
+
+    def test_non_google_host_is_not_anonymous(self, monkeypatch):
+        def fail(url: str) -> bytes:
+            raise AssertionError(url)
+
+        monkeypatch.setattr(avatar_service, "fetch_avatar_bytes", fail)
+        assert (
+            is_anonymous_provider_avatar("https://avatars.githubusercontent.com/u/1")
+            is False
+        )
+
+    def test_fetch_refuses_a_non_google_host(self):
+        assert fetch_avatar_bytes("https://example.com/a.png") is None
+
+
 # ---------------------------------------------------------------------------
 # Precedence
 # ---------------------------------------------------------------------------
@@ -402,3 +457,28 @@ class TestAvatarPrecedence:
             db_session.refresh(second)
             assert first.avatar_url == second.avatar_url == new_url
         assert (first.id, second.id) == original_ids
+
+    def test_anonymous_google_avatar_does_not_replace_a_photo(
+        self, db_session: Session
+    ) -> None:
+        account = models.Account(organization_name="Example")
+        db_session.add(account)
+        db_session.flush()
+        kept = "https://avatars.githubusercontent.com/u/123?v=4"
+        user = models.User(
+            account_id=account.id,
+            username=uuid4().hex,
+            email="avatar-anon@example.com",
+            avatar_source="sso",
+            avatar_url=kept,
+        )
+        db_session.add(user)
+        db_session.flush()
+        crud_user.set_avatar_from_sso(
+            db_session,
+            user=user,
+            avatar_url="https://lh3.googleusercontent.com/a/default-user=s96-c",
+            commit=False,
+        )
+        assert user.person.avatar_url == kept
+        assert user.person.avatar_source == "sso"
