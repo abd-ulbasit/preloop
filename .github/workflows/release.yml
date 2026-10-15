@@ -655,7 +655,10 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend, build-python, build-cli, sign-windows-cli, validate-windows-cli, sbom, verify-oss-install]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Tag push only. Publishing the draft emits release:published, and this
+    # workflow also runs on that event for image builds. Creating the release
+    # again there would flip a published release back to a draft.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
       # Required by actions/attest-build-provenance to mint a Sigstore
@@ -876,13 +879,43 @@ jobs:
             echo "_Changelog generation was unavailable for this release (${CHANGELOG_OUTCOME:-unknown})._" >> "$notes"
           fi
 
+      # No GitHub release exists until this point. The next step refuses to
+      # call the release API without a non-empty signed bundle on disk.
+      - name: Require provenance bundle before creating the release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bundle="release-assets/preloop-${RELEASE_TAG}.intoto.jsonl"
+          if [ ! -s "$bundle" ]; then
+            echo "::error::Refusing to create ${RELEASE_TAG}: signed provenance bundle is missing"
+            exit 1
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: release-assets/*
           body_path: release-notes.md
-          draft: false
+          # Stay a draft until the publish step sees the provenance asset.
+          # A failed upload must not leave a public unsigned release.
+          draft: true
+          fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Publish release only when provenance is attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bundle="preloop-${RELEASE_TAG}.intoto.jsonl"
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' | grep -Fxq "$bundle"; then
+            echo "::error::Refusing to publish ${RELEASE_TAG}: ${bundle} is not attached"
+            exit 1
+          fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
       - name: Trigger charts index update
         if: success()

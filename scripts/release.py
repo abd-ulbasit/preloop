@@ -354,10 +354,245 @@ def push_git_tag(plan: ReleasePlan) -> None:
     run_command(["git", "push", "origin", plan.tag])
 
 
-def find_github_release_run(
-    repo: str, head_sha: str, timeout_seconds: int = 180
+def extract_job(workflow: str, job_id: str) -> str:
+    """Return one top-level workflow job body, including its key line."""
+    match = re.search(
+        rf"^  {re.escape(job_id)}:\n.*?(?=^  [A-Za-z0-9-]+:\n|\Z)",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        return ""
+    return match.group(0)
+
+
+def workflow_release_problems(job_text: str) -> list[str]:
+    """Return reasons the create-release job cannot publish signed assets.
+
+    v0.16.0 already called ``actions/attest-build-provenance``, then died in
+    the changelog step before that attestation ran. Pushing the branch and the
+    tag together starts a second Release run for the same commit on ``main``,
+    and that run succeeds because Create Release is skipped. A local check has
+    to reject the changelog-in-the-environment pattern, and the post-push
+    check has to follow the tag run.
+    """
+    if not job_text.strip():
+        return ["release workflow has no create-release job"]
+
+    problems: list[str] = []
+    required = (
+        (
+            "id-token: write",
+            "create-release is missing id-token: write, so Sigstore cannot sign",
+        ),
+        (
+            "attestations: write",
+            "create-release is missing attestations: write",
+        ),
+        (
+            "actions/attest-build-provenance@",
+            "create-release does not attest build provenance",
+        ),
+        (
+            "subject-path: 'release-assets/*'",
+            "provenance attestation does not cover release-assets/*",
+        ),
+        (
+            "preloop-${GITHUB_REF_NAME}.intoto.jsonl",
+            "provenance bundle is not staged as preloop-<tag>.intoto.jsonl",
+        ),
+        (
+            "files: release-assets/*",
+            "Create Release does not upload release-assets/*, so the bundle "
+            "would be left behind",
+        ),
+        (
+            "body_path:",
+            "release notes must be passed with body_path so the changelog "
+            "cannot skip attestation",
+        ),
+        (
+            "release_assets.py verify",
+            "release assets are not verified before the GitHub release is created",
+        ),
+        (
+            "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+            "create-release must run only on the tag push, not when a release "
+            "is published",
+        ),
+        (
+            "Refusing to create",
+            "the job must refuse to create a release when the signed bundle is missing",
+        ),
+        (
+            "draft: true",
+            "Create Release must stay a draft until provenance is attached",
+        ),
+        (
+            "Refusing to publish",
+            "the job must refuse to publish a release whose provenance asset "
+            "is missing",
+        ),
+        (
+            "--draft=false",
+            "the draft is never published after the provenance check",
+        ),
+    )
+    for snippet, message in required:
+        if snippet not in job_text:
+            problems.append(message)
+    if re.search(r"CHANGELOG_CONTENT\s*:", job_text):
+        problems.append(
+            "changelog text is passed through the environment; that overflow "
+            "skipped attestation on v0.16.0"
+        )
+    if re.search(r"draft:\s*false", job_text):
+        problems.append(
+            "Create Release publishes immediately; keep it a draft until the "
+            "provenance asset is attached"
+        )
+
+    attest = job_text.find("actions/attest-build-provenance@")
+    staged = job_text.find("preloop-${GITHUB_REF_NAME}.intoto.jsonl")
+    upload = job_text.find("softprops/action-gh-release@")
+    publish = job_text.find("--draft=false")
+    if min(attest, staged, upload) >= 0 and not (attest < staged < upload):
+        problems.append(
+            "provenance must be attested and staged before Create Release "
+            "uploads assets"
+        )
+    if upload >= 0 and publish >= 0 and not upload < publish:
+        problems.append(
+            "the release is published before the provenance asset is uploaded"
+        )
+    return problems
+
+
+def ensure_release_workflow_ready() -> None:
+    """Refuse to publish when this checkout cannot produce a signed release."""
+    workflow_path = ROOT_DIR / ".github" / "workflows" / "release.yml"
+    job = extract_job(read_text(workflow_path), "create-release")
+    problems = workflow_release_problems(job)
+    if not problems:
+        return
+    detail = "\n".join(f"  - {item}" for item in problems)
+    raise SystemExit(f"Release workflow cannot publish signed assets:\n{detail}")
+
+
+def python_package_version(version: str) -> str:
+    """Return the PEP 440 name used for the wheel and sdist."""
+    match = re.fullmatch(
+        r"(?P<core>\d+\.\d+\.\d+)"
+        r"(?:-(?P<label>alpha|beta|rc)\.(?P<num>\d+))?"
+        r"(?:\+[0-9A-Za-z.-]+)?",
+        version,
+    )
+    if match and match.group("label"):
+        label_map = {"alpha": "a", "beta": "b", "rc": "rc"}
+        return (
+            f"{match.group('core')}{label_map[match.group('label')]}"
+            f"{match.group('num')}"
+        )
+    return version
+
+
+def vex_asset_names(root: Path | None = None) -> list[str]:
+    """Return OpenVEX filenames the release workflow copies onto the release."""
+    vex_dir = (root or ROOT_DIR) / "security" / "vex"
+    if not vex_dir.is_dir():
+        return []
+    return sorted(path.name for path in vex_dir.glob("*.openvex.json"))
+
+
+def expected_release_assets(version: str, extra: list[str] | None = None) -> set[str]:
+    """Return the asset names a published release must carry."""
+    package = python_package_version(version)
+    names = {
+        f"preloop-v{version}.intoto.jsonl",
+        "SHA256SUMS",
+        "docker-compose.release.yaml",
+        "install-cli.sh",
+        "install-cli.ps1",
+        "install-oss.sh",
+        f"preloop-{version}.tgz",
+        f"preloop-{package}.tar.gz",
+        f"preloop-{package}-py3-none-any.whl",
+        f"preloop-sbom-backend-{version}.cdx.json",
+        f"preloop-sbom-frontend-{version}.cdx.json",
+        f"preloop-sbom-cli-{version}.cdx.json",
+        "preloop-linux-amd64",
+        "preloop-linux-arm64",
+        "preloop-darwin-amd64",
+        "preloop-darwin-arm64",
+        "preloop-windows-amd64.exe",
+        "preloop-windows-arm64.exe",
+    }
+    names.update(extra or [])
+    return names
+
+
+def missing_release_assets(expected: set[str], actual: set[str]) -> list[str]:
+    """Return expected asset names that are absent from a release."""
+    return sorted(expected - actual)
+
+
+def select_tag_push_run(
+    runs: list[dict[str, object]], head_sha: str, tag: str
 ) -> dict[str, object] | None:
-    """Poll GitHub Actions until the Release workflow run appears."""
+    """Return the tag push run, ignoring the main push of the same commit.
+
+    Pushing the release commit and ``v*`` tag starts two Release workflow
+    runs with the same SHA. The main run succeeds without creating a release.
+    """
+    for run in runs:
+        if (
+            run.get("headSha") == head_sha
+            and run.get("event") == "push"
+            and run.get("headBranch") == tag
+        ):
+            return run
+    return None
+
+
+def release_run_problem(
+    run: dict[str, object], jobs: list[dict[str, object]]
+) -> str | None:
+    """Return why a finished tag run did not publish, if it did not."""
+    if run.get("conclusion") != "success":
+        return f"Release workflow conclusion={run.get('conclusion')}"
+    for job in jobs:
+        if job.get("name") == "Create Release":
+            if job.get("conclusion") != "success":
+                return f"Create Release conclusion={job.get('conclusion')}"
+            return None
+    return "Create Release job did not run"
+
+
+def published_release_problem(version: str, payload: dict[str, object]) -> str | None:
+    """Return why a GitHub release payload is not a complete signed release."""
+    tag = f"v{version}"
+    if payload.get("isDraft"):
+        return f"{tag} is still a draft"
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return f"{tag} response did not include assets"
+    actual: set[str] = set()
+    for asset in assets:
+        if isinstance(asset, dict) and isinstance(asset.get("name"), str):
+            actual.add(asset["name"])
+    missing = missing_release_assets(
+        expected_release_assets(version, vex_asset_names()), actual
+    )
+    if not missing:
+        return None
+    detail = "\n".join(f"  - {name}" for name in missing)
+    return f"{tag} is missing release assets:\n{detail}"
+
+
+def find_github_release_run(
+    repo: str, head_sha: str, tag: str, timeout_seconds: int = 180
+) -> dict[str, object] | None:
+    """Poll GitHub Actions until the tag's Release workflow run appears."""
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         result = run_command(
@@ -372,44 +607,57 @@ def find_github_release_run(
                 "--limit",
                 "20",
                 "--json",
-                "databaseId,headSha,status,conclusion,url,displayTitle,event",
+                "databaseId,headSha,headBranch,status,conclusion,url,"
+                "displayTitle,event",
             ],
             capture_output=True,
             check=False,
         )
         if result.returncode == 0:
             runs = json.loads(result.stdout)
-            for run in runs:
-                if run.get("headSha") == head_sha and run.get("event") == "push":
-                    return run
+            selected = select_tag_push_run(runs, head_sha, tag)
+            if selected is not None:
+                return selected
         time.sleep(5)
     return None
 
 
 def monitor_release_workflow(plan: ReleasePlan) -> None:
-    """Watch the GitHub Release workflow if gh is available."""
+    """Watch the tag's Release workflow and require a signed GitHub release.
+
+    Raises:
+        SystemExit: ``gh`` cannot see the tag run, the run failed, or the
+            published release is missing provenance or another required asset.
+    """
     if not command_exists("gh"):
-        print("gh CLI not found; skipping workflow monitoring.")
-        return
+        raise SystemExit(
+            "gh CLI not found; the tag was pushed but the release was not verified"
+        )
 
     repo = get_origin_repo_slug()
     if not repo:
-        print("Could not infer GitHub repository from origin; skipping monitoring.")
-        return
+        raise SystemExit(
+            "Could not infer GitHub repository from origin; "
+            "the tag was pushed but the release was not verified"
+        )
 
     auth_status = run_command(
         ["gh", "auth", "status"], check=False, capture_output=True
     )
     if auth_status.returncode != 0:
-        print("gh is not authenticated; skipping workflow monitoring.")
-        return
+        raise SystemExit(
+            "gh is not authenticated; the tag was pushed but the release "
+            "was not verified"
+        )
 
     head_sha = get_head_sha()
-    print("Waiting for GitHub Release workflow to appear...")
-    run_data = find_github_release_run(repo, head_sha)
+    print(f"Waiting for the {plan.tag} Release workflow run...")
+    run_data = find_github_release_run(repo, head_sha, plan.tag)
     if not run_data:
-        print("Could not find the Release workflow run yet.")
-        return
+        raise SystemExit(
+            f"Could not find the Release workflow run for {plan.tag}. "
+            "The main-branch run for this commit does not publish a release."
+        )
 
     run_id = str(run_data["databaseId"])
     run_url = str(run_data.get("url", ""))
@@ -440,23 +688,49 @@ def monitor_release_workflow(plan: ReleasePlan) -> None:
             "--repo",
             repo,
             "--json",
-            "status,conclusion,url",
+            "status,conclusion,url,jobs",
         ],
         capture_output=True,
         check=False,
     )
+    if final_view.returncode != 0:
+        raise SystemExit(f"Could not read Release workflow run {run_id}")
 
-    if final_view.returncode == 0:
-        final_data = json.loads(final_view.stdout)
-        print(
-            f"Release workflow finished with status={final_data.get('status')} "
-            f"conclusion={final_data.get('conclusion')}"
-        )
-        if final_data.get("url"):
-            print(final_data["url"])
+    final_data = json.loads(final_view.stdout)
+    print(
+        f"Release workflow finished with status={final_data.get('status')} "
+        f"conclusion={final_data.get('conclusion')}"
+    )
+    if final_data.get("url"):
+        print(final_data["url"])
 
-    if watch.returncode != 0:
-        raise SystemExit("Release workflow failed")
+    jobs = final_data.get("jobs")
+    problem = release_run_problem(final_data, jobs if isinstance(jobs, list) else [])
+    if problem or watch.returncode != 0:
+        raise SystemExit(problem or "Release workflow failed")
+
+    release_view = run_command(
+        [
+            "gh",
+            "release",
+            "view",
+            plan.tag,
+            "--repo",
+            repo,
+            "--json",
+            "assets,isDraft,tagName",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if release_view.returncode != 0:
+        raise SystemExit(f"Could not read GitHub release {plan.tag}")
+    release_problem = published_release_problem(
+        plan.version, json.loads(release_view.stdout)
+    )
+    if release_problem:
+        raise SystemExit(release_problem)
+    print(f"{plan.tag} has signed provenance and the required release assets.")
 
 
 def maybe_package_chart() -> None:
@@ -570,7 +844,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--monitor-release",
         action="store_true",
-        help="Watch the GitHub Release workflow after pushing the tag",
+        help=(
+            "Watch an already-pushed tag's Release workflow and require its "
+            "signed assets. Pushing a tag always does this."
+        ),
     )
     return parser.parse_args()
 
@@ -640,9 +917,7 @@ def main() -> int:
                     f"Push tag {plan.tag} to origin?", default=False
                 )
                 if push_tag:
-                    monitor_release = monitor_release or prompt_yes_no(
-                        "Monitor the GitHub Release workflow with gh?", default=True
-                    )
+                    monitor_release = True
         else:
             if git_has_changes(updated_paths):
                 print("Release files are still uncommitted; skipping tag/push steps.")
@@ -654,6 +929,9 @@ def main() -> int:
     if commit_release:
         create_release_commit(plan, updated_paths)
 
+    if create_tag or push_branch or push_tag:
+        ensure_release_workflow_ready()
+
     if create_tag:
         create_git_tag(plan)
 
@@ -662,9 +940,11 @@ def main() -> int:
 
     if push_tag:
         push_git_tag(plan)
-
-    if monitor_release:
         monitor_release_workflow(plan)
+    elif monitor_release:
+        monitor_release_workflow(plan)
+
+    ensure_release_workflow_ready()
 
     print("")
     print("Updated files:")
@@ -672,15 +952,18 @@ def main() -> int:
         print(f"  - {path.relative_to(ROOT_DIR)}")
 
     print("")
-    print("Next steps:")
-    print(
-        "  1. Review the diff, especially CHANGELOG.md, README.md, and release assets."
-    )
-    print("  2. Run your release validation commands.")
-    print(
-        f"  3. If you did not use automation above, commit/tag/push {plan.tag} when ready."
-    )
-    print("  4. Verify the GitHub release artifacts and install commands.")
+    if push_tag:
+        print(f"{plan.tag} was published with signed release assets.")
+    else:
+        print("Next steps:")
+        print("  1. Review the diff, especially CHANGELOG.md and README.md.")
+        print("  2. Run your release validation commands.")
+        print(
+            f"  3. Commit, tag, and push {plan.tag} when ready. "
+            "The script will not push, and will not exit successfully, "
+            "unless this checkout can publish signed assets and the tag "
+            "run attaches them."
+        )
     return 0
 
 

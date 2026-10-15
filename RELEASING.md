@@ -27,7 +27,17 @@ It can also optionally:
 - commit the release prep changes
 - create `v<version>`
 - push the current branch and tag
-- watch the GitHub `Release` workflow with `gh`
+- watch the tag's GitHub `Release` workflow with `gh`
+
+Before it pushes, the script checks that `.github/workflows/release.yml` can
+attest `release-assets/*` and upload `preloop-v<version>.intoto.jsonl`. The
+tag's Create Release job creates a draft only when that bundle is present,
+and publishes it only after the bundle is attached to the release. After
+the tag push the script waits for that tag's workflow run, not the `main`
+run of the same commit, and exits non-zero unless Create Release succeeded
+and the published release includes the provenance bundle plus the other
+shipped assets. A local-only run still exits non-zero when that workflow
+check fails.
 
 ## Pre-Release Checklist
 
