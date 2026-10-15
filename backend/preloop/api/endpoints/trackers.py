@@ -1512,32 +1512,44 @@ async def list_projects_for_org(
             tracker if project_data.tracker_id else None,
         )
     )
+    credential_source = (
+        tracker_credential_source(tracker) if project_data.tracker_id else None
+    )
+    username = current_user.username
+    # Everything needed from the database is resolved above. Release the pooled
+    # connection before the (slow, possibly failing) provider round trip so a
+    # misbehaving client cannot exhaust the pool (preloop#1762).
+    db.close()
+    if project_data.url and not project_data.url.endswith("/"):
+        project_data.url = project_data.url + "/"
+    # create_tracker_client swallows configuration errors and returns None,
+    # which is the 400 below.
+    client = await create_tracker_client(
+        tracker_type=project_data.tracker_type.value,
+        tracker_id="list-projects",
+        api_key=project_data.api_key,
+        connection_details={
+            "url": str(project_data.url) if project_data.url else None,
+            **(project_data.connection_details or {}),
+            **auth_details,
+        },
+        credential_source=credential_source,
+    )
+    if not client:
+        raise HTTPException(status_code=400, detail="Could not create tracker client")
     try:
-        if project_data.url and not project_data.url.endswith("/"):
-            project_data.url = project_data.url + "/"
-        client = await create_tracker_client(
-            tracker_type=project_data.tracker_type.value,
-            tracker_id="list-projects",
-            api_key=project_data.api_key,
-            connection_details={
-                "url": str(project_data.url) if project_data.url else None,
-                **(project_data.connection_details or {}),
-                **auth_details,
-            },
-            credential_source=(
-                tracker_credential_source(tracker) if project_data.tracker_id else None
-            ),
-        )
-        if not client:
-            raise HTTPException(
-                status_code=400, detail="Could not create tracker client"
-            )
         return await client.get_projects(project_data.organization_identifier)
-
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception(
-            f"Error listing projects for org for user {current_user.username}: {e}"
-        )
+        # Only the provider round trip maps to a gateway failure.
+        logger.exception(f"Error listing projects for org for user {username}: {e}")
         raise HTTPException(
-            status_code=500, detail=f"An unexpected error occurred: {e}"
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"The tracker could not list projects: {_first_line(e)}",
         )
+
+
+def _first_line(error: Exception) -> str:
+    """A short, single-line error reason for API responses."""
+    return (str(error).splitlines() or [type(error).__name__])[0][:200]

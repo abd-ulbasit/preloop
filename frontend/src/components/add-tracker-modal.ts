@@ -1,5 +1,5 @@
 import { parseUTCDate } from '../utils/date';
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import * as api from '../api';
 import '@shoelace-style/shoelace/dist/components/dialog/dialog.js';
@@ -127,6 +127,8 @@ export type BitbucketDcConnectionDetails = {
   repository_slug?: string;
   username?: string;
 };
+
+type ProjectLoadState = 'loading' | 'loaded' | 'failed';
 
 @customElement('add-tracker-modal')
 export class AddTrackerModal extends LitElement {
@@ -313,6 +315,16 @@ export class AddTrackerModal extends LitElement {
 
   @state()
   private selectedOrgs: Record<string, boolean> = {};
+
+  /**
+   * Per-org project listing state. A failed listing is never retried
+   * automatically (preloop#1762): only the inline Retry control re-fires it.
+   */
+  @state()
+  private projectLoadState: Record<string, ProjectLoadState> = {};
+
+  @state()
+  private projectLoadErrors: Record<string, string> = {};
 
   @state()
   private selectedProjects: Record<string, Record<string, boolean>> = {};
@@ -719,6 +731,8 @@ export class AddTrackerModal extends LitElement {
     }
     this.orgs = ids.map((id) => ({ id, name: id }));
     this.projects = {};
+    this.projectLoadState = {};
+    this.projectLoadErrors = {};
     this.selectedOrgs = {};
     for (const id of ids) {
       this.selectedOrgs[id] = true;
@@ -1054,6 +1068,41 @@ export class AddTrackerModal extends LitElement {
     }
     return label;
   }
+  updated(changed: PropertyValues) {
+    super.updated?.(changed);
+    if (
+      changed.has('orgs') ||
+      changed.has('step') ||
+      changed.has('selectedOrgs')
+    ) {
+      this.loadSelectedOrgProjects();
+    }
+  }
+
+  /**
+   * Start the initial listing for selected orgs once. Guarded by the per-org
+   * load state so re-renders never re-fire a listing.
+   */
+  private loadSelectedOrgProjects() {
+    // Offline managed edit never renders the tree and makes no provider calls.
+    if (
+      this.step !== 2 ||
+      this.authMethod === 'github_app' ||
+      this.managedOfflineEdit
+    ) {
+      return;
+    }
+    for (const org of this.orgs) {
+      if (
+        this.selectedOrgs[org.id] &&
+        !this.projects[org.id] &&
+        !this.projectLoadState[org.id]
+      ) {
+        void this.loadProjects(org.id);
+      }
+    }
+  }
+
   firstUpdated() {
     // Reset state when modal is shown
     this.warningMessages = [];
@@ -2260,17 +2309,11 @@ export class AddTrackerModal extends LitElement {
     // For GitHub App auth, orgs represent installations - no expandable projects
     const isGitHubApp = this.authMethod === 'github_app';
 
-    setTimeout(() => {
-      this.shadowRoot
-        ?.querySelectorAll('sl-tree-item')
-        ?.forEach((item: any) => {
-          if (item.selected && !isGitHubApp) {
-            item.dispatchEvent(
-              new CustomEvent('sl-lazy-load', { bubbles: true })
-            );
-          }
-        });
-    }, 300);
+    const failedOrgs = isGitHubApp
+      ? []
+      : this.orgs.filter(
+          (org: any) => this.projectLoadState[org.id] === 'failed'
+        );
     return html`
       <sl-tree
         selection="multiple"
@@ -2281,8 +2324,12 @@ export class AddTrackerModal extends LitElement {
             <sl-tree-item
               value="${org.id}"
               ?selected=${this.selectedOrgs[org.id]}
-              ?lazy=${!isGitHubApp && !this.projects[org.id]}
-              ?loading=${this.isLoading}
+              ?lazy=${
+                !isGitHubApp &&
+                !this.projects[org.id] &&
+                this.projectLoadState[org.id] !== 'failed'
+              }
+              ?loading=${this.projectLoadState[org.id] === 'loading'}
               ?expanded=${!isGitHubApp && this.selectedOrgs[org.id]}
               @sl-lazy-load=${(e: { target: SlTreeItem }) =>
                 this.loadProjects(org.id, e.target)}
@@ -2297,7 +2344,30 @@ export class AddTrackerModal extends LitElement {
           `
         )}
       </sl-tree>
+      ${failedOrgs.map(
+        (org: any) => html`
+          <div class="project-load-error error" data-org-id="${org.id}">
+            Could not list projects for ${org.name}:
+            ${this.projectLoadErrors[org.id]}
+            <sl-button
+              size="small"
+              class="retry-projects"
+              @click=${() => this.retryProjects(org.id)}
+            >
+              Retry
+            </sl-button>
+          </div>
+        `
+      )}
     `;
+  }
+
+  /** Explicit user retry of one failed org listing: exactly one request. */
+  retryProjects(orgId: string) {
+    if (this.projectLoadState[orgId] !== 'failed') {
+      return Promise.resolve();
+    }
+    return this.loadProjects(orgId, undefined, { retry: true });
   }
 
   async testConnection() {
@@ -2462,15 +2532,36 @@ export class AddTrackerModal extends LitElement {
     }
   }
 
-  async loadProjects(orgId: string, item?: SlTreeItem) {
-    if (this.projects[orgId]) {
-      // Projects already loaded
+  async loadProjects(
+    orgId: string,
+    item?: SlTreeItem,
+    { retry = false }: { retry?: boolean } = {}
+  ) {
+    const resetItem = () => {
+      if (item) {
+        item.loading = false;
+        item.lazy = false;
+      }
+    };
+    const state = this.projectLoadState[orgId];
+    if (
+      this.projects[orgId] ||
+      state === 'loading' ||
+      (state === 'failed' && !retry)
+    ) {
+      // Already loaded, in flight, or failed (only Retry re-fires a failure).
+      if (state !== 'loading') {
+        resetItem();
+      }
       return;
     }
     // GitHub App auth doesn't support per-project listing - access is at installation level
     if (this.authMethod === 'github_app') {
       return;
     }
+    this.projectLoadState = { ...this.projectLoadState, [orgId]: 'loading' };
+    const { [orgId]: _cleared, ...otherErrors } = this.projectLoadErrors;
+    this.projectLoadErrors = otherErrors;
     this.isLoading = true;
     if (item) {
       item.loading = true;
@@ -2486,6 +2577,7 @@ export class AddTrackerModal extends LitElement {
         this.connectionOptions()
       );
       this.projects = { ...this.projects, [orgId]: projects };
+      this.projectLoadState = { ...this.projectLoadState, [orgId]: 'loaded' };
       if (this.selectedOrgs[orgId]) {
         if (!this.includeFutureProjects) {
           this.selectedProjects[orgId] = projects.reduce(
@@ -2519,9 +2611,13 @@ export class AddTrackerModal extends LitElement {
         }
       }
     } catch (error: any) {
-      this.errorMessage = error.message;
+      this.projectLoadState = { ...this.projectLoadState, [orgId]: 'failed' };
+      this.projectLoadErrors = {
+        ...this.projectLoadErrors,
+        [orgId]: error?.message || 'Request failed',
+      };
     } finally {
-      this.isLoading = false;
+      this.isLoading = Object.values(this.projectLoadState).includes('loading');
       if (item) {
         item.loading = false;
         item.lazy = false;
@@ -2633,6 +2729,21 @@ export class AddTrackerModal extends LitElement {
         this.isLoading = false;
         return;
       }
+    }
+    // An org whose listing failed has no project selection; saving it would
+    // silently widen a project-level scope to the whole organization.
+    const unlisted = this.orgs.filter(
+      (org: any) =>
+        this.selectedOrgs[org.id] && this.projectLoadState[org.id] === 'failed'
+    );
+    if (unlisted.length > 0) {
+      this.errorMessage = `Projects for ${unlisted
+        .map((org: any) => org.name)
+        .join(', ')} could not be listed. Retry, or deselect ${
+        unlisted.length > 1 ? 'them' : 'it'
+      } before saving.`;
+      this.isLoading = false;
+      return;
     }
     const scopeRules = [];
     for (const org of this.orgs) {
