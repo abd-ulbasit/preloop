@@ -3,7 +3,8 @@
 # Extends ghcr.io/openai/codex-universal pinned by digest. One apt layer adds
 # the distro Perl toolchain (perl, cpanm, perlver, perlcritic, prove) and
 # shellcheck. Later layers add fixtures, a Maven offline cache, the smoke
-# gate, and /opt/preloop-environment.json. It sets no WORKDIR, ENTRYPOINT,
+# gate, /opt/preloop-environment.json, and /usr/local/bin/preloop-preflight.
+# It sets no WORKDIR, ENTRYPOINT,
 # or CMD, so the base Codex entrypoint and working directory stay in force.
 #
 #   docker build -f environments/universal/Dockerfile \
@@ -56,6 +57,8 @@ RUN --network=none set -a; \
     set +a; \
     export CODEX_BASE_IMAGE="${CODEX_BASE_IMAGE}"; \
     exec /opt/entrypoint.sh /opt/preloop-universal/smoke.sh
+# The preflight script is last so a change to it does not rebuild the smoke.
+COPY environments/universal/bin/preloop-preflight /usr/local/bin/preloop-preflight
 LABEL org.opencontainers.image.title="preloop-codex-universal" \
       org.opencontainers.image.description="Codex image with Perl linters, shellcheck, and a per-language smoke" \
       org.opencontainers.image.base.name="${CODEX_BASE_IMAGE}"

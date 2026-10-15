@@ -29,6 +29,12 @@ Files written into the image:
 Scan offline with `trivy --skip-db-update --skip-java-db-update fs --scanners vuln <path>`.
 The Java database is not baked.
 
+The offline smoke test scans `/opt/preloop-scanner/fixtures/vulnerable`, a
+`requirements.txt` the fetch stage writes with Django 2.2.0 and requests
+2.19.0. Those pins stay out of git: OpenSSF Scorecard scans every
+`*requirements*.txt` in the tree, including the old urllib3 and idna that
+requests 2.19.0 pulls in.
+
 `.github/workflows/publish-scanner-image.yml` publishes the image to
 `ghcr.io/preloop/preloop-codex-scanner` on version tags only and prints the
 published digest. Scheduled and manual runs build and smoke without pushing.

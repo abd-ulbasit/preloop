@@ -143,6 +143,34 @@ func TestRunnerBootstrapPassesNoSecretsInArgv(t *testing.T) {
 	}
 }
 
+func TestPreserveCodexUniversalEntrypoint(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	pinned := "ghcr.io/preloop/preloop-codex-universal@sha256:" + digest
+	for _, image := range []string{
+		"ghcr.io/openai/codex-universal:latest",
+		"ghcr.io/openai/codex-universal@sha256:" + digest,
+		pinned,
+		"ghcr.io/preloop/preloop-codex-universal:sha-0123456789ab",
+		"localhost:5000/mirror:tag",
+	} {
+		got := preserveCodexUniversalEntrypoint(image)
+		want := image != "localhost:5000/mirror:tag"
+		if got != want {
+			t.Fatalf("preserve %s = %v", image, got)
+		}
+	}
+	if preserveCodexUniversalEntrypoint("example/custom:1") {
+		t.Fatal("custom image must not keep its entrypoint")
+	}
+	args := dockerRunArgs(pinned, map[string]string{}, runnerDockerOpts{
+		Launch:             true,
+		PreserveEntrypoint: preserveCodexUniversalEntrypoint(pinned),
+	})
+	if strings.Contains(strings.Join(args, " "), "--entrypoint") {
+		t.Fatal("pinned universal image entrypoint overridden")
+	}
+}
+
 func TestRunnerBootstrapUploadsEvidenceWithoutLoggingPayload(t *testing.T) {
 	if !strings.Contains(runnerBootstrap, "PRELOOP_EVIDENCE_PUT_TOKEN") {
 		t.Fatal("private bootstrap must attempt direct evidence upload")

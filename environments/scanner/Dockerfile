@@ -55,15 +55,22 @@ RUN case "${TARGETARCH:-amd64}" in \
         --db-repository "${TRIVY_DB_REPOSITORY}" \
         --cache-dir /out/opt/trivy-cache \
         --output /out/opt/preloop-scanners.json \
+    && mkdir -p /out/opt/preloop-scanner/fixtures/vulnerable \
+    && printf '%s\n' 'django==2.2.0' 'requests==2.19.0' \
+        > /out/opt/preloop-scanner/fixtures/vulnerable/requirements.txt \
     && chmod -R a+rX /out
 
 FROM ${CODEX_BASE_IMAGE}
 ARG CODEX_BASE_IMAGE
 ARG TRIVY_VERSION=0.74.0
 ARG TRIVY_DB_REPOSITORY
+# The known-vulnerable pins (Django 2.2.0, requests 2.19.0) are written in
+# the fetch stage, not copied from a requirements.txt in git. Scorecard runs
+# osv-scanner on every *requirements*.txt in the tree and follows transitives,
+# so a committed fixture was the whole Vulnerabilities finding list. Trivy
+# still scans /opt/preloop-scanner/fixtures/vulnerable inside this image.
 COPY --link --from=fetch /out/ /
 COPY --link --chmod=0644 environments/scanner/preloop-environment.json /opt/preloop-environment.json
-COPY --link --chmod=0755 environments/scanner/fixtures /opt/preloop-scanner/fixtures
 ENV TRIVY_CACHE_DIR=/opt/trivy-cache
 LABEL org.opencontainers.image.title="preloop-codex-scanner" \
       org.opencontainers.image.description="Opt-in Codex-compatible image with Trivy and a digest-pinned advisory database" \

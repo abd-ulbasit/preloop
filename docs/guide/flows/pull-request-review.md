@@ -252,20 +252,19 @@ A reported version newer than `minimum_version` is a HIGH finding. An equal
 version is not. Dotted numbers compare numerically: 5.10 is newer than 5.9
 and older than 5.16.
 
-The default reviewer sandbox is `ghcr.io/openai/codex-universal` (see
-`backend/preloop/agents/images.py`). That image is not built from this
-repository and does not guarantee Perl. When `perl` or
-`Perl::MinimumVersion` is absent, the review says "version linter
-unavailable in this sandbox" and judges the diff from the policy. That is
-not a pass.
+The default reviewer sandbox is the digest-pinned image
+`ghcr.io/preloop/preloop-codex-universal` (see
+`backend/preloop/agents/images.py`). It includes Perl, `cpanm`, `perlver`
+(`Perl::MinimumVersion`), `perlcritic`, and `shellcheck`. When a private
+runner's image has no `perl` or `Perl::MinimumVersion`, the review says
+"version linter unavailable in this sandbox" and judges the diff from the
+policy. That is not a pass.
 
-The environment image built from `environments/preloop/Dockerfile` ships
-`perlver`. A private runner gets it with `cpanm Perl::MinimumVersion`.
-For a Codex sandbox with the toolchain, build the opt-in image in
+The environment image built from `environments/preloop/Dockerfile` also
+ships `perlver`. Private runners that need only the Perl toolchain build
 [`environments/perl`](https://github.com/preloop/preloop/tree/main/environments/perl)
-and select it with `CODEX_IMAGE` (hosted) or `agent_config.image` (private
-runner). Its README lists the build, the offline smoke and the evidence to
-keep.
+and select it with `agent_config.image`. Hosted Codex ignores that key.
+Its README lists the build, the offline smoke and the evidence to keep.
 
 ### Perl 5.10 example
 

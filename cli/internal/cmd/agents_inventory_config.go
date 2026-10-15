@@ -4,79 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
-	"path/filepath"
-	"strings"
 
-	toml "github.com/pelletier/go-toml/v2"
-	json5 "github.com/yosuke-furukawa/json5/encoding/json5"
 	"gopkg.in/yaml.v3"
 )
 
 var errInventoryConfig = errors.New("config_malformed")
 
-// Count declarations without decoding MCP definitions, provider credentials,
-// URLs, arguments, headers, or environment values. No raw data escapes this
-// function; callers only receive a count or a fixed error.
+// Count declarations using the shared validated route parser. Raw config,
+// names and routing fields never escape this count-only compatibility helper.
 func inventoryMCPServerCount(appName, path string, data []byte) (int, error) {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".toml":
-		// Empty structs skip server values; the parser validates the full document.
-		var doc struct {
-			MCPServers map[string]struct{} `toml:"mcp_servers"`
-		}
-		if err := toml.Unmarshal(data, &doc); err != nil {
-			return 0, errInventoryConfig
-		}
-		return len(doc.MCPServers), nil
-	case ".yaml", ".yml":
-		var doc yaml.Node
-		decoder := yaml.NewDecoder(bytes.NewReader(data))
-		if decoder.Decode(&doc) != nil || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-			return 0, errInventoryConfig
-		}
-		var extra yaml.Node
-		if decoder.Decode(&extra) != io.EOF {
-			return 0, errInventoryConfig
-		}
-		root := doc.Content[0]
-		if !inventoryUniqueYAMLKeys(root) {
-			return 0, errInventoryConfig
-		}
-		for i := 0; i < len(root.Content); i += 2 {
-			if root.Content[i].Value == "mcp_servers" {
-				servers := root.Content[i+1]
-				if servers.Kind != yaml.MappingNode || !inventoryUniqueYAMLKeys(servers) {
-					return 0, errInventoryConfig
-				}
-				for j := 1; j < len(servers.Content); j += 2 {
-					if servers.Content[j].Kind != yaml.MappingNode {
-						return 0, errInventoryConfig
-					}
-				}
-				return len(servers.Content) / 2, nil
-			}
-		}
-		return 0, nil
-	}
-	decode := json.Unmarshal
-	if appName == "OpenClaw" {
-		decode = json5.Unmarshal
-	}
-	doc, ok := inventoryRawObject(decode, data)
-	if !ok {
-		return 0, errInventoryConfig
-	}
-	// Same container as discovery's lookupMCPServerContainer. Values stay
-	// json.RawMessage so credentials, URLs, headers, and env are not decoded.
-	container := inventoryLookupMCPContainer(doc, decode)
-	count := 0
-	for _, raw := range container {
-		if _, entryOK := inventoryRawObject(decode, raw); entryOK {
-			count++
-		}
-	}
-	return count, nil
+	_, count, err := inventoryConfigSummary(appName, path, data)
+	return count, err
 }
 
 // inventoryLookupMCPContainer mirrors lookupMCPServerContainer: prefer a

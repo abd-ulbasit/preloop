@@ -88,9 +88,13 @@ push. A version tag, a manual run on main, and a merge to main that changes
 the recipe publish. Tags are `sha-<12 hex chars of the commit>` and
 `vX.Y.Z` on a version tag. The run summary records
 `ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`, and the workflow
-attests that digest. The hosted default stays
-`ghcr.io/openai/codex-universal:latest` until a later change pins this
-digest. Private runners can still build `environments/perl`.
+attests that digest. The hosted default is that published digest, pinned in
+`backend/preloop/agents/images.py` as
+`ghcr.io/preloop/preloop-codex-universal@sha256:2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de`.
+Helm `agents.codexImage` sets `CODEX_IMAGE` on the API and worker pods when
+an operator overrides it. Leave it empty to use the core default. A
+tag-valued `CODEX_IMAGE` logs one warning at startup. Private runners can
+still build `environments/perl`.
 
 ## Backend and frontend tests in the image
 

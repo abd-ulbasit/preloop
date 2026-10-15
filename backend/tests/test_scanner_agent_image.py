@@ -53,11 +53,18 @@ def _arg_default(name: str) -> str:
     return match.group(1)
 
 
-def test_base_is_the_default_codex_image_pinned_by_digest() -> None:
+def test_base_is_pinned_upstream_and_hosted_default_is_separate() -> None:
+    """The scanner still extends upstream. Hosted Codex uses our image."""
     base = _arg_default("CODEX_BASE_IMAGE")
     name, _, digest = base.partition("@sha256:")
     assert re.fullmatch(r"[a-f0-9]{64}", digest)
-    assert name == DEFAULT_AGENT_IMAGES["codex"].rsplit(":", 1)[0]
+    assert name == "ghcr.io/openai/codex-universal"
+    hosted = DEFAULT_AGENT_IMAGES["codex"]
+    assert re.fullmatch(
+        r"ghcr.io/preloop/preloop-codex-universal@sha256:[a-f0-9]{64}",
+        hosted,
+    )
+    assert hosted.split("@", 1)[0] != name
     assert re.fullmatch(r"\S+@sha256:[a-f0-9]{64}", _arg_default("FETCH_IMAGE"))
 
 
@@ -202,7 +209,21 @@ def test_smoke_runs_trivy_offline_from_the_baked_db() -> None:
     text = (SCANNER / "run-smoke.sh").read_text()
     assert "--network none" in text
     assert "--skip-db-update --skip-java-db-update" in text
-    assert (SCANNER / "fixtures" / "vulnerable" / "requirements.txt").is_file()
+    assert "/opt/preloop-scanner/fixtures/vulnerable" in text
+
+
+def test_vulnerable_fixture_is_baked_into_the_image_not_committed() -> None:
+    """Scorecard scans every *requirements*.txt in the git tree.
+
+    Django 2.2.0 and requests 2.19.0 (and the urllib3 and idna those pins
+    pull in) were the entire OpenSSF Vulnerabilities finding list. The
+    offline smoke test still needs that file inside the image.
+    """
+    dockerfile = DOCKERFILE.read_text()
+    assert "django==2.2.0" in dockerfile
+    assert "requests==2.19.0" in dockerfile
+    assert "/out/opt/preloop-scanner/fixtures/vulnerable/requirements.txt" in dockerfile
+    assert list(SCANNER.rglob("*requirements*.txt")) == []
 
 
 def test_latest_moves_on_stable_tags_only() -> None:

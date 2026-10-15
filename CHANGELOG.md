@@ -40,6 +40,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Breaking or behavior changes
 
+- **Hosted Codex image.** The default is the digest-pinned universal image
+  `ghcr.io/preloop/preloop-codex-universal@sha256:2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de`
+  (Perl linters and shellcheck included). Helm `agents.codexImage` sets
+  `CODEX_IMAGE` on the API and worker pods; leave it empty to keep this
+  default. A tag-valued `CODEX_IMAGE` logs one warning at startup.
+  `environments/perl` remains for private runners (#1717).
 - **Runner upgrade action:** `accept_untagged` defaults to `false` for both new
   and existing runners. To keep sending unpinned flows to existing private
   runners after upgrading, open **Runners** and enable **Untagged jobs** on
@@ -86,6 +92,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
   ([#1491](https://github.com/preloop/preloop/pull/1491)).
 - WebSocket execution commands now require authentication, the
   `execute_flows` permission, and account ownership.
+- Scorecard's Vulnerabilities check no longer reports the scanner image's
+  known-vulnerable smoke fixture. Django 2.2.0 and requests 2.19.0 (and the
+  urllib3 and idna those pins pull in) are written into the image at build
+  time. A committed `requirements.txt` was the whole finding list, because
+  Scorecard scans every requirements file in the tree. The offline Trivy
+  smoke test still scans that file inside the image.
 - Scorecard's vulnerable-dependency list is reduced by moving patched
   transitive locks forward: `undici` 7.29.1 in the ClawHub CI lock, `hono`
   4.13.13 and `fast-uri` 3.1.8 in the Claude plugin, `urllib3` 2.8.0 in the
@@ -112,6 +124,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
   requires `--target-user`. The authority cannot read account data, call MCP,
   or invoke inference. Application login and runtime validation stay unknown.
   See [Unattended enrollment](docs/guide/cli.md#unattended-enrollment).
+- `preloop agents discover --json` includes `mcp_routes` (managed, direct
+  remote, direct stdio, unknown, and completeness). Offline inventory apps
+  include the same counts plus `controls` for model route, native actions,
+  and managed MCP. Offline `verification` stays `unverified` because this
+  collector has no stored verification. The fields contain no names,
+  endpoints, secrets, or paths. See the [CLI reference](docs/guide/cli.md).
 - Persistent flows on Claude Code can run in an authorized host directory
   (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
   flow's Claude model, and wait for the flow timeout instead of a fixed 5

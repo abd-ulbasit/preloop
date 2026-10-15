@@ -17,7 +17,7 @@ import (
 	"github.com/preloop/preloop/cli/internal/version"
 )
 
-const inventoryDetectorVersion = "1"
+const inventoryDetectorVersion = "2"
 
 type inventoryProbeResult struct {
 	AppID      string `json:"app_id"`
@@ -40,6 +40,8 @@ type inventoryApp struct {
 	Usage         string             `json:"usage"`
 	Auth          string             `json:"auth"`
 	MCPCounts     inventoryMCPCounts `json:"mcp_counts"`
+	MCPRoutes     inventoryMCPRoutes `json:"mcp_routes"`
+	Controls      []inventoryControl `json:"controls"`
 }
 
 type inventoryEnvelope struct {
@@ -130,11 +132,14 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 		if !known {
 			continue
 		}
-		app := inventoryApp{AppID: id, Presence: "absent", EvidenceKinds: []string{}, Usage: "unknown", Auth: "unknown"}
+		app := inventoryApp{AppID: id, Presence: "absent", EvidenceKinds: []string{}, Usage: "unknown", Auth: "unknown", MCPRoutes: inventoryMCPRoutes{Completeness: "complete"}, Controls: inventoryControls(AgentConfig{Name: spec.Name})}
 		addProbe := func(kind, status, code string) {
 			result.ProbeResults = append(result.ProbeResults, inventoryProbeResult{AppID: id, Kind: kind, Status: status, ErrorCode: code})
 			if status == "error" || status == "unknown" {
 				result.Completeness = "partial"
+				if kind == "config" {
+					app.MCPRoutes.Completeness = "partial"
+				}
 				if app.Presence == "absent" {
 					app.Presence = "unknown"
 				}
@@ -169,11 +174,17 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 					addProbe("config", "error", "config_unreadable")
 					continue
 				}
-				count, err := inventoryMCPServerCount(spec.Name, path, data)
-				if err != nil {
+				if len(data) > inventoryConfigLimit {
 					addProbe("config", "error", "config_malformed")
 					continue
 				}
+				routes, count, routeErr := inventoryConfigSummary(spec.Name, path, data)
+				if routeErr != nil || routes.Completeness == "partial" {
+					addProbe("config", "error", "config_malformed")
+					continue
+				}
+				app.MCPRoutes.add(routes)
+				inventoryObserveLocalControls(app.Controls, spec.Name, data)
 				app.MCPCounts.Configs++
 				app.MCPCounts.Servers += count
 			} else {
@@ -191,6 +202,11 @@ func collectAgentInventory(deps inventoryProbeDependencies) inventoryEnvelope {
 		}
 		status, code := inventoryRuntimePresence(deps, home, spec)
 		addProbe("runtime", status, code)
+		if app.MCPRoutes.Managed > 0 {
+			inventorySetConfigured(app.Controls, "managed_mcp", "true")
+		} else if app.MCPRoutes.Completeness == "complete" && app.MCPRoutes.Unknown == 0 {
+			inventorySetConfigured(app.Controls, "managed_mcp", "false")
+		}
 		if app.Presence != "absent" {
 			result.Apps = append(result.Apps, app)
 		}

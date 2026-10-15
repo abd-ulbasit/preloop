@@ -13,7 +13,7 @@ require (
 	github.com/yosuke-furukawa/json5 v0.1.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.46.0
+	golang.org/x/term v0.47.0
 	gopkg.in/ini.v1 v1.67.3
 	gopkg.in/yaml.v3 v3.0.1
 )

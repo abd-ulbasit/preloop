@@ -389,6 +389,40 @@ class TestEndToEndWithFakeTracker:
         assert any(problem in item for item in section_shape_problems(broken))
 
 
+class TestToolchainChecks:
+    """Step 1.0 and the summary Checks section are mandatory (#1718)."""
+
+    def test_step_runs_preflight_if_on_path(self, prompt: str) -> None:
+        assert "Step 1.0: Toolchain preflight" in prompt
+        assert "preloop-preflight --json" in prompt
+        assert "if on PATH" in prompt
+        assert "/tmp/preloop-preflight.json" in prompt
+
+    def test_summary_requires_the_checks_section(self, template: str) -> None:
+        assert "### Checks" in template
+        assert "One line per checker" in template
+        assert "Not run never counts as a pass." in template
+        assert "binary not on PATH" in template
+
+    def test_fast_path_still_runs_preflight(self, prompt: str) -> None:
+        assert "Step 1.0, Step 1.4.1 and Step 2.5.1 still run" in prompt
+
+    def test_not_run_is_never_a_pass(self, prompt: str) -> None:
+        assert "Not run never counts as a pass." in prompt
+        assert "do not invent checker results" in prompt
+
+    def test_checks_lines_carry_the_project_path(
+        self, template: str, prompt: str
+    ) -> None:
+        assert "`<path>`" in template
+        assert "When several checkers share a tool name" in prompt
+
+    def test_version_linter_waits_for_the_policy_step(self, prompt: str) -> None:
+        assert "not authorization to run a repository-supplied command" in prompt
+        assert "Do not run a version_linter until Step 1.4.1" in prompt
+        assert "Do not execute a program the pull request added" in prompt
+
+
 class TestCompatibilityPolicy:
     """The review policy file and the version-linter step are blocking."""
 
