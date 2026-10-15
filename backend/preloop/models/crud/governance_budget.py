@@ -31,16 +31,17 @@ def run_spend(
     Unknown funding is deliberately excluded rather than charged to the platform.
     """
     usage = models.ApiUsage
+    funding = usage.meta_data["funding"].astext
     rows = (
         db.query(
-            usage.meta_data["funding"].astext,
+            funding,
             func.coalesce(func.sum(cast(usage.estimated_cost, Numeric)), 0.0),
         )
         .filter(
             usage.account_id == account_id,
             usage.action_type == "model_gateway",
             usage.meta_data["purpose"].astext.in_(PURPOSES),
-            usage.meta_data["funding"].astext.in_(("platform", "account")),
+            funding.in_(("platform", "account")),
             or_(
                 and_(
                     usage.timestamp >= window_start,
@@ -50,7 +51,7 @@ def run_spend(
                 usage.meta_data["governance_run_id"].astext == str(run_id),
             ),
         )
-        .group_by(usage.meta_data["funding"].astext)
+        .group_by(funding)
         .all()
     )
     return {"platform": 0.0, "account": 0.0, **{k: float(v) for k, v in rows}}
