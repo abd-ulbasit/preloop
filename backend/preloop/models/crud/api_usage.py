@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, aliased, joinedload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from preloop.models import models
+from preloop.models.gateway_usage import GATEWAY_USAGE_PURPOSES
 from ...services.cache_accounting import uncached_input_tokens
 from ...utils.jsonb_sanitize import sanitize_for_jsonb
 from .base import CRUDBase
@@ -72,15 +73,7 @@ def _refresh_committed_row(db: Session, db_obj: Any) -> None:
             set_committed_value(db_obj, key, value)
 
 
-# Known ``meta_data.purpose`` tags for internal model-gateway usage rows.
-GATEWAY_USAGE_PURPOSES = frozenset(
-    {
-        "session_title",
-        "session_optimization",
-        "replay_validation",
-        "session_embedding",
-    }
-)
+GATEWAY_USAGE_FUNDING = frozenset({"platform", "account"})
 
 # Replay-validation re-executions are Preloop-driven measurement traffic: real
 # spend, but not the account's agent traffic. They are excluded from the
@@ -3112,6 +3105,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         runtime_principal_id: Optional[str] = None,
         model_alias: Optional[str] = None,
         purpose: Optional[str] = None,
+        funding: Optional[str] = None,
         account_ids: Optional[Sequence[str]] = None,
     ) -> float:
         """Sum estimated gateway spend for an account since a timestamp.
@@ -3127,12 +3121,15 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             runtime_principal_id: Optional runtime principal filter.
             model_alias: Optional gateway model alias filter.
             purpose: Optional ``meta_data.purpose`` filter.
+            funding: Optional ``platform`` or ``account`` analysis funding filter.
 
         Returns:
             Total estimated gateway spend in USD (``0.0`` when none).
         """
         if purpose is not None and purpose not in GATEWAY_USAGE_PURPOSES:
             raise ValueError(f"Invalid gateway usage purpose: {purpose!r}")
+        if funding is not None and funding not in GATEWAY_USAGE_FUNDING:
+            raise ValueError(f"Invalid gateway usage funding: {funding!r}")
         query = db.query(
             func.coalesce(func.sum(self.model.estimated_cost), 0.0)
         ).filter(
@@ -3158,6 +3155,8 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             # usage aggregations above. Purpose-targeted reads (e.g. the
             # optimizer's daily cap) are unaffected.
             query = query.filter(exclude_replay_usage_condition())
+        if funding is not None:
+            query = query.filter(self.model.meta_data["funding"].astext == funding)
         return float(query.scalar() or 0.0)
 
     def list_gateway_tool_usage_in_window(
