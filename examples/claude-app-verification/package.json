@@ -1,0 +1,8 @@
+{
+  "name": "preloop-claude-app-verification",
+  "private": true,
+  "description": "Hash-pinned Claude Code for the local verification image.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.296"
+  }
+}
