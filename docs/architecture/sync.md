@@ -52,6 +52,35 @@ during mixed-version deployments.
 *   **Execution:** Runs as two distinct, long-running processes (scheduler and worker) or as a one-off CLI command.
 
 
+## On-demand tracker polling
+
+Tracker creation, scope/configuration saves, and **Sync now** publish
+`poll_tracker_on_demand`; the scheduler continues publishing `poll_tracker`.
+Filtered worker pools treat these names as one family: allowing or excluding
+either name includes or excludes both, without duplicate subscriptions. Existing
+`--tasks poll_tracker` pools therefore consume both lanes.
+
+Each subject has its own pull loop, sharing the worker's existing handler
+semaphore. A serial polling pool can start an on-demand scan after the active
+scan finishes, ahead of a queued scheduled backlog. Waiting lanes share the slot
+fairly, so scheduled polling continues under sustained manual requests. This does
+not preempt an active scan or increase the configured per-process concurrency.
+A worker using the unfiltered `preloop.sync.tasks.*` wildcard still consumes one
+FIFO lane and does not gain this backlog bypass; use a filtered polling pool for
+that behavior.
+
+Delivery remains at least once. Repeated requests and redeliveries are serialized
+within a serial polling worker, but are not coalesced or globally locked across
+replicas. Fleet concurrency remains controlled by polling replicas and worker
+concurrency configuration. A prefetched message renews its lease while waiting
+for a handler slot, preventing this wait from causing an ack-timeout redelivery.
+Active scans retain their existing lease behavior.
+
+Deploy all updated workers before the API. Older filtered workers do not
+subscribe to the new subject, so messages remain queued until a compatible
+worker consumes them. Older wildcard workers match the new subject but drop the
+unknown task; they must also be upgraded before the API starts publishing it.
+
 ## Issue Tracker Clients (within Preloop Sync)
 *   **Location:** Implementations reside within Preloop Sync.
 *   **Structure:** Abstract base classes define common interfaces (`get_issue`, `create_issue`, etc.).

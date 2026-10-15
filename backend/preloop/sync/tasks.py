@@ -20,6 +20,7 @@ from typing import Any, Optional, Union
 DISPATCHABLE_TASKS: tuple[str, ...] = (
     "scan_tracker_task",
     "poll_tracker",
+    "poll_tracker_on_demand",
     "notify_admins",
     "process_webhook_event",
     "run_scheduled_flow",
@@ -48,6 +49,15 @@ async def scan_tracker_task(
     since: Optional[datetime] = None,
     force_update: bool = False,
 ) -> Optional[dict[str, Any]]:
+    return await poll_tracker(tracker_id, since, force_update)
+
+
+async def poll_tracker_on_demand(
+    tracker_id: Union[int, str],
+    since: Optional[datetime] = None,
+    force_update: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Run a user-requested scan through the shared polling worker slot."""
     return await poll_tracker(tracker_id, since, force_update)
 
 

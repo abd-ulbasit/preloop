@@ -75,3 +75,29 @@ def test_registry_matches_real_task_functions(task):
     assert callable(getattr(task_module, task, None)), (
         f"{task} is in DISPATCHABLE_TASKS but is not a function in sync.tasks"
     )
+
+
+@pytest.mark.parametrize("name", ["poll_tracker", "poll_tracker_on_demand"])
+def test_polling_pool_consumes_scheduled_and_on_demand_together(name: str) -> None:
+    subjects = _worker(tasks_allowlist=[name])._subjects_to_subscribe()
+    assert set(subjects) == {
+        "preloop.sync.tasks.poll_tracker",
+        "preloop.sync.tasks.poll_tracker_on_demand",
+    }
+
+
+@pytest.mark.parametrize("name", ["poll_tracker", "poll_tracker_on_demand"])
+def test_polling_family_exclusion_keeps_pools_disjoint(name: str) -> None:
+    polling = set(_worker(tasks_allowlist=["poll_tracker"])._subjects_to_subscribe())
+    other = set(_worker(tasks_excludelist=[name])._subjects_to_subscribe())
+    assert polling.isdisjoint(other)
+    assert polling | other == {
+        f"preloop.sync.tasks.{name}" for name in DISPATCHABLE_TASKS
+    }
+
+
+def test_explicit_polling_aliases_do_not_duplicate_subscriptions() -> None:
+    subjects = _worker(
+        tasks_allowlist=["poll_tracker", "poll_tracker_on_demand", "poll_tracker"]
+    )._subjects_to_subscribe()
+    assert len(subjects) == len(set(subjects)) == 2

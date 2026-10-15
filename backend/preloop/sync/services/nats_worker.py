@@ -52,6 +52,35 @@ async def _webhook_progress(msg: Any) -> AsyncIterator[None]:
                 logger.debug("webhook progress heartbeat finished with a result")
 
 
+SLOT_WAIT_PROGRESS_INTERVAL_SECONDS = 60.0
+
+
+async def _acquire_slot_with_progress(msg: Any, slots: asyncio.Semaphore) -> None:
+    """Renew a prefetched message's lease while fairly waiting for a slot."""
+
+    async def renew() -> None:
+        while True:
+            await asyncio.sleep(SLOT_WAIT_PROGRESS_INTERVAL_SECONDS)
+            try:
+                await msg.in_progress()
+            except Exception:
+                logger.warning("Failed to renew waiting task progress", exc_info=True)
+
+    heartbeat = asyncio.create_task(renew())
+    acquired = False
+    try:
+        await slots.acquire()
+        acquired = True
+    finally:
+        heartbeat.cancel()
+        try:
+            await asyncio.gather(heartbeat, return_exceptions=True)
+        except BaseException:
+            if acquired:
+                slots.release()
+            raise
+
+
 class PreloopSyncNatsWorker:
     def __init__(
         self,
@@ -129,10 +158,19 @@ class PreloopSyncNatsWorker:
         """
         dispatchable_tasks = tasks.DISPATCHABLE_TASKS
 
+        # Keep both polling lanes in the same pool. Existing deployments only
+        # name poll_tracker; allowing or excluding either alias must cover both
+        # so WORKQUEUE filters stay disjoint and the shared slot bounds scans.
+        polling_tasks = {"poll_tracker", "poll_tracker_on_demand"}
+
         if self.tasks_allowlist:
-            names = list(self.tasks_allowlist)
+            names = list(dict.fromkeys(self.tasks_allowlist))
+            if polling_tasks.intersection(names):
+                names.extend(sorted(polling_tasks - set(names)))
         elif self.tasks_excludelist:
             excluded = set(self.tasks_excludelist)
+            if polling_tasks.intersection(excluded):
+                excluded.update(polling_tasks)
             names = [task for task in dispatchable_tasks if task not in excluded]
             unknown = excluded - set(dispatchable_tasks)
             if unknown:
@@ -524,7 +562,7 @@ class PreloopSyncNatsWorker:
                             exc_info=True,
                         )
                     return
-                await slots.acquire()
+                await _acquire_slot_with_progress(msg, slots)
                 if not self._accepting:
                     slots.release()
                     try:
