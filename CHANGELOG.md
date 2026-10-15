@@ -68,6 +68,10 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Security
 
+- Gateway IdP rejection logs no longer include the issuer claim. That claim
+  is a slice of the bearer, so the log line now carries the same short
+  fingerprint already used for the token (CodeQL
+  `py/clear-text-logging-sensitive-data`).
 - The Claude sidecar no longer takes a session directory from a raw `cwd` in
   a `send_message`. Persistent flows name an authorized host directory
   instead, which the sidecar checks against `preloop runner dirs`.
@@ -102,6 +106,12 @@ machine. The runner never reads, copies or forwards harness credentials. See
 
 ### Added
 
+- **Unattended app enrollment.** `preloop agents onboard --unattended` exchanges
+  a short-lived single-use authority for per-app MCP credentials and writes
+  them into the selected Claude Code, Codex CLI, or Cursor config. Linux
+  requires `--target-user`. The authority cannot read account data, call MCP,
+  or invoke inference. Application login and runtime validation stay unknown.
+  See [Unattended enrollment](docs/guide/cli.md#unattended-enrollment).
 - Persistent flows on Claude Code can run in an authorized host directory
   (`agent_config.workspace`, dirty trees refused unless `allow_dirty`), use the
   flow's Claude model, and wait for the flow timeout instead of a fixed 5

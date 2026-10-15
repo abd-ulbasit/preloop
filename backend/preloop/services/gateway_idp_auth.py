@@ -20,7 +20,8 @@ Trust model, in order:
    configured issuer's discovery document over https through an outbound
    address guard. ``alg: none`` and HMAC are never accepted.
 
-Tokens are never logged; log lines carry a short fingerprint only.
+Tokens are never logged. Log lines carry a short fingerprint of the bearer
+and of the issuer claim, which is itself a slice of that bearer.
 """
 
 from __future__ import annotations
@@ -878,16 +879,28 @@ async def authenticate_idp_bearer(
         logger.exception(
             "Gateway IdP validation error (fp=%s issuer=%s)",
             _token_log_fingerprint(token),
-            issuer,
+            _issuer_log_label(issuer),
         )
         raise idp_auth_error("invalid_token") from None
+
+
+def _issuer_log_label(issuer: Optional[str]) -> str:
+    """Short digest of an issuer taken from an unverified JWT.
+
+    ``iss`` is a slice of the bearer. Logging that slice is clear-text
+    credential material (CodeQL ``py/clear-text-logging-sensitive-data``).
+    The digest still correlates which issuer rejected a token.
+    """
+    if not issuer:
+        return "none"
+    return _token_log_fingerprint(issuer)
 
 
 def _log_rejection(token: str, reason: str, issuer: Optional[str]) -> None:
     logger.info(
         "Rejected gateway IdP token (fp=%s issuer=%s reason=%s)",
         _token_log_fingerprint(token),
-        issuer,
+        _issuer_log_label(issuer),
         reason,
     )
 
