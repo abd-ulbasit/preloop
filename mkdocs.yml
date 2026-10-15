@@ -198,6 +198,7 @@ nav:
       - "DORA: the AI-agent slice": guide/dora-agent-slice.md
       - Outbound webhooks: guide/webhooks.md
       - Agent discovery reporting: guide/agent-discovery-reporting.md
+      - Endpoint coverage and threat model: guide/endpoint-coverage.md
 
   - Cost:
       - Cost analytics and budgets: guide/concepts/cost-analytics.md
@@ -268,6 +269,7 @@ nav:
       - Windows quickstart: guide/runners/quickstart-windows.md
       - Remote sessions and workspaces: guide/runners/remote-sessions.md
       - Deploy agents onto Linux hosts: operations/agent-deployment.md
+      - Staged MDM deployment recipes: operations/mdm-recipes.md
       - Runner smoke test: guide/runners/staging-smoke.md
 
   - Users and teams:
