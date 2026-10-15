@@ -1391,18 +1391,12 @@ export class ActivityFeed extends LitElement {
         width: 6px;
       }
 
-      /* The list is the one thing that scrolls. Wherever nobody hands the
-         card a height it stops at 360px, the same floor the rail gives it,
-         so the feed is one size off the rail and cannot run away with the
-         page. 360px holds about twenty rows against an in-memory cap of
-         thirty, so a full feed always overflows and the list really does
-         scroll rather than the card quietly growing to the cap.
-
-         The cap is lifted by whoever takes responsibility for the height
-         (the Overview rail sets --activity-feed-list-max-height: none),
-         not by a viewport width: this card is not only ever on the rail,
-         and a wide window is not a promise that something above it is
-         bounding the column. */
+      /* Wherever nobody lifts the stop, the list scrolls inside 360px
+         (about twenty rows against an in-memory cap of thirty) so a busy
+         hour cannot run away with a page that did not ask for that.
+         Overview sets --activity-feed-list-max-height: none and does not
+         bound the card: the rows grow, and the shell content area scrolls
+         them with the rest of the page. */
       .rows {
         display: flex;
         flex: 1 1 auto;

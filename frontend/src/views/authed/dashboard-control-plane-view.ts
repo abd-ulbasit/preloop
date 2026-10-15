@@ -1148,59 +1148,13 @@ export class DashboardView extends AuthedElement {
         gap: var(--sl-spacing-medium);
       }
 
-      /* The side column is a rail, not a stack that grows the page.
-         The .main-content element is the scroll port (console-shell), so a
-         sticky child of it sticks at the top of what the operator can see,
-         and a column that is exactly viewport-tall subtracts the header.
-
-         align-self: stretch makes the rail as tall as the row it shares
-         with the main column, so on a short page it stops at the main
-         column's foot instead of pushing the page down; the max-height
-         then caps it at one viewport. Usage keeps its natural height and
-         the feed takes what is left (flex: 1 1 0, so its own rows never
-         vote on how tall the column wants to be) and scrolls internally. */
-      @media (min-width: 1200px) {
-        .column-layout.dashboard > .side-column {
-          position: sticky;
-          top: var(--sl-spacing-medium);
-          align-self: stretch;
-          max-height: calc(
-            100dvh - var(--console-header-height) - var(--sl-spacing-medium) * 2
-          );
-        }
-
-        /* The feed asks for 480px (48dvh on a short window) and grows into
-           whatever the rail has left, but it may also shrink: Usage keeps
-           its natural height, so a fixed floor plus Usage overflowed the
-           rail's own max-height at 1440x900 and hid the "View audit" footer
-           below the window (#1645). 160px still shows the header, two rows
-           and the footer. */
-        .column-layout.dashboard > .side-column > activity-feed {
-          flex: 1 1 min(480px, 48dvh);
-          min-height: 160px;
-          /* The rail is bounded and stretched above, so here (and only
-             here) the column decides the feed's height and the card's own
-             360px stop would only make the list shorter than the space it
-             has been given. */
-          --activity-feed-list-max-height: none;
-        }
-      }
-
-      /* A window too short for Usage plus a 160px feed (1280x720 at 110%
-         zoom) gets no rail at all: the column flows with the page, so its
-         foot is reached by scrolling instead of being cut off. */
-      @media (min-width: 1200px) and (max-height: 700px) {
-        .column-layout.dashboard > .side-column {
-          position: static;
-          align-self: start;
-          max-height: none;
-        }
-
-        .column-layout.dashboard > .side-column > activity-feed {
-          flex: none;
-          min-height: 0;
-          --activity-feed-list-max-height: 360px;
-        }
+      /* Usage and Activity sit beside the main column and scroll with it.
+         The shell's .main-content is the only page scroller. A sticky
+         viewport rail hid Activity under Usage and swallowed the wheel
+         that should move the page. The feed grows with its rows (thirty
+         in memory) so a wheel over the column reaches that same scroller. */
+      .column-layout.dashboard > .side-column > activity-feed {
+        --activity-feed-list-max-height: none;
       }
 
       .summary-grid,
