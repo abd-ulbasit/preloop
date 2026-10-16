@@ -82,6 +82,9 @@ linters and shellcheck. The Publish Universal Image workflow
 (`.github/workflows/publish-universal-image.yml`) builds linux/amd64 and
 linux/arm64, smokes amd64 with `environments/universal/run-smoke.sh`, and
 publishes the multi-arch index to `ghcr.io/preloop/preloop-codex-universal`.
+The container package must be public in GitHub package settings; after pushing
+and attesting the index, the workflow verifies anonymous digest access and
+fails if access is unavailable.
 
 A pull request and the weekly schedule build and smoke only; they do not
 push. A version tag, a manual run on main, and a merge to main that changes

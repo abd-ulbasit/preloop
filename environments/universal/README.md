@@ -13,7 +13,11 @@ push. A merge to main that changes this recipe, the Perl fixtures it copies,
 or the workflow publishes, as does `workflow_dispatch` on main and a `v*`
 tag. Published tags are `sha-<12 hex chars of the commit>` and, on a version
 tag, `vX.Y.Z`. The job summary prints
-`ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`. Publishing does not automatically update the hosted default. `environments/universal/bin/preloop-preflight`
+`ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`. Publishing does
+not automatically update the hosted default. The container package must be
+public in GitHub package settings; after pushing and attesting the index,
+the workflow verifies anonymous digest access and fails if access is unavailable.
+`environments/universal/bin/preloop-preflight`
 is installed at `/usr/local/bin/preloop-preflight`. It writes
 `/tmp/preloop-preflight.json`. The schema is
 `environments/universal/bin/preloop-preflight.schema.json`. The
@@ -71,8 +75,9 @@ by the runtime user.
 The pinned upstream base keeps several toolchains under `/root`, so arbitrary
 non-root users may still fail the required-tool check. Reading the manifest
 does not make those toolchains accessible.
-A successful run prints one `PASS` line for each of Python, Java, Go, Rust,
-TypeScript, Perl, and Shell (7 lines) and exits 0. `--negative-tool` removes
+A successful run prints `PASS preloop-preflight`, followed by one `PASS` line
+for each of Python, Java, Go, Rust, TypeScript, Perl, and Shell (8 lines total),
+and exits 0. `--negative-tool` removes
 one required command in a throwaway layer and passes only if the smoke then
 exits non-zero and names that tool (`missing required tool: <name>`).
 
@@ -90,7 +95,7 @@ Keep this output with the image:
 | Image id and repo digests | `run-smoke.sh` `image id` and `repo digests` lines |
 | Compressed size | `docker image inspect --format '{{.Size}}'` (`size bytes` line) |
 | Base image | `org.opencontainers.image.base.name` (`base image` line) |
-| Smoke log | the `run-smoke.sh` stdout, including seven `PASS` lines and `perlver --blame` |
+| Smoke log | the `run-smoke.sh` stdout, including eight `PASS` lines (preflight and seven languages) and `perlver --blame` |
 | Tool manifest | `/opt/preloop-environment.json` inside the image |
 
 `/opt/preloop-environment.json` has `version` 1 and `harness` `codex` (the
