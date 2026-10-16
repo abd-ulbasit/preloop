@@ -9,14 +9,14 @@ from preloop.agents.container import ContainerAgentExecutor
 from tests.agents.test_capture_shell_nounset import _markers, _run
 
 
-@pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("scheme", ["http", "https", ""])
 def test_project_bound_clone_preserves_instance_scheme(scheme: str) -> None:
     """A project binding without a raw URL uses the tracker's scheme and port."""
     executor = ContainerAgentExecutor("codex", {}, "test-image")
     project = MagicMock(slug="example/app", organization=MagicMock(tracker_id="t"))
     tracker = MagicMock(
         tracker_type="gitlab",
-        url=f"{scheme}://gitlab.example.com:53080",
+        url=f"{scheme + '://' if scheme else ''}gitlab.example.com:53080",
         resolved_api_key="test-token",
         auth_type="api_token",
     )
@@ -31,7 +31,7 @@ def test_project_bound_clone_preserves_instance_scheme(scheme: str) -> None:
             executor._resolve_repository_clone_url(
                 {"project_id": "p"}, 0, {"account_id": "a"}, {}
             )
-            == f"{scheme}://gitlab.example.com:53080/example/app.git"
+            == f"{scheme or 'https'}://gitlab.example.com:53080/example/app.git"
         )
 
 

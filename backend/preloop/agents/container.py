@@ -6642,9 +6642,13 @@ trap _preloop_publication_cleanup EXIT
                     # A scheme-less tracker URL defaults to HTTPS.
                     from urllib.parse import urlparse
 
-                    parsed = urlparse(tracker.url)
-                    host = parsed.netloc or parsed.path
-                    scheme = parsed.scheme or "https"
+                    parsed = urlparse(
+                        tracker.url
+                        if "://" in tracker.url
+                        else f"https://{tracker.url}"
+                    )
+                    host = parsed.netloc
+                    scheme = parsed.scheme
 
                     # Ensure slug ends with .git
                     if not slug.endswith(".git"):
