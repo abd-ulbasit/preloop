@@ -128,6 +128,10 @@ use a separate human or fixture author when testing bot approval. A reviewer
 finding, discussion or commit status is separate from GitLab's merge gate.
 Do not assume an approval alone enforces a policy or that CE provides a native
 GitHub-style request-changes gate. Inspect both the review summary and status.
+The `preloop` commit status records whether the execution completed: a reviewer
+can post **Changes Requested** while that status is successful. Configure
+GitLab's merge checks separately. Requiring a successful pipeline blocks failed
+tests; a review discussion still does not create a required approval rule.
 
 ## Issue to merge request
 
