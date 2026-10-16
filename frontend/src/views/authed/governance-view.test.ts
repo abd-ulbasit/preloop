@@ -392,3 +392,50 @@ describe('Governance findings clarity', () => {
     expect(ruleLabel(null)).to.equal('Not a policy rule');
   });
 });
+
+describe('Governance week and banner', () => {
+  let api: MockApi;
+  const older: GovernanceRun = {
+    ...run,
+    id: 'run-0',
+    window_start: '2026-09-28T07:00:00Z',
+    window_end: '2026-10-05T07:00:00Z',
+    mode_after: 'off_over_budget',
+  };
+  beforeEach(() => {
+    signInForTest();
+    api = mockApi({
+      capabilities: ['governance_review'],
+      routes: [
+        { path: `${BASE}/runs`, body: () => [run, older] },
+        { path: `${BASE}/findings`, body: () => [] },
+      ],
+    });
+  });
+  afterEach(() => api.restore());
+
+  it('shows the chosen week and no stale over-budget banner', async () => {
+    const el = await fixture<GovernanceView>(
+      html`<governance-view></governance-view>`
+    );
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('Reviewed'));
+    const select = el.shadowRoot!.querySelector(
+      'select[name="run_id"]'
+    ) as HTMLSelectElement;
+    select.value = 'run-0';
+    select.dispatchEvent(new Event('change'));
+    await waitUntil(
+      () =>
+        el
+          .shadowRoot!.textContent!.replace(/\s+/g, ' ')
+          .includes('Week of Sep 28'),
+      'chosen week'
+    );
+    await el.updateComplete;
+    const chosen = el.shadowRoot!.querySelector(
+      'select[name="run_id"]'
+    ) as HTMLSelectElement;
+    expect(chosen.value).to.equal('run-0');
+    expect(el.shadowRoot!.querySelector('.over-budget')).to.equal(null);
+  });
+});

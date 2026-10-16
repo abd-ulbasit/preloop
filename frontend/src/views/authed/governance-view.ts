@@ -451,7 +451,10 @@ export class GovernanceView extends LitElement {
       ${run.sessions_summarized === 0 ? html`<p class="muted">Not yet reviewed. Session summaries start with the first hourly sweep after the review is turned on, and next week's review includes them. Findings from usage counts still appear below.</p>` : html`<p class="muted">Findings from summaries cover the ${run.sessions_summarized} reviewed sessions only.</p>`}
       ${run.status === 'partial' || run.stop_reason ? html`<sl-alert variant="warning" open class="partial"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>Partial review: ${run.stop_reason ? stopReason(run.stop_reason) : 'the run did not finish the full week'}. Findings cover only what was reviewed.</sl-alert>` : nothing}
       ${
-        run.mode_after === 'off_over_budget' && !this.dismissedBudgetBanner
+        // Only the newest run says what the review is doing now.
+        run.id === this.runs[0]?.id &&
+        run.mode_after === 'off_over_budget' &&
+        !this.dismissedBudgetBanner
           ? html`<sl-alert
               variant="warning"
               open
@@ -837,7 +840,7 @@ export class GovernanceView extends LitElement {
                           @change=${this.changeFilter}
                         >
                           <option value="" disabled>Select a week</option>
-                          ${this.runs.map((run) => html`<option value=${run.id}>${day(run.window_start)}</option>`)}
+                          ${this.runs.map((run) => html`<option value=${run.id} ?selected=${run.id === this.selectedRun?.id}>${day(run.window_start)}</option>`)}
                         </select></label
                       >
                       <span slot="count"
