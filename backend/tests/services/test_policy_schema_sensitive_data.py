@@ -209,8 +209,10 @@ def test_sensitive_data_diff_is_reported_as_one_item() -> None:
     paths = [(item.path, item.operation) for item in diff.changes]
     assert ("$.sensitive_data", "add") in paths
     reverse = compute_policy_diff(incoming, current)
-    assert ("$.sensitive_data", "remove") in [
-        (item.path, item.operation) for item in reverse.changes
+    assert not reverse.changes
+    reset = compute_policy_diff(incoming, _doc(sensitive_data={}))
+    assert [(item.path, item.operation) for item in reset.changes] == [
+        ("$.sensitive_data", "modify")
     ]
 
 

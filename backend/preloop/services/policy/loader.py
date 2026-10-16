@@ -524,6 +524,8 @@ def compute_policy_diff(
         current_items: Optional[List[Any]],
         incoming_items: Optional[List[Any]],
         name_field: str = "name",
+        *,
+        replace: bool = True,
     ) -> None:
         current_map = {
             getattr(item, name_field): item for item in (current_items or [])
@@ -533,7 +535,7 @@ def compute_policy_diff(
         }
 
         # Removed items
-        for name in set(current_map.keys()) - set(incoming_map.keys()):
+        for name in (set(current_map) - set(incoming_map)) if replace else ():
             changes.append(
                 PolicyDiffItem(
                     path=f"{path}[name={name}]",
@@ -581,24 +583,42 @@ def compute_policy_diff(
             )
         )
 
+    # These sections upsert named entries; import never deletes unlisted entries.
+    # Omitted, null, and empty lists therefore all preserve existing items.
     # Compare MCP servers
-    diff_named_lists("$.mcp_servers", current.mcp_servers, incoming.mcp_servers)
+    diff_named_lists(
+        "$.mcp_servers", current.mcp_servers, incoming.mcp_servers, replace=False
+    )
 
     # Compare approval workflows
     diff_named_lists(
-        "$.approval_workflows", current.approval_workflows, incoming.approval_workflows
+        "$.approval_workflows",
+        current.approval_workflows,
+        incoming.approval_workflows,
+        replace=False,
     )
 
     # Compare tools
-    diff_named_lists("$.tools", current.tools, incoming.tools)
-    diff_named_lists("$.access_rules", current.access_rules, incoming.access_rules)
+    diff_named_lists("$.tools", current.tools, incoming.tools, replace=False)
+    diff_named_lists(
+        "$.access_rules",
+        current.access_rules,
+        current.access_rules
+        if incoming.access_rules is None
+        else incoming.access_rules,
+    )
     diff_named_lists(
         "$.resource_shares",
         current.resource_shares,
-        incoming.resource_shares,
+        current.resource_shares
+        if incoming.resource_shares is None
+        else incoming.resource_shares,
         name_field="id",
     )
-    if current.access_rule_mode != incoming.access_rule_mode:
+    if (
+        incoming.access_rule_mode is not None
+        and current.access_rule_mode != incoming.access_rule_mode
+    ):
         changes.append(
             PolicyDiffItem(
                 path="$.access_rule_mode",
@@ -608,7 +628,10 @@ def compute_policy_diff(
             )
         )
 
-    if current.resource_access != incoming.resource_access:
+    if (
+        incoming.resource_access is not None
+        and current.resource_access != incoming.resource_access
+    ):
         changes.append(
             PolicyDiffItem(
                 path="$.resource_access",
@@ -629,7 +652,12 @@ def compute_policy_diff(
         return item.id
 
     current_map = {_model_io_name(item): item for item in (current.model_io or [])}
-    incoming_map = {_model_io_name(item): item for item in (incoming.model_io or [])}
+    # Import preserves existing model I/O rules when the section is omitted.
+    # Only an explicit list (including []) replaces it; preview the same plan.
+    incoming_model_io = (
+        current.model_io if incoming.model_io is None else incoming.model_io
+    )
+    incoming_map = {_model_io_name(item): item for item in (incoming_model_io or [])}
     for name in set(current_map.keys()) - set(incoming_map.keys()):
         changes.append(
             PolicyDiffItem(
@@ -670,7 +698,7 @@ def compute_policy_diff(
     incoming_sensitive = (
         incoming.sensitive_data.model_dump(exclude_none=True)
         if incoming.sensitive_data
-        else {}
+        else current_sensitive
     )
     if current_sensitive != incoming_sensitive:
         if not incoming_sensitive:
@@ -693,7 +721,9 @@ def compute_policy_diff(
         current.defaults.model_dump(exclude_none=True) if current.defaults else {}
     )
     incoming_defaults = (
-        incoming.defaults.model_dump(exclude_none=True) if incoming.defaults else {}
+        incoming.defaults.model_dump(exclude_none=True)
+        if incoming.defaults is not None
+        else current_defaults
     )
     if current_defaults != incoming_defaults:
         changes.append(

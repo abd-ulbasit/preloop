@@ -50,7 +50,12 @@ The guided Add rule form includes:
 - a condition field
 - detector toggles for PII, injection, and moderation
 
-YAML import and export on the same page round-trip these rules.
+YAML import and export on the same page round-trip these rules. Omitting
+`model_io` (or setting it to `null`) preserves the existing rules. An explicit
+`model_io` list replaces the section; use `model_io: []` to remove all Model I/O
+rules. The preview reflects these import semantics, so omitted rules are not
+listed as removals. To remove only one rule through YAML, supply the complete
+list you want to keep.
 
 ## Condition attributes
 
@@ -414,3 +419,14 @@ model_io:
       - expression: "injection.score > 0.7"
         action: deny
 ```
+
+Optional `sensitive_data`, `access_rules`, `access_rule_mode`, `resource_access`, and
+`resource_shares` sections also preserve their current configuration when omitted
+or set to `null`. Explicit values replace the corresponding section; use `[]`
+for list sections or `{}` for configuration maps to reset them. The preview
+uses these same import rules.
+
+The `mcp_servers`, `approval_workflows`, and `tools` sections instead add or
+update named entries. Omitted/null sections, empty lists, and entries absent
+from a supplied list preserve the existing entries. Importing `[]` does not
+clear these sections, and the preview does not report those entries as removed.

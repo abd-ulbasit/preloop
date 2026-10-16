@@ -1272,7 +1272,12 @@ class PolicyDocument(BaseModel):
         None, description="Tool configuration definitions"
     )
     model_io: Optional[List[ModelIORule]] = Field(
-        None, description="Model request and response content policy rules"
+        None,
+        description=(
+            "Model request and response content policy rules. Omitted or null "
+            "preserves existing rules on import; an explicit list replaces "
+            "them, and [] removes all model I/O rules."
+        ),
     )
     sensitive_data: Optional[SensitiveDataConfig] = Field(
         None, description="Sensitive data detectors shared by model and tool rules"
