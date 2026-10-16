@@ -24,6 +24,7 @@ def test_oss_docs_nav_has_no_weekly_governance_review() -> None:
 def test_oss_docs_have_no_weekly_governance_review_page() -> None:
     assert not (REPO_ROOT / "docs" / "guide" / "governance-review.md").exists()
     pages = list((REPO_ROOT / "docs").rglob("*.md"))
+    pages.extend(page for page in REPO_ROOT.glob("*.md") if page.name != "CHANGELOG.md")
     pages.extend((REPO_ROOT / "helm").rglob("*.md"))
     pages.extend((REPO_ROOT / "helm").rglob("*.yaml"))
     pages.append(REPO_ROOT / ".env.example")
