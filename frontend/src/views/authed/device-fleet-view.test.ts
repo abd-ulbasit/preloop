@@ -176,6 +176,19 @@ describe('Device fleet', () => {
     expect(view.shadowRoot.querySelector('form')).to.exist;
   });
 
+  it('falls back to devices for a view-only settings URL', async () => {
+    history.replaceState({}, '', '?tab=settings');
+    setup(true, ['view_device_fleet']);
+    const view = await mount();
+    expect(view.shadowRoot.textContent).to.include('example-workstation');
+    expect(view.shadowRoot.querySelector('form')).not.to.exist;
+    expect(api.callsTo('/api/v1/fleet/settings')).to.have.length(0);
+    view.onBeforeEnter({ search: '?tab=settings' });
+    await waitUntil(() => !view.loading);
+    await view.updateComplete;
+    expect(view.shadowRoot.textContent).to.include('example-workstation');
+  });
+
   it('saves complete opt-in settings using the shared wire contract', async () => {
     history.replaceState({}, '', '?tab=settings');
     setup();

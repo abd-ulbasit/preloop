@@ -83,6 +83,17 @@ describe('attention summary', () => {
     expect(formatAttentionSummary(null)).to.equal('');
   });
 
+  it('includes fleet findings and suppresses low-only wording', () => {
+    publishAttentionSummary([item('model', 'low')], 2);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '2 items need attention: 2 fleet findings'
+    );
+    publishAttentionSummary([item('flow')], 1);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '2 items need attention: 1 flow, 1 fleet finding'
+    );
+  });
+
   it('is forgotten when the account changes', () => {
     publishAttentionSummary([item('flow')]);
     expect(readAttentionSummary()?.total).to.equal(1);

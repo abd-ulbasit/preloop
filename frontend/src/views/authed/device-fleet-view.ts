@@ -182,6 +182,7 @@ export class DeviceFleetView extends LitElement {
       }
       this.active = true;
       this.manage = access.manage;
+      if (this.tab === 'settings' && !access.manage) this.tab = 'devices';
       const key = new URLSearchParams(this.routeSearch).get('device');
       const [page, device, rules] = await Promise.all([
         getDeviceFleet(controller.signal),

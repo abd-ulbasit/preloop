@@ -1,6 +1,5 @@
 import {
   hasFleetPermission,
-  getFleetRules,
   getFleetFindings,
   fleetHref,
   fleetFindingTitle,
@@ -734,9 +733,7 @@ export class AttentionView extends AuthedElement {
           return;
         this.permissions = profile?.permissions ?? null;
         this.fleetAllowed =
-          !!profile &&
-          hasFleetPermission(profile, 'view_device_fleet') &&
-          hasFleetPermission(profile, 'manage_device_fleet');
+          !!profile && hasFleetPermission(profile, 'view_device_fleet');
         this.permissionsReady = true;
       })
       .catch(() => {
@@ -798,20 +795,11 @@ export class AttentionView extends AuthedElement {
       this.fleetAllowed
     ) {
       try {
-        const [findings, settings] = await Promise.all([
-          getFleetFindings(),
-          getFleetRules(),
-        ]);
-        const attentionRules = new Set(
-          settings.items
-            .filter(
-              (rule) => rule.enabled && rule.channels.includes('attention')
-            )
-            .map((rule) => String(rule.rule))
-        );
+        const findings = await getFleetFindings();
         if (generation !== this.refreshGeneration || !this.isConnected) return;
         this.fleetFindings = findings.items.filter(
-          (item) => item.state === 'open' && attentionRules.has(item.rule)
+          (item) =>
+            item.state === 'open' && item.evidence.attention_enabled === true
         );
       } catch {
         if (generation !== this.refreshGeneration || !this.isConnected) return;
@@ -822,7 +810,7 @@ export class AttentionView extends AuthedElement {
     this.loading = false;
     // The header's bell has no budget for these nine requests; it states the
     // counts this page just derived.
-    publishAttentionSummary(this.items);
+    publishAttentionSummary(this.items, this.fleetFindings.length);
   }
 
   private get derived() {
