@@ -135,6 +135,27 @@ issue event types and label an existing issue after the hook is active. Leave
 MR creation enabled in the preset's Git configuration. Use a small issue with
 explicit acceptance criteria for the first run.
 
+Configure the implementation preset's runner-controlled verification profile
+before changing code. Its generic default refuses non-documentation changes
+until an operator supplies checks for the repository. For a Python project
+using standard-library tests, append this rule to
+`git_clone_config.verification.profile.rules`, preserving the existing universal
+checks and unknown-path default:
+
+```yaml
+- id: python-unit-tests
+  path_globs: ["*.py", "**/*.py"]
+  commands:
+    - id: unit-tests
+      command: python -m unittest
+      reason: Verify the project test suite
+      scope: shared
+```
+
+Use your repository's actual test command and toolchain. The gate re-runs it
+against the final commit before publishing; an agent's claim that tests passed
+does not replace the gate. See [Automated Issue Implementation](flows/automated-issue-implementation.md).
+
 Allow the bot to push its implementation branch. Do not protect the
 `preloop/*` branch pattern unless the bot is explicitly allowed to push it.
 Keep the default branch protected and use an MR. Check push rules for verified
