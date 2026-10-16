@@ -6095,7 +6095,9 @@ class OpenAIGatewayService:
         # Never promote an unfinished tool call to response.completed. Codex
         # persists these items and replays them on resume; an empty or partial
         # arguments string can then make every subsequent request fail.
-        candidate_items = list(items_by_id.values()) or (
+        # Inspect both sources: a statusless streamed item must not hide an
+        # explicitly unfinished item in the terminal response.
+        candidate_items = list(items_by_id.values()) + (
             (completed_response or {}).get("output") or []
         )
         for item in candidate_items:

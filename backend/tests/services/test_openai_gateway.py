@@ -2464,11 +2464,11 @@ def test_aggregate_codex_sse_stream_captures_function_call_with_arguments_deltas
 
 
 @pytest.mark.parametrize("status", ["in_progress", "incomplete"])
-@pytest.mark.parametrize("from_completed", [False, True])
+@pytest.mark.parametrize("source", ["stream", "terminal", "mixed"])
 @pytest.mark.parametrize("item_type", ["function_call", "custom_tool_call"])
 @pytest.mark.parametrize("arguments", ["", '{"target":', '{"target":"worker"}'])
 def test_aggregate_codex_events_rejects_unfinished_tool_call(
-    item_type: str, arguments: str, status: str, from_completed: bool
+    item_type: str, arguments: str, status: str, source: str
 ) -> None:
     """An interrupted tool stream must not poison the client's saved history."""
     from preloop.services.model_gateway_errors import ModelGatewayAPIError
@@ -2490,11 +2490,17 @@ def test_aggregate_codex_events_rejects_unfinished_tool_call(
     }
     event = (
         {"type": "response.completed", "response": {"output": [item]}}
-        if from_completed
+        if source != "stream"
         else {"type": "response.output_item.added", "item": item}
     )
+    events = [event]
+    if source == "mixed":
+        statusless_item = {key: value for key, value in item.items() if key != "status"}
+        events.insert(
+            0, {"type": "response.output_item.added", "item": statusless_item}
+        )
     with pytest.raises(ModelGatewayAPIError, match="unfinished tool call"):
-        service._aggregate_codex_events([event])
+        service._aggregate_codex_events(events)
 
 
 def test_aggregate_codex_sse_stream_skips_truncated_response_completed_event():
