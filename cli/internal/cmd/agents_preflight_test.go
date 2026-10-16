@@ -322,7 +322,7 @@ func TestDetectAgentAuthStateMatrix(t *testing.T) {
 
 func TestSupportLevelForAgentMatrix(t *testing.T) {
 	fullAgents := []string{"Claude Code", "Codex CLI", "OpenCode", "Gemini CLI", "Hermes", "OpenClaw", "Claude Desktop"}
-	mcpOnlyAgents := []string{"Cursor", "Windsurf", "VSCode / Copilot", "Antigravity", "Devin"}
+	mcpOnlyAgents := []string{"Cursor", "VSCode / Copilot", "Antigravity", "Devin"}
 	for _, name := range fullAgents {
 		if level := supportLevelForAgent(AgentConfig{Name: name}); level != agentSupportLevelFull {
 			t.Fatalf("expected %s to be full support, got %q", name, level)
@@ -431,7 +431,7 @@ func TestPrintAgentOnboardingSummaryShowsSupportLevelReason(t *testing.T) {
 }
 
 func TestMCPOnlyAgentModelNoteLeadsWithSupportLabel(t *testing.T) {
-	for _, name := range []string{"Cursor", "VSCode / Copilot", "Antigravity", "Devin", "Windsurf"} {
+	for _, name := range []string{"Cursor", "VSCode / Copilot", "Antigravity", "Devin"} {
 		note := mcpOnlyAgentModelNote(AgentConfig{Name: name})
 		if !strings.HasPrefix(note, mcpOnlySupportLabel) {
 			t.Fatalf("expected %s note to lead with the support label, got %q", name, note)

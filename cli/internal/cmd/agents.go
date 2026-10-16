@@ -124,18 +124,16 @@ var agentSpecs = []agentSpec{
 		Parser:      parseGenericMCP,
 	},
 	{
-		Name:        "Windsurf",
-		ConfigPaths: []string{".codeium/windsurf/mcp_config.json"},
-		Parser:      parseGenericMCP,
-	},
-	{
-		// VS Code / Copilot Chat. Onboarding writes ~/.vscode/mcp.json only.
+		// VS Code / Copilot Chat. Prefer the native user-profile MCP file;
+		// retain ~/.vscode/mcp.json for existing enrollments.
 		// Model traffic is manual BYOK (Chat: Manage Language Models ->
 		// Add Models -> Custom Endpoint, then chatLanguageModels.json).
 		// There is no config-file hook for agents onboard to rewrite.
-		Name:        "VSCode / Copilot",
-		ConfigPaths: []string{".vscode/mcp.json"},
-		Parser:      parseGenericMCP,
+		Name:                "VSCode / Copilot",
+		ConfigPaths:         []string{".vscode/mcp.json"},
+		DetectionCommands:   []string{"code", "code-insiders", "codium"},
+		BootstrapConfigPath: ".vscode/mcp.json",
+		Parser:              parseGenericMCP,
 	},
 	{
 		Name:        "Gemini CLI",
@@ -309,7 +307,7 @@ var agentsDiscoverCmd = &cobra.Command{
 MCP server configurations without mutating local files or your Preloop account.
 
 Supported agents: Pi, DeepSeek Harness, Claude Code, Claude Desktop, Cursor,
-                  Windsurf, VSCode / Copilot, Gemini CLI, OpenCode, Codex CLI,
+                  VSCode / Copilot, Gemini CLI, OpenCode, Codex CLI,
                   OpenClaw, Hermes, Antigravity, Devin, Copilot CLI.
 
 Each listed agent shows a pre-onboarding readiness probe:
@@ -617,15 +615,19 @@ func printAgentOnboardingSummary(w io.Writer, outcomes []agentOnboardingOutcome)
 // one attempted agent onboarded (fully or partially, and trivially when
 // nothing was attempted), non-zero only when every attempted agent failed.
 func agentOnboardingSummaryError(outcomes []agentOnboardingOutcome) error {
-	if len(outcomes) == 0 {
-		return nil
-	}
+	failed := 0
 	for _, outcome := range outcomes {
-		if outcome.Status != agentOnboardingStatusFailed {
+		switch outcome.Status {
+		case agentOnboardingStatusOnboarded, agentOnboardingStatusPartial:
 			return nil
+		case agentOnboardingStatusFailed:
+			failed++
 		}
 	}
-	return fmt.Errorf("failed to onboard all %d attempted agent(s)", len(outcomes))
+	if failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("failed to onboard all %d attempted agent(s)", failed)
 }
 
 // ignoreLauncherSkipped converts the partial-success launcher-skip marker to
@@ -1057,6 +1059,10 @@ func promptToOnboardDiscoveredAgents(
 	if err != nil {
 		return err
 	}
+	var outcomes []agentOnboardingOutcome
+	defer func() {
+		printAgentOnboardingSummary(os.Stdout, completeDiscoveryOutcomes(discovered, outcomes))
+	}()
 	if len(candidates) == 0 {
 		fmt.Println("All discovered agents are already onboarded or have local managed enrollment state.")
 		return nil
@@ -1080,7 +1086,7 @@ func promptToOnboardDiscoveredAgents(
 	// take ~5s) and a slow upstream for one agent never blocks subsequent
 	// agents from being touched.
 	deferLiveValidate := !skipLiveValidate
-	outcomes, err := promptToOnboardCandidatesTiered(os.Stdin, os.Stdout, client, candidates, autoApprove, true, func(agent AgentConfig, approvals bool) error {
+	outcomes, err = promptToOnboardCandidatesTiered(os.Stdin, os.Stdout, client, candidates, autoApprove, true, func(agent AgentConfig, approvals bool) error {
 		return executeManagedEnrollment(agent, managedEnrollmentOptions{
 			Client: client,
 			// AutoApprove carries the -y flag so per-agent sub-prompts
@@ -1103,7 +1109,7 @@ func promptToOnboardDiscoveredAgents(
 	// validating; only failed agents are excluded.
 	var enrolled []AgentConfig
 	for _, outcome := range outcomes {
-		if outcome.Status != agentOnboardingStatusFailed {
+		if outcome.Status == agentOnboardingStatusOnboarded || outcome.Status == agentOnboardingStatusPartial {
 			enrolled = append(enrolled, outcome.Agent)
 		}
 	}
@@ -1111,7 +1117,6 @@ func promptToOnboardDiscoveredAgents(
 		liveResults := runDeferredLiveValidationsParallel(client, enrolled, os.Stdout)
 		applyLiveValidationOutcomesToSummary(outcomes, liveResults)
 	}
-	printAgentOnboardingSummary(os.Stdout, outcomes)
 	return agentOnboardingSummaryError(outcomes)
 }
 
@@ -1119,8 +1124,7 @@ func promptToOnboardDiscoveredAgents(
 // unless autoApprove is set, and enrolls each approved agent. An error from
 // one agent's enrollment is recorded as a failed/partial outcome and the loop
 // continues with the remaining agents; only prompt I/O failures abort the
-// loop. The returned outcomes cover every attempted agent (skipped agents are
-// not included).
+// loop. Outcomes include explicitly declined agents as skipped.
 func promptToOnboardCandidates(
 	reader io.Reader,
 	writer io.Writer,
@@ -1147,6 +1151,7 @@ func promptToOnboardCandidates(
 				return outcomes, fmt.Errorf("failed to read onboarding confirmation: %w", err)
 			}
 			if !confirmed {
+				outcomes = append(outcomes, agentOnboardingOutcome{Agent: agent, Status: "skipped", Reason: "onboarding declined"})
 				continue
 			}
 		}
@@ -1562,7 +1567,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 		}
 		var enrolled []AgentConfig
 		for _, outcome := range outcomes {
-			if outcome.Status != agentOnboardingStatusFailed {
+			if outcome.Status == agentOnboardingStatusOnboarded || outcome.Status == agentOnboardingStatusPartial {
 				enrolled = append(enrolled, outcome.Agent)
 			}
 		}
@@ -2037,7 +2042,7 @@ func runAgentsValidate(cmd *cobra.Command, args []string) error {
 		}
 
 		if runLiveValidation && status == "validated" {
-			liveResult, liveErr := runManagedAgentLiveValidation(client, agent, existingValidation)
+			liveResult, liveErr := runManagedAgentLiveValidation(client, agent, currentLiveValidationInputs(existingValidation, result))
 			if liveResult != nil {
 				result = mergeStringMaps(result, liveResult.ValidationResult)
 				if liveResult.Attempted && !liveResult.Passed {
@@ -3741,6 +3746,11 @@ func detectInstalledAgent(home string, spec agentSpec) (string, bool) {
 		return "", false
 	}
 	bootstrapPath := expandAgentConfigPath(home, filepath.Join(home, spec.BootstrapConfigPath))
+	if spec.Name == "VSCode / Copilot" {
+		if dirs := userConfigDirs(home); len(dirs) > 0 {
+			bootstrapPath = filepath.Join(dirs[0], "Code", "User", "mcp.json")
+		}
+	}
 	if spec.Name == devinAgentName {
 		if path, err := devinConfigPath("mcp_config.json"); err == nil {
 			bootstrapPath = path

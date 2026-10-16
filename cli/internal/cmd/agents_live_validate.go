@@ -31,10 +31,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -159,13 +161,17 @@ func runGatewayLiveValidation(
 	builder gatewayLiveValidationBuilder,
 ) (*managedLiveValidationOutcome, error) {
 	failedOutcome := func(err error) (*managedLiveValidationOutcome, error) {
+		status := "failed"
+		if isLiveValidationTimeout(err) {
+			status = "timeout"
+		}
 		return &managedLiveValidationOutcome{
 			Attempted: true,
 			Passed:    false,
 			ValidationResult: mergeStringMaps(validationResult, map[string]interface{}{
 				"live_validation_attempted": true,
 				"live_validation_passed":    false,
-				"live_validation_status":    "failed",
+				"live_validation_status":    status,
 				"live_validation_error":     err.Error(),
 				"live_validation_endpoint":  endpointKey,
 			}),
@@ -236,6 +242,7 @@ func runGatewayLiveValidation(
 	}
 
 	gatewayClient := api.NewGatewayProbeClient(baseURL, spec.Token)
+	gatewayClient.SetTimeout(120 * time.Second)
 	postProbe := func() error {
 		var gatewayResponse map[string]interface{}
 		if len(spec.Headers) == 0 {
@@ -271,6 +278,8 @@ func runGatewayLiveValidation(
 		liveValidationStatus = "throttled"
 	} else if isUpstreamBillingValidationError(requestErr) {
 		liveValidationStatus = "upstream_unavailable"
+	} else if isLiveValidationTimeout(requestErr) {
+		liveValidationStatus = "timeout"
 	} else if isUpstreamTransientValidationError(requestErr) {
 		liveValidationStatus = "upstream_transient"
 	}
@@ -541,7 +550,7 @@ func liveValidationStatusKeepsGatewayConfig(validationResult map[string]interfac
 		return false
 	}
 	status, _ := validationResult["live_validation_status"].(string)
-	return status == "upstream_transient"
+	return status == "upstream_transient" || status == "timeout"
 }
 
 // liveValidationUpstreamNote explains an upstream-side refusal to the operator,
@@ -552,6 +561,8 @@ func liveValidationUpstreamNote(validationResult map[string]interface{}) string 
 	}
 	status, _ := validationResult["live_validation_status"].(string)
 	switch status {
+	case "timeout":
+		return "the live validation probe timed out; model routing and credentials remain unverified"
 	case "throttled":
 		return "the upstream provider rate-limited the live validation probe"
 	case "upstream_unavailable":
@@ -1554,10 +1565,12 @@ func printDeferredLiveValidationLine(
 	if result.Err != nil {
 		status, _ := result.Outcome.ValidationResult["live_validation_status"].(string)
 		switch status {
-		case "throttled", "upstream_unavailable", "upstream_transient":
+		case "throttled", "upstream_unavailable", "upstream_transient", "timeout":
 			// Keep the nuanced status wording for inconclusive upstream outcomes.
 			label := "failed"
 			switch status {
+			case "timeout":
+				label = "inconclusive (request timed out)"
 			case "throttled":
 				label = "throttled"
 			case "upstream_unavailable":
@@ -1609,9 +1622,8 @@ func deferredLiveValidationModelAlias(result deferredLiveValidationResult) strin
 // applyLiveValidationOutcomesToSummary folds deferred live-validation
 // results back into the batch onboarding outcomes so the final summary
 // table never prints a bare "onboarded  -" row for an agent whose model
-// traffic is unverified. The onboarding Status is left untouched (the
-// enrollment itself succeeded); only the Reason column gains the
-// validation outcome and the re-verify command.
+// traffic is unverified. Unsuccessful attempted probes make the status partial;
+// the Reason column gains the validation outcome and recovery command.
 func applyLiveValidationOutcomesToSummary(
 	outcomes []agentOnboardingOutcome,
 	results []deferredLiveValidationResult,
@@ -1625,6 +1637,9 @@ func applyLiveValidationOutcomesToSummary(
 		for i := range outcomes {
 			if resolveAgentDisplayName(outcomes[i].Agent) != name {
 				continue
+			}
+			if result.Outcome != nil && result.Outcome.Attempted && !result.Outcome.Passed && outcomes[i].Status == agentOnboardingStatusOnboarded {
+				outcomes[i].Status = agentOnboardingStatusPartial
 			}
 			if outcomes[i].Reason == "" {
 				outcomes[i].Reason = reason
@@ -1652,6 +1667,8 @@ func liveValidationSummaryReason(result deferredLiveValidationResult) string {
 	)
 	status, _ := result.Outcome.ValidationResult["live_validation_status"].(string)
 	switch status {
+	case "timeout":
+		return "live validation inconclusive (request timed out); model routing retained; " + revalidate
 	case "throttled":
 		return "live validation throttled — model traffic unverified; " + revalidate
 	case "upstream_unavailable":
@@ -1687,4 +1704,23 @@ func shellQuoteAgentName(name string) string {
 		"\n", "\\n",
 	).Replace(name)
 	return `"` + escaped + `"`
+}
+
+// A transport timeout establishes neither invalid credentials nor working routing.
+// Do not retry generation automatically: the timed-out request may still be billed.
+func isLiveValidationTimeout(err error) bool {
+	var networkError net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout())
+}
+
+// Saved probe metadata must not override the configuration we just inspected.
+func currentLiveValidationInputs(saved, current map[string]interface{}) map[string]interface{} {
+	result := mergeStringMaps(saved, current)
+	// A new probe replaces old evidence, errors, and skip/rollback reasons.
+	for key := range result {
+		if strings.HasPrefix(key, "live_validation_") {
+			delete(result, key)
+		}
+	}
+	return result
 }

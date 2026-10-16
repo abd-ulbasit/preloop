@@ -111,7 +111,7 @@ const AVAILABLE_AGENT_KINDS = [
   { value: 'gemini_cli', label: 'Gemini CLI' },
   { value: 'hermes', label: 'Hermes' },
   { value: 'cursor', label: 'Cursor' },
-  { value: 'windsurf', label: 'Windsurf' },
+  { value: 'devin', label: 'Devin' },
   { value: 'desktop_agent', label: 'Desktop Agent' },
   { value: 'custom', label: 'Custom' },
   { value: 'flows', label: 'Flows' },

@@ -44,6 +44,7 @@ export const AGENT_KIND_PRESENTATION: Record<string, AgentKindPresentation> = {
   deepseek: { label: 'DeepSeek Harness', icon: 'terminal' },
   hermes: { label: 'Hermes', icon: '', logo: '/images/logos/hermes.svg' },
   cursor: { label: 'Cursor', icon: '', logo: '/images/logos/cursor.svg' },
+  // Retain presentation for historical enrollments; no new onboarding.
   windsurf: {
     label: 'Windsurf',
     icon: '',
@@ -79,7 +80,6 @@ export const CLI_ONBOARDABLE_AGENT_KINDS: ReadonlySet<string> = new Set([
   'pi',
   'deepseek',
   'cursor',
-  'windsurf',
   'vscode',
   'copilot_cli',
   'antigravity',

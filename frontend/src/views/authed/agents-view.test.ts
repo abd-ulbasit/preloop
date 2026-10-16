@@ -817,7 +817,7 @@ describe('AgentsView', () => {
         'pi',
         'deepseek',
         'cursor',
-        'windsurf',
+        'devin',
         'desktop_agent',
         'custom',
         'flows',

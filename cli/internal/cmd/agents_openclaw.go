@@ -7504,6 +7504,13 @@ func configPathsForAgentSpec(home string, spec agentSpec) []string {
 			addPath(path)
 		}
 	}
+	if spec.Name == "VSCode / Copilot" {
+		for _, dir := range userConfigDirs(home) {
+			for _, app := range []string{"Code", "Code - Insiders", "VSCodium"} {
+				addPath(filepath.Join(dir, app, "User", "mcp.json"))
+			}
+		}
+	}
 	for _, relPath := range spec.ConfigPaths {
 		addPath(filepath.Join(home, relPath))
 	}
