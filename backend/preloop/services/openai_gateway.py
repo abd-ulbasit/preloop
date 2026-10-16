@@ -6092,6 +6092,27 @@ class OpenAIGatewayService:
                 message=str(message),
             )
 
+        # Never promote an unfinished tool call to response.completed. Codex
+        # persists these items and replays them on resume; an empty or partial
+        # arguments string can then make every subsequent request fail.
+        # Inspect both sources: a statusless streamed item must not hide an
+        # explicitly unfinished item in the terminal response.
+        candidate_items = list(items_by_id.values())
+        terminal_output = (completed_response or {}).get("output")
+        if isinstance(terminal_output, list):
+            candidate_items.extend(terminal_output)
+        for item in candidate_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"function_call", "custom_tool_call"} and item.get(
+                "status"
+            ) in {"in_progress", "incomplete"}:
+                raise ModelGatewayAPIError(
+                    provider="openai",
+                    status_code=502,
+                    message="Codex upstream returned an unfinished tool call",
+                )
+
         # Materialise final ``output`` items from the per-item buffers.
         output: List[Dict[str, Any]] = []
         aggregate_text_parts: List[str] = []
