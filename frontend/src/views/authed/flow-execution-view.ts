@@ -3634,9 +3634,10 @@ ${execution.resolved_input_prompt}</pre>
             class="strip-value"
             data-testid="strip-cost"
             title=${
-              execution.cost_priced_at
-                ? `Priced at ${parseUTCDate(execution.cost_priced_at).toLocaleString()}`
-                : nothing
+              'Estimated model cost from usage records. Hosted credit spend can differ because it uses the hosted tariff and includes charged retries.' +
+              (execution.cost_priced_at
+                ? ` Priced at ${parseUTCDate(execution.cost_priced_at).toLocaleString()}`
+                : '')
             }
             >${costText}${costCeiling}${this.renderRepricedNote(
               execution

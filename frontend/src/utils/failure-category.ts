@@ -45,7 +45,7 @@ export const FAILURE_CATEGORY_META: Record<string, FailureCategoryMeta> = {
   model_auth: {
     label: 'model auth',
     tooltip:
-      'The gateway rejected the credentials this run was using, so the model was never reached.',
+      'A model request was rejected because its credentials were invalid. Earlier requests in the run may have succeeded.',
   },
   provider_billing: {
     label: 'provider billing',

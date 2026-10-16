@@ -150,3 +150,24 @@ selection. Reads by ID and explicit historical-pricing/spend-accounting queries
 continue to include them, so retirement does not erase past usage from caps.
 Account-owned provider configurations remain available independently of these
 operator markers.
+
+
+### Reservation capacity and cost estimates
+
+Each physical hosted request reserves its verified worst-case input and output
+cost before dispatch. A positive credit balance can therefore be too small for
+another request, even when its expected final cost is lower. The reservation is
+released on verified settlement; unknown dispatched costs stay held.
+
+When outstanding calls hold enough credit to block a request that would otherwise
+fit, the gateway returns HTTP 429 with `Retry-After`. Clients should use their
+existing bounded retry policy. If the balance after settled spending cannot cover
+the reservation even without holds, HTTP 402 is terminal until credit or the
+request changes. Refusals report the required reservation, available amount,
+settled spending, outstanding holds, and limit.
+
+Execution cost is an estimate from recorded usage and its selected pricing. The
+hosted credit ledger charges the fixed hosted tariff, including physical attempts
+that may end in a gateway error. Catalog cache discounts and missing usage on
+failed attempts can make an execution estimate lower than credit spent. The
+account credit balance is the durable ledger balance, not that estimate.
