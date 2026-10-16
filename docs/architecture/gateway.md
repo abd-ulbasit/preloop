@@ -212,3 +212,18 @@ and stops requests after a rate limit. Recovered per-request costs are tagged
 unavailable records, ambiguous costs, and exhausted lookup budgets remain
 unpriced. Dry runs can preview these provider reads without changing usage.
 The `provider_lookup` response counters explain recovery and unresolved work.
+
+### Hosted reasoning output allowance
+
+For hosted Alibaba DeepSeek models using Responses-to-chat translation, requests
+without an output limit receive an explicit allowance of 8,192 tokens, bounded by
+the model's configured output ceiling. Set
+`GATEWAY_HOSTED_REASONING_MAX_OUTPUT_TOKENS` (256–32,768) to change this default.
+The effective allowance enters budget preflight before any upstream request;
+account and flow denials still stop the request. Explicit client limits are
+preserved and `max_output_tokens` translates to chat `max_tokens`.
+
+This avoids relying on an upstream default that can run out while producing only
+reasoning. A reasoning-only stream ending with `finish_reason=length` fails with
+`output_budget_exhausted`, without confirming task completion. It does not retry
+with a larger allowance or submit a review on the agent's behalf.
