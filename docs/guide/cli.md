@@ -220,7 +220,7 @@ native binary.
 | Cursor | Yes | Manual BYOK: set the OpenAI base-URL override in Cursor's Settings → Models yourself; covers the AI panel incl. Agent mode | n/a |
 | Claude Desktop | Yes | Yes: the default onboarding installs the direct route into this device's managed configuration (asks for administrator rights); `--model-route direct` or `apps-gateway` prints it for your MDM ([Claude Desktop](clients/claude-desktop.md)) | n/a |
 | Windsurf | Yes | No | n/a |
-| VS Code / Copilot | Yes | Manual BYOK: Chat: Manage Language Models -> Add Models -> Custom Endpoint, then `chatLanguageModels.json`. Full URLs end in `/openai/v1/chat/completions`, `/openai/v1/responses`, or `/anthropic/v1/messages`. Set `toolCalling: true`. Business and Enterprise need the admin BYOK policy. See [VS Code Copilot](clients/vscode-copilot.md) | n/a |
+| VS Code / Copilot | Native user-profile configuration; verify server/session authentication | Manual BYOK: Chat: Manage Language Models -> Add Models -> Custom Endpoint, then `chatLanguageModels.json`. Full URLs end in `/openai/v1/chat/completions`, `/openai/v1/responses`, or `/anthropic/v1/messages`. Set `toolCalling: true`. Business and Enterprise need the admin BYOK policy. See [VS Code Copilot](clients/vscode-copilot.md) | n/a |
 | Copilot CLI | Yes (`~/.copilot/mcp-config.json`) | No on onboard. `preloop copilot` launches the CLI with gateway env vars | n/a |
 | Antigravity | Yes | No (locked to Google-hosted models) | n/a |
 | Devin | Yes | No (inference runs in Cognition's cloud) | n/a |
