@@ -1,7 +1,7 @@
 """Webhook model."""
 
 import uuid
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import ForeignKey, String, JSON
 from sqlalchemy.dialects.postgresql import UUID
@@ -24,6 +24,12 @@ class Webhook(Base):
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     secret: Mapped[str] = mapped_column(String(255), nullable=False)
     events: Mapped[List[str]] = mapped_column(JSON, nullable=False)
+
+    # Verified namespace retained when the callback's original grant disconnects.
+    jira_cloud_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    jira_provider_subject: Mapped[Optional[str]] = mapped_column(
+        String(1000), nullable=True
+    )
 
     # Foreign keys
     project_id: Mapped[uuid.UUID] = mapped_column(

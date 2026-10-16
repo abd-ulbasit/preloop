@@ -169,7 +169,8 @@ async def test_scan_tracker_force_update_ignores_polling_time(
             "projects": 1,
             "issues": 5,
             "embeddings_updated": 5,
-            "organizations": {"errors": 0},
+            "organizations": {"errors": 1},
+            "errors": 1,
         }
         # Act
         stats = await scan_tracker(
@@ -178,6 +179,8 @@ async def test_scan_tracker_force_update_ignores_polling_time(
 
         # Assert
         mock_process_org.assert_called_once()
+        assert stats["organizations"]["errors"] == 1
+        assert stats["errors"] == 1
         assert stats["organizations"]["processed"] == 1
         assert stats["organizations"]["skipped_polling"] == 0
 
@@ -725,6 +728,7 @@ async def test_process_organization_jira_manual_webhook_is_not_an_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("registration_fails", [False, True])
 @patch("preloop.sync.scanner.core.crud_organization")
 @patch("os.getenv")
 async def test_process_organization_managed_jira_uses_dynamic_webhook(
@@ -733,21 +737,27 @@ async def test_process_organization_managed_jira_uses_dynamic_webhook(
     mock_db_session,
     mock_organization,
     mock_project,
+    registration_fails,
 ):
     """A managed Jira grant syncs one dynamic webhook, never the classic path."""
     mock_getenv.return_value = "http://test.com"
     mock_client = AsyncMock(spec=TrackerClient)
     mock_client.client = AsyncMock()
     mock_client.client.managed = True
+    mock_client.tracker = MagicMock(id="tracker")
     mock_client.client.sync_dynamic_webhooks = AsyncMock(
         return_value={"action": "refreshed", "webhook_id": "1000"}
     )
+    if registration_fails:
+        mock_client.client.sync_dynamic_webhooks.side_effect = RuntimeError(
+            "registration rejected"
+        )
     mock_client.client.register_webhook = MagicMock()
     mock_client.scan_projects.return_value = [mock_project]
     mock_client.scan_issues.return_value = ([], 0)
     mock_client.tracker_type = "jira"
 
-    await _process_organization(
+    stats = await _process_organization(
         db=mock_db_session,
         client=mock_client,
         org=mock_organization,
@@ -760,6 +770,9 @@ async def test_process_organization_managed_jira_uses_dynamic_webhook(
     assert args[1] == [mock_project]
     assert args[2].endswith(f"/api/v1/private/webhooks/jira/{mock_organization.id}")
     mock_client.client.register_webhook.assert_not_called()
+    assert stats["errors"] == int(registration_fails)
+    assert stats["organizations"]["errors"] == int(registration_fails)
+    mock_client.scan_issues.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -962,3 +975,58 @@ async def test_scan_projects_skips_missing_identifier(
 
         # Assert
         assert len(projects) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tracker_type", ["jira", "github", "gitlab", "gitlab-ce", "bitbucket"]
+)
+async def test_webhook_registration_failures_count_in_scan_errors(
+    tracker_type, mock_db_session, mock_organization, mock_project, monkeypatch
+):
+    """Every provider's registration failures remain visible in scan totals."""
+    monkeypatch.setenv("PRELOOP_URL", "https://preloop.example")
+    client = AsyncMock(spec=TrackerClient)
+    client.tracker = MagicMock(
+        id="tracker", meta_data={"gitlab_ce": tracker_type == "gitlab-ce"}
+    )
+    client.tracker_type = "gitlab" if tracker_type == "gitlab-ce" else tracker_type
+    client.client = MagicMock()
+    client.client.managed = False
+    client.client.webhook_status = None
+    client.client.is_webhook_registered_for_organization = AsyncMock(return_value=False)
+    client.client.is_webhook_registered_for_project = (
+        MagicMock(return_value=False)
+        if tracker_type == "jira"
+        else AsyncMock(return_value=False)
+    )
+    registration = MagicMock if tracker_type == "jira" else AsyncMock
+    client.client.register_webhook = registration(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.client.register_group_webhook = AsyncMock(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.client.register_project_webhook = AsyncMock(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.scan_projects.return_value = [mock_project]
+    client.scan_issues.return_value = ([], 0)
+    stats = await _process_organization(
+        db=mock_db_session,
+        client=client,
+        org=mock_organization,
+        since=None,
+        force_update=False,
+    )
+    assert stats["organizations"]["errors"] > 0
+    assert stats["errors"] == stats["organizations"]["errors"]
+    client.scan_issues.assert_awaited_once()
+    if tracker_type == "gitlab":
+        client.client.register_group_webhook.assert_awaited_once()
+    elif tracker_type == "gitlab-ce":
+        client.client.register_project_webhook.assert_awaited_once()
+    elif tracker_type == "jira":
+        client.client.register_webhook.assert_called_once()
+    else:
+        client.client.register_webhook.assert_awaited_once()

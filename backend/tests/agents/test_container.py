@@ -1883,6 +1883,21 @@ class TestProjectRepoUrlForAppTrackers:
             == "https://github.com/preloop/preloop.git"
         )
 
+    def test_managed_bitbucket_without_stored_key_yields_clean_url(
+        self, container_executor
+    ):
+        tracker = MagicMock(
+            id="tracker-managed",
+            resolved_api_key="",
+            auth_type="managed_oauth",
+            tracker_type="bitbucket",
+            url="https://bitbucket.org",
+        )
+        assert (
+            self._lookup(container_executor, tracker)
+            == "https://bitbucket.org/preloop/preloop.git"
+        )
+
     def test_pat_tracker_without_a_key_is_still_refused(self, container_executor):
         tracker = MagicMock(
             id="tracker-pat",

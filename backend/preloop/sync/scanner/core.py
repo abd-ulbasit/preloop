@@ -652,6 +652,7 @@ async def _process_organization(
                         e,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "jira":
                 if getattr(client.client, "webhook_status", None) == "manual_required":
                     logger.info(
@@ -709,6 +710,7 @@ async def _process_organization(
                                 exc_info=True,
                             )
                             org_stats["organizations"]["errors"] += 1
+                            org_stats["errors"] += 1
             elif client.tracker_type == "github":
                 try:
                     if not await client.client.is_webhook_registered_for_organization(
@@ -726,6 +728,7 @@ async def _process_organization(
                         exc_info=True,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "gitlab":
                 try:
                     # Check if tracker is already marked as GitLab CE
@@ -788,12 +791,14 @@ async def _process_organization(
                                     exc_info=True,
                                 )
                                 org_stats["organizations"]["errors"] += 1
+                                org_stats["errors"] += 1
                 except Exception as e:
                     logger.error(
                         f"Error registering webhook for GitLab organization {org.identifier}: {e}",
                         exc_info=True,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "bitbucket":
                 # Bitbucket hooks are per repository; the workspace-level hook
                 # API is not used so a repository access token also works.
@@ -814,6 +819,7 @@ async def _process_organization(
                             exc_info=True,
                         )
                         org_stats["organizations"]["errors"] += 1
+                        org_stats["errors"] += 1
             else:
                 # Handle other tracker types here if necessary
                 pass
@@ -833,6 +839,7 @@ async def _process_organization(
                 exc_info=True,
             )
             org_stats["organizations"]["errors"] += 1
+            org_stats["errors"] += 1
 
     # Polling logic
     for project in projects:
@@ -902,6 +909,9 @@ async def scan_tracker(
                 db, client, org, since, force_update
             )
             stats["organizations"]["processed"] += 1
+            stats["organizations"]["errors"] += org_stats.get("organizations", {}).get(
+                "errors", 0
+            )
             for key in stats:
                 if not isinstance(stats[key], dict):
                     stats[key] += org_stats.get(key, 0)

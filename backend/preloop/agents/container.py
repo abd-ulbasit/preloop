@@ -6601,13 +6601,12 @@ trap _preloop_publication_cleanup EXIT
 
                 # A tracker with no usable credential cannot clone a private
                 # repository, so refusing here gives a clearer error than a
-                # failed clone. App-authenticated trackers are the exception:
-                # they legitimately store no key, their token is minted by the
-                # orchestrator and delivered through the execution context.
-                if (
-                    not tracker.resolved_api_key
-                    and (tracker.auth_type or "").lower() not in APP_AUTH_TYPES
-                ):
+                # failed clone. App and managed OAuth trackers store no key:
+                # the orchestrator resolves their fresh credential and delivers
+                # it through the execution context.
+                if not tracker.resolved_api_key and (
+                    tracker.auth_type or ""
+                ).lower() not in APP_AUTH_TYPES | {MANAGED_AUTH_TYPE}:
                     self.logger.warning(
                         f"Tracker {tracker.id} has no API key configured"
                     )

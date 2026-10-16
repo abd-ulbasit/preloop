@@ -19,6 +19,8 @@ from preloop.models.crud import (
     crud_organization,
     crud_project,
     crud_tracker,
+    crud_webhook,
+    crud_tracker_scope_rule,
 )
 from preloop.models.db.session import get_db_session, _safe_close_db_session
 from preloop.models.crud.project import find_repository_projects, repository_host
@@ -111,6 +113,7 @@ class _WebhookPlan:
     tracker_id: Any = None
     organization_id: Any = None
     db_processed: Optional[bool] = None
+    received_organization_ids: list[str] = field(default_factory=list)
 
     def queue_task(self, name: str, *args: Any, **kwargs: Any) -> None:
         self.tasks.append((name, args, kwargs))
@@ -145,6 +148,10 @@ async def receive_webhook(
         try:
             if tracker_type.lower() == BITBUCKET_DC_TRACKER_TYPE:
                 return _prepare_bitbucket_dc_webhook(
+                    organization_id, raw_body, headers, db, plan
+                )
+            if tracker_type.lower() == "jira":
+                return _prepare_shared_jira_webhook(
                     organization_id, raw_body, headers, db, plan
                 )
             return _prepare_webhook(
@@ -183,11 +190,14 @@ async def receive_webhook(
 
         def update_timestamp() -> None:
             try:
-                crud_organization.touch_webhook(
-                    db,
-                    organization_id=plan.organization_id,
-                    observed_at=datetime.now(timezone.utc),
-                )
+                for received_id in plan.received_organization_ids or [
+                    plan.organization_id
+                ]:
+                    crud_organization.touch_webhook(
+                        db,
+                        organization_id=received_id,
+                        observed_at=datetime.now(timezone.utc),
+                    )
             finally:
                 _safe_close_db_session(db)
 
@@ -488,6 +498,130 @@ def _verify_managed_jira_delivery(
             tracker.id,
         )
         raise denied
+
+
+def _jira_delivery_identity(raw_body: bytes, headers: Mapping[str, str]) -> str:
+    """Keep retries stable when Jira does not supply its delivery identifier."""
+    return (
+        headers.get("X-Atlassian-Webhook-Identifier")
+        or headers.get("x-atlassian-webhook-identifier")
+        or "jira:" + hashlib.sha256(raw_body).hexdigest()
+    )
+
+
+def _prepare_shared_jira_webhook(
+    organization_id: str,
+    raw_body: bytes,
+    headers: Mapping[str, str],
+    db: Session,
+    plan: _WebhookPlan,
+) -> dict[str, Any]:
+    """Dispatch a signed shared callback only to explicit registration owners."""
+    from urllib.parse import urljoin
+    from preloop.config import settings
+    from preloop.utils.tracker_scope import project_scope_identifiers
+
+    anchor = crud_organization.get_with_tracker(db, id=organization_id)
+    if anchor is None or not anchor.tracker or not is_managed_tracker(anchor.tracker):
+        return _prepare_webhook("jira", organization_id, raw_body, headers, db, plan)
+    denied = HTTPException(status_code=403, detail="Invalid Jira delivery")
+    verifier = get_managed_webhook_verifier("jira")
+    try:
+        verified = verifier is not None and bool(
+            verifier.verify(
+                authorization=headers.get("Authorization")
+                or headers.get("authorization")
+            )
+        )
+    except Exception:
+        raise denied from None
+    if not verified:
+        raise denied
+    try:
+        payload = json.loads(raw_body)
+    except ValueError:
+        raise denied from None
+    matched = payload.get("matchedWebhookIds") if isinstance(payload, dict) else None
+    if not isinstance(matched, list) or not 0 < len(matched) <= 100:
+        raise denied
+    matched_ids = {str(i) for i in matched if str(i).isdigit()}
+    if not matched_ids:
+        raise denied
+    callback_url = urljoin(
+        str(settings.preloop_url), f"/api/v1/private/webhooks/jira/{anchor.id}"
+    )
+    context = crud_webhook.jira_callback_namespace(
+        db, callback_url=callback_url, matched_ids=matched_ids
+    ) or crud_webhook.jira_callback_context(db, tracker_id=str(anchor.tracker_id))
+    if context is None:
+        raise denied
+    candidates = crud_webhook.get_jira_callback_projects(
+        db,
+        callback_url=callback_url,
+        cloud_id=context[0],
+        provider_subject=context[1],
+        matched_ids=matched_ids,
+    )
+    if not candidates:
+        raise denied
+    issue = payload.get("issue")
+    fields = issue.get("fields") if isinstance(issue, dict) else None
+    external_project = fields.get("project") if isinstance(fields, dict) else None
+    if not isinstance(external_project, dict):
+        raise denied
+    eligible: dict[str, Any] = {}
+    for project in candidates:
+        tracker = project.organization.tracker
+        identities = project_scope_identifiers(
+            "jira", project.identifier, jira_key=project.slug
+        )
+        if not identities.intersection(
+            {
+                str(external_project.get("id") or ""),
+                str(external_project.get("key") or ""),
+            }
+        ):
+            continue
+        rules = crud_tracker_scope_rule.get_by_tracker(
+            db, tracker_id=tracker.id, account_id=tracker.account_id
+        )
+        orgs = {
+            r.identifier
+            for r in rules
+            if r.scope_type == "ORGANIZATION" and r.rule_type == "INCLUDE"
+        }
+        includes = {
+            r.identifier
+            for r in rules
+            if r.scope_type == "PROJECT" and r.rule_type == "INCLUDE"
+        }
+        excludes = {
+            r.identifier
+            for r in rules
+            if r.scope_type == "PROJECT" and r.rule_type == "EXCLUDE"
+        }
+        if (
+            project.organization.identifier not in orgs
+            or identities.intersection(excludes)
+            or (includes and not identities.intersection(includes))
+        ):
+            continue
+        eligible[str(project.organization_id)] = project.organization
+    results = []
+    for target in eligible.values():
+        child = _WebhookPlan()
+        result = _prepare_webhook("jira", str(target.id), raw_body, headers, db, child)
+        plan.tasks.extend(child.tasks)
+        if child.db_processed:
+            plan.received_organization_ids.append(str(target.id))
+        if plan.tracker_id is None:
+            plan.tracker_id, plan.organization_id = (
+                child.tracker_id,
+                child.organization_id,
+            )
+        results.append(result)
+    plan.db_processed = bool(plan.received_organization_ids) if results else None
+    return {"status": "success", "matched_trackers": len(results)}
 
 
 def _prepare_webhook(
@@ -1187,7 +1321,12 @@ def _prepare_webhook(
         event_type=actual_event_type,
         delivery_id=headers.get("X-GitHub-Delivery")
         or headers.get("X-Gitlab-Event-UUID")
-        or headers.get(BITBUCKET_DELIVERY_HEADER),
+        or headers.get(BITBUCKET_DELIVERY_HEADER)
+        or (
+            _jira_delivery_identity(raw_body, headers)
+            if tracker_type.lower() == "jira"
+            else None
+        ),
         payload=parsed_payload,
         tracker_id=str(plan.tracker_id),
         organization_id=str(plan.organization_id),
