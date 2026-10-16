@@ -229,7 +229,7 @@ Official documentation rechecked 2026-10-16. The pages below do not publish a Fr
 - [Bring your own key for GitHub Copilot](https://docs.github.com/en/copilot/concepts/models/bring-your-own-key) lists VS Code under local BYOK and describes that mechanism as suitable for users without a Copilot subscription. For Copilot Business and Copilot Enterprise, an enterprise or organization policy can disable local BYOK in IDEs.
 - [Changing the AI model for GitHub Copilot Chat](https://docs.github.com/en/copilot/how-tos/use-ai-models/change-the-chat-model) says a Copilot Business or Copilot Enterprise plan must have **Bring Your Own Language Model Key in Select IDEs** enabled to use third-party models in a supported IDE.
 
-The interactive test below did not validate Business or Enterprise policy enforcement or a per-plan entitlement matrix. Those checks remain unverified.
+The interactive test did not validate Business or Enterprise policy enforcement or a per-plan entitlement matrix. Those checks remain unverified.
 
 ## Related
 
