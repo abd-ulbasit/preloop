@@ -17,7 +17,7 @@ from preloop.models.crud import (
     crud_tracker,
 )
 from preloop.models.crud import flow_artifact
-from preloop.models.crud.flow_feedback import TERMINAL
+from preloop.models.crud.flow_feedback import SESSIONLESS_RETRY_STATUSES, TERMINAL
 from preloop.models.db.session import get_session_factory
 from preloop.schemas.flow_continuation import (
     ContinuationAdoptRequest,
@@ -226,11 +226,12 @@ def _load_source(
         active_recoverable = not active_id or bool(
             active is not None
             and active.flow_id == flow.id
-            and active.status in {"FAILED", "TIMED_OUT"}
+            and active.status in SESSIONLESS_RETRY_STATUSES
             and not active.total_tokens
             and not active.tool_calls_count
             and not active.estimated_cost
             and not active.cli_session
+            and not active.agent_session_reference
         )
         return {
             "execution_id": execution_id,

@@ -2379,6 +2379,8 @@ def test_successful_bitbucket_head_lookup(
         "worked",
         "tools",
         "spent",
+        "session",
+        "runtime",
     ],
 )
 def test_native_reactivation_preserves_authority_and_limits(
@@ -2389,7 +2391,9 @@ def test_native_reactivation_preserves_authority_and_limits(
         thread.state, thread.stop_reason = "stopped", "flow_disabled"
         thread.turns, thread.cost, thread.no_progress = 1, 0.1, 1
         failed = models.FlowExecution(
-            id=uuid.uuid4(), flow_id=thread.flow_id, status="FAILED"
+            id=uuid.uuid4(),
+            flow_id=thread.flow_id,
+            status="FAILED",
         )
         db.add(failed)
         db.flush()
@@ -2418,6 +2422,10 @@ def test_native_reactivation_preserves_authority_and_limits(
             failed.tool_calls_count = 1
         if failure == "spent":
             failed.estimated_cost = 0.01
+        if failure == "runtime":
+            failed.agent_session_reference = "agent-startup-failed"
+        if failure == "session":
+            failed.cli_session = {"session_id": "new-agent-session"}
         db.commit()
         before = (
             thread.turns,

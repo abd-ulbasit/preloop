@@ -37,6 +37,7 @@ export interface FlowExecutionActionResource {
   agent_session_reference?: string | null;
   flow_id?: string | null;
   trigger_event_details?: Record<string, unknown> | null;
+  resume_of?: string | null;
 }
 
 export interface FlowExecutionActionContext extends ActionContext {
@@ -119,7 +120,11 @@ export function canRetryExecution(
     typeof resume === 'object' &&
     'thread_id' in resume &&
     resume.thread_id;
-  return RETRYABLE_EXECUTION_STATUSES.has(execution.status) && !controllerOwned;
+  return (
+    RETRYABLE_EXECUTION_STATUSES.has(execution.status) &&
+    !controllerOwned &&
+    !execution.resume_of
+  );
 }
 
 export function executionDetailUrl(

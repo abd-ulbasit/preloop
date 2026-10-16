@@ -156,6 +156,7 @@ class CRUDFlowFeedback:
                 or active.tool_calls_count
                 or active.estimated_cost
                 or active.cli_session
+                or active.agent_session_reference
             ):
                 raise ValueError(
                     "Native continuation has an active or stopped execution"

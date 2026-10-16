@@ -330,6 +330,28 @@ def test_metadata_only_workspace_still_allows_native_resume(
         service._load_source(account, execution_id)["native_reactivation_available"]
         is True
     )
+    active = SimpleNamespace(
+        id=uuid4(),
+        flow_id=flow_id,
+        status="FAILED",
+        total_tokens=0,
+        tool_calls_count=0,
+        estimated_cost=0,
+        cli_session=None,
+        agent_session_reference=None,
+    )
+    existing.active_execution_id = active.id
+    monkeypatch.setattr(
+        service.crud_flow_execution,
+        "get",
+        lambda *a, **k: active if k["id"] == active.id else row,
+    )
+    assert service._load_source(account, execution_id)["native_reactivation_available"]
+    active.agent_session_reference = "runtime-opened-before-startup-failure"
+    assert not service._load_source(account, execution_id)[
+        "native_reactivation_available"
+    ]
+    existing.active_execution_id = None
     existing.stop_reason = "no_progress"
     assert (
         service._load_source(account, execution_id)["native_reactivation_available"]
