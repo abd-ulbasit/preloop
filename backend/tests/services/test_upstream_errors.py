@@ -329,3 +329,22 @@ def test_recorded_plain_429_is_still_an_upstream_rate_limit():
         classify_recorded_error(429, "You exceeded your current quota")
         == "upstream_quota_exhausted"
     )
+
+
+def test_hosted_credit_hold_is_retryable_without_upstream_rate_limit_class() -> None:
+    from preloop.services.upstream_errors import (
+        ERROR_CLASS_HOSTED_CREDIT_RESERVED,
+        is_retryable_upstream_failure,
+    )
+
+    error = ModelGatewayAPIError(
+        provider="openai",
+        status_code=429,
+        message="Hosted credit is temporarily held by outstanding calls",
+        error_class=ERROR_CLASS_HOSTED_CREDIT_RESERVED,
+        retry_after_seconds=1,
+    )
+    classified = classify_upstream_error(error)
+    assert classified.error_class == ERROR_CLASS_HOSTED_CREDIT_RESERVED
+    assert classified.retry_after_seconds == 1
+    assert is_retryable_upstream_failure(error)

@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from preloop.models.crud import crud_api_usage
 
 
@@ -36,14 +38,15 @@ def _log_row(
     )
 
 
-def test_rate_limit_summary_excludes_budget_denials(db_session, test_user):
+@pytest.mark.parametrize("local_class", ["budget_exceeded", "hosted_credit_reserved"])
+def test_rate_limit_summary_excludes_local_denials(db_session, test_user, local_class):
     """The gateway's budget 429 (#1447) is not a rate limit."""
     _log_row(
         db_session,
         test_user,
         status_code=429,
         retry_after_ms=3_600_000,
-        error_class="budget_exceeded",
+        error_class=local_class,
     )
     _log_row(db_session, test_user, status_code=429, retry_after_ms=2_000)
 

@@ -3682,7 +3682,9 @@ class OpenAIGatewayService:
             created_at = int(time.time())
             text_item_id = f"msg_{response_id}"
             assistant_parts: List[str] = []
-            final_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            final_usage = self._responses_api_usage(
+                None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            )
             final_usage_details: Dict[str, Any] = {}
             recorded = False
             terminal_sent = False
@@ -6664,14 +6666,15 @@ class OpenAIGatewayService:
             # Responses clients require these nested counters even when a chat
             # provider omits them. Fill only the client-facing copy; raw usage
             # remains unchanged for accounting's unknown-versus-zero handling.
-            for key, counter in (
-                ("input_tokens_details", "cached_tokens"),
-                ("output_tokens_details", "reasoning_tokens"),
+            reported = extract_token_details(raw_usage)
+            for key, counter, reported_key in (
+                ("input_tokens_details", "cached_tokens", "cache_read_tokens"),
+                ("output_tokens_details", "reasoning_tokens", "reasoning_tokens"),
             ):
                 details = usage.get(key)
                 details = dict(details) if isinstance(details, dict) else {}
                 if details.get(counter) is None:
-                    details[counter] = 0
+                    details[counter] = reported[reported_key] or 0
                 usage[key] = details
             return usage
 

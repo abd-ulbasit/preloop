@@ -317,11 +317,13 @@ def test_search_row_explicit_zero_is_a_reported_miss():
     )
 
 
+@pytest.mark.parametrize("send_usage", [True, False])
 @pytest.mark.parametrize(
     "reasoning", [None, {}, {"audio_tokens": 0}, {"reasoning_tokens": 3}]
 )
 def test_chat_bridged_responses_stream_keeps_details_in_completed(
     reasoning: dict[str, int] | None,
+    send_usage: bool,
 ) -> None:
     """Streamed /responses over a chat-completions upstream (transcode)."""
     model = SimpleNamespace(
@@ -333,13 +335,16 @@ def test_chat_bridged_responses_stream_keeps_details_in_completed(
     chat_usage = {
         "prompt_tokens": 100,
         "completion_tokens": 7,
-        "total_tokens": 107,
+        "total_tokens": 107 if send_usage else 0,
         "prompt_tokens_details": {"cached_tokens": 64},
         "completion_tokens_details": reasoning,
     }
     chunks = [
         {"choices": [{"delta": {"content": "OK"}}]},
-        {"choices": [{"delta": {}, "finish_reason": "stop"}], "usage": chat_usage},
+        {
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            **({"usage": chat_usage} if send_usage else {}),
+        },
     ]
     service = _service()
     with (
@@ -365,11 +370,14 @@ def test_chat_bridged_responses_stream_keeps_details_in_completed(
         if isinstance(p, dict) and p.get("type") == "response.completed"
     )
     assert completed["response"]["usage"] == {
-        "input_tokens": 100,
-        "output_tokens": 7,
-        "total_tokens": 107,
-        "input_tokens_details": {"cached_tokens": 64},
-        "output_tokens_details": {"reasoning_tokens": 0, **(reasoning or {})},
+        "input_tokens": 100 if send_usage else 0,
+        "output_tokens": 7 if send_usage else 0,
+        "total_tokens": 107 if send_usage else 0,
+        "input_tokens_details": {"cached_tokens": 64 if send_usage else 0},
+        "output_tokens_details": {
+            "reasoning_tokens": 0,
+            **((reasoning or {}) if send_usage else {}),
+        },
     }
 
 
@@ -506,4 +514,24 @@ def test_responses_completion_usage_fills_required_details_without_mutating_raw(
         (details or {}).get("reasoning_tokens") or 0
     )
     assert parsed.input_tokens_details.cached_tokens == 0
+    assert raw == before
+
+
+@pytest.mark.parametrize("nested", [None, {}, {"cached_tokens": None}])
+def test_top_level_cache_count_survives_responses_counter_completion(
+    nested: dict[str, Any] | None,
+) -> None:
+    raw = {
+        "prompt_tokens": 100,
+        "completion_tokens": 2,
+        "total_tokens": 102,
+        "prompt_tokens_details": nested,
+        "cache_read_input_tokens": 64,
+    }
+    before = deepcopy(raw)
+    usage = OpenAIGatewayService._responses_api_usage(
+        raw, {"prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102}
+    )
+    assert usage["input_tokens_details"]["cached_tokens"] == 64
+    assert usage["cache_read_input_tokens"] == 64
     assert raw == before

@@ -152,7 +152,7 @@ Account-owned provider configurations remain available independently of these
 operator markers.
 
 
-### Reservation capacity and cost estimates
+## Reservation capacity and cost estimates
 
 Each physical hosted request reserves its verified worst-case input and output
 cost before dispatch. A positive credit balance can therefore be too small for
