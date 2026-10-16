@@ -460,13 +460,27 @@ Target Branch:       # Branch to create for commits (auto-generated if empty)
 
 **5. Repositories**
 
-Add one or more repositories to clone:
+In both **Create flow** and **Edit flow**, expand **Advanced Git workspace**,
+enable workspace cloning, then select **Add repository** for each checkout.
+You can edit or remove entries independently. Saving and reopening the flow keeps
+the full list.
+
+The first entry is marked **Default** and supplies the agent's starting working
+directory. Select **Make default** on another entry to move it first. Each entry
+needs a distinct clone path; for example, `/workspace/backend` and
+`/workspace/frontend` make both repositories available in the same execution.
+
+With no explicit repositories, cloning falls back to the trigger project or
+[Jira repository bindings](jira-repository-binding.md). Explicit entries take
+precedence over those bindings; adding or removing entries preserves the saved
+bindings.
 
 **Per Repository:**
-- **Tracker:** Select GitHub/GitLab tracker
+- **Tracker:** Select a GitHub, GitLab, or Bitbucket tracker
+- **Project:** (optional) Select a repository project from that tracker
 - **Repository URL:** (optional - leave empty to use trigger project)
 - **Clone Path:** Where to clone (e.g., `/workspace`)
-- **Branch:** (optional - leave empty for default branch)
+- **Branch:** (optional) Override the flow source branch for this repository
 
 **Example 1: Single Repo (from trigger)**
 ```yaml

@@ -1,5 +1,12 @@
 import '../table/table-pagination';
-import { LitElement, html, css, unsafeCSS, nothing } from 'lit';
+import {
+  LitElement,
+  html,
+  css,
+  unsafeCSS,
+  nothing,
+  type TemplateResult,
+} from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import {
   getTrackers,
@@ -18,7 +25,7 @@ import {
   type HarnessOption,
   type RunnerRecord,
 } from '../api';
-import type { Flow } from '../types';
+import type { Flow, GitCloneRepository, Project, Organization } from '../types';
 import { defaultFlowNotifications } from '../types';
 import { getAgentControlState } from '../utils/agent-control';
 import {
@@ -506,6 +513,12 @@ export class PreloopFlowForm extends LitElement {
   }
 
   protected updated(): void {
+    if (
+      this.flow.git_clone_config?.enabled &&
+      !this.repositoryProjectsRequested
+    ) {
+      void this.loadRepositoryProjects();
+    }
     this.syncUnloadGuard();
   }
 
@@ -1418,6 +1431,247 @@ export class PreloopFlowForm extends LitElement {
       entry[field] = Number.isFinite(parsed) ? parsed : null;
     }
     this.setCallableFlows(entries);
+  }
+
+  private repositoryProjectsRequested = false;
+  @state() private repositoryProjects: Project[] = [];
+  @state() private repositoryOrganizations: Organization[] = [];
+  @state() private repositoryProjectsFailed = false;
+
+  /** Load checkout choices only when the Git workspace is enabled. */
+  private async loadRepositoryProjects(): Promise<void> {
+    this.repositoryProjectsRequested = true;
+    this.repositoryProjectsFailed = false;
+    try {
+      const [projects, organizations] = await Promise.all([
+        listProjects(),
+        listOrganizations(),
+      ]);
+      this.repositoryProjects = projects;
+      this.repositoryOrganizations = organizations;
+    } catch {
+      this.repositoryProjectsFailed = true;
+    }
+  }
+
+  private get repositoryTrackers(): Array<{
+    id: string;
+    name: string;
+    tracker_type: string;
+  }> {
+    return this.trackers.filter((tracker) =>
+      ['github', 'gitlab', 'bitbucket'].includes(tracker.tracker_type)
+    );
+  }
+
+  private addGitRepository(): void {
+    const config = this.flow.git_clone_config!;
+    const repositories = config.repositories || [];
+    const paths = new Set(
+      repositories.map((repo: GitCloneRepository) => repo.clone_path)
+    );
+    let clonePath = '/workspace';
+    for (let suffix = 2; paths.has(clonePath); suffix++) {
+      clonePath = `/workspace-${suffix}`;
+    }
+    const triggerTracker = this.repositoryTrackers.find(
+      (tracker) => tracker.id === this.flow.trigger_event_source
+    );
+    config.repositories = [
+      ...repositories,
+      {
+        tracker_id: triggerTracker?.id || this.repositoryTrackers[0]?.id || '',
+        clone_path: clonePath,
+      },
+    ];
+    this.requestUpdate();
+  }
+
+  private async removeGitRepository(
+    repository: GitCloneRepository
+  ): Promise<void> {
+    const confirmed = await confirmDialog({
+      title: 'Remove repository',
+      message: `Remove the checkout at ${repository.clone_path}?`,
+      detail: 'The change takes effect when you save the flow.',
+      confirmLabel: 'Remove repository',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    const config = this.flow.git_clone_config!;
+    config.repositories = config.repositories?.filter(
+      (repo: GitCloneRepository) => repo !== repository
+    );
+    this.requestUpdate();
+  }
+
+  /** The executors use the first repository as the default working directory. */
+  private makeDefaultRepository(repository: GitCloneRepository): void {
+    const config = this.flow.git_clone_config!;
+    config.repositories = [
+      repository,
+      ...(config.repositories || []).filter(
+        (repo: GitCloneRepository) => repo !== repository
+      ),
+    ];
+    this.requestUpdate();
+  }
+
+  private renderGitRepositories(): TemplateResult {
+    const repositories: GitCloneRepository[] =
+      this.flow.git_clone_config?.repositories || [];
+    return html`
+      <div data-repository-editor>
+        <h4>Repositories</h4>
+        <p class="checkbox-help">
+          Each repository is cloned into its own path. The first repository is
+          the default working directory. With no entries, cloning uses Jira
+          repository bindings or the trigger project.
+        </p>
+        ${
+          this.repositoryProjectsFailed
+            ? html`
+                <sl-alert variant="warning" open>
+                  Repository projects could not be loaded. You can still enter a
+                  repository URL.
+                  <sl-button
+                    size="small"
+                    @click=${() => this.loadRepositoryProjects()}
+                    >Try again</sl-button
+                  >
+                </sl-alert>
+              `
+            : nothing
+        }
+        ${repositories.map((repo, index) => {
+          const projects = this.repositoryProjects.filter(
+            (project) =>
+              project.tracker_id === repo.tracker_id ||
+              this.repositoryOrganizations.some(
+                (org) =>
+                  org.id === project.organization_id &&
+                  org.tracker_id === repo.tracker_id
+              )
+          );
+          const trackerMissing =
+            repo.tracker_id &&
+            !this.repositoryTrackers.some(
+              (tracker) => tracker.id === repo.tracker_id
+            );
+          return html`
+            <section
+              data-repository=${index}
+              aria-label=${`Repository ${index + 1}`}
+              style="border-top: 1px solid var(--console-hairline); padding-block: var(--sl-spacing-medium);"
+            >
+              <div
+                style="display: flex; align-items: center; gap: var(--sl-spacing-small); margin-bottom: var(--sl-spacing-medium);"
+              >
+                <strong>Repository ${index + 1}</strong>
+                ${
+                  index === 0
+                    ? html`<sl-badge data-default-repository variant="neutral"
+                        >Default</sl-badge
+                      >`
+                    : html`<sl-button
+                        data-make-default-repository
+                        size="small"
+                        @click=${() => this.makeDefaultRepository(repo)}
+                        >Make default</sl-button
+                      >`
+                }
+              </div>
+              <div class="form-grid">
+                <sl-select
+                  label="Tracker"
+                  data-repository-field="tracker_id"
+                  .value=${repo.tracker_id}
+                  @sl-change=${(event: Event) => {
+                    repo.tracker_id = (event.target as HTMLSelectElement).value;
+                    repo.project_id = undefined;
+                    this.requestUpdate();
+                  }}
+                >
+                  ${trackerMissing ? html`<sl-option value=${repo.tracker_id}>Saved tracker (${repo.tracker_id})</sl-option>` : nothing}
+                  ${this.repositoryTrackers.map((tracker) => html`<sl-option value=${tracker.id}>${tracker.name}</sl-option>`)}
+                </sl-select>
+                <sl-select
+                  label="Project (optional)"
+                  data-repository-field="project_id"
+                  .value=${repo.project_id || ''}
+                  clearable
+                  @sl-change=${(event: Event) => {
+                    repo.project_id =
+                      (event.target as HTMLSelectElement).value || undefined;
+                    this.requestUpdate();
+                  }}
+                >
+                  ${
+                    repo.project_id &&
+                    !projects.some((project) => project.id === repo.project_id)
+                      ? html`<sl-option value=${repo.project_id}
+                          >Saved project (${repo.project_id})</sl-option
+                        >`
+                      : nothing
+                  }
+                  ${projects.map((project) => html`<sl-option value=${project.id}>${project.name}</sl-option>`)}
+                </sl-select>
+                <sl-input
+                  label="Repository URL (optional)"
+                  data-repository-field="repository_url"
+                  placeholder="https://example.com/team/repository.git"
+                  help-text="Leave blank to resolve from the selected project or trigger."
+                  .value=${repo.repository_url || ''}
+                  @sl-input=${(event: Event) => {
+                    repo.repository_url =
+                      (event.target as HTMLInputElement).value || undefined;
+                    this.requestUpdate();
+                  }}
+                ></sl-input>
+                <sl-input
+                  label="Clone path"
+                  data-repository-field="clone_path"
+                  .value=${repo.clone_path}
+                  help-text="Absolute path or relative to /workspace/. Use a distinct path for each repository."
+                  @sl-input=${(event: Event) => {
+                    repo.clone_path = (event.target as HTMLInputElement).value;
+                    this.requestUpdate();
+                  }}
+                ></sl-input>
+                <sl-input
+                  label="Branch (optional)"
+                  data-repository-field="branch"
+                  .value=${repo.branch || ''}
+                  help-text="Leave blank to use the flow source branch."
+                  @sl-input=${(event: Event) => {
+                    repo.branch =
+                      (event.target as HTMLInputElement).value || undefined;
+                    this.requestUpdate();
+                  }}
+                ></sl-input>
+              </div>
+              <sl-button
+                data-remove-repository
+                variant="danger"
+                outline
+                size="small"
+                style="margin-top: var(--sl-spacing-large);"
+                @click=${() => this.removeGitRepository(repo)}
+                >Remove repository</sl-button
+              >
+            </section>
+          `;
+        })}
+        <sl-button
+          data-add-repository
+          ?disabled=${this.repositoryTrackers.length === 0}
+          @click=${() => this.addGitRepository()}
+        >
+          <sl-icon slot="prefix" name="plus-lg"></sl-icon>Add repository
+        </sl-button>
+        ${this.repositoryTrackers.length === 0 ? html`<p class="checkbox-help">Connect a GitHub, GitLab, or Bitbucket tracker to add repositories.</p>` : nothing}
+      </div>
+    `;
   }
 
   private handleGitCloneToggle(checked: boolean) {
@@ -4849,6 +5103,7 @@ export class PreloopFlowForm extends LitElement {
               <sl-icon name="git"></sl-icon> Git clone configuration
             </div>
             <sl-checkbox
+              data-git-clone-enabled
               .checked=${this.flow.git_clone_config?.enabled || false}
               @sl-change=${(e: any) =>
                 this.handleGitCloneToggle(e.target.checked)}
@@ -4860,6 +5115,7 @@ export class PreloopFlowForm extends LitElement {
             ${
               this.flow.git_clone_config?.enabled
                 ? html`
+                    ${this.renderGitRepositories()}
                     <div
                       class="form-grid"
                       style="margin-top: var(--sl-spacing-medium);"
