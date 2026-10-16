@@ -300,3 +300,99 @@ def test_request_size_limit_precedes_transport_allocation() -> None:
     with pytest.raises(ModelGatewayAPIError) as error:
         RunnerModelStream(model, {"messages": "x" * MAX_REQUEST_BYTES})
     assert error.value.status_code == 413
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": True},
+        {"status": "200"},
+        {"data": {}},
+        {"done": "false"},
+        {"error": {}},
+        {"error": "x" * 129},
+    ],
+)
+async def test_malformed_runner_frames_fail_closed(fields: dict[str, object]) -> None:
+    import asyncio
+    from preloop.services.runner_model_proxy import RunnerModelConnection
+
+    connection = RunnerModelConnection(MagicMock(), str(uuid4()), str(uuid4()))
+    future = asyncio.get_running_loop().create_future()
+    connection.pending["request-1"] = future
+    connection.response({"request_id": "request-1", **fields})
+    assert (await future)["status"] == 502
+    assert (await future)["error"] == "runner_proxy_error"
+
+
+def test_invalid_upstream_json_closes_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+    from preloop.services.runner_model_proxy import RunnerModelStream
+    from preloop.services.model_gateway_errors import ModelGatewayAPIError
+
+    model = SimpleNamespace(
+        id=uuid4(),
+        account_id=uuid4(),
+        runner_id=uuid4(),
+        api_endpoint="http://localhost:11434/v1",
+    )
+    stream = RunnerModelStream(model, {"model": "example", "stream": True})
+    monkeypatch.setattr(
+        stream, "_rpc", AsyncMock(return_value={"data": "data: invalid JSON"})
+    )
+    with pytest.raises(ModelGatewayAPIError) as error:
+        next(stream)
+    assert error.value.status_code == 502
+    assert stream.closed and not stream.thread.is_alive()
+
+
+@pytest.mark.parametrize("method", ["create_response", "stream_response"])
+def test_runner_responses_api_is_rejected_before_credentials(
+    method: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from preloop.services.model_gateway_auth import ModelGatewayAuthContext
+    from preloop.services.model_gateway_errors import ModelGatewayAPIError
+    from preloop.services.openai_gateway import OpenAIGatewayService
+
+    auth = ModelGatewayAuthContext(
+        token="test", user=SimpleNamespace(id=uuid4(), account_id=uuid4())
+    )
+    service = OpenAIGatewayService(MagicMock(), auth)
+    monkeypatch.setattr(
+        service,
+        "_resolve_requested_model",
+        lambda *args, **kwargs: SimpleNamespace(endpoint_type="runner"),
+    )
+    with pytest.raises(ModelGatewayAPIError) as error:
+        getattr(service, method)({"model": "example", "input": "Hello"})
+    assert error.value.status_code == 400
+    assert "chat completions only" in error.value.message
+
+
+def test_request_start_rechecks_socket_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from preloop.models.crud.flow_runner import crud_flow_runner
+    from preloop.models.db import session
+    from preloop.services.runner_model_proxy import RunnerModelConnection
+
+    connection = RunnerModelConnection(
+        MagicMock(),
+        str(uuid4()),
+        str(uuid4()),
+        credential_hash="old-hash",
+        connection_id="connection-1",
+    )
+    monkeypatch.setattr(session, "get_db_session", lambda: iter([MagicMock()]))
+    monkeypatch.setattr(
+        crud_flow_runner,
+        "get",
+        lambda *args, **kwargs: SimpleNamespace(
+            token_hash="new-hash",
+            publication_capabilities={"connection_id": "connection-1"},
+        ),
+    )
+    with pytest.raises(ConnectionError, match="no longer current"):
+        connection._authorized({})

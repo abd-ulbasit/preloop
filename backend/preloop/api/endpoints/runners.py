@@ -385,7 +385,7 @@ def register_runner_model(
     metadata["gateway"] = gateway
     data["meta_data"] = metadata
     try:
-        return crud_ai_model.create_with_account(
+        return crud_ai_model.register_runner_model(
             db, obj_in=data, account_id=current_user.account_id
         )
     except ValueError as exc:
@@ -825,8 +825,16 @@ async def runner_ws(
     previous_models = _model_connections.pop(runner_key, None)
     if previous_models is not None:
         await previous_models.close()
+    connection_id = secrets.token_hex(32)
+    crud_flow_runner.set_publication_capabilities(
+        db, runner_id=runner.id, capabilities={"connection_id": connection_id}
+    )
     model_connection = RunnerModelConnection(
-        websocket, str(runner.account_id), runner_key
+        websocket,
+        str(runner.account_id),
+        runner_key,
+        credential_hash=authenticated_hash,
+        connection_id=connection_id,
     )
     if (getattr(runner, "capabilities", None) or {}).get("model_proxy_version") == 1:
         try:
@@ -835,10 +843,6 @@ async def runner_ws(
             logger.warning("Runner model transport unavailable")
     _model_connections[runner_key] = model_connection
     _live[runner_key] = websocket
-    connection_id = secrets.token_hex(32)
-    crud_flow_runner.set_publication_capabilities(
-        db, runner_id=runner.id, capabilities={"connection_id": connection_id}
-    )
     # One controller per job, not per socket: a runner may hold several
     # executions at once and each publication has its own nonce, writer
     # credential and expiry task.
@@ -937,6 +941,14 @@ async def runner_ws(
                 # Closed by a delete or a token rotation while waiting.
                 break
             msg_type = str(raw.get("type") or "")
+            if msg_type == "model_response":
+                # Starts revalidate the credential and connection in CRUD;
+                # revocation/replacement closes pending calls, and heartbeats
+                # retain the cross-worker credential check. Token frames must
+                # not each acquire a database connection.
+                if _live.get(runner_key) is websocket:
+                    model_connection.response(raw)
+                continue
             runner = crud_flow_runner.get(db, id=runner_id)
             if not runner:
                 await websocket.send_json({"type": "error", "error": "gone"})
@@ -956,9 +968,6 @@ async def runner_ws(
                     {"type": "error", "error": "Runner connection was replaced"}
                 )
                 break
-            if msg_type == "model_response":
-                model_connection.response(raw)
-                continue
             if msg_type.startswith("publication_"):
                 execution_id = _parse_runner_execution_id(raw.get("execution_id"))
                 controller = publication_for(execution_id)
