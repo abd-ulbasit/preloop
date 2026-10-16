@@ -11,8 +11,8 @@ import (
 
 func TestDiscoverySummaryAccountsForEveryAgent(t *testing.T) {
 	agents := []AgentConfig{
-		{Name: "Cursor", ConfigPath: "/cursor", IsOnboarded: true, OnboardingState: "mcp_proxy_only"},
-		{Name: "Antigravity", ConfigPath: "/antigravity", IsOnboarded: true, OnboardingState: "mcp_proxy_only"},
+		{Name: "Cursor", ConfigPath: "/cursor", RuntimeState: "present", IsOnboarded: true, OnboardingState: "mcp_proxy_only"},
+		{Name: "Antigravity", ConfigPath: "/antigravity", RuntimeState: "present", IsOnboarded: true, OnboardingState: "mcp_proxy_only"},
 		{Name: "Pi", ConfigPath: "/pi", RuntimeState: "missing"},
 		{Name: "Claude Code", ConfigPath: "/claude"},
 	}
