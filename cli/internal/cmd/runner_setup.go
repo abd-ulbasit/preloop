@@ -337,6 +337,11 @@ func installRunnerFromSetup(req runnerSetupRequest) error {
 	// runner to report online would only block login until the timeout.
 	if started {
 		waitForRunnerOnline(req.Out)
+		if req.tty() {
+			if err := discoverAndRegisterRunnerModels(req.In, req.Out, nil, true, false); err != nil {
+				fmt.Fprintf(req.Out, "Local models: %v. Retry with: preloop runner models --register\n", err)
+			}
+		}
 	}
 	return nil
 }
