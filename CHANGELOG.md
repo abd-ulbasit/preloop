@@ -50,8 +50,8 @@ after the page scroller moved to the content area.
 ### Breaking or behavior changes
 
 - **Hosted Codex image.** The default is the digest-pinned universal image
-  `ghcr.io/preloop/preloop-codex-universal@sha256:2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de`
-  (Perl linters and shellcheck included). Helm `agents.codexImage` sets
+  `ghcr.io/preloop/preloop-codex-universal@sha256:c6f75840defd44b6a6b187302acf165e245b378844098c8b57442bceee5f5b96`
+  (Perl linters, shellcheck, and preloop-preflight included). Helm `agents.codexImage` sets
   `CODEX_IMAGE` on the API and worker pods; leave it empty to keep this
   default. A tag-valued `CODEX_IMAGE` logs one warning at startup.
   `environments/perl` remains for private runners (#1717).

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
@@ -246,8 +247,12 @@ def test_index_digest_is_summarized_and_attested() -> None:
     assert attest["with"]["push-to-registry"] is True
     assert attest["with"]["subject-digest"] == "${{ steps.index.outputs.digest }}"
     assert attest["with"]["subject-name"] == "${{ env.IMAGE }}"
-    public = next(step for step in steps if step.get("name") == "Make package public")
-    assert "visibility=public" in str(public["run"])
+    public = next(
+        step for step in steps if step.get("name") == "Verify anonymous digest access"
+    )
+    assert 'docker --config "$anonymous_config" manifest inspect' in str(public["run"])
+    assert public["env"]["DIGEST"] == "${{ steps.index.outputs.digest }}"
+    assert "GH_TOKEN" not in public["env"]
 
 
 def test_environments_doc_names_the_published_digest() -> None:
@@ -257,7 +262,7 @@ def test_environments_doc_names_the_published_digest() -> None:
     assert "publish-universal-image.yml" in text
     assert (
         "ghcr.io/preloop/preloop-codex-universal@sha256:"
-        "2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de"
+        "c6f75840defd44b6a6b187302acf165e245b378844098c8b57442bceee5f5b96"
     ) in text
     assert "agents.codexImage" in text
     assert "hosted default stays" not in text
@@ -269,3 +274,45 @@ def test_readme_points_at_the_publish_workflow() -> None:
     assert "sha-<12" in collapsed
     assert "do not push" in collapsed
     assert "hosted default" in collapsed
+
+
+@pytest.mark.parametrize("accessible", [True, False])
+def test_publication_checks_anonymous_access_not_visibility_mutation(
+    tmp_path: Path, accessible: bool
+) -> None:
+    """A public digest passes even when the visibility PATCH API is unavailable."""
+    step = next(
+        step
+        for step in _steps(_jobs(_workflow())["publish"])
+        if step.get("name") == "Verify anonymous digest access"
+    )
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        '#!/bin/sh\n[ "$1" = "--config" ] || exit 2\n'
+        '[ -d "$2" ] || exit 2\n[ ! -e "$2/config.json" ] || exit 2\n'
+        '[ "$3 $4" = "manifest inspect" ] || exit 2\n'
+        '[ "$5" = "$IMAGE@$DIGEST" ] || exit 2\n'
+        + ("exit 0\n" if accessible else "exit 1\n")
+    )
+    fake_docker.chmod(0o755)
+    fake_sleep = tmp_path / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n")
+    fake_sleep.chmod(0o755)
+    result = subprocess.run(
+        [BASH, "-c", str(step["run"])],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "IMAGE": "ghcr.io/example/universal",
+            "DIGEST": "sha256:" + "a" * 64,
+            "PRELOOP_DISABLE_TELEMETRY": "true",
+        },
+    )
+    if accessible:
+        assert result.returncode == 0, result.stderr
+        assert "anonymously accessible" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "anonymous access failed" in result.stderr
