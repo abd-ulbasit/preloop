@@ -387,4 +387,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert hosted_credit.down_revision == "20261017_gov_candidate_idx"
     thresholds = script.get_revision("20261019_gov_thresholds")
     assert thresholds.down_revision == "20261018_hosted_credit"
-    assert script.get_heads() == ["20261019_gov_thresholds"]
+    jira_callback = script.get_revision("20261020_jira_callback")
+    assert jira_callback.down_revision == "20261019_gov_thresholds"
+    assert script.get_heads() == ["20261020_jira_callback"]
