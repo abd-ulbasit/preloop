@@ -6,8 +6,9 @@ the execution result under ``verification``, while anything the agent wrote
 itself under that key is demoted to ``verification_reported``.
 """
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 
 from preloop.agents.verification import (

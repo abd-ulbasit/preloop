@@ -383,7 +383,7 @@ import subprocess
 import sys
 
 repo, base = sys.argv[1:]
-def git(*args):
+def git(*args: str) -> bytes:
     return subprocess.check_output(["git", "-C", repo, *args])
 try:
     # Never absorb uncommitted implementation work into a repair commit.
@@ -423,7 +423,7 @@ try:
             "Strip trailing whitespace before verification")
         print("PRELOOP_WHITESPACE_REPAIRED files=%d head=%s" %
               (len(repaired), git("rev-parse", "HEAD").decode().strip()), flush=True)
-except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+except (OSError, ValueError, subprocess.CalledProcessError):
     print("PRELOOP_VERIFICATION_DENIED status=blocked reason=whitespace repair failed", flush=True)
     sys.exit(3)
 """
