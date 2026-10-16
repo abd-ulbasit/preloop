@@ -1,3 +1,4 @@
+import '../../components/runner-policy-banner';
 import {
   LitElement,
   html,
@@ -1562,6 +1563,7 @@ export class ConsoleShell extends LitElement {
                   <!-- A relaxed governance state is visible on every console
                        page, not just the approvals view. -->
                   <approval-bypass-banner></approval-bypass-banner>
+                  <runner-policy-banner></runner-policy-banner>
                   <!-- Usage sits under both governance banners: it is
                        information, not a fault, and it renders nothing at
                        all on OSS, where the endpoint does not exist. -->

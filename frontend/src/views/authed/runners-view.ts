@@ -1,3 +1,4 @@
+import '../../components/runner-compliance';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { LitElement, html, css, unsafeCSS, nothing } from 'lit';
@@ -867,6 +868,7 @@ export class RunnersView extends LitElement {
         headerText="Runners"
         description="Self-hosted CLI runners for this account."
       ></view-header>
+      <runner-compliance></runner-compliance>
       ${this.loading ? nothing : this.renderDefaultPoolControl()}
       ${
         this.loading

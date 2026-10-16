@@ -1,3 +1,4 @@
+import '../../../components/runner-policy-settings';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import { billingStatusLabel } from '../../../utils/billing-status';
@@ -765,6 +766,7 @@ export class AccountView extends LitElement {
               ? html`<subaccounts-view embedded></subaccounts-view>`
               : ''
           }
+          <runner-policy-settings></runner-policy-settings>
           ${this._renderSessionArtifactUsage()}
           ${
             isProprietary
