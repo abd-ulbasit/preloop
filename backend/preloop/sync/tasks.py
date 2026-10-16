@@ -1,6 +1,6 @@
 from preloop.sync.config import logger
 from preloop.models.db.session import get_db_session
-from preloop.models.crud import crud_tracker, crud_issue_embedding
+from preloop.models.crud import crud_tracker, crud_issue_embedding, crud_webhook
 from sqlalchemy.orm import Session
 from preloop.services.db_executor import run_db_sync
 from preloop.api.loop_safety import run_db_off_loop
@@ -55,9 +55,9 @@ async def scan_tracker_task(
 async def poll_tracker_on_demand(
     tracker_id: Union[int, str],
     since: Optional[datetime] = None,
-    force_update: bool = False,
+    force_update: bool = True,
 ) -> Optional[dict[str, Any]]:
-    """Run a user-requested scan through the shared polling worker slot."""
+    """Run explicit initial/manual discovery without the scheduled cooldown."""
     return await poll_tracker(tracker_id, since, force_update)
 
 
@@ -706,14 +706,10 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
 
     db = next(get_db_session())
     try:
-        from preloop.models.models.tracker import Tracker
-        from preloop.models.models.webhook import Webhook
-        from preloop.models.models.organization import Organization
-        from preloop.models.models.project import Project
         from preloop.sync.trackers import create_tracker_client
 
         # Get the deleted tracker (include deleted ones)
-        tracker = db.query(Tracker).filter(Tracker.id == tracker_id).first()
+        tracker = crud_tracker.get_by_id(db, id=tracker_id)
         if not tracker:
             logger.error(f"Tracker {tracker_id} not found for webhook cleanup")
             return
@@ -722,49 +718,18 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
             f"Cleaning up webhooks for tracker {tracker.name} (type: {tracker.tracker_type}, url: {tracker.url})"
         )
 
-        # Find all organizations under this tracker
-        organizations = (
-            db.query(Organization).filter(Organization.tracker_id == tracker_id).all()
-        )
-        org_ids = [org.id for org in organizations]
-
-        # Find all projects under this tracker (either directly or through organizations)
-        # Projects belong to a tracker through their organization (Project
-        # has no tracker_id column).
-        projects = (
-            db.query(Project).filter(Project.organization_id.in_(org_ids)).all()
-            if org_ids
-            else []
-        )
-        project_ids = [proj.id for proj in projects]
-
-        # Find all webhooks for these projects and organizations
-        webhooks = (
-            db.query(Webhook)
-            .filter(
-                (Webhook.project_id.in_(project_ids) if project_ids else False)
-                | (Webhook.organization_id.in_(org_ids) if org_ids else False)
-            )
-            .all()
-        )
+        # The CRUD query handles organization-only, project-only and empty
+        # scopes, and excludes associations owned by any other tracker.
+        webhooks = crud_webhook.get_for_tracker(db, tracker_id=tracker_id)
 
         logger.info(
             f"Found {len(webhooks)} webhooks to clean up for tracker {tracker_id}"
         )
 
         # Check if there are other non-deleted trackers with same type and URL
-        other_trackers = (
-            db.query(Tracker)
-            .filter(
-                Tracker.tracker_type == tracker.tracker_type,
-                Tracker.url == tracker.url,
-                Tracker.id != tracker_id,
-                Tracker.is_deleted.is_(False),
-            )
-            .all()
+        should_delete_external = not crud_tracker.has_other_live_for_endpoint(
+            db, tracker=tracker
         )
-
-        should_delete_external = len(other_trackers) == 0
         managed_jira = (
             str(tracker.tracker_type).lower() == "jira"
             and str(tracker.auth_type or "").lower() == "managed_oauth"
@@ -778,8 +743,8 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
             )
         else:
             logger.info(
-                f"Found {len(other_trackers)} other active trackers with same type/URL. "
-                f"Will not delete webhooks from external tracker."
+                "Found other active trackers with same type/URL. "
+                "Will not delete webhooks from external tracker."
             )
 
         # Delete webhooks from external tracker if needed
@@ -837,10 +802,21 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
                 )
 
         # Delete webhook records from our database
+        deleted_count = 0
         for webhook in webhooks:
             try:
-                db.delete(webhook)
-                logger.info(f"Deleted webhook record {webhook.id} from database")
+                deleted = crud_webhook.remove_for_tracker(
+                    db, id=str(webhook.id), tracker_id=tracker_id
+                )
+                deleted_count += deleted
+                if deleted:
+                    logger.info(f"Deleted webhook record {webhook.id} from database")
+                else:
+                    logger.warning(
+                        "Webhook %s no longer belongs to tracker %s; left in place",
+                        webhook.id,
+                        tracker_id,
+                    )
             except Exception as e:
                 logger.error(
                     f"Failed to delete webhook record {webhook.id}: {e}", exc_info=True
@@ -848,7 +824,7 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
 
         db.commit()
         logger.info(
-            f"Webhook cleanup completed for tracker {tracker_id}. Deleted {len(webhooks)} webhooks."
+            f"Webhook cleanup completed for tracker {tracker_id}. Deleted {deleted_count} webhooks."
         )
 
     except Exception as e:

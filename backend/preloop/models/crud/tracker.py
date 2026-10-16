@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 
+from preloop.models import models
+
 from ..models.tracker import Tracker, TrackerType
 from .base import CRUDBase
 
@@ -276,6 +278,22 @@ class CRUDTracker(CRUDBase[Tracker]):
         if account_id:
             query = query.filter(Tracker.account_id == account_id)
         return query.offset(skip).limit(limit).all()
+
+    def has_other_live_for_endpoint(
+        self, db: Session, *, tracker: models.Tracker
+    ) -> bool:
+        """Keep shared external hooks while another non-deleted binding exists."""
+        return (
+            db.query(models.Tracker.id)
+            .filter(
+                models.Tracker.tracker_type == tracker.tracker_type,
+                models.Tracker.url == tracker.url,
+                models.Tracker.id != tracker.id,
+                models.Tracker.is_deleted.is_(False),
+            )
+            .first()
+            is not None
+        )
 
     def get_by_id(self, db: Session, *, id: str) -> Optional[Tracker]:
         """Get tracker by ID."""

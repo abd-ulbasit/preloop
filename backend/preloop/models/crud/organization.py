@@ -33,10 +33,12 @@ class CRUDOrganization(CRUDBase[Organization]):
     def get_by_identifier(
         self, db: Session, *, identifier: str, account_id: Optional[str] = None
     ) -> Optional[Organization]:
-        """Get organization by unique identifier."""
+        """Resolve an identifier, excluding deleted trackers in account lookups."""
         query = db.query(Organization).filter(Organization.identifier == identifier)
         if account_id:
-            query = query.join(Tracker).filter(Tracker.account_id == account_id)
+            query = query.join(Tracker).filter(
+                Tracker.account_id == account_id, Tracker.is_deleted.is_(False)
+            )
         return query.first()
 
     def get_by_identifier_and_tracker(

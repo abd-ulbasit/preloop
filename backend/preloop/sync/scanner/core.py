@@ -221,10 +221,10 @@ class TrackerClient:
             org_create_data = self.client.transform_organization(org_data)
             # Add the tracker_id which is required for Organization model
             org_create_data["tracker_id"] = self.tracker.id
-            org = crud_organization.get_by_identifier(
+            org = crud_organization.get_by_identifier_and_tracker(
                 db,
                 identifier=org_create_data["identifier"],
-                account_id=self.tracker.account_id,
+                tracker_id=str(self.tracker.id),
             )
             if org:
                 org = crud_organization.update(db, db_obj=org, obj_in=org_create_data)

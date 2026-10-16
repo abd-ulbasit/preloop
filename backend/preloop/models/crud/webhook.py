@@ -2,7 +2,10 @@
 
 from typing import List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Query, Session
+
+from preloop.models import models
 
 from ..models.webhook import Webhook
 from ..models.project import Project
@@ -13,6 +16,43 @@ from .base import CRUDBase
 
 class CRUDWebhook(CRUDBase[Webhook]):
     """CRUD operations for Webhook model."""
+
+    def _for_tracker(self, db: Session, *, tracker_id: str) -> Query:
+        """Scope webhook associations to one tracker, including deleted trackers."""
+        organization_ids = select(models.Organization.id).where(
+            models.Organization.tracker_id == tracker_id
+        )
+        project_ids = select(models.Project.id).where(
+            models.Project.organization_id.in_(organization_ids)
+        )
+        return db.query(models.Webhook).filter(
+            or_(
+                models.Webhook.organization_id.in_(organization_ids),
+                models.Webhook.project_id.in_(project_ids),
+            ),
+            # A malformed mixed association must never let cleanup cross
+            # tracker ownership through its other, matching association.
+            or_(
+                models.Webhook.organization_id.is_(None),
+                models.Webhook.organization_id.in_(organization_ids),
+            ),
+            or_(
+                models.Webhook.project_id.is_(None),
+                models.Webhook.project_id.in_(project_ids),
+            ),
+        )
+
+    def get_for_tracker(self, db: Session, *, tracker_id: str) -> List[models.Webhook]:
+        """Return webhooks wholly owned by a tracker; empty scopes return none."""
+        return self._for_tracker(db, tracker_id=tracker_id).all()
+
+    def remove_for_tracker(self, db: Session, *, id: str, tracker_id: str) -> int:
+        """Remove one webhook only while it still belongs to the target scope."""
+        return (
+            self._for_tracker(db, tracker_id=tracker_id)
+            .filter(models.Webhook.id == id)
+            .delete(synchronize_session=False)
+        )
 
     def get_by_project_id(
         self, db: Session, *, project_id: str, account_id: Optional[str] = None
