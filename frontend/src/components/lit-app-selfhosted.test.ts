@@ -8,6 +8,11 @@ import {
 import sinon from 'sinon';
 import './lit-app';
 
+// These browser tests cover client routing, not Vite's Node-only HTML transform.
+// For the prerender boundary, build a selfhosted brand and inspect index.html
+// and pricing/index.html for absence of <landing-view>/<public-pricing-view>.
+// That build-output check is currently manual; it was verified in the local
+// Enterprise selfhosted Docker image for preloop-ee#229.
 describe('Self-hosted public routes', () => {
   let fetchStub: sinon.SinonStub;
 
