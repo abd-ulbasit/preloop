@@ -463,7 +463,9 @@ Target Branch:       # Branch to create for commits (auto-generated if empty)
 In both **Create flow** and **Edit flow**, expand **Advanced Git workspace**,
 enable workspace cloning, then select **Add repository** for each checkout.
 You can edit or remove entries independently. Saving and reopening the flow keeps
-the full list.
+the full list. Saving with cloning disabled clears the explicit repository list
+so the executors do not clone it. Re-enabling before saving keeps the entries in
+the open form. Jira repository bindings and other Git settings are preserved.
 
 The first entry is marked **Default** and supplies the agent's starting working
 directory. Select **Make default** on another entry to move it first. Each entry

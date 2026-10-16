@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -88,3 +89,34 @@ def test_two_repositories_are_cloned_into_the_workspace(
         assert git("-C", str(checkout), "rev-parse", "HEAD") == git(
             "-C", str(tmp_path / f"source-{name}"), "rev-parse", "HEAD"
         )
+
+
+@pytest.mark.parametrize(
+    "executor_class", [ContainerAgentExecutor, CodexAgent, OpenCodeAgent, GeminiAgent]
+)
+def test_disabled_form_config_does_not_clone_even_with_a_trigger_project(
+    executor_class: type[ContainerAgentExecutor],
+) -> None:
+    """The disabled form submits an empty list, bypassing explicit-repo cloning."""
+    if executor_class is ContainerAgentExecutor:
+        executor = executor_class(
+            agent_type="codex", config={}, image="test-image", use_kubernetes=False
+        )
+    else:
+        executor = executor_class(config={})
+    context: dict[str, Any] = {
+        "flow_id": "example-flow",
+        "execution_id": "example-execution",
+        "trigger_project_id": "example-trigger-project",
+        "git_clone_config": {
+            "enabled": False,
+            "repositories": [],
+            "repository_bindings": [
+                {"tracker_id": "example-tracker", "repository": "team/api"}
+            ],
+        },
+    }
+    with patch.object(executor, "_prepare_git_clone_command") as clone:
+        command = executor._prepare_init_commands(context)
+    clone.assert_not_called()
+    assert command == ""

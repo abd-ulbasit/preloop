@@ -304,10 +304,15 @@ describe('PreloopFlowForm repository checkouts', () => {
     await element.updateComplete;
     const disabled = await saved(element);
     expect(disabled.enabled).to.equal(false);
-    expect(disabled.repositories).to.have.length(1);
+    expect(disabled.repositories).to.deep.equal([]);
+    expect(element.flow.git_clone_config.repositories).to.have.length(1);
     expect(disabled.repository_bindings).to.deep.equal(
       config.repository_bindings
     );
     expect(disabled.publication_mode).to.equal('isolated');
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('sl-change'));
+    await element.updateComplete;
+    expect((await saved(element)).repositories).to.have.length(1);
   });
 });

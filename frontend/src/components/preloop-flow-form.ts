@@ -25,7 +25,13 @@ import {
   type HarnessOption,
   type RunnerRecord,
 } from '../api';
-import type { Flow, GitCloneRepository, Project, Organization } from '../types';
+import type {
+  Flow,
+  GitCloneConfig,
+  GitCloneRepository,
+  Project,
+  Organization,
+} from '../types';
 import { defaultFlowNotifications } from '../types';
 import { getAgentControlState } from '../utils/agent-control';
 import {
@@ -1674,6 +1680,14 @@ export class PreloopFlowForm extends LitElement {
     `;
   }
 
+  /** Explicit repositories imply cloning to legacy executors, even if disabled. */
+  private composedGitCloneConfig(): GitCloneConfig {
+    const config = this.flow.git_clone_config || { enabled: false };
+    return !config.enabled && config.repositories?.length
+      ? { ...config, repositories: [] }
+      : config;
+  }
+
   private handleGitCloneToggle(checked: boolean) {
     this.flow.git_clone_config = {
       ...this.flow.git_clone_config,
@@ -1952,7 +1966,7 @@ export class PreloopFlowForm extends LitElement {
           this.triggerType === 'schedule'
             ? this.flow.schedule_config || defaultScheduleConfig()
             : null,
-        git_clone_config: this.flow.git_clone_config || { enabled: false },
+        git_clone_config: this.composedGitCloneConfig(),
         notifications: this.composedNotifications(),
         // Explicit null clears a saved override and restores the deployment default.
         timeout_seconds: timeoutSeconds,
@@ -5111,7 +5125,15 @@ export class PreloopFlowForm extends LitElement {
             >
               Enable git workspace cloning
             </sl-checkbox>
-
+            ${
+              !this.flow.git_clone_config?.enabled &&
+              this.flow.git_clone_config?.repositories?.length
+                ? html`<p class="checkbox-help" data-disabled-repositories-help>
+                    Saving with cloning disabled clears the saved repository
+                    list. Re-enable before saving to keep these entries.
+                  </p>`
+                : nothing
+            }
             ${
               this.flow.git_clone_config?.enabled
                 ? html`
