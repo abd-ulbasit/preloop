@@ -1285,6 +1285,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         details = models.FlowExecution.trigger_event_details
         return (
             db.query(models.FlowExecution)
+            .options(load_only(models.FlowExecution.id))
             .join(models.Flow)
             .filter(
                 models.FlowExecution.flow_id == flow_id,

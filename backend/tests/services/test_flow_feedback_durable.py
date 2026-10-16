@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from collections.abc import Generator
 from typing import Any
@@ -2347,11 +2347,18 @@ def test_successful_bitbucket_head_lookup(
             },
         }
         db.commit()
+        # A fresh identity map ensures previously loaded attributes cannot
+        # hide an unnecessarily wide SELECT in the existence lookup.
+        lookup_flow_id = thread.flow_id if same_flow else uuid.uuid4()
+        lookup_account_id = thread.account_id if same_account else uuid.uuid4()
+        db.expunge_all()
         found = crud_flow_execution.get_successful_for_bitbucket_head(
             db,
-            flow_id=thread.flow_id if same_flow else uuid.uuid4(),
-            account_id=thread.account_id if same_account else uuid.uuid4(),
+            flow_id=lookup_flow_id,
+            account_id=lookup_account_id,
             tracker_object_key="bitbucket:ws/repo:pr:7",
             head_sha="head",
         )
         assert (found is not None) == expected
+        if found is not None:
+            assert {"evidence_archive", "result"} <= inspect(found).unloaded

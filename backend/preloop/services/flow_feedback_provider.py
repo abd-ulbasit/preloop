@@ -897,7 +897,9 @@ class FeedbackProvider:
         if re.search(r"<!--\s*preloop-review:", text):
             # Severity markers identify actionable findings. Summary and
             # reviewed-sha markers only describe a completed review.
-            return re.search(r":severity:(?:high|medium|low)\s*-->", text) is None
+            return (
+                re.search(r":severity:(?:critical|high|medium|low)\s*-->", text) is None
+            )
         return False
 
     async def _bitbucket(self) -> FeedbackState:

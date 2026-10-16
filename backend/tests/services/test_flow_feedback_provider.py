@@ -1571,14 +1571,17 @@ async def test_bitbucket_only_approval_is_ready_without_a_repair() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bitbucket_marked_change_finding_remains_actionable() -> None:
+@pytest.mark.parametrize("severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"])
+async def test_bitbucket_marked_change_finding_remains_actionable(
+    severity: str,
+) -> None:
     """Filtering summary markers must preserve real marked review findings."""
     provider, _ = bitbucket_fixture(
         comments=[
             {
                 "id": 1,
                 "content": {
-                    "raw": "<!-- preloop-review:flow-id:reviewer:severity:HIGH -->\nFix the parser"
+                    "raw": f"<!-- preloop-review:flow-id:reviewer:severity:{severity} -->\nFix the parser"
                 },
                 "inline": {"path": "a.py", "to": 3},
                 "user": {"uuid": "{" + BB_REVIEWER_UUID + "}"},
