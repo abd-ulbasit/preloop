@@ -113,8 +113,11 @@ describe('Governance findings', () => {
   }
   it('renders coverage, run history and a real finding anchor', async () => {
     const el = await mount();
-    expect(el.shadowRoot!.textContent).to.contain('(3 segments)');
-    expect(el.shadowRoot!.textContent).to.contain('summaries started');
+    const text = el.shadowRoot!.textContent!.replace(/\s+/g, ' ');
+    expect(text).to.contain('Week of Oct 5, 2026 to Oct 12, 2026 (UTC)');
+    expect(text).not.to.contain('segments');
+    expect(text).to.contain('Weekly review');
+    expect(text).to.contain('Broke a requirement in your policy.');
     expect(
       el.shadowRoot!.querySelector(
         'a[href="/console/governance/findings/finding-1"]'
@@ -155,6 +158,8 @@ describe('Governance findings', () => {
       el.shadowRoot!.querySelector('a[href="/console/audit?event=event-1"]')
     ).to.exist;
     expect(el.shadowRoot!.textContent).to.contain('must.tools');
+    expect(el.shadowRoot!.textContent).to.contain('Tools (requirement)');
+    expect(el.shadowRoot!.textContent).to.contain('Gateway usage data');
     (
       el.shadowRoot!.querySelector('[data-dismiss="expected"]') as HTMLElement
     ).click();
@@ -218,7 +223,7 @@ describe('Governance findings', () => {
       );
       if (state === 'zero') {
         expect(text).to.contain('Not yet reviewed');
-        expect(text).to.contain('first hourly sweep');
+        expect(text.replace(/\s+/g, ' ')).to.contain('first hourly sweep');
       }
       if (state === 'covered')
         expect(text).to.contain('No findings in the reviewed data');
@@ -368,5 +373,22 @@ describe('Governance findings', () => {
     await el.updateComplete;
     expect(el.shadowRoot!.querySelector('view-header')).to.equal(null);
     expect(api.callsTo(`${BASE}/findings`)).to.have.length(0);
+  });
+});
+
+describe('Governance findings clarity', () => {
+  it('names rules in plain words', async () => {
+    const { ruleLabel } = await import('./governance-view');
+    expect(ruleLabel('prefer.retry_limit')).to.equal(
+      'Retry limit (preference)'
+    );
+    expect(ruleLabel('must.data_handling')).to.equal(
+      'Data handling (requirement)'
+    );
+    expect(ruleLabel('must.account.2')).to.equal('Your policy (requirement)');
+    expect(ruleLabel('policy_notice.no-secrets')).to.equal(
+      'Policy rule no-secrets'
+    );
+    expect(ruleLabel(null)).to.equal('Not a policy rule');
   });
 });

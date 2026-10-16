@@ -3660,10 +3660,18 @@ defaults:
     return html`
       <view-header
         headerText="Policies"
-        description="Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches."
+        description=${
+          this._activeTab === 'governance'
+            ? 'The AI usage policy the weekly review checks sessions against. It reports and never blocks work.'
+            : 'Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches.'
+        }
         width="extra-wide"
       >
-        <div slot="main-column">
+        <div
+          slot="main-column"
+          class="rule-actions"
+          ?hidden=${this._activeTab === 'governance'}
+        >
           <sl-button
             size="small"
             variant="primary"
@@ -3771,7 +3779,7 @@ defaults:
                             panel="governance"
                             ?active=${this._activeTab === 'governance'}
                           >
-                            Governance policy
+                            AI usage policy
                           </sl-tab>`
                         : ''
                     }

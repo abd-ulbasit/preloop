@@ -289,7 +289,7 @@ describe('PoliciesView', () => {
       governance_review: true,
     });
     const tab = element.shadowRoot!.querySelector('sl-tab[panel="governance"]');
-    expect(tab?.textContent?.trim()).to.equal('Governance policy');
+    expect(tab?.textContent?.trim()).to.equal('AI usage policy');
     (element as any)._activeTab = 'governance';
     await element.updateComplete;
     const panel = element.shadowRoot!.querySelector('governance-policy-panel');
@@ -305,6 +305,16 @@ describe('PoliciesView', () => {
     await element.updateComplete;
     const panel = element.shadowRoot!.querySelector('governance-policy-panel');
     expect(panel?.canManage).to.equal(true);
+    // Rule actions edit the tool-call policy, not this document.
+    const actions = element.shadowRoot!.querySelector(
+      '.rule-actions'
+    ) as HTMLElement;
+    expect(actions.hidden).to.equal(true);
+    expect(
+      element
+        .shadowRoot!.querySelector('view-header')!
+        .getAttribute('description')
+    ).to.contain('weekly review');
   });
 
   it('renders the Policies header and tabs after load', async () => {
