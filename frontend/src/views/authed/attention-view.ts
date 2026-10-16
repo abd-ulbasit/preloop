@@ -1,3 +1,4 @@
+import { decideMCPFinding, type MCPFinding } from '../../mcp-findings-api';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { formatUsd, formatUsdExact } from '../../utils/money';
@@ -115,6 +116,8 @@ export class AttentionView extends AuthedElement {
   @state() private gatewayFailures: GatewayUsageSearchResultItem[] = [];
   @state() private budgetPolicies: BudgetPolicy[] = [];
   @state() private priceOverrides: AttentionPriceOverride[] = [];
+  @state() private mcpFindingsEnabled = false;
+  @state() private mcpFindings: MCPFinding[] = [];
   @state() private policyNotices: AttentionPolicyNotice[] = [];
   @state() private spendOutliers: SpendOutlierFinding[] = [];
   @state() private showSpendSettings = false;
@@ -769,11 +772,13 @@ export class AttentionView extends AuthedElement {
     this.budgetPolicies = inputs.budgetPolicies || [];
     this.usageSummary = inputs.usageSummary || null;
     this.priceOverrides = inputs.priceOverrides || [];
+    this.mcpFindings = inputs.mcpFindings || [];
     this.policyNotices = inputs.policyNotices || [];
     this.spendOutliers = inputs.spendOutliers || [];
     this.dismissals = (inputs.dismissals || []) as AttentionDismissal[];
     this.dismissalsSupported = inputs.dismissalsSupported;
     this.billingEnabled = features?.features?.billing === true;
+    this.mcpFindingsEnabled = features?.features?.mcp_findings === true;
 
     this.lastUpdatedAt = new Date().toISOString();
     this.loading = false;
@@ -792,6 +797,7 @@ export class AttentionView extends AuthedElement {
       budgetPolicies: this.budgetPolicies,
       usageSummary: this.usageSummary,
       priceOverrides: this.priceOverrides,
+      mcpFindings: this.mcpFindings,
       policyNotices: this.policyNotices,
       spendOutliers: this.spendOutliers,
       dismissals: this.dismissals,
@@ -924,7 +930,9 @@ export class AttentionView extends AuthedElement {
   private renderChipStrip(grouped: Map<AttentionKind, AttentionItem[]>) {
     return html`
       <div class="chip-strip">
-        ${ATTENTION_KIND_ORDER.map((kind) => {
+        ${ATTENTION_KIND_ORDER.filter(
+          (kind) => kind !== 'mcp' || this.mcpFindingsEnabled
+        ).map((kind) => {
           const count = grouped.get(kind)?.length || 0;
           return html`
             <button
@@ -1530,6 +1538,67 @@ export class AttentionView extends AuthedElement {
     `;
   }
 
+  private async decideMCP(item: MCPFinding, action: 'approve' | 'ignore') {
+    const accepted = await confirmDialog({
+      title:
+        action === 'approve'
+          ? 'Approve inventory route?'
+          : 'Ignore finding for 7 days?',
+      message:
+        action === 'approve'
+          ? 'This approves only this account registry revision. It grants no execution permission, enrollment or OAuth access.'
+          : 'Evidence remains recorded. This finding returns after 7 days unless resolved.',
+      confirmLabel:
+        action === 'approve' ? 'Approve inventory' : 'Ignore for 7 days',
+    });
+    if (!accepted) return;
+    try {
+      await decideMCPFinding(item.id, action);
+      await this.fetchAll();
+    } catch {
+      showToast('Could not save the MCP inventory decision', 'danger');
+    }
+  }
+
+  private renderMCPEvidence(item: AttentionItem) {
+    const finding = item.evidence?.mcpFinding;
+    if (!finding) return nothing;
+    return html`
+      <p>Registry ID: <code>${finding.server_id}</code></p>
+      <p>
+        Evidence:
+        ${finding.evidence_class === 'observed_call' ? 'completed routed call' : 'configuration only'}.
+        Approval: ${finding.approval_state}. Person:
+        ${finding.person_id || 'unknown'}.
+      </p>
+      <p>${finding.limitation}</p>
+      <div class="evidence-actions">
+        ${
+          hasPermission(this.permissions, 'approve_mcp_servers')
+            ? html`
+                <sl-button
+                  size="small"
+                  @click=${() => void this.decideMCP(finding, 'approve')}
+                  >Approve inventory</sl-button
+                >
+              `
+            : nothing
+        }
+        ${
+          hasPermission(this.permissions, 'ignore_mcp_findings')
+            ? html`
+                <sl-button
+                  size="small"
+                  @click=${() => void this.decideMCP(finding, 'ignore')}
+                  >Ignore for 7 days</sl-button
+                >
+              `
+            : nothing
+        }
+      </div>
+    `;
+  }
+
   private renderPolicyEvidence(item: AttentionItem) {
     const notice = item.evidence?.policyNotice;
     if (!notice) {
@@ -1678,6 +1747,8 @@ export class AttentionView extends AuthedElement {
         return this.renderPricingEvidence(item);
       case 'budget':
         return this.renderBudgetEvidence(item);
+      case 'mcp':
+        return this.renderMCPEvidence(item);
       case 'policy':
         return this.renderPolicyEvidence(item);
       case 'spend':
@@ -1975,7 +2046,9 @@ export class AttentionView extends AuthedElement {
                     ${
                       items.length === 0
                         ? this.renderAllClear(dismissed.length)
-                        : ATTENTION_KIND_ORDER.map((kind) =>
+                        : ATTENTION_KIND_ORDER.filter(
+                            (kind) => kind !== 'mcp' || this.mcpFindingsEnabled
+                          ).map((kind) =>
                             this.renderSection(kind, grouped.get(kind) || [])
                           )
                     }

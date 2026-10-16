@@ -4,6 +4,11 @@ Preloop is an open-source, responsible AI automation platform. It can proxy tool
 
 ARCHITECTURE.md is the map. Read one chapter under `docs/architecture/` for the subsystem you are changing. Do not load every chapter for context.
 
+[MCP dispatch provenance](docs/architecture/mcp-dispatch-provenance.md) defines the
+identity-only extension event for completed proxied calls. Optional plugins own
+inventory interpretation; hook labels and mutable tool-name maps cannot establish
+server identity.
+
 [Account access rules](docs/architecture/account-access-rules.md) includes the portable exact-resource selector and resource requirement contract. Core owns atomic storage, reference validation and generation invalidation; Enterprise owns preview authorization and enforcement of independent local gates.
 
 Live session supervision uses shared Lit state and tool/approval cards across

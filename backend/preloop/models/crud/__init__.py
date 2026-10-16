@@ -2,6 +2,7 @@
 
 # Create CRUD instances for each model
 from .callback_receipt import crud_callback_key_binding, crud_callback_receipt
+from .mcp_inventory import crud_mcp_inventory
 from ..models import (
     Account,
     AccountDiscoverySalt,
@@ -304,6 +305,7 @@ crud_tool_access_rule = CRUDToolAccessRule()  # Instantiate CRUDToolAccessRule
 
 
 __all__ = [
+    "crud_mcp_inventory",
     "identity_directory",
     "CRUDPerson",
     "IdentityConflictError",
