@@ -45,6 +45,10 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from preloop.models import models
 
 from preloop.models.crud import (
     crud_account,
@@ -577,10 +581,17 @@ def _seed_trialing_subscription(db_session: Any, account_id: Any) -> None:
     )
 
 
-def test_trial_hosted_budget_blocks_before_upstream_dispatch(
-    client, db_session, test_user, fake_upstream
-):
-    """A trial hosted-model hard cap denies with 429 and never dispatches upstream."""
+@pytest.mark.parametrize("hosted", [True, False])
+def test_trial_hosted_budget_respects_instance_mode(
+    client: TestClient,
+    db_session: Session,
+    test_user: models.User,
+    fake_upstream: _UpstreamState,
+    monkeypatch: pytest.MonkeyPatch,
+    hosted: bool,
+) -> None:
+    """Only Cloud trial caps block before the real upstream HTTP dispatch."""
+    monkeypatch.setenv("PRELOOP_HOSTED", "true" if hosted else "false")
     _seed_trialing_subscription(db_session, test_user.account_id)
     _seed_gateway_model(
         db_session,
@@ -606,6 +617,11 @@ def test_trial_hosted_budget_blocks_before_upstream_dispatch(
             "max_tokens": 1000,
         },
     )
+
+    if not hosted:
+        assert response.status_code == 200, response.text
+        assert fake_upstream.request_count == 1
+        return
 
     assert response.status_code == 429, response.text
     body = response.json()
