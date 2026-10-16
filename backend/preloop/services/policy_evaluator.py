@@ -1475,9 +1475,9 @@ def _evaluate_cel_condition_on_bindings(
     try:
         import celpy
 
-        env = celpy.Environment()
-        ast = env.compile(expression)
-        program = env.program(ast)
+        from preloop.services.cel_programs import compile_cel_program
+
+        program = compile_cel_program(expression)
         activation = celpy.json_to_cel(bindings)
         result = program.evaluate(activation)
         return bool(result)

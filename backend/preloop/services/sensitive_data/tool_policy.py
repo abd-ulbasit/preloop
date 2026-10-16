@@ -471,6 +471,8 @@ def evaluate_tool_target(
                     },
                 )
             except ValueError:
+                if action == NOTIFY:
+                    continue
                 matched = True
                 action = DENY
             if not matched:

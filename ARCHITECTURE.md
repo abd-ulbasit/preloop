@@ -874,6 +874,8 @@ The capability-gated runner policy console consumes the Enterprise provider’s 
 
 Tool data policies also support CEL predicates on `tool.args` using `args`,
 `tool.name` and `tool.server`. These reuse the sensitive-data policy store,
-notice delivery and approval dispatch; evaluation errors deny the call.
+notice delivery and approval dispatch. Evaluation errors skip notify rules;
+deny and approval rules fail closed. A bounded CEL program cache shares compiled
+expressions between validation and evaluation without retaining request bindings.
 The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrates
 portable server allowlists, write approvals and bulk-export checks.

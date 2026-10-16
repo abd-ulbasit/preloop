@@ -182,7 +182,8 @@ For server allowlists, write-tool patterns and bulk-export checks, a
 `sensitive_data.rules` entry may use a CEL `condition` instead of detector
 `types`. It binds `args`, `tool.name` and `tool.server`, runs only on
 `tool.args`, and supports `notify`, `deny` and `require_approval`. Evaluation
-errors deny the call. A condition rule cannot use detector types or redact.
+errors skip notify rules; deny and approval rules fail closed. A condition
+rule cannot use detector types or redact.
 See the downloadable pack in [Governing back-office AI use](policies/back-office-ai.md).
 
 ### Reference-only logging

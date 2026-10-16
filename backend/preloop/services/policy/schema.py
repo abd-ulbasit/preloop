@@ -845,7 +845,7 @@ class SensitiveDataRule(BaseModel):
         max_length=10000,
         description=(
             "CEL predicate instead of a detector scan, for tool.args only. "
-            "Bindings: args, tool.name and tool.server. Evaluation errors deny."
+            "Bindings: args, tool.name and tool.server. Errors skip notify rules; others deny."
         ),
     )
 
@@ -858,10 +858,10 @@ class SensitiveDataRule(BaseModel):
             raise ValueError("condition rules require on: [tool.args]")
         if self.types is not None or self.action_value() == "redact":
             raise ValueError("condition rules cannot set types or redact")
-        import celpy
+        from preloop.services.cel_programs import compile_cel_program
 
         try:
-            celpy.Environment().compile(self.condition)
+            compile_cel_program(self.condition)
         except Exception as exc:
             raise ValueError("Invalid CEL condition") from exc
         return self

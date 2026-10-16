@@ -13,6 +13,7 @@ rules for traffic that passes through Preloop.
 2. In **Policies**, export your current policy as a backup. Edit the downloaded
    file: replace `crm`, `marketing`, `warehouse` and `cdn-analytics` with the exact
    server names configured in Preloop. These are names, not endpoint URLs.
+   Keep `preloop-mcp` in the list to allow Preloop builtin tools without notices.
 3. Replace the synthetic `premium-approved` and `premium-unapproved` model names
    with your approved and other top-tier model identifiers. The example compares
    `model.name`, the provider model identifier when available, rather than a
@@ -48,7 +49,8 @@ The tool rules live under `sensitive_data.rules`, the existing policy section fo
 protecting tool data. Their `condition` field evaluates CEL against `args`,
 `tool.name` and `tool.server` instead of running a detector. It supports
 `notify`, `deny` and `require_approval`, only on `tool.args`; it cannot be combined
-with detector `types` or redaction. A condition evaluation error denies the call.
+with detector `types` or redaction. A condition evaluation error skips a notify
+rule; deny and approval rules fail closed and deny the call.
 Disabled rules and server/tool/agent scopes retain their usual behavior.
 
 Rules run in file order. The notification is collected first; bulk denial comes

@@ -13,11 +13,12 @@ approval_workflows:
 
 sensitive_data:
   rules:
+    # preloop-mcp is the pseudo-server for Preloop builtin tools.
     - id: back-office-unapproved-server
       description: A connected assistant called a server outside our approved list.
       "on": [tool.args]
       condition: >-
-        !(tool.server in ['crm', 'marketing', 'warehouse', 'cdn-analytics'])
+        !(tool.server in ['preloop-mcp', 'crm', 'marketing', 'warehouse', 'cdn-analytics'])
       action: notify
 
     - id: back-office-bulk-export

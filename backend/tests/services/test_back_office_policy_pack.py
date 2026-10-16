@@ -41,6 +41,7 @@ def test_pack_loads_and_round_trips() -> None:
     "server,name,args,decision,rule",
     [
         ("unapproved", "read_record", {}, "notify", "back-office-unapproved-server"),
+        ("preloop-mcp", "ask_user", {}, "allow", None),
         (
             "crm",
             "update_record",
@@ -196,3 +197,68 @@ def test_import_pack_on_fresh_account(
     exported = export_current_policy(db_session, account.id)
     assert exported.sensitive_data == policy.sensitive_data
     assert exported.model_io == policy.model_io
+
+
+@pytest.mark.parametrize(
+    "action,expected",
+    [("notify", "allow"), ("deny", "deny"), ("require_approval", "deny")],
+)
+def test_predicate_errors_preserve_notify_contract(action: str, expected: str) -> None:
+    from preloop.services.policy.schema import SensitiveDataConfig
+
+    config = SensitiveDataConfig.model_validate(
+        {
+            "rules": [
+                {
+                    "id": "example",
+                    "on": ["tool.args"],
+                    "action": action,
+                    "condition": "args.limit > 10000",
+                }
+            ]
+        }
+    )
+    result = evaluate_tool_target(
+        config=config,
+        detector_config=None,
+        target="tool.args",
+        payload={"limit": "many"},
+        tool_name="query",
+        server_name="warehouse",
+        managed_agent_id=None,
+        record=False,
+    )
+    assert result.action == expected
+
+
+def test_compiled_predicates_do_not_retain_request_bindings() -> None:
+    from preloop.services.cel_programs import compile_cel_program
+    from preloop.services.policy.schema import SensitiveDataConfig
+
+    compile_cel_program.cache_clear()
+    config = SensitiveDataConfig.model_validate(
+        {
+            "rules": [
+                {
+                    "id": "example",
+                    "on": ["tool.args"],
+                    "action": "deny",
+                    "condition": "args.limit > 10000",
+                }
+            ]
+        }
+    )
+    for limit, expected in [(1, "allow"), (10001, "deny"), (1, "allow")]:
+        result = evaluate_tool_target(
+            config=config,
+            detector_config=None,
+            target="tool.args",
+            payload={"limit": limit},
+            tool_name="query",
+            server_name="warehouse",
+            managed_agent_id=None,
+            record=False,
+        )
+        assert result.action == expected
+    assert compile_cel_program.cache_info().misses == 1
+    assert compile_cel_program.cache_info().hits >= 3
