@@ -179,3 +179,152 @@ func TestRunnerModelConcurrencyIsBounded(t *testing.T) {
 		t.Fatalf("%v", frame)
 	}
 }
+
+func TestRunnerModelNonstreamSuccess(t *testing.T) {
+	payload := `{"choices":[{"message":{"role":"assistant","content":"Hello"}}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, payload)
+	}))
+	defer server.Close()
+	proxy := newRunnerModelProxy([]runnerLocalModel{{ID: "model-1", BaseURL: server.URL + "/v1", Model: "example"}})
+	defer proxy.cancel()
+	proxy.handle(runnerModelRequest{RequestID: "one", Operation: "start", ModelID: "model-1", BaseURL: server.URL + "/v1", Body: json.RawMessage(`{"model":"example"}`)})
+	frame := nextModelFrame(t, proxy)
+	if frame["data"] != payload || frame["status"] != 200 || frame["done"] != true || frame["error"] != nil {
+		t.Fatalf("unexpected completion: %v", frame)
+	}
+}
+
+func TestRunnerModelAggregateResponseLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		line := "data: " + strings.Repeat("x", 32*1024) + "\n"
+		for i := 0; i < 520; i++ {
+			if _, err := fmt.Fprint(w, line); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	proxy := newRunnerModelProxy([]runnerLocalModel{{ID: "model-1", BaseURL: server.URL + "/v1", Model: "example"}})
+	defer proxy.cancel()
+	proxy.handle(runnerModelRequest{RequestID: "one", Operation: "start", ModelID: "model-1", BaseURL: server.URL + "/v1", Body: json.RawMessage(`{"model":"example","stream":true}`)})
+	total := 0
+	for i := 0; i < 520; i++ {
+		frame := nextModelFrame(t, proxy)
+		if frame["error"] != nil {
+			if frame["error"] != "runner_response_limit" || frame["done"] != true || total == 0 || total > runnerModelResponseLimit {
+				t.Fatalf("unexpected limit result: %v, bytes %d", frame, total)
+			}
+			return
+		}
+		total += len(frame["data"].(string)) + 1
+		proxy.handle(runnerModelRequest{RequestID: "one", Operation: "next"})
+	}
+	t.Fatal("aggregate response limit was not enforced")
+}
+
+func TestRunnerModelIdleDeadline(t *testing.T) {
+	cancelled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	defer server.Close()
+	proxy := newRunnerModelProxy([]runnerLocalModel{{ID: "model-1", BaseURL: server.URL + "/v1", Model: "example"}})
+	defer proxy.cancel()
+	if proxy.idleTimeout != 60*time.Second {
+		t.Fatalf("unexpected default idle timeout: %v", proxy.idleTimeout)
+	}
+	proxy.idleTimeout = 100 * time.Millisecond
+	proxy.handle(runnerModelRequest{RequestID: "one", Operation: "start", ModelID: "model-1", BaseURL: server.URL + "/v1", Body: json.RawMessage(`{"model":"example","stream":true}`)})
+	frame := nextModelFrame(t, proxy)
+	if frame["error"] != "runner_upstream_unavailable" || frame["done"] != true {
+		t.Fatalf("unexpected deadline result: %v", frame)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("idle deadline did not cancel upstream")
+	}
+}
+
+func TestRunnerModelConsentUsesCallerTTY(t *testing.T) {
+	var output strings.Builder
+	t.Setenv("PRELOOP_CONFIRM", "1")
+	approved, err := confirmRunnerLocalModels(strings.NewReader("yes\n"), &output, true)
+	if err != nil || !approved || !strings.Contains(output.String(), "[y/N]") {
+		t.Fatalf("caller terminal was ignored: %v %v %s", approved, err, output.String())
+	}
+	approved, err = confirmRunnerLocalModels(strings.NewReader("yes\n"), io.Discard, false)
+	if err == nil || approved {
+		t.Fatal("noninteractive consent accepted without --yes")
+	}
+	approved, err = confirmRunnerLocalModels(strings.NewReader("\n"), io.Discard, true)
+	if err != nil || approved {
+		t.Fatal("default consent must remain no")
+	}
+}
+
+func TestRunnerModelRegistrationContinuesAndRecoversState(t *testing.T) {
+	t.Setenv("PRELOOP_RUNNER_STATE_DIR", t.TempDir())
+	if err := writeRunnerState(&runnerState{ID: "example-runner"}); err != nil {
+		t.Fatal(err)
+	}
+	oldToken, oldURL := FlagToken, FlagURL
+	t.Cleanup(func() { FlagToken, FlagURL = oldToken, oldURL })
+	FlagToken = "example-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/runners/example-runner/models" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		var body struct {
+			Model string `json:"model_identifier"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Model == "unavailable" {
+			http.Error(w, "registration unavailable", 400)
+			return
+		}
+		fmt.Fprint(w, `{"id":"existing-registration"}`)
+	}))
+	defer server.Close()
+	FlagURL = server.URL
+	found := []runnerLocalModel{{BaseURL: "http://localhost:11434/v1", Model: "unavailable"}, {BaseURL: "http://localhost:11434/v1", Model: "example"}}
+	err := registerDiscoveredRunnerModels(found, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("missing per-model error: %v", err)
+	}
+	state, err := readRunnerState()
+	if err != nil || len(state.LocalModels) != 1 || state.LocalModels[0].ID != "existing-registration" {
+		t.Fatalf("successful registration lost: %+v %v", state, err)
+	}
+}
+
+func TestRunnerModelIdleDeadlineMidstream(t *testing.T) {
+	cancelled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		fmt.Fprint(w, "data: hello\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	defer server.Close()
+	proxy := newRunnerModelProxy([]runnerLocalModel{{ID: "model-1", BaseURL: server.URL + "/v1", Model: "example"}})
+	defer proxy.cancel()
+	proxy.idleTimeout = 100 * time.Millisecond
+	proxy.handle(runnerModelRequest{RequestID: "one", Operation: "start", ModelID: "model-1", BaseURL: server.URL + "/v1", Body: json.RawMessage(`{"model":"example","stream":true}`)})
+	if first := nextModelFrame(t, proxy); first["data"] != "data: hello" {
+		t.Fatalf("unexpected first frame %v", first)
+	}
+	proxy.handle(runnerModelRequest{RequestID: "one", Operation: "next"})
+	if last := nextModelFrame(t, proxy); last["done"] != true || last["error"] != "runner_upstream_read_error" {
+		t.Fatalf("unexpected idle error %v", last)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upstream remained open")
+	}
+}

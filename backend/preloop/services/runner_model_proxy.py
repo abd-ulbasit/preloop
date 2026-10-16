@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hmac
 import threading
 import time
 from typing import Any
@@ -60,8 +61,18 @@ def runner_model_subject(account_id: str, runner_id: str) -> str:
 class RunnerModelConnection:
     """Bridge one socket to internal NATS RPC with one frame in flight per call."""
 
-    def __init__(self, websocket: WebSocket, account_id: str, runner_id: str) -> None:
+    def __init__(
+        self,
+        websocket: WebSocket,
+        account_id: str,
+        runner_id: str,
+        *,
+        credential_hash: str | None = None,
+        connection_id: str | None = None,
+    ) -> None:
         self.websocket = websocket
+        self.credential_hash = credential_hash
+        self.connection_id = connection_id
         self.account_id = account_id
         self.runner_id = runner_id
         self.subject = runner_model_subject(account_id, runner_id)
@@ -165,9 +176,24 @@ class RunnerModelConnection:
     def _authorized(self, raw: dict[str, Any]) -> bool:
         """Recheck stored model/account binding before handing work to the host."""
         from preloop.models.crud import crud_ai_model
+        from preloop.models.crud.flow_runner import crud_flow_runner
         from preloop.models.db.session import get_db_session
 
         for db in get_db_session():
+            runner = crud_flow_runner.get(
+                db, id=self.runner_id, account_id=self.account_id
+            )
+            if (
+                not runner
+                or not self.credential_hash
+                or not self.connection_id
+                or not hmac.compare_digest(
+                    runner.token_hash or "", self.credential_hash
+                )
+                or (runner.publication_capabilities or {}).get("connection_id")
+                != self.connection_id
+            ):
+                raise ConnectionError("Runner connection is no longer current")
             model = crud_ai_model.get(
                 db, id=raw.get("model_id"), account_id=self.account_id
             )
@@ -185,7 +211,20 @@ class RunnerModelConnection:
         future = self.pending.get(str(raw.get("request_id")))
         if future is None or future.done():
             return
-        if len(json.dumps(raw).encode()) > MAX_FRAME_BYTES + 2048:
+        if (
+            type(raw.get("status", 200)) is not int
+            or not 200 <= raw.get("status", 200) <= 599
+            or not isinstance(raw.get("data", ""), str)
+            or type(raw.get("done", False)) is not bool
+            or (
+                raw.get("error") is not None
+                and (not isinstance(raw["error"], str) or len(raw["error"]) > 128)
+            )
+        ):
+            future.set_result(
+                {"status": 502, "error": "runner_proxy_error", "done": True}
+            )
+        elif len(json.dumps(raw).encode()) > MAX_FRAME_BYTES + 2048:
             future.set_result(
                 {"status": 502, "error": "runner_frame_too_large", "done": True}
             )
@@ -347,7 +386,14 @@ class RunnerModelStream:
                     data = line[5:].strip()
                     if data == "[DONE]":
                         break
-                    return ModelResponseStream(**json.loads(data))
+                    try:
+                        return ModelResponseStream(**json.loads(data))
+                    except (ValueError, TypeError) as exc:
+                        raise ModelGatewayAPIError(
+                            provider="openai",
+                            status_code=502,
+                            message="Runner returned an invalid model response",
+                        ) from exc
                 if reply.get("done"):
                     break
         except BaseException:
@@ -398,6 +444,13 @@ def runner_completion(model: Any, body: dict[str, Any], *, stream: bool) -> Any:
         return tunnel
     try:
         reply = tunnel.read()
-        return ModelResponse(**json.loads(reply["data"]))
+        try:
+            return ModelResponse(**json.loads(reply["data"]))
+        except (ValueError, TypeError) as exc:
+            raise ModelGatewayAPIError(
+                provider="openai",
+                status_code=502,
+                message="Runner returned an invalid model response",
+            ) from exc
     finally:
         tunnel.close()

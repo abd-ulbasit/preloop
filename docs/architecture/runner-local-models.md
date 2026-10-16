@@ -13,7 +13,9 @@ natively, so `http://localhost:11434/v1` reaches host Ollama.
 
 `POST /runners/{runner_id}/models` registers a discovered model with an authenticated
 account user and model-management permission. CRUD verifies runner ownership,
-normalizes the URL, and creates a gateway-enabled model. The runner separately
+normalizes the URL, and creates a gateway-enabled model. Repeating the same
+runner, normalized URL and model identifier returns its existing registration,
+so the operator can recover a lost native allowlist after approving discovery again. The runner separately
 persists the operator-approved model ID, base URL and upstream model identifier.
 Registration never grants the backend arbitrary access to the host network.
 

@@ -506,6 +506,22 @@ class CRUDAIModel(CRUDBase[AIModel]):
             "account_count": len({str(row.account_id) for row in matching}),
         }
 
+    def register_runner_model(
+        self, db: Session, *, obj_in: Dict[str, Any], account_id: Any
+    ) -> AIModel:
+        """Recover an existing exact binding after lost native registration state."""
+        data = dict(obj_in)
+        self._validate_runner_endpoint(db, data, account_id=account_id)
+        for model in self.get_by_account(db, account_id=account_id):
+            if (
+                model.endpoint_type == "runner"
+                and str(model.runner_id) == str(data["runner_id"])
+                and model.api_endpoint == data["api_endpoint"]
+                and model.model_identifier == data["model_identifier"]
+            ):
+                return model
+        return self.create_with_account(db, obj_in=data, account_id=account_id)
+
     def create_with_account(
         self,
         db: Session,

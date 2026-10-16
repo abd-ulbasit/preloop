@@ -604,3 +604,42 @@ async def test_hello_null_host_exec_profiles_leaves_capabilities_empty(
     await runners.runner_ws(websocket, runner.id, MagicMock())
 
     assert runner.capabilities == {"host_exec_profiles": []}
+
+
+@pytest.mark.asyncio
+async def test_model_response_frames_do_not_query_runner_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token frames use their socket-bound future without a database round trip."""
+    runner = _stub_leased_runner(uuid4())
+    writer = _stub_capability_writer(runner)
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_json = AsyncMock()
+    websocket.receive_json = AsyncMock(
+        side_effect=[
+            {
+                "type": "model_response",
+                "request_id": "unknown",
+                "data": "data: example",
+            },
+            WebSocketDisconnect(),
+        ]
+    )
+    monkeypatch.setattr(runners, "_authenticate_runner", lambda *args: runner)
+    monkeypatch.setattr(runners, "_deliver_session_messages", AsyncMock())
+    monkeypatch.setattr(runners, "_refresh_presence", MagicMock())
+    monkeypatch.setattr(runners, "emit_runner_updated", MagicMock())
+    monkeypatch.setattr(runners.crud_flow_runner, "touch_heartbeat", MagicMock())
+    monkeypatch.setattr(runners.crud_flow_runner, "set_presence_signals", MagicMock())
+    monkeypatch.setattr(
+        runners.crud_flow_runner,
+        "set_publication_capabilities",
+        lambda *args, **kwargs: False
+        if kwargs.get("offline")
+        else writer(*args, **kwargs),
+    )
+    lookup = MagicMock(side_effect=AssertionError("Token frame queried the runner row"))
+    monkeypatch.setattr(runners.crud_flow_runner, "get", lookup)
+    await runners.runner_ws(websocket, runner.id, MagicMock())
+    lookup.assert_not_called()

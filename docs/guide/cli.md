@@ -57,9 +57,13 @@ preloop runner fg --labels local     # foreground: register, heartbeat, lease jo
 preloop runner enable                # install launchd / systemd / scheduled task
 preloop runner start|stop|restart|status
 preloop runner disable               # remove the service
+preloop runner models                # discover local OpenAI-compatible servers
+preloop runner models --register     # approve models for the account gateway
 ```
 
 `preloop runner setup` asks on a terminal when the account policy is `optional`, installs without a question when it is `required`, and prints one line when it is `forbidden`. On Windows it registers a per-user logon task; no elevation is needed, and an error names the device policy when task creation is blocked. The installed service registers as the hostname with labels `personal`, `os:<os>` and `arch:<arch>`. Remove it with `preloop runner disable`.
+
+Use `--register --yes` for explicit noninteractive approval and `--base-url http://localhost:11434/v1` for an additional loopback server. `PRELOOP_RUNNER_STATE_DIR` selects an isolated runner state directory. See [runner-proxied local models](runner-local-models.md) for registration and transport limits.
 
 ## Restricted CI
 

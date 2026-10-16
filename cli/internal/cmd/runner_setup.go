@@ -338,7 +338,7 @@ func installRunnerFromSetup(req runnerSetupRequest) error {
 	if started {
 		waitForRunnerOnline(req.Out)
 		if req.tty() {
-			if err := discoverAndRegisterRunnerModels(req.In, req.Out, nil, true, false); err != nil {
+			if err := discoverAndRegisterRunnerModelsWithTTY(req.In, req.Out, nil, true, false, req.tty()); err != nil {
 				fmt.Fprintf(req.Out, "Local models: %v. Retry with: preloop runner models --register\n", err)
 			}
 		}

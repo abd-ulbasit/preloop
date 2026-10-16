@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -86,17 +87,18 @@ type runnerModelCall struct {
 }
 
 type runnerModelProxy struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	calls   map[string]*runnerModelCall
-	allowed map[string]runnerLocalModel
-	frames  chan map[string]any
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	calls       map[string]*runnerModelCall
+	allowed     map[string]runnerLocalModel
+	frames      chan map[string]any
+	idleTimeout time.Duration
 }
 
 func newRunnerModelProxy(allowed []runnerLocalModel) *runnerModelProxy {
 	ctx, cancel := context.WithCancel(context.Background())
-	proxy := &runnerModelProxy{ctx: ctx, cancel: cancel,
+	proxy := &runnerModelProxy{ctx: ctx, cancel: cancel, idleTimeout: 60 * time.Second,
 		calls: map[string]*runnerModelCall{}, allowed: map[string]runnerLocalModel{}, frames: make(chan map[string]any, 4)}
 	for _, model := range allowed {
 		proxy.allowed[model.ID] = model
@@ -162,7 +164,7 @@ func (p *runnerModelProxy) forward(ctx context.Context, call *runnerModelCall, r
 		p.emit(ctx, request.RequestID, 403, "", true, "runner_model_not_allowed")
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(request.Body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, approved.BaseURL+"/chat/completions", bytes.NewReader(request.Body))
 	if err != nil {
 		p.emit(ctx, request.RequestID, 502, "", true, "runner_upstream_error")
 		return
@@ -170,7 +172,7 @@ func (p *runnerModelProxy) forward(ctx context.Context, call *runnerModelCall, r
 	req.Header.Set("Content-Type", "application/json")
 	client := runnerLocalHTTPClient(10 * time.Minute)
 	defer client.CloseIdleConnections()
-	idle := time.AfterFunc(60*time.Second, call.cancel)
+	idle := time.AfterFunc(p.idleTimeout, call.cancel)
 	defer idle.Stop()
 	response, err := client.Do(req)
 	if err != nil {
@@ -195,7 +197,7 @@ func (p *runnerModelProxy) forward(ctx context.Context, call *runnerModelCall, r
 	scanner.Buffer(make([]byte, 4096), runnerModelFrameLimit)
 	total := 0
 	for {
-		idle.Reset(60 * time.Second)
+		idle.Reset(p.idleTimeout)
 		if !scanner.Scan() {
 			code := ""
 			if scanner.Err() != nil {
@@ -293,6 +295,10 @@ func discoverRunnerModelsAt(all []string) ([]runnerLocalModel, error) {
 }
 
 func discoverAndRegisterRunnerModels(in io.Reader, out io.Writer, bases []string, register, yes bool) error {
+	return discoverAndRegisterRunnerModelsWithTTY(in, out, bases, register, yes, loginTerminal())
+}
+
+func discoverAndRegisterRunnerModelsWithTTY(in io.Reader, out io.Writer, bases []string, register, yes, tty bool) error {
 	found, err := discoverRunnerModels(bases)
 	if err != nil {
 		return err
@@ -309,16 +315,15 @@ func discoverAndRegisterRunnerModels(in io.Reader, out io.Writer, bases []string
 		return nil
 	}
 	if !yes {
-		if !loginTerminal() {
-			return fmt.Errorf("noninteractive registration requires --register --yes")
-		}
-		// Local model consent must remain explicit, including when PRELOOP_CONFIRM is set.
-		fmt.Fprint(out, "Allow account gateway requests to these local models? [y/N] ")
-		answer, _ := bufio.NewReader(in).ReadString('\n')
-		if !runnerSetupAffirmative(answer) {
-			return nil
+		approved, err := confirmRunnerLocalModels(in, out, tty)
+		if err != nil || !approved {
+			return err
 		}
 	}
+	return registerDiscoveredRunnerModels(found, out)
+}
+
+func registerDiscoveredRunnerModels(found []runnerLocalModel, out io.Writer) error {
 	state, err := readRunnerState()
 	if err != nil || state == nil || state.ID == "" {
 		return fmt.Errorf("start or set up this runner before registering models")
@@ -327,6 +332,7 @@ func discoverAndRegisterRunnerModels(in io.Reader, out io.Writer, bases []string
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, model := range found {
 		already := false
 		for _, existing := range state.LocalModels {
@@ -346,10 +352,12 @@ func discoverAndRegisterRunnerModels(in io.Reader, out io.Writer, bases []string
 			"api_endpoint": model.BaseURL, "meta_data": map[string]any{"gateway": map[string]any{"enabled": true, "model_alias": alias}},
 		}, &response)
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("%s: %w", model.Model, err))
+			continue
 		}
 		if response.ID == "" {
-			return fmt.Errorf("registration returned no model ID")
+			failures = append(failures, fmt.Errorf("%s: registration returned no model ID", model.Model))
+			continue
 		}
 		model.ID = response.ID
 		if err := updateRunnerState(func(current *runnerState) error { current.LocalModels = append(current.LocalModels, model); return nil }); err != nil {
@@ -358,6 +366,17 @@ func discoverAndRegisterRunnerModels(in io.Reader, out io.Writer, bases []string
 		state.LocalModels = append(state.LocalModels, model)
 		fmt.Fprintf(out, "Registered %s as %s\n", model.Model, alias)
 	}
-	fmt.Fprintln(out, "Local model registrations saved. Reconnect the runner to load the allowlist.")
-	return nil
+	fmt.Fprintln(out, "Reconnect the runner to load saved local model registrations.")
+	return errors.Join(failures...)
+}
+
+// The caller supplies terminal detection so setup's TTY override is preserved.
+func confirmRunnerLocalModels(in io.Reader, out io.Writer, tty bool) (bool, error) {
+	if !tty {
+		return false, fmt.Errorf("noninteractive registration requires --register --yes")
+	}
+	// Consent remains explicit, including when PRELOOP_CONFIRM is set.
+	fmt.Fprint(out, "Allow account gateway requests to these local models? [y/N] ")
+	answer, _ := bufio.NewReader(in).ReadString('\n')
+	return runnerSetupAffirmative(answer), nil
 }

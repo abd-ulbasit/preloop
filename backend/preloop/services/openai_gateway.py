@@ -2182,6 +2182,12 @@ class OpenAIGatewayService:
             )
 
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        if getattr(model, "endpoint_type", "direct") == "runner":
+            raise ModelGatewayAPIError(
+                provider="openai",
+                status_code=400,
+                message="Runner models support chat completions only",
+            )
         payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses"
@@ -3614,6 +3620,12 @@ class OpenAIGatewayService:
         self._begin_request_accounting()
         self._adopt_openai_native_session_id(payload)
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        if getattr(model, "endpoint_type", "direct") == "runner":
+            raise ModelGatewayAPIError(
+                provider="openai",
+                status_code=400,
+                message="Runner models support chat completions only",
+            )
         payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses_stream"
