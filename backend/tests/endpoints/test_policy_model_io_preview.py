@@ -1,10 +1,7 @@
 """Preview and import must agree on omitted versus explicit model I/O sections."""
 
-import functools
-import inspect
 import io
 from types import SimpleNamespace
-from typing import Any, Callable
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -158,32 +155,69 @@ async def test_preview_requires_read_permission_before_export(
     """The existing read gate still protects current-account rule contents."""
     import preloop.utils.permissions as permissions
 
-    def denied(
-        required_permission: str,
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        assert required_permission == "view_policies"
-
-        def decorate(func: Callable[..., Any]) -> Callable[..., Any]:
-            @functools.wraps(func)
-            async def wrapper(*args: Any, **kwargs: Any) -> Any:
-                raise HTTPException(403, "Permission denied")
-
-            return wrapper
-
-        return decorate
-
-    mocker.patch.object(permissions, "_plugin_require_permission", denied)
-    mocker.patch.object(permissions, "_rbac_checks_enabled", return_value=True)
-    export = mocker.patch("preloop.api.endpoints.policies.export_current_policy")
-    wrapped = permissions.require_permission("view_policies")(
-        inspect.unwrap(policies.diff_policy)
+    mocker.patch("preloop.plugins.account_hooks._authorizer", object())
+    check = mocker.patch.object(
+        permissions,
+        "_check_authorizer",
+        side_effect=HTTPException(403, "Permission denied"),
     )
+    export = mocker.patch("preloop.api.endpoints.policies.export_current_policy")
     with pytest.raises(HTTPException) as error:
-        await wrapped(
+        await policies.diff_policy(
             file=UploadFile(file=io.BytesIO(b"model_io: []"), filename="policy.yaml"),
             account=SimpleNamespace(id=uuid4()),
             current_user=SimpleNamespace(id=uuid4()),
             db=MagicMock(),
         )
     assert error.value.status_code == 403
+    check.assert_called_once()
+    assert check.call_args.args[0] == "view_policies"
     export.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "section,value,empty",
+    [
+        (
+            "access_rules",
+            [{"name": "allow", "effect": "permit", "actions": ["model:invoke"]}],
+            [],
+        ),
+        ("access_rule_mode", {"model:invoke": "require_permit"}, {}),
+        (
+            "resource_access",
+            [{"resource_type": "ai_model", "resource_id": str(uuid4())}],
+            [],
+        ),
+        (
+            "resource_shares",
+            [
+                {
+                    "id": str(uuid4()),
+                    "resource_type": "ai_model",
+                    "resource_id": str(uuid4()),
+                    "target_mode": "all",
+                }
+            ],
+            [],
+        ),
+        ("sensitive_data", {"detectors": {"locales": ["de"]}}, {}),
+    ],
+)
+def test_optional_replacement_sections_preserve_omission_and_preview_explicit_reset(
+    section: str,
+    value: object,
+    empty: object,
+) -> None:
+    """Every optional replacement section follows its importer's None guard."""
+    base = {"metadata": {"name": "Synthetic policy"}}
+    current = PolicyDocument.model_validate({**base, section: value})
+    for incoming in (base, {**base, section: None}):
+        assert not compute_policy_diff(
+            current, PolicyDocument.model_validate(incoming)
+        ).changes
+    reset = compute_policy_diff(
+        current, PolicyDocument.model_validate({**base, section: empty})
+    )
+    assert len(reset.changes) == 1
+    assert reset.changes[0].path.startswith(f"$.{section}")

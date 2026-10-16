@@ -591,14 +591,25 @@ def compute_policy_diff(
 
     # Compare tools
     diff_named_lists("$.tools", current.tools, incoming.tools)
-    diff_named_lists("$.access_rules", current.access_rules, incoming.access_rules)
+    diff_named_lists(
+        "$.access_rules",
+        current.access_rules,
+        current.access_rules
+        if incoming.access_rules is None
+        else incoming.access_rules,
+    )
     diff_named_lists(
         "$.resource_shares",
         current.resource_shares,
-        incoming.resource_shares,
+        current.resource_shares
+        if incoming.resource_shares is None
+        else incoming.resource_shares,
         name_field="id",
     )
-    if current.access_rule_mode != incoming.access_rule_mode:
+    if (
+        incoming.access_rule_mode is not None
+        and current.access_rule_mode != incoming.access_rule_mode
+    ):
         changes.append(
             PolicyDiffItem(
                 path="$.access_rule_mode",
@@ -608,7 +619,10 @@ def compute_policy_diff(
             )
         )
 
-    if current.resource_access != incoming.resource_access:
+    if (
+        incoming.resource_access is not None
+        and current.resource_access != incoming.resource_access
+    ):
         changes.append(
             PolicyDiffItem(
                 path="$.resource_access",
@@ -675,7 +689,7 @@ def compute_policy_diff(
     incoming_sensitive = (
         incoming.sensitive_data.model_dump(exclude_none=True)
         if incoming.sensitive_data
-        else {}
+        else current_sensitive
     )
     if current_sensitive != incoming_sensitive:
         if not incoming_sensitive:

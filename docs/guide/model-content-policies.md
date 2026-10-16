@@ -419,3 +419,9 @@ model_io:
       - expression: "injection.score > 0.7"
         action: deny
 ```
+
+Optional `sensitive_data`, `access_rules`, `access_rule_mode`, `resource_access`, and
+`resource_shares` sections also preserve their current configuration when omitted
+or set to `null`. Explicit values replace the corresponding section; use `[]`
+for list sections or `{}` for configuration maps to reset them. The preview
+uses these same import rules.
