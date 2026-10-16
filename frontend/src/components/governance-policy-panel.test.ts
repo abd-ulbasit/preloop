@@ -1,7 +1,7 @@
 import { html, fixture, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 
-import { invalidateApiCaches } from '../api';
+import { invalidateApiCaches, type GovernanceThresholdSource } from '../api';
 import './governance-policy-panel';
 import {
   markRuleHeadings,
@@ -30,7 +30,71 @@ interface Version {
 }
 
 /** An in-memory governance API, enough to round-trip the panel. */
-function fakeServer(mode = 'on_platform', extraVersions = 0) {
+function thresholdGroups(
+  saved: Record<string, Record<string, unknown>> | null,
+  legacyCount?: number
+) {
+  const value = (kind: string, key: string, fallback: number | string) =>
+    saved?.[kind]?.[key] ?? fallback;
+  return [
+    {
+      kind: 'retry_limit',
+      label: 'Repeated errors',
+      help: 'Flag the same error repeated in one session.',
+      fields: [
+        {
+          key: 'count',
+          label: 'Repeats in one session',
+          default: 5,
+          minimum: 2,
+          maximum: 1000,
+          integer: true,
+          unit: 'repeats',
+          choices: [],
+          value: value('retry_limit', 'count', legacyCount ?? 5),
+          source: (saved?.retry_limit?.count !== undefined
+            ? 'settings'
+            : legacyCount !== undefined
+              ? 'policy_document'
+              : 'default') as GovernanceThresholdSource,
+        },
+      ],
+    },
+    {
+      kind: 'model_per_task',
+      label: 'Model per task',
+      help: 'Flag a top-tier model used for work of this kind.',
+      fields: [
+        {
+          key: 'triage',
+          label: 'Triage',
+          default: 'small',
+          integer: false,
+          choices: ['small', 'large', 'any'],
+          value: value('model_per_task', 'triage', 'small'),
+          source:
+            saved?.model_per_task?.triage !== undefined
+              ? 'settings'
+              : 'default',
+        },
+      ],
+    },
+  ];
+}
+
+function fakeServer(
+  mode = 'on_platform',
+  extraVersions = 0,
+  options: {
+    legacyBlocks?: number;
+    thresholds?: boolean;
+    legacyCount?: number;
+    watchlistCount?: boolean;
+    policyGate?: Promise<void>;
+  } = {}
+) {
+  let legacyBlocks = options.legacyBlocks ?? 0;
+  let savedThresholds: Record<string, Record<string, unknown>> | null = null;
   const versions: Version[] = [
     {
       id: 'v1',
@@ -69,6 +133,9 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
     watchlist: {
       policy_document_version: active().version,
       fingerprint: 'f',
+      ...(options.watchlistCount === false
+        ? {}
+        : { legacy_rule_blocks: legacyBlocks }),
       rules: [
         {
           rule_ref: 'prefer.retry_limit',
@@ -112,6 +179,7 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
       calls.push({ method, url, body });
       const path = new URL(url, window.location.origin).pathname;
       if (path === '/api/v1/governance-review/policy') {
+        if (method === 'GET') await options.policyGate;
         if (method === 'PUT') addVersion(body.body_markdown);
         return json(document());
       }
@@ -122,6 +190,19 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
       if (restore && method === 'POST') {
         const source = versions.find((v) => v.version === Number(restore[1]))!;
         addVersion(source.body_markdown);
+        return json(document());
+      }
+      if (path === '/api/v1/governance-review/review-settings') {
+        if (options.thresholds === false) return json({ detail: 'x' }, 404);
+        if (method === 'PUT') savedThresholds = body.detector_thresholds;
+        return json({
+          groups: thresholdGroups(savedThresholds, options.legacyCount),
+          legacy_rule_blocks: legacyBlocks,
+        });
+      }
+      if (path === '/api/v1/governance-review/policy/convert-legacy-rules') {
+        legacyBlocks = 0;
+        addVersion('# Converted');
         return json(document());
       }
       if (path === '/api/v1/governance-review/settings') {
@@ -282,13 +363,228 @@ describe('governance-policy-panel', () => {
     ).to.contain('Own small model');
   });
 
-  it('marks must and prefer rules, must first', async () => {
+  it('does not list compiled rule refs', async () => {
     server = fakeServer();
     const element = await mount(true);
-    const chips = [
-      ...element.shadowRoot!.querySelectorAll('.rules .rule-class'),
-    ].map((chip) => chip.textContent!.trim());
-    expect(chips).to.deep.equal(['Must', 'Prefer']);
+    const text = element.shadowRoot!.textContent!;
+    expect(text).not.to.contain('prefer.retry_limit');
+    expect(text).not.to.contain('governance-rule');
+    expect(element.shadowRoot!.querySelector('.rules')).to.equal(null);
+  });
+
+  it('explains that the policy is plain language', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    const intro = element.shadowRoot!.querySelector('.policy-intro')!;
+    expect(intro.textContent).to.contain('plain language');
+    const textarea = element.shadowRoot!.querySelector(
+      'textarea.policy-source'
+    ) as HTMLTextAreaElement;
+    expect(textarea.getAttribute('aria-label')).to.equal('AI usage policy');
+  });
+
+  it('shows what the review measures and saves a changed number', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    await waitUntil(() => element.shadowRoot!.querySelector('form.thresholds'));
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    expect(String(input.value)).to.equal('5');
+    expect(input.getAttribute('label')).to.equal('Repeats in one session');
+    input.value = '8';
+    input.dispatchEvent(new Event('sl-input'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() =>
+      server.calls.some(
+        (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+      )
+    );
+    const put = server.calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+    );
+    expect(put?.body).to.deep.equal({
+      detector_thresholds: { retry_limit: { count: 8 } },
+    });
+  });
+
+  it('confirms before resetting measured checks, allowing cancellation', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('sl-button.reset-thresholds')
+    );
+    const confirm = sinon.stub().resolves(false);
+    element.confirm = confirm;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.reset-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => confirm.calledOnce);
+    await element.updateComplete;
+    expect(server.calls.some((c) => c.method === 'PUT')).to.equal(false);
+    confirm.resolves(true);
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.reset-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() =>
+      server.calls.some(
+        (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+      )
+    );
+    const put = server.calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+    );
+    expect(put?.body).to.deep.equal({ detector_thresholds: null });
+  });
+
+  for (const value of ['', '1', '1001', '2.5', 'not a number', 'Infinity']) {
+    it(`rejects invalid measured-check value ${JSON.stringify(value)} beside its field`, async () => {
+      server = fakeServer();
+      const element = await mount(true);
+      const input = element.shadowRoot!.querySelector(
+        'sl-input[data-field="retry_limit.count"]'
+      ) as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('sl-input'));
+      await element.updateComplete;
+      expect(input.getAttribute('aria-invalid')).to.equal('true');
+      expect(input.getAttribute('help-text')).not.to.equal('');
+      const button = element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLButtonElement;
+      expect(button.disabled).to.equal(true);
+      element
+        .shadowRoot!.querySelector('form.thresholds')!
+        .dispatchEvent(new Event('submit', { cancelable: true }));
+      await element.updateComplete;
+      expect(server.calls.some((c) => c.method === 'PUT')).to.equal(false);
+      input.value = '8';
+      input.dispatchEvent(new Event('sl-input'));
+      await element.updateComplete;
+      expect(input.getAttribute('aria-invalid')).to.equal('false');
+      expect(button.disabled).to.equal(false);
+    });
+  }
+
+  it('leaves unchanged legacy values in the policy when saving another field', async () => {
+    server = fakeServer('on_platform', 0, { legacyCount: 7 });
+    const element = await mount(true);
+    const input = element.shadowRoot!.querySelector(
+      'sl-select[data-field="model_per_task.triage"]'
+    ) as HTMLSelectElement;
+    input.value = 'large';
+    input.dispatchEvent(new Event('sl-change'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => server.calls.some((c) => c.method === 'PUT'));
+    expect(server.calls.find((c) => c.method === 'PUT')?.body).to.deep.equal({
+      detector_thresholds: { model_per_task: { triage: 'large' } },
+    });
+  });
+
+  it('saves an edited legacy value even when it equals the built-in default', async () => {
+    server = fakeServer('on_platform', 0, { legacyCount: 7 });
+    const element = await mount(true);
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    input.value = '5';
+    input.dispatchEvent(new Event('sl-input'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => server.calls.some((c) => c.method === 'PUT'));
+    expect(server.calls.find((c) => c.method === 'PUT')?.body).to.deep.equal({
+      detector_thresholds: { retry_limit: { count: 5 } },
+    });
+  });
+
+  it('uses the review-settings legacy count when the watchlist omits it', async () => {
+    server = fakeServer('on_platform', 0, {
+      legacyBlocks: 3,
+      watchlistCount: false,
+    });
+    const element = await mount(true);
+    expect(
+      element.shadowRoot!.querySelector('.legacy-blocks')?.textContent
+    ).to.contain('3 hidden rule');
+  });
+
+  it('requests thresholds before the initial policy request resolves', async () => {
+    let release!: () => void;
+    const policyGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server = fakeServer('on_platform', 0, { policyGate });
+    const element = await fixture<GovernancePolicyPanel>(
+      html`<governance-policy-panel></governance-policy-panel>`
+    );
+    try {
+      await waitUntil(() =>
+        server.calls.some((c) => c.url.endsWith('/review-settings'))
+      );
+    } finally {
+      release();
+    }
+    await waitUntil(() => element.shadowRoot?.querySelector('form.thresholds'));
+  });
+
+  it('gives read-only members disabled measured checks', async () => {
+    server = fakeServer();
+    const element = await mount(false);
+    await waitUntil(() => element.shadowRoot!.querySelector('form.thresholds'));
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    expect(input.hasAttribute('disabled')).to.equal(true);
+    expect(
+      element.shadowRoot!.querySelector('sl-button.save-thresholds')
+    ).to.equal(null);
+  });
+
+  it('hides the measured checks on a server without them', async () => {
+    server = fakeServer('on_platform', 0, { thresholds: false });
+    const element = await mount(true);
+    expect(element.shadowRoot!.querySelector('form.thresholds')).to.equal(null);
+    expect(element.shadowRoot!.querySelector('textarea.policy-source')).to
+      .exist;
+  });
+
+  it('offers to move legacy rule blocks into the settings', async () => {
+    server = fakeServer('on_platform', 0, { legacyBlocks: 3 });
+    const element = await mount(true);
+    const notice = element.shadowRoot!.querySelector('.legacy-blocks')!;
+    expect(notice.textContent!.replace(/\s+/g, ' ')).to.contain(
+      '3 hidden rule blocks'
+    );
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.convert-legacy'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => !element.shadowRoot!.querySelector('.legacy-blocks'));
+    expect(
+      server.calls.some(
+        (c) => c.method === 'POST' && c.url.endsWith('/convert-legacy-rules')
+      )
+    ).to.equal(true);
+    expect(versionRows(element)[0]).to.equal('2');
   });
 
   it('labels rule headings in the preview with their class', () => {
@@ -309,11 +605,13 @@ describe('governance-policy-panel', () => {
       PRIVACY_SENTENCE
     );
     await waitUntil(
-      () => element.shadowRoot!.querySelectorAll('sl-option').length > 0
+      () =>
+        element.shadowRoot!.querySelectorAll('sl-select.model sl-option')
+          .length > 0
     );
-    const options = [...element.shadowRoot!.querySelectorAll('sl-option')].map(
-      (option) => option.getAttribute('value')
-    );
+    const options = [
+      ...element.shadowRoot!.querySelectorAll('sl-select.model sl-option'),
+    ].map((option) => option.getAttribute('value'));
     expect(options).to.deep.equal(['m-own']);
   });
 

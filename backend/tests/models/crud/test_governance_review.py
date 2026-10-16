@@ -262,6 +262,63 @@ def test_set_mode_persists_and_overrides_the_default(
     assert row.mode_changed_by_id == test_user.id
 
 
+def test_set_thresholds_keeps_mode_and_round_trips(
+    db_session: Session, test_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRELOOP_HOSTED", "true")
+    crud_governance_review_settings.set_mode(
+        db_session,
+        account_id=test_user.account_id,
+        mode="off",
+        commit=False,
+    )
+
+    row = crud_governance_review_settings.set_thresholds(
+        db_session,
+        account_id=test_user.account_id,
+        detector_thresholds={"retry_limit": {"count": 7}},
+        commit=False,
+    )
+
+    assert row.mode == "off"
+    assert row.detector_thresholds == {"retry_limit": {"count": 7}}
+
+
+def test_set_thresholds_inserts_the_default_mode_for_a_new_account(
+    db_session: Session, test_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRELOOP_HOSTED", "true")
+
+    row = crud_governance_review_settings.set_thresholds(
+        db_session,
+        account_id=test_user.account_id,
+        detector_thresholds=None,
+        commit=False,
+    )
+
+    assert row.mode == "on_platform"
+    assert row.detector_thresholds is None
+
+
+def test_set_thresholds_rejects_a_non_object_or_oversized_value(
+    db_session: Session, test_user: User
+) -> None:
+    with pytest.raises(GovernanceReviewValidationError):
+        crud_governance_review_settings.set_thresholds(
+            db_session,
+            account_id=test_user.account_id,
+            detector_thresholds=["retry_limit"],  # type: ignore[arg-type]
+            commit=False,
+        )
+    with pytest.raises(GovernanceReviewValidationError):
+        crud_governance_review_settings.set_thresholds(
+            db_session,
+            account_id=test_user.account_id,
+            detector_thresholds={"x": "y" * 5000},
+            commit=False,
+        )
+
+
 def test_upsert_digest_is_per_segment(db_session: Session, test_user: User) -> None:
     session = _session(db_session, test_user.account_id)
     start, end = _window()

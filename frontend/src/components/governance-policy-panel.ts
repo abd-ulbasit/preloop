@@ -2,21 +2,25 @@ import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import {
+  convertGovernanceLegacyRules,
   getAIModels,
   getGovernancePolicy,
   getGovernanceReviewSettings,
+  getGovernanceThresholds,
   getUsers,
   keepGovernanceReviewOn,
   listGovernancePolicyVersions,
   restoreGovernancePolicyVersion,
   saveGovernancePolicy,
+  saveGovernanceThresholds,
   updateGovernanceReviewSettings,
   type GovernancePolicyDocument,
   type GovernancePolicyVersion,
   type GovernanceReviewMode,
   type GovernanceReviewSettings,
   type GovernanceRuleClass,
-  type GovernanceWatchlistRule,
+  type GovernanceThresholdField,
+  type GovernanceThresholds,
 } from '../api';
 import type { AIModel } from '../types';
 import { confirmDialog, showToast } from './confirm-dialog';
@@ -27,6 +31,7 @@ import '@shoelace-style/shoelace/dist/components/alert/alert.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
+import '@shoelace-style/shoelace/dist/components/input/input.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 import '@shoelace-style/shoelace/dist/components/radio/radio.js';
 import '@shoelace-style/shoelace/dist/components/radio-group/radio-group.js';
@@ -46,18 +51,24 @@ const MODE_LABELS: Record<ChosenMode, string> = {
 export const PRIVACY_SENTENCE =
   "With Preloop models, scrubbed session excerpts and summaries are sent to Preloop's model provider. Choose your own model to keep them on your provider.";
 
-const CLASS_LABELS: Record<
-  GovernanceRuleClass,
-  { label: string; miss: string }
-> = {
-  must: { label: 'Must', miss: 'A miss is a violation' },
-  prefer: { label: 'Prefer', miss: 'A miss is an inefficiency' },
+const CLASS_LABELS: Record<GovernanceRuleClass, { label: string }> = {
+  must: { label: 'Must' },
+  prefer: { label: 'Prefer' },
 };
 
+const SOURCE_NOTES: Record<GovernanceThresholdField['source'], string> = {
+  default: '',
+  settings: '',
+  policy_document: 'From a hidden rule block in the policy',
+};
+
+/** `kind.key` names one measured-check input. */
+type ThresholdDraft = Record<string, number | string>;
+
 /**
- * Marks the rule headings of the rendered preview with their class, so a
- * reader sees which rules are hard and which are soft without reading the
- * `governance-rule` blocks (which the sanitiser drops with every comment).
+ * Marks `### must.name` and `### prefer.name` headings, which policies in the
+ * old format still use, with their class in the rendered preview. A plain
+ * language policy has none and renders unchanged.
  */
 export function markRuleHeadings(renderedHtml: string): string {
   return renderedHtml.replace(
@@ -78,8 +89,9 @@ function isOwnGatewayModel(model: AIModel): boolean {
 }
 
 /**
- * The Governance policy tab: the markdown policy the weekly review reads,
- * its version history, and the review settings.
+ * The Governance policy tab: the plain-language policy the weekly review
+ * reads, the numbers its measured checks use, the analysis model, and the
+ * version history.
  *
  * Rendered only where `/features` reports `governance_review`; the parent
  * view owns that gate. `canManage` false (a `view_policies` member) gives a
@@ -107,6 +119,11 @@ export class GovernancePolicyPanel extends LitElement {
   @state() private _savingSettings = false;
   @state() private _keepingOn = false;
   @state() private _userNames: Map<string, string> = new Map();
+  /** Null on a server that predates the measured-check settings. */
+  @state() private _thresholds: GovernanceThresholds | null = null;
+  @state() private _thresholdDraft: ThresholdDraft = {};
+  @state() private _savingThresholds = false;
+  @state() private _converting = false;
 
   static styles = [
     unsafeCSS(consoleStyles),
@@ -140,14 +157,17 @@ export class GovernancePolicyPanel extends LitElement {
       .toolbar .spacer {
         flex: 1;
       }
+      .policy-intro {
+        max-width: 72ch;
+      }
       textarea {
         box-sizing: border-box;
         width: 100%;
         min-height: 420px;
         padding: var(--sl-spacing-small);
-        font-family: var(--sl-font-mono);
-        font-size: var(--console-text-meta);
-        line-height: 1.5;
+        font-family: var(--sl-font-sans);
+        font-size: var(--console-text-body);
+        line-height: 1.6;
         color: inherit;
         background: var(--console-surface);
         border: 1px solid var(--console-hairline);
@@ -157,21 +177,34 @@ export class GovernancePolicyPanel extends LitElement {
       textarea[readonly] {
         color: var(--console-meta-color);
       }
-      .rules {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-      }
-      .rules li {
-        display: flex;
-        align-items: baseline;
-        gap: var(--sl-spacing-small);
-        padding: var(--sl-spacing-2x-small) 0;
+      .threshold-group {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) 2fr;
+        gap: var(--sl-spacing-medium);
+        padding: var(--sl-spacing-small) 0;
         border-bottom: 1px solid var(--console-hairline);
-        font-size: var(--console-text-body);
       }
-      .rules code {
-        font-size: var(--console-text-meta);
+      .threshold-group:last-of-type {
+        border-bottom: none;
+      }
+      .threshold-group h4 {
+        margin: 0;
+        font-size: var(--console-text-body);
+        font-weight: 600;
+      }
+      .threshold-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sl-spacing-small) var(--sl-spacing-medium);
+      }
+      .threshold-fields sl-input,
+      .threshold-fields sl-select {
+        width: 200px;
+      }
+      @media (max-width: 640px) {
+        .threshold-group {
+          grid-template-columns: 1fr;
+        }
       }
       .rule-class {
         display: inline-block;
@@ -242,6 +275,7 @@ export class GovernancePolicyPanel extends LitElement {
         getGovernancePolicy(),
         listGovernancePolicyVersions(),
         getGovernanceReviewSettings(),
+        this._loadThresholds(),
       ]);
       this._applyPolicy(policy);
       this._versions = versions;
@@ -268,6 +302,147 @@ export class GovernancePolicyPanel extends LitElement {
         );
       })
       .catch(() => undefined);
+  }
+
+  /** An older server has no measured-check settings: hide the form. */
+  private async _loadThresholds(): Promise<void> {
+    try {
+      this._applyThresholds(await getGovernanceThresholds());
+    } catch {
+      this._thresholds = null;
+    }
+  }
+
+  private _applyThresholds(thresholds: GovernanceThresholds): void {
+    this._thresholds = thresholds;
+    const draft: ThresholdDraft = {};
+    for (const group of thresholds.groups) {
+      for (const field of group.fields) {
+        draft[`${group.kind}.${field.key}`] = field.value;
+      }
+    }
+    this._thresholdDraft = draft;
+  }
+
+  /** Preserve saved overrides and explicit edits, leaving legacy values in place. */
+  private _thresholdOverrides(): Record<
+    string,
+    Record<string, number | string>
+  > {
+    const overrides: Record<string, Record<string, number | string>> = {};
+    for (const group of this._thresholds?.groups ?? []) {
+      for (const field of group.fields) {
+        const value = this._thresholdDraft[`${group.kind}.${field.key}`];
+        const keep =
+          field.source === 'settings' || String(value) !== String(field.value);
+        if (value === undefined || value === '' || !keep) continue;
+        (overrides[group.kind] ??= {})[field.key] = field.choices.length
+          ? String(value)
+          : Number(value);
+      }
+    }
+    return overrides;
+  }
+
+  private get _thresholdsDirty(): boolean {
+    return (this._thresholds?.groups ?? []).some((group) =>
+      group.fields.some(
+        (field) =>
+          String(this._thresholdDraft[`${group.kind}.${field.key}`]) !==
+          String(field.value)
+      )
+    );
+  }
+
+  private _thresholdError(
+    field: GovernanceThresholdField,
+    value: number | string
+  ): string {
+    if (field.choices.length) {
+      return field.choices.includes(String(value))
+        ? ''
+        : 'Choose a value from the list.';
+    }
+    if (String(value).trim() === '' || !Number.isFinite(Number(value))) {
+      return 'Enter a number.';
+    }
+    const number = Number(value);
+    if (field.integer && !Number.isInteger(number))
+      return 'Enter a whole number.';
+    if (field.minimum != null && number < field.minimum)
+      return `Enter ${field.minimum} or more.`;
+    if (field.maximum != null && number > field.maximum)
+      return `Enter ${field.maximum} or less.`;
+    return '';
+  }
+
+  private get _thresholdsValid(): boolean {
+    return (this._thresholds?.groups ?? []).every((group) =>
+      group.fields.every(
+        (field) =>
+          !this._thresholdError(
+            field,
+            this._thresholdDraft[`${group.kind}.${field.key}`] ?? field.value
+          )
+      )
+    );
+  }
+
+  private async _resetThresholds(): Promise<void> {
+    const confirmed = await this.confirm({
+      title: 'Reset measured checks?',
+      message: 'This removes all saved measured-check settings for your team.',
+      detail:
+        'Values still in legacy policy blocks apply first; otherwise the built-in defaults apply. This cannot be undone.',
+      confirmLabel: 'Reset',
+      variant: 'danger',
+    });
+    if (confirmed) await this._saveThresholds(true);
+  }
+
+  private async _saveThresholds(reset = false): Promise<void> {
+    if (this._savingThresholds || (!reset && !this._thresholdsValid)) return;
+    this._savingThresholds = true;
+    try {
+      this._applyThresholds(
+        await saveGovernanceThresholds(
+          reset ? null : this._thresholdOverrides()
+        )
+      );
+      showToast(
+        reset
+          ? 'Measured checks reset to the defaults.'
+          : 'Measured checks saved.',
+        'success'
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Failed to save',
+        'danger'
+      );
+    } finally {
+      this._savingThresholds = false;
+    }
+  }
+
+  private async _convertLegacy(): Promise<void> {
+    this._converting = true;
+    try {
+      const converted = await convertGovernanceLegacyRules();
+      this._applyPolicy(converted);
+      await Promise.all([this._reloadVersions(), this._loadThresholds()]);
+      showToast(
+        `Rule blocks removed. Saved as version ${converted.version}.`,
+        'success'
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Failed to convert',
+        'danger'
+      );
+    } finally {
+      this._converting = false;
+    }
   }
 
   private _applyPolicy(policy: GovernancePolicyDocument): void {
@@ -348,7 +523,7 @@ export class GovernancePolicyPanel extends LitElement {
         body.analysis_model_id = this._modelDraft || null;
       }
       this._applySettings(await updateGovernanceReviewSettings(body));
-      showToast('Review settings saved.', 'success');
+      showToast('Analysis model saved.', 'success');
     } catch (error) {
       showToast(
         error instanceof Error ? error.message : 'Failed to save settings',
@@ -422,46 +597,66 @@ export class GovernancePolicyPanel extends LitElement {
     `;
   }
 
-  private _renderRule(rule: GovernanceWatchlistRule) {
-    return html`<li>
-      <span
-        class="rule-class rule-class-${rule.class}"
-        title=${CLASS_LABELS[rule.class].miss}
-        >${CLASS_LABELS[rule.class].label}</span
-      >
-      <code>${rule.rule_ref}</code>
-      <span>${rule.check}</span>
-    </li>`;
+  private _renderLegacyNotice() {
+    const blocks =
+      this._policy?.watchlist.legacy_rule_blocks ??
+      this._thresholds?.legacy_rule_blocks ??
+      0;
+    if (!blocks) return nothing;
+    return html`<sl-alert variant="neutral" open class="legacy-blocks">
+      <sl-icon slot="icon" name="info-circle"></sl-icon>
+      This policy still has ${blocks} hidden rule
+      block${blocks === 1 ? '' : 's'} from the old format. You no longer need
+      them: the review reads the text, and the numbers now live in What the
+      review measures below.
+      ${
+        this.canManage
+          ? html`<div class="toolbar">
+              <sl-button
+                size="small"
+                class="convert-legacy"
+                ?loading=${this._converting}
+                @click=${this._convertLegacy}
+                >Move the numbers and remove the blocks</sl-button
+              >
+            </div>`
+          : nothing
+      }
+    </sl-alert>`;
   }
 
   private _renderEditor() {
     const policy = this._policy;
     if (!policy) return nothing;
-    const rules = [...policy.watchlist.rules].sort((a, b) =>
-      a.class === b.class ? 0 : a.class === 'must' ? -1 : 1
-    );
     return html`
       <section>
-        <h3>Governance policy</h3>
-        <div class="meta">
-          The weekly review reads this document and reports what it finds. It
-          does not block work. Version ${policy.version}, saved
-          ${formatRelativeTime(policy.created_at)}.
+        <h3>AI usage policy</h3>
+        <div class="meta policy-intro">
+          Write your policy in plain language, or paste the one you already
+          have. Each week the review reads all of it and reports what your
+          team's agent sessions did against it. It never blocks work. Rules you
+          call a requirement are reported as violations, preferences as
+          inefficiencies.
         </div>
+        ${this._renderLegacyNotice()}
         <div class="toolbar">
           <sl-radio-group
             size="small"
-            aria-label="Show the source or the preview"
+            aria-label="Show the text or the preview"
             value=${this._view}
             @sl-change=${(event: Event) =>
               (this._view = (event.target as HTMLInputElement).value as
                 'edit' | 'preview')}
           >
             <sl-radio-button value="edit"
-              >${this.canManage ? 'Edit' : 'Source'}</sl-radio-button
+              >${this.canManage ? 'Edit' : 'Text'}</sl-radio-button
             >
             <sl-radio-button value="preview">Preview</sl-radio-button>
           </sl-radio-group>
+          <span class="meta"
+            >Version ${policy.version}, saved
+            ${formatRelativeTime(policy.created_at)}</span
+          >
           <span class="spacer"></span>
           ${
             this.canManage
@@ -492,8 +687,7 @@ export class GovernancePolicyPanel extends LitElement {
           this._view === 'edit'
             ? html`<textarea
                 class="policy-source"
-                aria-label="Governance policy markdown"
-                spellcheck="false"
+                aria-label="AI usage policy"
                 ?readonly=${!this.canManage}
                 .value=${this._draft}
                 @input=${(event: Event) =>
@@ -504,22 +698,116 @@ export class GovernancePolicyPanel extends LitElement {
               </div>`
         }
       </section>
+    `;
+  }
+
+  private _renderThresholdField(kind: string, field: GovernanceThresholdField) {
+    const name = `${kind}.${field.key}`;
+    const value = this._thresholdDraft[name] ?? field.value;
+    const error = this._thresholdError(field, value);
+    const note = error || SOURCE_NOTES[field.source];
+    const onChange = (event: Event) => {
+      this._thresholdDraft = {
+        ...this._thresholdDraft,
+        [name]: (event.target as HTMLInputElement).value,
+      };
+    };
+    if (field.choices.length) {
+      return html`<sl-select
+        size="small"
+        data-field=${name}
+        label=${field.label}
+        help-text=${note}
+        aria-invalid=${String(Boolean(error))}
+        value=${String(value)}
+        ?disabled=${!this.canManage}
+        @sl-change=${onChange}
+      >
+        ${field.choices.map(
+          (choice) =>
+            html`<sl-option value=${choice}
+              >${choice === 'any' ? 'Any model' : `A ${choice} model`}</sl-option
+            >`
+        )}
+      </sl-select>`;
+    }
+    return html`<sl-input
+      size="small"
+      type="number"
+      data-field=${name}
+      label=${field.label}
+      help-text=${note}
+      aria-invalid=${String(Boolean(error))}
+      value=${String(value)}
+      min=${field.minimum ?? nothing}
+      max=${field.maximum ?? nothing}
+      step=${field.integer ? '1' : 'any'}
+      ?disabled=${!this.canManage}
+      @sl-input=${onChange}
+    >
+      ${
+        field.unit
+          ? html`<span slot="suffix" class="meta">${field.unit}</span>`
+          : nothing
+      }
+    </sl-input>`;
+  }
+
+  private _renderThresholds() {
+    const thresholds = this._thresholds;
+    if (!thresholds) return nothing;
+    return html`
       <section>
-        <h3>Rules the review checks</h3>
-        <div class="meta">
-          Must rules are hard: a miss is a violation. Prefer rules are soft: a
-          miss is an inefficiency, and its suggestion quotes the rule. Compiled
-          from version ${policy.watchlist.policy_document_version}.
+        <h3>What the review measures</h3>
+        <div class="meta policy-intro">
+          Some checks are counted, not read: repeated errors, error rate,
+          caching, unused tools, model size per task, tool loops and context
+          size. These are the numbers they use. Most teams keep the defaults.
         </div>
-        ${
-          rules.length
-            ? html`<ul class="rules">
-                ${rules.map((rule) => this._renderRule(rule))}
-              </ul>`
-            : html`<div class="meta">
-                No rules compiled. Each rule needs its governance-rule block.
+        <form
+          class="thresholds"
+          @submit=${(event: Event) => {
+            event.preventDefault();
+            void this._saveThresholds();
+          }}
+        >
+          ${thresholds.groups.map(
+            (group) =>
+              html`<div class="threshold-group" data-kind=${group.kind}>
+                <div>
+                  <h4>${group.label}</h4>
+                  <div class="meta">${group.help}</div>
+                </div>
+                <div class="threshold-fields">
+                  ${group.fields.map((field) =>
+                    this._renderThresholdField(group.kind, field)
+                  )}
+                </div>
               </div>`
-        }
+          )}
+          ${
+            this.canManage
+              ? html`<div class="toolbar">
+                  <sl-button
+                    size="small"
+                    variant="primary"
+                    class="save-thresholds"
+                    ?disabled=${!this._thresholdsDirty || !this._thresholdsValid}
+                    ?loading=${this._savingThresholds}
+                    @click=${() => this._saveThresholds()}
+                    >Save measured checks</sl-button
+                  >
+                  <sl-button
+                    size="small"
+                    class="reset-thresholds"
+                    ?disabled=${this._savingThresholds}
+                    @click=${this._resetThresholds}
+                    >Reset to defaults</sl-button
+                  >
+                </div>`
+              : nothing
+          }
+        </form>
       </section>
     `;
   }
@@ -584,10 +872,10 @@ export class GovernancePolicyPanel extends LitElement {
     const ownModel = this._modeDraft === 'on_own_model';
     return html`
       <section>
-        <h3>Review settings</h3>
+        <h3>Analysis model</h3>
         <div class="settings-grid">
           <sl-radio-group
-            label="Analysis"
+            label="Run the review"
             class="mode"
             value=${this._modeDraft}
             ?disabled=${!this.canManage}
@@ -663,8 +951,9 @@ export class GovernancePolicyPanel extends LitElement {
       </sl-alert>`;
     }
     return html`
-      ${this._renderBanner()} ${this._renderEditor()} ${this._renderHistory()}
-      ${this._renderSettings()}
+      ${this._renderBanner()} ${this._renderEditor()}
+      ${this._renderThresholds()} ${this._renderSettings()}
+      ${this._renderHistory()}
     `;
   }
 }

@@ -8731,6 +8731,11 @@ export interface GovernanceWatchlist {
   policy_document_version: number;
   fingerprint: string;
   rules: GovernanceWatchlistRule[];
+  /** Bounded copy of the prose the per-session summaries read. */
+  policy_text?: string;
+  policy_text_truncated?: boolean;
+  /** Hidden `governance-rule` blocks left from the old policy format. */
+  legacy_rule_blocks?: number;
 }
 
 export interface GovernancePolicyVersion {
@@ -8758,6 +8763,43 @@ export interface GovernanceReviewSettings {
   mode_changed_by_id?: string | null;
   privacy_line: string;
 }
+
+/** Where a measured check's value comes from. */
+export type GovernanceThresholdSource =
+  'default' | 'policy_document' | 'settings';
+
+export interface GovernanceThresholdField {
+  key: string;
+  label: string;
+  default: number | string;
+  minimum?: number | null;
+  maximum?: number | null;
+  integer: boolean;
+  unit?: string | null;
+  /** Non-empty for a choice field, such as a model size. */
+  choices: string[];
+  value: number | string;
+  source: GovernanceThresholdSource;
+}
+
+export interface GovernanceThresholdGroup {
+  kind: string;
+  label: string;
+  help: string;
+  fields: GovernanceThresholdField[];
+}
+
+/** The numbers the measured checks read, next to the free-text policy. */
+export interface GovernanceThresholds {
+  groups: GovernanceThresholdGroup[];
+  legacy_rule_blocks: number;
+}
+
+/** Overrides keyed by check then field. Null restores every default. */
+export type GovernanceThresholdOverrides = Record<
+  string,
+  Record<string, number | string>
+> | null;
 
 const GOVERNANCE_BASE = '/api/v1/governance-review';
 
@@ -8820,6 +8862,35 @@ export function restoreGovernancePolicyVersion(
   return governanceJson(
     `/policy/versions/${encodeURIComponent(String(version))}/restore`,
     'Failed to restore the policy version',
+    { method: 'POST' }
+  );
+}
+
+export function getGovernanceThresholds(): Promise<GovernanceThresholds> {
+  return governanceJson(
+    '/review-settings',
+    'Failed to load what the review measures'
+  );
+}
+
+export function saveGovernanceThresholds(
+  overrides: GovernanceThresholdOverrides
+): Promise<GovernanceThresholds> {
+  return governanceJson(
+    '/review-settings',
+    'Failed to save what the review measures',
+    jsonBody('PUT', { detector_thresholds: overrides })
+  );
+}
+
+/**
+ * Drops the hidden rule blocks of the old policy format. Their numbers move
+ * into the review settings; the prose is saved as a new version.
+ */
+export function convertGovernanceLegacyRules(): Promise<GovernancePolicyDocument> {
+  return governanceJson(
+    '/policy/convert-legacy-rules',
+    'Failed to convert the policy',
     { method: 'POST' }
   );
 }
