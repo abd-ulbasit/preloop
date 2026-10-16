@@ -1485,6 +1485,27 @@ describe('FlowExecutionsView', () => {
       expect(el.shadowRoot?.querySelectorAll('tbody tr').length).to.equal(2);
     });
 
+    it('omits Retry for a controller continuation in the lightweight list response', async () => {
+      fetchStub = sinon.stub(window, 'fetch').resolves(
+        new Response(
+          JSON.stringify([
+            {
+              id: 'repair',
+              flow_id: 'flow-1',
+              flow_name: 'Follow-up',
+              status: 'FAILED',
+              start_time: '2026-09-15T15:25:00Z',
+              resume_of: 'publisher',
+            },
+          ]),
+          { status: 200 }
+        )
+      );
+      const el = await render();
+      expect(el.shadowRoot?.querySelectorAll('tbody tr').length).to.equal(1);
+      expect(() => actionById(el, 'retry')).to.throw('no "retry" action');
+    });
+
     it('asks before it cancels a run and does nothing when the answer is no', async () => {
       const requests: string[] = [];
       fetchStub = sinon.stub(window, 'fetch').callsFake(async (input) => {

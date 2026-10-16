@@ -80,6 +80,98 @@ class CRUDFlowFeedback:
             db.commit()
         return thread
 
+    def lock_recovery_flow(
+        self, db: Session, *, flow_id: uuid.UUID, account_id: uuid.UUID
+    ) -> models.Flow | None:
+        """Lock the parent before recovery locks the publisher and thread rows."""
+        return db.execute(
+            select(models.Flow)
+            .where(models.Flow.id == flow_id, models.Flow.account_id == account_id)
+            .with_for_update(read=True)
+        ).scalar_one_or_none()
+
+    def reactivate_native(
+        self,
+        db: Session,
+        *,
+        thread_id: uuid.UUID,
+        account_id: uuid.UUID,
+        flow_id: uuid.UUID,
+        source_execution_id: uuid.UUID,
+        pr_url: str,
+        branch: str,
+        now: datetime,
+    ) -> models.FlowThread:
+        """Wake a disabled native thread without reserving work or resetting limits.
+
+        The caller freshly validates provider head and checkpoint artifacts.
+        Row locks serialize recovery with controller reservations and completion.
+        """
+        flow = db.execute(
+            select(models.Flow)
+            .where(models.Flow.id == flow_id, models.Flow.account_id == account_id)
+            .with_for_update(read=True)
+        ).scalar_one_or_none()
+        thread = db.execute(
+            select(models.FlowThread)
+            .where(
+                models.FlowThread.id == thread_id,
+                models.FlowThread.account_id == account_id,
+                models.FlowThread.flow_id == flow_id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        policy = (flow.agent_config or {}).get("feedback") if flow else None
+        if (
+            flow is None
+            or not flow.is_enabled
+            or not isinstance(policy, dict)
+            or policy.get("enabled") is not True
+            or thread is None
+            or thread.state != "stopped"
+            or thread.stop_reason != "flow_disabled"
+            or thread.latest_execution_id != source_execution_id
+            or thread.pr_url != pr_url
+            or thread.branch != branch
+            or thread.expires_at <= now
+            or (thread.lease_until is not None and thread.lease_until > now)
+            or thread.turns >= int(policy.get("max_turns", 5))
+            or thread.cost >= float(policy.get("max_cost", 100))
+            or thread.no_progress >= int(policy.get("max_no_progress", 2))
+        ):
+            raise ValueError("Native continuation is no longer eligible for recovery")
+        if thread.active_execution_id:
+            active = db.execute(
+                select(models.FlowExecution)
+                .where(
+                    models.FlowExecution.id == thread.active_execution_id,
+                    models.FlowExecution.flow_id == flow_id,
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if (
+                active is None
+                or active.status not in SESSIONLESS_RETRY_STATUSES
+                or active.total_tokens
+                or active.tool_calls_count
+                or active.estimated_cost
+                or active.cli_session
+                or active.agent_session_reference
+            ):
+                raise ValueError(
+                    "Native continuation has an active or stopped execution"
+                )
+            # Current provider reconciliation, not stale consumed feedback, decides
+            # whether a repair is needed. Preserve the original native source.
+            self.release_consumed(db, thread.id, active.id)
+        thread.active_execution_id = None
+        thread.state = "waiting"
+        thread.stop_reason = None
+        thread.due_at = now
+        thread.lease_token = None
+        thread.lease_until = None
+        return thread
+
     def find(
         self,
         db: Session,

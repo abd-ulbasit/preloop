@@ -127,7 +127,6 @@ export class PreloopExecutionContinuation extends LitElement {
         'CANCELLED',
         'ABORTED',
       ].includes(this.execution.status) &&
-      !this.execution.result?.continuation?.thread_id &&
       !this.execution.trigger_event_details?._thread_id
     );
   }
@@ -180,7 +179,7 @@ export class PreloopExecutionContinuation extends LitElement {
       !preview.feedback_enabled ||
       !preview.feedback_readable ||
       !preview.artifact_upload_enabled ||
-      preview.existing_thread_id
+      (preview.existing_thread_id && !preview.native_reactivation_available)
     )
       return null;
     if (
@@ -322,11 +321,11 @@ export class PreloopExecutionContinuation extends LitElement {
     return html`
       <div class="action">
         <sl-button data-continuation-preview @click=${this.loadPreview}
-          >Set up PR follow-up</sl-button
+          >Manage PR follow-up</sl-button
         >
       </div>
       <sl-dialog
-        label="Set up PR follow-up"
+        label="Manage PR follow-up"
         .open=${this.open}
         @sl-request-close=${(event: Event) => {
           event.preventDefault();
@@ -378,7 +377,7 @@ export class PreloopExecutionContinuation extends LitElement {
                   Branch: <code>${preview.branch}</code><br />Current commit:
                   <code>${preview.head_sha}</code>
                 </p>
-                ${preview.existing_thread_id ? html`<sl-alert open>This PR already has follow-up configured (${preview.existing_thread_state || 'registered'}).</sl-alert>` : nothing}
+                ${preview.native_reactivation_available ? html`<sl-alert open>Follow-up stopped when this flow was disabled. Recover it to check current review and CI feedback using the existing limits.</sl-alert>` : preview.existing_thread_id ? html`<sl-alert open>This PR already has follow-up configured (${preview.existing_thread_state || 'registered'}). ${preview.existing_thread_state === 'stopped' ? 'Recovery is unavailable when saved state is expired or a prior attempt may have opened a runtime or performed work. Review the original and follow-up runs before starting a new flow run.' : ''}</sl-alert>` : nothing}
                 ${!preview.feedback_enabled ? html`<sl-alert open>Enable PR review and CI follow-up in <a href=${`/console/flows/${encodeURIComponent(preview.flow_id)}?edit=true`}>this flow's settings</a>, then reload this preview.</sl-alert>` : nothing}
                 ${!preview.artifact_upload_enabled ? html`<sl-alert open>Saved execution state uploads must be enabled by your deployment administrator before follow-up can start.</sl-alert>` : nothing}
                 ${!preview.feedback_readable ? html`<sl-alert open variant="warning">Review and CI access must be available before follow-up can start. ${preview.feedback_blocked_reason || ''}</sl-alert>` : nothing}
@@ -441,7 +440,7 @@ export class PreloopExecutionContinuation extends LitElement {
           @click=${this.adopt}
           ?loading=${this.saving}
           ?disabled=${this.loading || this.saving || !mode || !preview?.head_sha || (mode === 'published_branch_handoff' && !this.acknowledged)}
-          >Enable follow-up for this PR</sl-button
+          >${preview?.native_reactivation_available ? 'Recover PR follow-up' : 'Enable follow-up for this PR'}</sl-button
         >
       </sl-dialog>
     `;

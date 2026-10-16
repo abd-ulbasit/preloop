@@ -17,7 +17,7 @@ from preloop.models.crud import (
     crud_tracker,
 )
 from preloop.models.crud import flow_artifact
-from preloop.models.crud.flow_feedback import TERMINAL
+from preloop.models.crud.flow_feedback import SESSIONLESS_RETRY_STATUSES, TERMINAL
 from preloop.models.db.session import get_session_factory
 from preloop.schemas.flow_continuation import (
     ContinuationAdoptRequest,
@@ -217,6 +217,22 @@ def _load_source(
             and native_expires_at is not None
             else None
         )
+        active_id = getattr(existing, "active_execution_id", None)
+        active = (
+            crud_flow_execution.get(db, id=active_id, account_id=account_id)
+            if active_id
+            else None
+        )
+        active_recoverable = not active_id or bool(
+            active is not None
+            and active.flow_id == flow.id
+            and active.status in SESSIONLESS_RETRY_STATUSES
+            and not active.total_tokens
+            and not active.tool_calls_count
+            and not active.estimated_cost
+            and not active.cli_session
+            and not active.agent_session_reference
+        )
         return {
             "execution_id": execution_id,
             "flow_id": flow.id,
@@ -231,6 +247,15 @@ def _load_source(
             "native_resume_expires_at": native_resume_expires_at,
             "existing_thread_id": existing.id if existing else None,
             "existing_thread_state": existing.state if existing else None,
+            "native_reactivation_available": bool(
+                existing
+                and existing.state == "stopped"
+                and existing.stop_reason == "flow_disabled"
+                and existing.latest_execution_id == execution_id
+                and str(existing.id) == str(thread_id)
+                and native_resume_available
+                and active_recoverable
+            ),
             # Never project tracker credentials into the API response.
             "tracker_id": tracker_id,
             "tracker_key": tracker.resolved_api_key,
@@ -342,6 +367,8 @@ async def _read_publication(source: dict[str, Any]) -> dict[str, Any]:
                 return normalize_uuid(repo_obj.get("uuid")) == normalize_uuid(expected)
             return str(repo_obj.get("full_name") or "") == source["repository_id"]
 
+        from preloop.services.flow_feedback_provider import canonical_bitbucket_head
+
         publication = {
             "open": str(pr.get("state") or "").upper() == "OPEN",
             "same_repository": all(
@@ -349,7 +376,9 @@ async def _read_publication(source: dict[str, Any]) -> dict[str, Any]:
                 for side in ("source", "destination")
             ),
             "branch": ((pr.get("source") or {}).get("branch") or {}).get("name"),
-            "head_sha": ((pr.get("source") or {}).get("commit") or {}).get("hash"),
+            "head_sha": await canonical_bitbucket_head(
+                client, base, ((pr.get("source") or {}).get("commit") or {}).get("hash")
+            ),
             "pr_url": ((pr.get("links") or {}).get("html") or {}).get("href"),
         }
         return await _feedback_preflight(client, source, publication)
@@ -444,6 +473,9 @@ def preview_continuation(
         },
         head_sha=publication["head_sha"],
         native_resume_expires_at=source.get("native_resume_expires_at"),
+        native_reactivation_available=source.get(
+            "native_reactivation_available", False
+        ),
         feedback_readable=publication.get("feedback_readable", False),
         feedback_blocked_reason=publication.get("feedback_blocked_reason"),
         artifact_upload_enabled=settings.flow_artifact_direct_upload,
@@ -482,6 +514,14 @@ def adopt_continuation(
             "Acknowledge starting a fresh conversation from the published branch"
         )
     with get_session_factory()() as db:
+        if preview.existing_thread_id and preview.native_reactivation_available:
+            if (
+                crud_flow_feedback.lock_recovery_flow(
+                    db, flow_id=preview.flow_id, account_id=account_id
+                )
+                is None
+            ):
+                raise ContinuationAdoptionError("Flow is no longer available")
         execution = crud_flow_execution.lock_for_runner_completion(
             db, execution_id=execution_id, account_id=account_id
         )
@@ -513,6 +553,40 @@ def adopt_continuation(
             or not feedback_policy(flow)
         ):
             raise ContinuationAdoptionError("Flow feedback is no longer enabled")
+        if preview.existing_thread_id and preview.native_reactivation_available:
+            if (
+                not preview.native_resume_available
+                or preview.native_resume_expires_at is None
+                or preview.native_resume_expires_at.replace(tzinfo=UTC)
+                <= datetime.now(UTC)
+            ):
+                raise ContinuationAdoptionError(
+                    "Native checkpoint expired; reload the preview"
+                )
+            if request.recovery_mode != "native_resume":
+                raise ContinuationAdoptionError(
+                    "Existing native recovery mode cannot change"
+                )
+            try:
+                thread = crud_flow_feedback.reactivate_native(
+                    db,
+                    thread_id=preview.existing_thread_id,
+                    account_id=account_id,
+                    flow_id=flow.id,
+                    source_execution_id=execution_id,
+                    pr_url=preview.pr_url,
+                    branch=preview.branch,
+                    now=datetime.now(UTC).replace(tzinfo=None),
+                )
+            except ValueError as exc:
+                raise ContinuationAdoptionError(str(exc)) from exc
+            db.commit()
+            return ContinuationAdoptResponse(
+                thread_id=thread.id,
+                state=thread.state,
+                pr_url=thread.pr_url,
+                recovery_mode="native_resume",
+            )
         # Persist the selected association and subscription atomically. A second
         # adoption cannot race this row into a different PR or recovery mode.
         try:

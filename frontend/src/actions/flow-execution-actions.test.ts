@@ -35,6 +35,35 @@ describe('flowExecutionActions', () => {
     }
   });
 
+  it('does not offer standalone retry for a controller-owned continuation', () => {
+    const ids = actionIds(
+      flowExecutionActions(
+        {
+          id: 'repair',
+          status: 'FAILED',
+          trigger_event_details: { _resume: { thread_id: 'native-thread' } },
+        },
+        ctx
+      )
+    );
+    expect(ids).to.deep.equal(['open']);
+  });
+
+  it('hides retry on lightweight list rows carrying resume lineage', () => {
+    expect(
+      actionIds(
+        flowExecutionActions(
+          {
+            id: 'repair',
+            status: 'FAILED',
+            resume_of: 'publisher',
+          },
+          ctx
+        )
+      )
+    ).to.deep.equal(['open']);
+  });
+
   it('offers neither on a run that succeeded', () => {
     expect(
       actionIds(flowExecutionActions({ id: 'e1', status: 'SUCCEEDED' }, ctx))
