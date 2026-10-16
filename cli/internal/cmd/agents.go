@@ -2670,7 +2670,11 @@ func executeOffboard(agent AgentConfig, autoApprove bool, modelRemovalPolicy, se
 	fmt.Printf("✓ Offboarded %s\n", resolveAgentDisplayName(agent))
 	fmt.Printf("  Restored config: %s\n", agent.ConfigPath)
 	restartHermesGatewayAfterReconfig(agent, os.Stdout)
-	printMutatingCommandUndo(os.Stdout, fmt.Sprintf("preloop agents onboard %s", shellQuoteAgentName(resolveAgentDisplayName(agent))))
+	if strings.EqualFold(agent.Name, "Windsurf") {
+		fmt.Println("Windsurf is retired. Run preloop agents onboard Devin to onboard the replacement app.")
+	} else {
+		printMutatingCommandUndo(os.Stdout, fmt.Sprintf("preloop agents onboard %s", shellQuoteAgentName(resolveAgentDisplayName(agent))))
+	}
 	if recovery == subscriptionRestoreNotApplicable && isClaudeCodeAgent(agent) {
 		printClaudeCodeOAuthOffboardNote(os.Stdout)
 	}

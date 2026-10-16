@@ -1429,6 +1429,8 @@ export class AgentDetailView extends LitElement {
     // The upstream provider refused the probe (rate limit / billing): the
     // gateway plumbing is proven but model traffic is UNVERIFIED. Never
     // present this as a check that is still in flight.
+    if (this.agent.live_validation_status === 'timeout')
+      return 'Live check timed out, unverified';
     if (this.agent.live_validation_status === 'throttled')
       return 'Live check throttled, unverified';
     if (this.agent.live_validation_status === 'upstream_unavailable')

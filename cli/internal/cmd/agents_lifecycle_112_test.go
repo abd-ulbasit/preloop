@@ -208,6 +208,63 @@ func TestExecuteOffboardWarnsWhenManagedLookupMisses(t *testing.T) {
 	}
 }
 
+func TestExecuteOffboardRetiredWindsurfSuggestsDevin(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	configPath := filepath.Join(home, "agent.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(home, "backup.json")
+	if err := os.WriteFile(backupPath, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := AgentConfig{
+		Name:        "Windsurf",
+		DisplayName: "Old Editor",
+		ConfigPath:  configPath,
+	}
+	agent = normalizeDiscoveredAgent(agent)
+	if err := saveLocalEnrollmentState(&localEnrollmentState{
+		AgentName:          agent.Name,
+		ConfigPath:         configPath,
+		BackupPath:         backupPath,
+		ConfigExisted:      true,
+		RuntimePrincipalID: runtimePrincipalIDForAgent(agent),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(managedAgentListResponse{Items: nil})
+	}))
+	defer server.Close()
+
+	originalURL, originalToken := FlagURL, FlagToken
+	FlagURL = server.URL
+	FlagToken = "tok"
+	t.Cleanup(func() {
+		FlagURL = originalURL
+		FlagToken = originalToken
+	})
+
+	out := captureStdout(t, func() error {
+		return executeOffboard(agent, true, offboardCleanupNo, offboardCleanupNo)
+	})
+	if !strings.Contains(out, "Could not match a managed record for this install") {
+		t.Fatalf("expected lookup warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "preloop agents remove") {
+		t.Fatalf("expected remove hint, got:\n%s", out)
+	}
+	if strings.Contains(out, "preloop agents onboard 'Old Editor'") || strings.Contains(out, "preloop agents onboard Windsurf") {
+		t.Fatalf("must not suggest re-onboarding a retired adapter: %s", out)
+	}
+	if !strings.Contains(out, "preloop agents onboard Devin") {
+		t.Fatalf("expected replacement onboarding hint: %s", out)
+	}
+}
+
 func TestEnsureArchivedManagedAgentReenrolled(t *testing.T) {
 	agent := AgentConfig{
 		Name:        "Codex CLI",

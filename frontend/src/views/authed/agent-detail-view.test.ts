@@ -1082,6 +1082,29 @@ describe('AgentDetailView', () => {
     ).to.equal('Upstream refused, unverified');
   });
 
+  it('labels a timed out live check as unverified with a warning', async () => {
+    const element = await fixture<AgentDetailView>(
+      html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+    );
+    await waitUntil(
+      () => !(element as any).loading && (element as any).agent !== null,
+      'Agent detail view did not finish loading'
+    );
+    (element as any).agent = {
+      ...(element as any).agent,
+      live_validation_passed: false,
+      live_validation_status: 'timeout',
+    };
+    await element.updateComplete;
+    const chip = element.shadowRoot?.querySelector(
+      '.badge-row sl-badge.capability-chip'
+    );
+    expect(chip?.getAttribute('variant')).to.equal('warning');
+    expect(chip?.closest('sl-tooltip')?.getAttribute('content')).to.equal(
+      'Live check timed out, unverified'
+    );
+  });
+
   describe('progressive load', () => {
     function agentCalls(): URL[] {
       return fetchStub
