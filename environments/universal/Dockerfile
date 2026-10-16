@@ -59,6 +59,8 @@ RUN --network=none set -a; \
     exec /opt/entrypoint.sh /opt/preloop-universal/smoke.sh
 # The preflight script is last so a change to it does not rebuild the smoke.
 COPY environments/universal/bin/preloop-preflight /usr/local/bin/preloop-preflight
+# Both architectures must contain a runnable preflight before publication.
+RUN --network=none preloop-preflight --help >/dev/null
 LABEL org.opencontainers.image.title="preloop-codex-universal" \
       org.opencontainers.image.description="Codex image with Perl linters, shellcheck, and a per-language smoke" \
       org.opencontainers.image.base.name="${CODEX_BASE_IMAGE}"

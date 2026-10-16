@@ -52,7 +52,8 @@ network access, into `/opt/preloop-universal/m2`. The smoke then runs
 
 ## Smoke
 
-The publish workflow checks the final image for an executable
+Both architecture builds run `preloop-preflight --help` offline after installing
+the binary. The publish workflow also checks the final image for an executable
 `preloop-preflight` and runs `--help` offline before its language smoke.
 The guard comes from the checkout, so it also rejects older pinned images
 whose embedded smoke did not require preflight. A missing or broken binary
