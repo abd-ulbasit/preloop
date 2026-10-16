@@ -30,6 +30,12 @@ from preloop.services.subject_governance import (
 )
 
 
+@pytest.fixture(autouse=True)
+def hosted_billing_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing cap tests describe hosted Cloud behavior explicitly."""
+    monkeypatch.setenv("PRELOOP_HOSTED", "true")
+
+
 def test_enforce_or_raise_reports_trial_hosted_model_limit(db_session, test_user):
     """Trial hosted-model hard caps should return the specific BYOK guidance."""
     now = datetime.now(timezone.utc)
