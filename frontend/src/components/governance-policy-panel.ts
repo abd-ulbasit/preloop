@@ -275,11 +275,11 @@ export class GovernancePolicyPanel extends LitElement {
         getGovernancePolicy(),
         listGovernancePolicyVersions(),
         getGovernanceReviewSettings(),
+        this._loadThresholds(),
       ]);
       this._applyPolicy(policy);
       this._versions = versions;
       this._applySettings(settings);
-      await this._loadThresholds();
     } catch (error) {
       this._error =
         error instanceof Error ? error.message : 'Failed to load the policy';
@@ -324,7 +324,7 @@ export class GovernancePolicyPanel extends LitElement {
     this._thresholdDraft = draft;
   }
 
-  /** Values that differ from the default, which is all the server keeps. */
+  /** Preserve saved overrides and explicit edits, leaving legacy values in place. */
   private _thresholdOverrides(): Record<
     string,
     Record<string, number | string>
@@ -334,7 +334,7 @@ export class GovernancePolicyPanel extends LitElement {
       for (const field of group.fields) {
         const value = this._thresholdDraft[`${group.kind}.${field.key}`];
         const keep =
-          field.source !== 'default' || String(value) !== String(field.default);
+          field.source === 'settings' || String(value) !== String(field.value);
         if (value === undefined || value === '' || !keep) continue;
         (overrides[group.kind] ??= {})[field.key] = field.choices.length
           ? String(value)
@@ -354,8 +354,54 @@ export class GovernancePolicyPanel extends LitElement {
     );
   }
 
+  private _thresholdError(
+    field: GovernanceThresholdField,
+    value: number | string
+  ): string {
+    if (field.choices.length) {
+      return field.choices.includes(String(value))
+        ? ''
+        : 'Choose a value from the list.';
+    }
+    if (String(value).trim() === '' || !Number.isFinite(Number(value))) {
+      return 'Enter a number.';
+    }
+    const number = Number(value);
+    if (field.integer && !Number.isInteger(number))
+      return 'Enter a whole number.';
+    if (field.minimum != null && number < field.minimum)
+      return `Enter ${field.minimum} or more.`;
+    if (field.maximum != null && number > field.maximum)
+      return `Enter ${field.maximum} or less.`;
+    return '';
+  }
+
+  private get _thresholdsValid(): boolean {
+    return (this._thresholds?.groups ?? []).every((group) =>
+      group.fields.every(
+        (field) =>
+          !this._thresholdError(
+            field,
+            this._thresholdDraft[`${group.kind}.${field.key}`] ?? field.value
+          )
+      )
+    );
+  }
+
+  private async _resetThresholds(): Promise<void> {
+    const confirmed = await this.confirm({
+      title: 'Reset measured checks?',
+      message: 'This removes all saved measured-check settings for your team.',
+      detail:
+        'Values still in legacy policy blocks apply first; otherwise the built-in defaults apply. This cannot be undone.',
+      confirmLabel: 'Reset',
+      variant: 'danger',
+    });
+    if (confirmed) await this._saveThresholds(true);
+  }
+
   private async _saveThresholds(reset = false): Promise<void> {
-    if (this._savingThresholds) return;
+    if (this._savingThresholds || (!reset && !this._thresholdsValid)) return;
     this._savingThresholds = true;
     try {
       this._applyThresholds(
@@ -552,7 +598,10 @@ export class GovernancePolicyPanel extends LitElement {
   }
 
   private _renderLegacyNotice() {
-    const blocks = this._policy?.watchlist.legacy_rule_blocks ?? 0;
+    const blocks =
+      this._policy?.watchlist.legacy_rule_blocks ??
+      this._thresholds?.legacy_rule_blocks ??
+      0;
     if (!blocks) return nothing;
     return html`<sl-alert variant="neutral" open class="legacy-blocks">
       <sl-icon slot="icon" name="info-circle"></sl-icon>
@@ -655,7 +704,8 @@ export class GovernancePolicyPanel extends LitElement {
   private _renderThresholdField(kind: string, field: GovernanceThresholdField) {
     const name = `${kind}.${field.key}`;
     const value = this._thresholdDraft[name] ?? field.value;
-    const note = SOURCE_NOTES[field.source];
+    const error = this._thresholdError(field, value);
+    const note = error || SOURCE_NOTES[field.source];
     const onChange = (event: Event) => {
       this._thresholdDraft = {
         ...this._thresholdDraft,
@@ -668,6 +718,7 @@ export class GovernancePolicyPanel extends LitElement {
         data-field=${name}
         label=${field.label}
         help-text=${note}
+        aria-invalid=${String(Boolean(error))}
         value=${String(value)}
         ?disabled=${!this.canManage}
         @sl-change=${onChange}
@@ -686,6 +737,7 @@ export class GovernancePolicyPanel extends LitElement {
       data-field=${name}
       label=${field.label}
       help-text=${note}
+      aria-invalid=${String(Boolean(error))}
       value=${String(value)}
       min=${field.minimum ?? nothing}
       max=${field.maximum ?? nothing}
@@ -740,7 +792,7 @@ export class GovernancePolicyPanel extends LitElement {
                     size="small"
                     variant="primary"
                     class="save-thresholds"
-                    ?disabled=${!this._thresholdsDirty}
+                    ?disabled=${!this._thresholdsDirty || !this._thresholdsValid}
                     ?loading=${this._savingThresholds}
                     @click=${() => this._saveThresholds()}
                     >Save measured checks</sl-button
@@ -749,7 +801,7 @@ export class GovernancePolicyPanel extends LitElement {
                     size="small"
                     class="reset-thresholds"
                     ?disabled=${this._savingThresholds}
-                    @click=${() => this._saveThresholds(true)}
+                    @click=${this._resetThresholds}
                     >Reset to defaults</sl-button
                   >
                 </div>`

@@ -1,7 +1,7 @@
 import { html, fixture, expect, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 
-import { invalidateApiCaches } from '../api';
+import { invalidateApiCaches, type GovernanceThresholdSource } from '../api';
 import './governance-policy-panel';
 import {
   markRuleHeadings,
@@ -31,7 +31,8 @@ interface Version {
 
 /** An in-memory governance API, enough to round-trip the panel. */
 function thresholdGroups(
-  saved: Record<string, Record<string, unknown>> | null
+  saved: Record<string, Record<string, unknown>> | null,
+  legacyCount?: number
 ) {
   const value = (kind: string, key: string, fallback: number | string) =>
     saved?.[kind]?.[key] ?? fallback;
@@ -50,8 +51,12 @@ function thresholdGroups(
           integer: true,
           unit: 'repeats',
           choices: [],
-          value: value('retry_limit', 'count', 5),
-          source: saved?.retry_limit?.count ? 'settings' : 'default',
+          value: value('retry_limit', 'count', legacyCount ?? 5),
+          source: (saved?.retry_limit?.count !== undefined
+            ? 'settings'
+            : legacyCount !== undefined
+              ? 'policy_document'
+              : 'default') as GovernanceThresholdSource,
         },
       ],
     },
@@ -67,7 +72,10 @@ function thresholdGroups(
           integer: false,
           choices: ['small', 'large', 'any'],
           value: value('model_per_task', 'triage', 'small'),
-          source: 'default',
+          source:
+            saved?.model_per_task?.triage !== undefined
+              ? 'settings'
+              : 'default',
         },
       ],
     },
@@ -77,7 +85,13 @@ function thresholdGroups(
 function fakeServer(
   mode = 'on_platform',
   extraVersions = 0,
-  options: { legacyBlocks?: number; thresholds?: boolean } = {}
+  options: {
+    legacyBlocks?: number;
+    thresholds?: boolean;
+    legacyCount?: number;
+    watchlistCount?: boolean;
+    policyGate?: Promise<void>;
+  } = {}
 ) {
   let legacyBlocks = options.legacyBlocks ?? 0;
   let savedThresholds: Record<string, Record<string, unknown>> | null = null;
@@ -119,7 +133,9 @@ function fakeServer(
     watchlist: {
       policy_document_version: active().version,
       fingerprint: 'f',
-      legacy_rule_blocks: legacyBlocks,
+      ...(options.watchlistCount === false
+        ? {}
+        : { legacy_rule_blocks: legacyBlocks }),
       rules: [
         {
           rule_ref: 'prefer.retry_limit',
@@ -163,6 +179,7 @@ function fakeServer(
       calls.push({ method, url, body });
       const path = new URL(url, window.location.origin).pathname;
       if (path === '/api/v1/governance-review/policy') {
+        if (method === 'GET') await options.policyGate;
         if (method === 'PUT') addVersion(body.body_markdown);
         return json(document());
       }
@@ -179,7 +196,7 @@ function fakeServer(
         if (options.thresholds === false) return json({ detail: 'x' }, 404);
         if (method === 'PUT') savedThresholds = body.detector_thresholds;
         return json({
-          groups: thresholdGroups(savedThresholds),
+          groups: thresholdGroups(savedThresholds, options.legacyCount),
           legacy_rule_blocks: legacyBlocks,
         });
       }
@@ -396,12 +413,23 @@ describe('governance-policy-panel', () => {
     });
   });
 
-  it('resets the measured checks to their defaults', async () => {
+  it('confirms before resetting measured checks, allowing cancellation', async () => {
     server = fakeServer();
     const element = await mount(true);
     await waitUntil(() =>
       element.shadowRoot!.querySelector('sl-button.reset-thresholds')
     );
+    const confirm = sinon.stub().resolves(false);
+    element.confirm = confirm;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.reset-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => confirm.calledOnce);
+    await element.updateComplete;
+    expect(server.calls.some((c) => c.method === 'PUT')).to.equal(false);
+    confirm.resolves(true);
     (
       element.shadowRoot!.querySelector(
         'sl-button.reset-thresholds'
@@ -416,6 +444,105 @@ describe('governance-policy-panel', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
     );
     expect(put?.body).to.deep.equal({ detector_thresholds: null });
+  });
+
+  for (const value of ['', '1', '1001', '2.5', 'not a number', 'Infinity']) {
+    it(`rejects invalid measured-check value ${JSON.stringify(value)} beside its field`, async () => {
+      server = fakeServer();
+      const element = await mount(true);
+      const input = element.shadowRoot!.querySelector(
+        'sl-input[data-field="retry_limit.count"]'
+      ) as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('sl-input'));
+      await element.updateComplete;
+      expect(input.getAttribute('aria-invalid')).to.equal('true');
+      expect(input.getAttribute('help-text')).not.to.equal('');
+      const button = element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLButtonElement;
+      expect(button.disabled).to.equal(true);
+      element
+        .shadowRoot!.querySelector('form.thresholds')!
+        .dispatchEvent(new Event('submit', { cancelable: true }));
+      await element.updateComplete;
+      expect(server.calls.some((c) => c.method === 'PUT')).to.equal(false);
+      input.value = '8';
+      input.dispatchEvent(new Event('sl-input'));
+      await element.updateComplete;
+      expect(input.getAttribute('aria-invalid')).to.equal('false');
+      expect(button.disabled).to.equal(false);
+    });
+  }
+
+  it('leaves unchanged legacy values in the policy when saving another field', async () => {
+    server = fakeServer('on_platform', 0, { legacyCount: 7 });
+    const element = await mount(true);
+    const input = element.shadowRoot!.querySelector(
+      'sl-select[data-field="model_per_task.triage"]'
+    ) as HTMLSelectElement;
+    input.value = 'large';
+    input.dispatchEvent(new Event('sl-change'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => server.calls.some((c) => c.method === 'PUT'));
+    expect(server.calls.find((c) => c.method === 'PUT')?.body).to.deep.equal({
+      detector_thresholds: { model_per_task: { triage: 'large' } },
+    });
+  });
+
+  it('saves an edited legacy value even when it equals the built-in default', async () => {
+    server = fakeServer('on_platform', 0, { legacyCount: 7 });
+    const element = await mount(true);
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    input.value = '5';
+    input.dispatchEvent(new Event('sl-input'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => server.calls.some((c) => c.method === 'PUT'));
+    expect(server.calls.find((c) => c.method === 'PUT')?.body).to.deep.equal({
+      detector_thresholds: { retry_limit: { count: 5 } },
+    });
+  });
+
+  it('uses the review-settings legacy count when the watchlist omits it', async () => {
+    server = fakeServer('on_platform', 0, {
+      legacyBlocks: 3,
+      watchlistCount: false,
+    });
+    const element = await mount(true);
+    expect(
+      element.shadowRoot!.querySelector('.legacy-blocks')?.textContent
+    ).to.contain('3 hidden rule');
+  });
+
+  it('requests thresholds before the initial policy request resolves', async () => {
+    let release!: () => void;
+    const policyGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server = fakeServer('on_platform', 0, { policyGate });
+    const element = await fixture<GovernancePolicyPanel>(
+      html`<governance-policy-panel></governance-policy-panel>`
+    );
+    try {
+      await waitUntil(() =>
+        server.calls.some((c) => c.url.endsWith('/review-settings'))
+      );
+    } finally {
+      release();
+    }
+    await waitUntil(() => element.shadowRoot?.querySelector('form.thresholds'));
   });
 
   it('gives read-only members disabled measured checks', async () => {
