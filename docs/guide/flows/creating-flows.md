@@ -519,7 +519,7 @@ Commands run with full container privileges, so they are restricted: they are co
 1. Review all configuration
 2. Click **Create flow** (or **Save changes** if editing)
 
-Flows you create or clone start **Enabled**, they trigger on matching events immediately. Only built-in presets start disabled. Use **Pause** on the flow details page if you want to stop it from triggering, and **Resume** to turn it back on.
+New blank flows start **Enabled** and trigger on matching events immediately. Preset copies start **Disabled**: configure their tracker and project scope, save, then explicitly enable them from Flows. Built-in presets remain disabled templates. Use **Pause** on the flow details page if you want to stop it from triggering, and **Resume** to turn it back on.
 
 ### Run now
 
