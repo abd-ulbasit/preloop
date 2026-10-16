@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Query, Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from preloop.models import models
 
@@ -13,6 +14,24 @@ from ..models.project import Project
 from ..models.organization import Organization
 from ..models.tracker import Tracker
 from .base import CRUDBase
+
+
+def _usable_jira_grant(now: datetime) -> ColumnElement[bool]:
+    """Require an active grant with live access or refresh credentials."""
+    return and_(
+        models.OAuthToken.status == "active",
+        or_(
+            models.OAuthToken.expires_at.is_(None),
+            models.OAuthToken.expires_at > now,
+            and_(
+                models.OAuthToken.refresh_token_encrypted.isnot(None),
+                or_(
+                    models.OAuthToken.refresh_token_expires_at.is_(None),
+                    models.OAuthToken.refresh_token_expires_at > now,
+                ),
+            ),
+        ),
+    )
 
 
 class CRUDWebhook(CRUDBase[Webhook]):
@@ -74,6 +93,7 @@ class CRUDWebhook(CRUDBase[Webhook]):
                 models.Tracker.auth_type == "managed_oauth",
                 models.OAuthToken.provider == "jira",
                 models.OAuthToken.auth_mode == "managed_oauth",
+                _usable_jira_grant(datetime.now(timezone.utc)),
             )
             .first()
         )
@@ -195,7 +215,6 @@ class CRUDWebhook(CRUDBase[Webhook]):
                 models.Tracker.is_active.is_(True),
                 models.OAuthToken.provider == "jira",
                 models.OAuthToken.auth_mode == "managed_oauth",
-                models.OAuthToken.status == "active",
                 models.OAuthToken.provider_subject == provider_subject,
                 models.OAuthProviderConfiguration.enabled.is_(True),
                 models.OAuthProviderConfiguration.provider == "jira",
@@ -203,17 +222,7 @@ class CRUDWebhook(CRUDBase[Webhook]):
                 == models.OAuthProviderConfiguration.canonical_instance,
                 models.OAuthToken.configuration_version
                 == models.OAuthProviderConfiguration.version,
-                or_(
-                    models.OAuthToken.expires_at.is_(None),
-                    models.OAuthToken.expires_at > now,
-                    and_(
-                        models.OAuthToken.refresh_token_encrypted.isnot(None),
-                        or_(
-                            models.OAuthToken.refresh_token_expires_at.is_(None),
-                            models.OAuthToken.refresh_token_expires_at > now,
-                        ),
-                    ),
-                ),
+                _usable_jira_grant(now),
             )
         )
         if matched_ids is not None:

@@ -710,6 +710,7 @@ async def _process_organization(
                                 exc_info=True,
                             )
                             org_stats["organizations"]["errors"] += 1
+                            org_stats["errors"] += 1
             elif client.tracker_type == "github":
                 try:
                     if not await client.client.is_webhook_registered_for_organization(
@@ -727,6 +728,7 @@ async def _process_organization(
                         exc_info=True,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "gitlab":
                 try:
                     # Check if tracker is already marked as GitLab CE
@@ -789,12 +791,14 @@ async def _process_organization(
                                     exc_info=True,
                                 )
                                 org_stats["organizations"]["errors"] += 1
+                                org_stats["errors"] += 1
                 except Exception as e:
                     logger.error(
                         f"Error registering webhook for GitLab organization {org.identifier}: {e}",
                         exc_info=True,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "bitbucket":
                 # Bitbucket hooks are per repository; the workspace-level hook
                 # API is not used so a repository access token also works.
@@ -815,6 +819,7 @@ async def _process_organization(
                             exc_info=True,
                         )
                         org_stats["organizations"]["errors"] += 1
+                        org_stats["errors"] += 1
             else:
                 # Handle other tracker types here if necessary
                 pass
@@ -834,6 +839,7 @@ async def _process_organization(
                 exc_info=True,
             )
             org_stats["organizations"]["errors"] += 1
+            org_stats["errors"] += 1
 
     # Polling logic
     for project in projects:

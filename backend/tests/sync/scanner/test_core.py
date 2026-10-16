@@ -975,3 +975,58 @@ async def test_scan_projects_skips_missing_identifier(
 
         # Assert
         assert len(projects) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tracker_type", ["jira", "github", "gitlab", "gitlab-ce", "bitbucket"]
+)
+async def test_webhook_registration_failures_count_in_scan_errors(
+    tracker_type, mock_db_session, mock_organization, mock_project, monkeypatch
+):
+    """Every provider's registration failures remain visible in scan totals."""
+    monkeypatch.setenv("PRELOOP_URL", "https://preloop.example")
+    client = AsyncMock(spec=TrackerClient)
+    client.tracker = MagicMock(
+        id="tracker", meta_data={"gitlab_ce": tracker_type == "gitlab-ce"}
+    )
+    client.tracker_type = "gitlab" if tracker_type == "gitlab-ce" else tracker_type
+    client.client = MagicMock()
+    client.client.managed = False
+    client.client.webhook_status = None
+    client.client.is_webhook_registered_for_organization = AsyncMock(return_value=False)
+    client.client.is_webhook_registered_for_project = (
+        MagicMock(return_value=False)
+        if tracker_type == "jira"
+        else AsyncMock(return_value=False)
+    )
+    registration = MagicMock if tracker_type == "jira" else AsyncMock
+    client.client.register_webhook = registration(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.client.register_group_webhook = AsyncMock(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.client.register_project_webhook = AsyncMock(
+        side_effect=RuntimeError("registration rejected")
+    )
+    client.scan_projects.return_value = [mock_project]
+    client.scan_issues.return_value = ([], 0)
+    stats = await _process_organization(
+        db=mock_db_session,
+        client=client,
+        org=mock_organization,
+        since=None,
+        force_update=False,
+    )
+    assert stats["organizations"]["errors"] > 0
+    assert stats["errors"] == stats["organizations"]["errors"]
+    client.scan_issues.assert_awaited_once()
+    if tracker_type == "gitlab":
+        client.client.register_group_webhook.assert_awaited_once()
+    elif tracker_type == "gitlab-ce":
+        client.client.register_project_webhook.assert_awaited_once()
+    elif tracker_type == "jira":
+        client.client.register_webhook.assert_called_once()
+    else:
+        client.client.register_webhook.assert_awaited_once()

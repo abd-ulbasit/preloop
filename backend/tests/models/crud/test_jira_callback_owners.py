@@ -114,6 +114,11 @@ def test_callback_excludes_unusable_grants(db_session, callback_owner, change):
         tracker.is_active = False
     db_session.flush()
     assert owners(db_session, callback) == []
+    if change in {"revoked", "expired"}:
+        assert (
+            crud_webhook.jira_callback_context(db_session, tracker_id=str(tracker.id))
+            is None
+        )
 
 
 def test_expired_access_with_live_refresh_is_usable(db_session, callback_owner):
@@ -123,6 +128,9 @@ def test_expired_access_with_live_refresh_is_usable(db_session, callback_owner):
     token.refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     db_session.flush()
     assert owners(db_session, callback) == [project]
+    assert crud_webhook.jira_callback_context(
+        db_session, tracker_id=str(tracker.id)
+    ) == ("cloud", "user")
 
 
 def test_shared_callback_ids_preserve_account_ownership(db_session, callback_owner):
