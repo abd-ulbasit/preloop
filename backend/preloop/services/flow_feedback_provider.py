@@ -60,6 +60,25 @@ def _login_matches(token: str, login: str) -> bool:
     return False
 
 
+async def canonical_bitbucket_head(client: Any, repository: str, sha: Any) -> str:
+    """Resolve an abbreviated provider head to its full, repository-bound hash."""
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
+        raise ValueError("provider head commit unavailable")
+    if len(sha) in {40, 64}:
+        return sha.lower()
+    response = await client._request(
+        "GET", f"{repository}/commit/{quote(sha, safe='')}"
+    )
+    full = response.json().get("hash")
+    if (
+        not isinstance(full, str)
+        or not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", full)
+        or not full.lower().startswith(sha.lower())
+    ):
+        raise ValueError("provider canonical head unavailable")
+    return full.lower()
+
+
 def reviewer_is_trusted(policy: Mapping[str, Any], actor: Mapping[str, Any]) -> bool:
     """Return whether a bot actor is an explicitly trusted reviewer.
 
@@ -939,9 +958,11 @@ class FeedbackProvider:
             )
         if not matches:
             raise ValueError("provider repository identity mismatch")
-        sha = ((pr.get("source") or {}).get("commit") or {}).get("hash")
-        if not sha:
-            raise ValueError("provider head commit unavailable")
+        sha = await canonical_bitbucket_head(
+            self.client,
+            repo,
+            ((pr.get("source") or {}).get("commit") or {}).get("hash"),
+        )
         pr_url = ((pr.get("links") or {}).get("html") or {}).get("href")
         state = FeedbackState(
             sha, closed=str(pr.get("state") or "").upper() in closed_states
@@ -1040,7 +1061,11 @@ class FeedbackProvider:
         state.feedback += [receipt("ci", item, head_sha=sha) for item in failed]
         current = await get(base)
         state.closed = str(current.get("state") or "").upper() in closed_states
-        current_sha = ((current.get("source") or {}).get("commit") or {}).get("hash")
+        current_sha = await canonical_bitbucket_head(
+            self.client,
+            repo,
+            ((current.get("source") or {}).get("commit") or {}).get("hash"),
+        )
         if current_sha != sha:
             return FeedbackState(
                 str(current_sha or ""),

@@ -1318,7 +1318,7 @@ def bitbucket_binding() -> SimpleNamespace:
 def _bb_pr() -> dict[str, Any]:
     return {
         "state": "OPEN",
-        "source": {"commit": {"hash": "head"}, "branch": {"name": "feat"}},
+        "source": {"commit": {"hash": "a" * 40}, "branch": {"name": "feat"}},
         "destination": {
             "branch": {"name": "main"},
             "repository": {
@@ -1346,6 +1346,7 @@ def _bb_pr() -> dict[str, Any]:
 def bitbucket_fixture(
     *,
     changed_head: bool = False,
+    abbreviated: bool = False,
     closed: bool = False,
     statuses_next: bool = False,
     wrong_repo: bool = False,
@@ -1372,8 +1373,13 @@ def bitbucket_fixture(
                     "full_name": "ws/other",
                 }
             if changed_head and reads > 1:
-                pr["source"]["commit"]["hash"] = "new-head"
+                pr["source"]["commit"]["hash"] = "b" * 40
+            if abbreviated:
+                pr["source"]["commit"]["hash"] = pr["source"]["commit"]["hash"][:12]
             return SimpleNamespace(json=lambda pr=pr: pr)
+        if "/commit/" in path and "/statuses" not in path:
+            short = path.rsplit("/", 1)[-1]
+            return SimpleNamespace(json=lambda: {"hash": short[0] * 40})
         if "/statuses" in path:
             data = {
                 "values": [
@@ -1435,7 +1441,7 @@ def bitbucket_fixture(
 async def test_bitbucket_reconciles_comments_participants_and_statuses() -> None:
     provider, paths = bitbucket_fixture()
     state = await provider.read()
-    assert state.head_sha == "head"
+    assert state.head_sha == "a" * 40
     assert not state.closed
     # The failed required build status blocks readiness and produces a receipt.
     assert not state.checks_passed
@@ -1467,7 +1473,7 @@ async def test_bitbucket_closed_pr_stops_after_one_read() -> None:
 async def test_bitbucket_head_change_during_reconciliation_blocks() -> None:
     provider, _ = bitbucket_fixture(changed_head=True)
     state = await provider.read()
-    assert state.head_sha == "new-head"
+    assert state.head_sha == "b" * 40
     assert state.checks_pending
     assert state.blocked_reason == "head_changed_during_reconciliation"
     assert state.feedback == []
@@ -1590,3 +1596,54 @@ async def test_bitbucket_marked_change_finding_remains_actionable(
     )
     state = await provider.read()
     assert any(i["kind"] == "inline_comment" for i in state.feedback)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned", ["a" * 40, "a" * 64])
+async def test_bitbucket_resolves_abbreviated_head_via_bound_provider(
+    returned: str,
+) -> None:
+    from preloop.services.flow_feedback_provider import canonical_bitbucket_head
+
+    client = SimpleNamespace(
+        _request=AsyncMock(
+            return_value=SimpleNamespace(json=lambda: {"hash": returned})
+        )
+    )
+    assert (
+        await canonical_bitbucket_head(client, "repositories/ws/repo", "a" * 12)
+        == returned
+    )
+    client._request.assert_awaited_once_with(
+        "GET", "repositories/ws/repo/commit/" + "a" * 12
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned", ["b" * 40, "a" * 12, None, "not-a-hash"])
+async def test_bitbucket_rejects_unverified_canonical_head(
+    returned: str | None,
+) -> None:
+    from preloop.services.flow_feedback_provider import canonical_bitbucket_head
+
+    client = SimpleNamespace(
+        _request=AsyncMock(
+            return_value=SimpleNamespace(json=lambda: {"hash": returned})
+        )
+    )
+    with pytest.raises(ValueError, match="canonical head"):
+        await canonical_bitbucket_head(client, "repositories/ws/repo", "a" * 12)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [False, True])
+async def test_bitbucket_reconciliation_compares_canonical_heads(changed: bool) -> None:
+    provider, paths = bitbucket_fixture(abbreviated=True, changed_head=changed)
+    state = await provider.read()
+    assert state.head_sha == ("b" if changed else "a") * 40
+    assert (state.blocked_reason == "head_changed_during_reconciliation") == changed
+    assert any(
+        "/commit/" + "a" * 12 == path[path.index("/commit/") :]
+        for path in paths
+        if "/commit/" in path and "/statuses" not in path
+    )

@@ -27454,6 +27454,10 @@ components:
           - type: string
           - type: 'null'
           title: Existing Thread State
+        native_reactivation_available:
+          type: boolean
+          title: Native Reactivation Available
+          default: false
         allowed_recovery_modes:
           items:
             type: string

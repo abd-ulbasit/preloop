@@ -36,6 +36,7 @@ export interface FlowExecutionActionResource {
   /** Set once the run opened a runtime session worth linking to. */
   agent_session_reference?: string | null;
   flow_id?: string | null;
+  trigger_event_details?: Record<string, unknown> | null;
 }
 
 export interface FlowExecutionActionContext extends ActionContext {
@@ -112,7 +113,13 @@ export function confirmRetryExecution(options: {
 export function canRetryExecution(
   execution: FlowExecutionActionResource
 ): boolean {
-  return RETRYABLE_EXECUTION_STATUSES.has(execution.status);
+  const resume = execution.trigger_event_details?._resume;
+  const controllerOwned =
+    resume &&
+    typeof resume === 'object' &&
+    'thread_id' in resume &&
+    resume.thread_id;
+  return RETRYABLE_EXECUTION_STATUSES.has(execution.status) && !controllerOwned;
 }
 
 export function executionDetailUrl(

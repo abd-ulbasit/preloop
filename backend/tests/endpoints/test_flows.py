@@ -3734,3 +3734,27 @@ def test_clone_does_not_bind_unpriced_builtin(mocker: MockerFixture) -> None:
     with pytest.raises(HTTPException) as exc:
         flows._resolve_clone_model_binding(MagicMock(), preset, uuid.uuid4())
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_retry_native_continuation_refuses_before_creating_run(
+    mock_account: Account, mocker: MockerFixture
+) -> None:
+    original = MagicMock(status="FAILED", flow_id=uuid.uuid4())
+    source = str(uuid.uuid4())
+    original.trigger_event_details = {
+        "_resume": {"thread_id": str(uuid.uuid4()), "execution_id": source}
+    }
+    mocker.patch.object(flows.crud_flow_execution, "get", return_value=original)
+    mocker.patch.object(flows.crud_flow, "get", return_value=MagicMock())
+    trigger = mocker.patch("preloop.services.flow_trigger_service.FlowTriggerService")
+    with pytest.raises(HTTPException) as error:
+        await maybe_await(
+            flows.retry_flow_execution(
+                db=MagicMock(), execution_id=uuid.uuid4(), current_user=mock_account
+            )
+        )
+    assert error.value.status_code == 409
+    assert source in error.value.detail
+    assert "follow-up preview" in error.value.detail
+    trigger.assert_not_called()

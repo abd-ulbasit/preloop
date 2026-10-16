@@ -2362,3 +2362,183 @@ def test_successful_bitbucket_head_lookup(
         assert (found is not None) == expected
         if found is not None:
             assert {"evidence_archive", "result"} <= inspect(found).unloaded
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "account",
+        "reason",
+        "expiry",
+        "active",
+        "budget",
+        "source",
+        "cost",
+        "no_progress",
+        "worked",
+    ],
+)
+def test_native_reactivation_preserves_authority_and_limits(
+    database: Engine, failure: str | None
+) -> None:
+    with Session(database) as db:
+        thread = create_thread(db)
+        thread.state, thread.stop_reason = "stopped", "flow_disabled"
+        thread.turns, thread.cost, thread.no_progress = 1, 0.1, 1
+        failed = models.FlowExecution(
+            id=uuid.uuid4(), flow_id=thread.flow_id, status="FAILED"
+        )
+        db.add(failed)
+        db.flush()
+        thread.active_execution_id = failed.id
+        account = thread.account_id
+        source = thread.latest_execution_id
+        if failure == "account":
+            account = uuid.uuid4()
+        if failure == "reason":
+            thread.stop_reason = "no_progress"
+        if failure == "expiry":
+            thread.expires_at = NOW
+        if failure == "active":
+            failed.status = "RUNNING"
+        if failure == "budget":
+            thread.turns = 5
+        if failure == "source":
+            source = uuid.uuid4()
+        if failure == "cost":
+            thread.cost = 100
+        if failure == "no_progress":
+            thread.no_progress = 2
+        if failure == "worked":
+            failed.total_tokens = 1
+        db.commit()
+        before = (
+            thread.turns,
+            thread.cost,
+            thread.no_progress,
+            thread.latest_execution_id,
+            thread.context,
+        )
+
+        def call() -> models.FlowThread:
+            return crud_flow_feedback.reactivate_native(
+                db,
+                thread_id=thread.id,
+                account_id=account,
+                flow_id=thread.flow_id,
+                source_execution_id=source,
+                pr_url=thread.pr_url,
+                branch=thread.branch,
+                now=NOW,
+            )
+
+        if failure:
+            with pytest.raises(ValueError):
+                call()
+            db.rollback()
+            assert thread.state == "stopped"
+        else:
+            restored = call()
+            db.commit()
+            assert restored.id == thread.id and restored.state == "waiting"
+            assert restored.active_execution_id is None
+            assert restored.stop_reason is None
+            assert (
+                restored.turns,
+                restored.cost,
+                restored.no_progress,
+                restored.latest_execution_id,
+                restored.context,
+            ) == before
+            # A competing recovery cannot double-activate or reserve an execution.
+            with pytest.raises(ValueError):
+                call()
+            db.rollback()
+            assert (
+                db.query(models.FlowExecution).filter_by(flow_id=thread.flow_id).count()
+                == 2
+            )
+
+
+@pytest.mark.asyncio
+async def test_recover_disabled_native_thread_reconciles_without_manufacturing_work(
+    database: Engine,
+) -> None:
+    from sqlalchemy.orm import sessionmaker
+    from preloop.services import flow_continuation_adoption as adoption
+    from preloop.schemas.flow_continuation import (
+        ContinuationAdoptRequest,
+        ContinuationPreview,
+    )
+
+    with Session(database) as db:
+        thread = create_thread(db)
+        source = db.get(models.FlowExecution, thread.latest_execution_id)
+        source.result = {"pr_url": thread.pr_url, "pr_source_branch": thread.branch}
+        thread.state, thread.stop_reason = "stopped", "flow_disabled"
+        # This test uses current time because adoption creates the wakeup now.
+        now = datetime.now().replace(microsecond=0)
+        thread.expires_at = now + timedelta(days=1)
+        db.commit()
+        readiness = ContinuationPreview(
+            execution_id=source.id,
+            flow_id=thread.flow_id,
+            pr_url=thread.pr_url,
+            branch=thread.branch,
+            head_sha="a" * 40,
+            feedback_enabled=True,
+            artifact_upload_enabled=True,
+            feedback_readable=True,
+            native_resume_available=True,
+            native_reactivation_available=True,
+            native_resume_expires_at=now + timedelta(hours=1),
+            existing_thread_id=thread.id,
+            existing_thread_state="stopped",
+            allowed_recovery_modes=["native_resume"],
+            warnings=[],
+        )
+        request = ContinuationAdoptRequest(
+            recovery_mode="native_resume", expected_head_sha="a" * 40
+        )
+        with (
+            patch.object(adoption, "preview_continuation", return_value=readiness),
+            patch.object(
+                adoption, "get_session_factory", return_value=sessionmaker(database)
+            ),
+            patch.object(adoption, "register_thread") as register,
+        ):
+            response = adoption.adopt_continuation(
+                thread.account_id, source.id, request
+            )
+        assert response.thread_id == thread.id and response.state == "waiting"
+        register.assert_not_called()
+        db.refresh(thread)
+        later = now + timedelta(seconds=5)
+        provider = SimpleNamespace(
+            read=AsyncMock(
+                return_value=FeedbackState(
+                    "a" * 40, checks_passed=True, reviews_passed=True
+                )
+            )
+        )
+        with (
+            patch(
+                "preloop.services.flow_feedback.FeedbackProvider.for_thread",
+                AsyncMock(return_value=provider),
+            ),
+            patch.object(
+                crud_flow_feedback, "reserve", wraps=crud_flow_feedback.reserve
+            ) as reserve,
+        ):
+            await _reconcile(
+                db, *crud_flow_feedback.claim_due(db, now=later)[0], now=later
+            )
+        reserve.assert_not_called()
+        db.refresh(thread)
+        assert thread.state == "ready"
+        assert thread.active_execution_id is None
+        assert (
+            db.query(models.FlowExecution).filter_by(flow_id=thread.flow_id).count()
+            == 1
+        )

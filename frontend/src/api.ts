@@ -4916,6 +4916,7 @@ export interface FlowContinuationPreview {
   native_resume_expires_at?: string | null;
   existing_thread_id: string | null;
   existing_thread_state?: string | null;
+  native_reactivation_available?: boolean;
   allowed_recovery_modes: ContinuationRecoveryMode[];
   warnings: string[];
 }

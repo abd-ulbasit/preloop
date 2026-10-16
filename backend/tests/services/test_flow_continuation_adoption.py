@@ -321,6 +321,12 @@ def test_metadata_only_workspace_still_allows_native_resume(
     workspace.manifest = {"metadata": {}}
     refused = service._load_source(account, execution_id)
     assert refused["native_resume_available"] is False
+    assert refused["native_reactivation_available"] is False
+    workspace.manifest = {"metadata": {"metadata_only": True}}
+    native.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    refused = service._load_source(account, execution_id)
+    assert refused["native_resume_available"] is False
+    assert refused["native_reactivation_available"] is False
 
 
 def test_preview_surfaces_native_checkpoint_expiry() -> None:
@@ -655,7 +661,7 @@ async def test_bitbucket_read_publication_matches_repository_uuid() -> None:
         "state": "OPEN",
         "source": {
             "branch": {"name": "feat/x"},
-            "commit": {"hash": "head"},
+            "commit": {"hash": "a" * 40},
             "repository": {"uuid": "{" + repo_uuid + "}", "full_name": "ws/repo"},
         },
         "destination": {
@@ -681,7 +687,7 @@ async def test_bitbucket_read_publication_matches_repository_uuid() -> None:
         patch.object(
             service.FeedbackProvider,
             "read",
-            AsyncMock(return_value=FeedbackState("head")),
+            AsyncMock(return_value=FeedbackState("a" * 40)),
         ),
     ):
         result = await service._read_publication(source)
@@ -701,7 +707,7 @@ async def test_bitbucket_read_publication_rejects_fork_source() -> None:
         "state": "OPEN",
         "source": {
             "branch": {"name": "feat/x"},
-            "commit": {"hash": "head"},
+            "commit": {"hash": "a" * 40},
             "repository": {"uuid": "{99999999-9999-9999-9999-999999999999}"},
         },
         "destination": {
@@ -727,7 +733,7 @@ async def test_bitbucket_read_publication_rejects_fork_source() -> None:
         patch.object(
             service.FeedbackProvider,
             "read",
-            AsyncMock(return_value=FeedbackState("head")),
+            AsyncMock(return_value=FeedbackState("a" * 40)),
         ),
     ):
         result = await service._read_publication(source)
@@ -774,3 +780,53 @@ def test_jira_triggered_source_uses_the_bound_repository() -> None:
     assert error.value.status_code == 404
     assert resolver.called
     assert tracker_get.call_args.kwargs["id"] == bitbucket_tracker
+
+
+@pytest.mark.asyncio
+async def test_bitbucket_preview_expands_short_head_before_confirmation() -> None:
+    full = "a" * 40
+    repo = {"full_name": "ws/repo"}
+    pr = {
+        "state": "OPEN",
+        "source": {
+            "branch": {"name": "feat"},
+            "commit": {"hash": full[:12]},
+            "repository": repo,
+        },
+        "destination": {"repository": repo},
+        "links": {"html": {"href": "https://bitbucket.org/ws/repo/pull-requests/7"}},
+    }
+
+    async def request(method: str, path: str, **kwargs: object) -> object:
+        value = {"hash": full} if "/commit/" in path else pr
+        return SimpleNamespace(json=lambda: value)
+
+    client = SimpleNamespace(_request=AsyncMock(side_effect=request))
+    source = {
+        "provider": "bitbucket",
+        "repository_id": "ws/repo",
+        "number": "7",
+        "tracker_id": uuid4(),
+        "tracker_key": "k",
+        "tracker_options": {},
+        "policy": {},
+    }
+    with (
+        patch.object(service, "create_tracker_client", AsyncMock(return_value=client)),
+        patch.object(
+            service.FeedbackProvider,
+            "read",
+            AsyncMock(return_value=FeedbackState(full)),
+        ),
+    ):
+        publication = await service._read_publication(source)
+    assert publication["head_sha"] == full
+    # The exact preview head now satisfies the unchanged confirmation schema.
+    request_body = ContinuationAdoptRequest(
+        recovery_mode="native_resume", expected_head_sha=publication["head_sha"]
+    )
+    assert request_body.expected_head_sha == full
+    assert client._request.await_args_list[1].args == (
+        "GET",
+        "repositories/ws/repo/commit/" + full[:12],
+    )

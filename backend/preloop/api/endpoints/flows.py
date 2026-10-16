@@ -2742,6 +2742,19 @@ async def retry_flow_execution(
     from preloop.services.flow_trigger_service import FlowTriggerService
 
     trigger_data = dict(original.trigger_event_details or {})
+    resume = trigger_data.get("_resume")
+    if isinstance(resume, dict) and resume.get("thread_id"):
+        publisher = resume.get("resume_root") or resume.get("execution_id")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This continuation is owned by the review and CI controller and "
+                "cannot be retried as a standalone run. Enable the flow, then open "
+                f"publishing execution {publisher} and use its follow-up preview "
+                "to recover a disabled native continuation. Current provider "
+                "feedback will determine whether another repair is needed."
+            ),
+        )
     trigger_data.pop(ROUTING_RECORD_KEY, None)
 
     trigger_service = FlowTriggerService(db)

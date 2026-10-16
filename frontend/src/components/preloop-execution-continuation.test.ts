@@ -109,6 +109,41 @@ describe('Execution PR follow-up adoption', () => {
     await element.updateComplete;
   };
 
+  it('keeps the recovery preview accessible on an already registered publisher', async () => {
+    const element = await mount();
+    element.execution = {
+      ...execution,
+      result: {
+        ...execution.result,
+        continuation: { thread_id: 'native-thread' },
+      },
+    };
+    await element.updateComplete;
+    expect(control(element, 'preview')).to.exist;
+  });
+
+  it('offers explicit native recovery for a disabled existing thread', async () => {
+    preview = {
+      ...preview,
+      existing_thread_id: 'native-thread',
+      existing_thread_state: 'stopped',
+      native_resume_available: true,
+      native_reactivation_available: true,
+      allowed_recovery_modes: ['native_resume'],
+    };
+    const element = await mount();
+    await open(element);
+    expect(control(element, 'confirm').disabled).to.equal(false);
+    expect(control(element, 'confirm').textContent).to.contain(
+      'Recover PR follow-up'
+    );
+    await confirm(element);
+    expect(posts()).to.have.length(1);
+    const body = JSON.parse(posts()[0].args[1].body);
+    expect(body.recovery_mode).to.equal('native_resume');
+    expect(body.expected_head_sha).to.equal('a'.repeat(40));
+  });
+
   it('does not fetch until explicitly opened and never adopts during preview', async () => {
     const element = await mount();
     expect(requests().length).to.equal(0);
@@ -396,13 +431,7 @@ describe('Execution PR follow-up adoption', () => {
     expect(fetchStub.callCount).to.equal(0);
   });
 
-  for (const change of [
-    { status: 'RUNNING' },
-    { status: 'COMPLETED' },
-    {
-      result: { ...execution.result, continuation: { thread_id: 'thread-1' } },
-    },
-  ]) {
+  for (const change of [{ status: 'RUNNING' }, { status: 'COMPLETED' }]) {
     it(`hides the action for ineligible execution ${JSON.stringify(change)}`, async () => {
       const element = await mount();
       element.execution = { ...execution, ...change };

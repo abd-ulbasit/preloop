@@ -29,6 +29,7 @@ class ContinuationPreview(BaseModel):
     native_resume_expires_at: datetime | None = None
     existing_thread_id: UUID | None = None
     existing_thread_state: str | None = None
+    native_reactivation_available: bool = False
     allowed_recovery_modes: list[RecoveryMode]
     warnings: list[str]
 
