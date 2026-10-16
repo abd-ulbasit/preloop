@@ -348,14 +348,15 @@ func copilotConfigDir(d harnessInventoryDeps) string {
 
 // copilotStoredConfig is the subset of ~/.copilot/config.json the runner
 // reads. The login name is deliberately not decoded.
+type copilotStoredUser struct {
+	Host string `json:"host"`
+}
+
 type copilotStoredConfig struct {
-	Model            string `json:"model"`
-	LastLoggedInUser *struct {
-		Host string `json:"host"`
-	} `json:"last_logged_in_user"`
-	LoggedInUsers []struct {
-		Host string `json:"host"`
-	} `json:"logged_in_users"`
+	Model            string              `json:"model"`
+	LastLoggedInUser *copilotStoredUser  `json:"last_logged_in_user"`
+	LoggedInUsers    []copilotStoredUser `json:"logged_in_users"`
+	legacyLogin      bool
 }
 
 func readCopilotStoredConfig(dir string) copilotStoredConfig {
@@ -365,12 +366,34 @@ func readCopilotStoredConfig(dir string) copilotStoredConfig {
 		return cfg
 	}
 	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, 256*1024))
-	if err != nil {
+	const maxConfigBytes = 256 * 1024
+	raw, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
+	if err != nil || len(raw) > maxConfigBytes {
 		return copilotStoredConfig{}
 	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	// Copilot writes a leading // comment. Preserve URL strings while removing
+	// comments, and reject malformed documents rather than using partial data.
+	wire := struct {
+		*copilotStoredConfig
+		ModernLastUser json.RawMessage `json:"lastLoggedInUser"`
+		ModernUsers    json.RawMessage `json:"loggedInUsers"`
+	}{copilotStoredConfig: &cfg}
+	if err := json.Unmarshal([]byte(stripJSONCComments(string(raw))), &wire); err != nil {
 		return copilotStoredConfig{}
+	}
+	cfg.legacyLogin = cfg.LastLoggedInUser != nil || len(cfg.LoggedInUsers) > 0
+	if len(wire.ModernLastUser) != 0 || len(wire.ModernUsers) != 0 {
+		// Modern identity records can remain after logout. Only the CLI status
+		// probe (or explicit token environment) establishes login for this schema.
+		// Never decode authTokens or account login names.
+		cfg.legacyLogin = false
+		cfg.LastLoggedInUser, cfg.LoggedInUsers = nil, nil
+		if len(wire.ModernLastUser) != 0 && json.Unmarshal(wire.ModernLastUser, &cfg.LastLoggedInUser) != nil {
+			return copilotStoredConfig{}
+		}
+		if len(wire.ModernUsers) != 0 && json.Unmarshal(wire.ModernUsers, &cfg.LoggedInUsers) != nil {
+			return copilotStoredConfig{}
+		}
 	}
 	return cfg
 }
@@ -635,7 +658,7 @@ func buildCopilotEntry(d harnessInventoryDeps, discovered map[string]AgentConfig
 			break
 		}
 	}
-	if entry.LoginSource != "env" && hasStoredLogin {
+	if entry.LoginSource != "env" && stored.legacyLogin {
 		entry.LoginState, entry.LoginSource = harnessLoginSignedIn, "stored"
 	}
 	if entry.LoginSource != "env" && err == nil && d.CopilotLogin != nil {
