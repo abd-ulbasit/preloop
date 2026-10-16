@@ -46,7 +46,7 @@ ticket, and it is not a transcript.
 | Surface | MCP governed | Models metered | Hook sessions | Spend visible | Dollars per ticket | Publication and feedback | Status today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | VS Code Copilot Chat, GitHub-hosted models | Yes, for MCP servers Preloop writes | Not possible: no proxy for GitHub-hosted models | Not wired: VS Code hooks are GitHub preview; Preloop writes no such file | Premium-request import | No. Per user and day only | Not this surface: a person drives the chat | MCP shipped. Metering not possible; hooks not wired |
-| VS Code Copilot Chat, BYOK (custom endpoint) | Same MCP path as the row above | Gateway rows for the Custom Endpoint Chat Completions shape (`tools`, `stream: true`) and the Responses shape, attributed to the agent credential. Interactive VS Code is a founder checklist ([#787](https://github.com/preloop/preloop/issues/787)) | Not wired: VS Code hooks are GitHub preview; Preloop writes no such file | Gateway for calls that reach Preloop. Import stays GitHub-reported ([#788](https://github.com/preloop/preloop/issues/788)) | No. Gateway rows are per request, not per ticket | Not this surface | Documented manual BYOK. Interactive session unverified ([#787](https://github.com/preloop/preloop/issues/787)) |
+| VS Code Copilot Chat, BYOK (custom endpoint) | Same MCP path as the row above | Gateway rows for the Custom Endpoint Chat Completions shape (`tools`, `stream: true`) and the Responses shape, attributed to the agent credential. Chat Completions and an Agent built-in tool roundtrip verified; other protocols remain unverified ([guide](clients/vscode-copilot.md)) | Not wired: VS Code hooks are GitHub preview; Preloop writes no such file | Gateway for calls that reach Preloop. Import stays GitHub-reported ([#788](https://github.com/preloop/preloop/issues/788)) | No. Gateway rows are per request, not per ticket | Not this surface | Manual BYOK verified on 2026-10-16. New-harness MCP authentication remains unverified ([guide](clients/vscode-copilot.md#interactive-verification-2026-10-16)) |
 | Copilot CLI, GitHub-hosted, interactive on a laptop | Yes, after onboard. Native tools need `--approvals` | Not possible: no proxy for GitHub-hosted models | Yes, lifecycle only | Premium-request import | No. Per user and day only | Not this surface: a person drives the session | Shipped |
 | Copilot CLI, GitHub-hosted, flow on a private-runner host profile | Yes, from two separate sources: the runner user's own MCP file, and the flow's `preloop-flow` server, which the runner supplies per job with a short-lived, execution-scoped token | Not possible: no proxy for GitHub-hosted models | Yes. The runner installs usage hooks before the run | Execution: not gateway metered, plus a premium-request count. Dollars: import | No. The count is not tokens and not a price, and the import is per user and day. Unknown stays unknown | Opt-in managed publication for one Bitbucket Cloud repository (profile `allow_publish`, runner capabilities `host_publication` and `host_continuation`), and feedback continuation that resumes the same Copilot session on the originating runner. Other publication and native resume are rejected before the run | Shipped ([#956](https://github.com/preloop/preloop/issues/956)), with the flow MCP server. Publication and continuation: [#1069](https://github.com/preloop/preloop/issues/1069); publication retry from retained work is planned |
 | Copilot CLI BYOK through the gateway (`preloop copilot`) | Same CLI MCP and approval hooks | Yes: tokens, cost, and session replay | Yes, when the CLI hooks are installed | Gateway. Not the premium-request import | Yes for a gateway flow: gateway rows carry the session and the execution. The local launcher attributes to the session, not to a ticket | Not this launcher. Publication belongs to the flow's harness; the local launcher pushes nothing | Shipped |
@@ -57,9 +57,12 @@ ticket, and it is not a transcript.
 
 ### VS Code Copilot Chat, GitHub-hosted models
 
-`preloop agents onboard "VSCode / Copilot"` writes the user MCP file
-`~/.vscode/mcp.json` (`cli/internal/cmd/agents.go`, config path
-`.vscode/mcp.json`). Tool calls that client makes through Preloop are
+Current CLI builds of `preloop agents onboard "VSCode / Copilot"` prefer
+the native OS user-profile `mcp.json` for VS Code, Insiders and VSCodium;
+`~/.vscode/mcp.json` is retained for legacy enrollments. Use **MCP: Open
+User Configuration** to locate the active profile file. See the
+[MCP-only setup](clients/vscode-copilot.md#path-a-mcp-only). Tool calls that
+the authenticated session actually makes through Preloop are
 governed: policies, approvals, and audit on `/mcp/v1`. Copilot's
 built-in edit and terminal tools are not MCP calls.
 `permissionSourceForAgent` has no VS Code branch
@@ -88,8 +91,9 @@ surface: a person drives the chat.
 
 ### VS Code Copilot Chat, BYOK (custom endpoint)
 
-MCP governance is the same user file as the GitHub-hosted row. Onboarding
-writes that MCP file and leaves `chatLanguageModels.json` alone.
+MCP uses the same native user-profile configuration as the GitHub-hosted
+row. Native discovery alone does not establish authentication in the new
+Copilot harness. Onboarding leaves `chatLanguageModels.json` alone.
 
 The manual path is [VS Code Copilot Chat](clients/vscode-copilot.md):
 **Chat: Manage Language Models** -> **Add Models** -> **Custom Endpoint**,
@@ -97,12 +101,16 @@ with `toolCalling: true` and the full gateway URLs. The gateway regression
 test `backend/tests/endpoints/test_openai_gateway_issue_787.py` replays
 Chat Completions (`tools`, `stream: true`) and the Responses shape with
 an agent credential and a fake upstream, and checks that the usage row
-stores tokens and cost for that agent. An interactive VS Code session
-was not run. That session, and a licensed Business or Enterprise seat,
-are the founder checklist on that page
+stores tokens and cost for that agent. The 2026-10-16 interactive test
+verified a production Chat Completions route, an Agent built-in file-tool
+roundtrip and gateway usage attribution. Persistent Ask mode, local-stack
+coverage, other protocols and Business/Enterprise policy behavior remain
+unverified. Native MCP discovery passed, but new-harness session authentication
+and an actual MCP tool call remain unverified. The guide records these limits
+and provides separate MCP-only and MCP-plus-model setup paths
 ([#787](https://github.com/preloop/preloop/issues/787)).
 
-Plan pages checked 2026-10-10 are cited on that page. They say BYOK works
+Plan pages rechecked 2026-10-16 are cited on that page. They say BYOK works
 with no Copilot plan, and that Business and Enterprise need an admin
 policy. They do not name Copilot Free, Pro, and Pro+ as separate rows.
 
@@ -368,8 +376,9 @@ zero. A completion has nothing to publish and nothing to continue.
    Chat BYOK is a separate manual path:
    [VS Code Copilot Chat](clients/vscode-copilot.md). Onboarding leaves
    `chatLanguageModels.json` alone. The gateway request shape is covered
-   by a regression test. An interactive VS Code session is the founder
-   checklist ([#787](https://github.com/preloop/preloop/issues/787)).
+   by a regression test. The guide also records the 2026-10-16 interactive
+   Chat Completions/Agent result and remaining MCP authentication, protocol,
+   plan and local-stack limits ([#787](https://github.com/preloop/preloop/issues/787)).
 
 ## External references
 

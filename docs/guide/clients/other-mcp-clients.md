@@ -104,7 +104,7 @@ If your client is MCP-capable but not in the table, add the endpoint manually (U
 ## Related
 
 - [Importing usage from Cursor](../cost/importing-cursor-usage.md): get bundled-model spend into Cost analytics
-- [VS Code Copilot Chat](vscode-copilot.md): Custom Endpoint click path and founder checklist
+- [VS Code / Copilot setup](vscode-copilot.md): MCP-only and MCP-plus-custom-model steps, tested result and limitations
 - [CLI Reference: support levels](../cli.md#support-levels)
 - [Connect Your MCP Client](../getting-started/connect-mcp-client.md): generic setup steps
 - [Subject-Scoped Governance](../concepts/subject-scoped-governance.md): scoping tools/models per client key
