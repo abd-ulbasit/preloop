@@ -123,3 +123,24 @@ def test_direct_responses_protocol_reaches_execution_context() -> None:
     assert not context["model_gateway_enabled"]
     assert context["model_api_protocol"] == "responses"
     assert context["model_endpoint"] == "https://api.example.com/v1"
+
+
+def test_update_rejects_explicit_null_harness(client: TestClient) -> None:
+    created = client.post(
+        "/api/v1/flows",
+        json={
+            "name": f"Codex null harness {uuid4().hex}",
+            "prompt_template": "Review",
+            "agent_type": "codex",
+            "agent_config": {},
+        },
+    )
+    assert created.status_code == 200
+    updated = client.put(
+        f"/api/v1/flows/{created.json()['id']}", json={"agent_type": None}
+    )
+    assert updated.status_code == 422
+    assert updated.json()["detail"] == "agent_type cannot be null"
+    stored = client.get(f"/api/v1/flows/{created.json()['id']}")
+    assert stored.status_code == 200
+    assert stored.json()["agent_type"] == "codex"

@@ -2812,6 +2812,11 @@ def update_flow(
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
 
+    # Omission preserves the harness, but an explicit null cannot be stored
+    # in Flow.agent_type. Reject it before any harness-specific validation.
+    if "agent_type" in flow_in.model_fields_set and flow_in.agent_type is None:
+        raise HTTPException(status_code=422, detail="agent_type cannot be null")
+
     # Security: Prevent modifying source_preset_id during update
     # The preset link should only be set during creation (via clone_preset or create)
     # Allowing arbitrary changes could let users pull content from other accounts' flows
