@@ -7,7 +7,7 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from preloop.agents.codex import CodexAgent
+from preloop.agents.codex import CODEX_MCP_STARTUP_TIMEOUT_SECONDS, CodexAgent
 from preloop.services.model_context_limits import limits_for_execution
 from preloop.utils.execve_limits import PROMPT_FILE_PATH
 
@@ -343,7 +343,7 @@ class TestCodexAuthConfig:
         config_text = config_text.replace("$MCP_TOOL_TIMEOUT_SEC", "600")
         server = tomllib.loads(config_text)["mcp_servers"]["preloop"]
         assert server.get("required") is True
-        assert server.get("startup_timeout_sec", 10) >= 60
+        assert server["startup_timeout_sec"] == CODEX_MCP_STARTUP_TIMEOUT_SECONDS
 
     @pytest.mark.parametrize("gateway_enabled", [None, False])
     def test_direct_chat_provider_rejected_before_launch(

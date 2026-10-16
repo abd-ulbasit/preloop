@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 #: is dropped rather than written, so a routing preference can never make
 #: config.toml unparseable.
 CODEX_REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+CODEX_MCP_STARTUP_TIMEOUT_SECONDS = 60
 
 
 class CodexAgent(ContainerAgentExecutor):
@@ -1019,7 +1020,7 @@ exit $CODEX_EXIT_CODE
             # period in Codex. A flow that requested tools must wait for them
             # or fail startup rather than silently run without those tools.
             "required = true\n"
-            "startup_timeout_sec = 60\n"
+            f"startup_timeout_sec = {CODEX_MCP_STARTUP_TIMEOUT_SECONDS}\n"
             "tool_timeout_sec = $MCP_TOOL_TIMEOUT_SEC\n"
             if attach_mcp
             else ""
