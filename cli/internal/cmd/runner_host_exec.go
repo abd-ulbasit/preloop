@@ -1037,6 +1037,10 @@ func beginHostExecJob(
 		buffer.governance = governance
 	}
 	cmd.Stdout, cmd.Stderr = buffer, buffer
+	if buffer.harness == hostExecHarnessCodex || buffer.harness == hostExecHarnessOpenCode || buffer.harness == hostExecHarnessDeepSeek {
+		cmd.Stderr = runnerDiagnosticWriter{buffer: buffer}
+	}
+
 	gate := &hostExecGate{}
 	jobs.start(&runnerJob{executionID: executionID, cmd: cmd, halted: halted, hostGate: gate})
 	done := jobs.outcomes
