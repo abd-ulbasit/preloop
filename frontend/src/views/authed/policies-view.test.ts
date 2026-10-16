@@ -306,10 +306,14 @@ describe('PoliciesView', () => {
     const panel = element.shadowRoot!.querySelector('governance-policy-panel');
     expect(panel?.canManage).to.equal(true);
     // Rule actions edit the tool-call policy, not this document.
-    const actions = element.shadowRoot!.querySelector(
-      '.rule-actions'
-    ) as HTMLElement;
-    expect(actions.hidden).to.equal(true);
+    expect(element.shadowRoot!.querySelector('.rule-actions')).to.equal(null);
+    (element as any)._activeTab = 'rules';
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.rule-actions')).not.to.equal(
+      null
+    );
+    (element as any)._activeTab = 'governance';
+    await element.updateComplete;
     expect(
       element
         .shadowRoot!.querySelector('view-header')!

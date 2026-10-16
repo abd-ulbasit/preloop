@@ -452,6 +452,7 @@ export class GovernanceView extends LitElement {
       ${run.status === 'partial' || run.stop_reason ? html`<sl-alert variant="warning" open class="partial"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>Partial review: ${run.stop_reason ? stopReason(run.stop_reason) : 'the run did not finish the full week'}. Findings cover only what was reviewed.</sl-alert>` : nothing}
       ${
         // Only the newest run says what the review is doing now.
+        this.runOffset === 0 &&
         run.id === this.runs[0]?.id &&
         run.mode_after === 'off_over_budget' &&
         !this.dismissedBudgetBanner

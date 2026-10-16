@@ -395,6 +395,7 @@ describe('Governance findings clarity', () => {
 
 describe('Governance week and banner', () => {
   let api: MockApi;
+  let firstPage: GovernanceRun[];
   const older: GovernanceRun = {
     ...run,
     id: 'run-0',
@@ -404,10 +405,17 @@ describe('Governance week and banner', () => {
   };
   beforeEach(() => {
     signInForTest();
+    firstPage = [run, older];
     api = mockApi({
       capabilities: ['governance_review'],
       routes: [
-        { path: `${BASE}/runs`, body: () => [run, older] },
+        {
+          path: `${BASE}/runs`,
+          body: (call) =>
+            new URLSearchParams(call.search).get('offset') === '25'
+              ? [older]
+              : firstPage,
+        },
         { path: `${BASE}/findings`, body: () => [] },
       ],
     });
@@ -419,11 +427,12 @@ describe('Governance week and banner', () => {
       html`<governance-view></governance-view>`
     );
     await waitUntil(() => el.shadowRoot!.textContent!.includes('Reviewed'));
-    const select = el.shadowRoot!.querySelector(
-      'select[name="run_id"]'
-    ) as HTMLSelectElement;
-    select.value = 'run-0';
-    select.dispatchEvent(new Event('change'));
+    const history = el.shadowRoot!.querySelector(
+      '[data-history]'
+    ) as HTMLDetailsElement;
+    history.open = true;
+    const weeks = history.querySelectorAll('tbody button');
+    (weeks[1] as HTMLButtonElement).click();
     await waitUntil(
       () =>
         el
@@ -436,6 +445,33 @@ describe('Governance week and banner', () => {
       'select[name="run_id"]'
     ) as HTMLSelectElement;
     expect(chosen.value).to.equal('run-0');
+    expect(el.shadowRoot!.querySelector('.over-budget')).to.equal(null);
+  });
+
+  it('does not show the current budget banner on older run pages', async () => {
+    firstPage = Array.from({ length: 25 }, (_, i) => ({
+      ...run,
+      id: `recent-${i}`,
+    }));
+    const el = await fixture<GovernanceView>(
+      html`<governance-view></governance-view>`
+    );
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('Reviewed'));
+    const history = el.shadowRoot!.querySelector(
+      '[data-history]'
+    ) as HTMLDetailsElement;
+    history.open = true;
+    const olderButton = Array.from(history.querySelectorAll('sl-button')).find(
+      (button) => button.textContent!.includes('Older runs')
+    )!;
+    olderButton.click();
+    await waitUntil(() =>
+      el.shadowRoot!.querySelector(
+        'select[name="run_id"] option[value="run-0"]'
+      )
+    );
+    await el.updateComplete;
+    expect(el.shadowRoot!.textContent).to.contain('Sep 28');
     expect(el.shadowRoot!.querySelector('.over-budget')).to.equal(null);
   });
 });
