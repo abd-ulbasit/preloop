@@ -2438,13 +2438,22 @@ class JiraTracker(BaseTracker):
 
             classic_url = f"{self.jira_url}/rest/webhooks/1.0/webhook"
             if self.jira_client is not None:
-                response = self.jira_client._session.post(
-                    classic_url,
-                    json=webhook_payload,
-                )
+                try:
+                    response = self.jira_client._session.post(
+                        classic_url,
+                        json=webhook_payload,
+                    )
+                except JIRAError as error:
+                    # The library raises for denied requests instead of returning
+                    # a response. Scoped tokens must still try the fallback APIs.
+                    if not self._scoped_gateway or not _webhook_status_blocked(
+                        error.status_code
+                    ):
+                        raise
+                    response = None
             else:
                 response = self._post_webhook(classic_url, webhook_payload)
-            if _webhook_status_blocked(response.status_code):
+            if response is None or _webhook_status_blocked(response.status_code):
                 alternate = self._register_webhook_alternate(webhook_payload)
                 if alternate is None:
                     self._record_manual_webhook(db, webhook_url)
@@ -2902,6 +2911,13 @@ class JiraTracker(BaseTracker):
                     jql = hook.get("jqlFilter", "")
                     if f"project = {project.identifier.upper()}" in jql:
                         return True
+            return False
+        except TrackerAuthenticationError:
+            if not self._scoped_gateway:
+                raise
+            # Scoped tokens can read issues through the gateway while Jira
+            # denies webhook administration on the site. Let registration try
+            # the supported endpoints and persist manual setup if all refuse.
             return False
         except (TrackerConnectionError, TrackerResponseError):
             return False

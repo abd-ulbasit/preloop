@@ -8,14 +8,17 @@ site. A classic token that already succeeds on the site is not moved.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import List
-from unittest.mock import MagicMock, patch
+from typing import Any, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from jira import JIRAError
 
-from preloop.sync.exceptions import TrackerAuthenticationError
+from preloop.api.endpoints.trackers import _jira_manual_webhook
+from preloop.models import models
+from preloop.sync.exceptions import TrackerAuthenticationError, TrackerResponseError
+from preloop.sync.scanner.core import TrackerClient, _process_organization
 from preloop.sync.trackers.factory import create_tracker_client
 from preloop.sync.trackers.jira import (
     WEBHOOK_STATUS_MANUAL_REQUIRED,
@@ -294,6 +297,131 @@ def test_classic_webhook_still_auto_registers():
     crud_tracker.update.assert_not_called()
     tracker.jira_client._session.post.assert_called_once()
     assert tracker.webhook_status != WEBHOOK_STATUS_MANUAL_REQUIRED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403])
+@pytest.mark.parametrize("registration_raises", [False, True])
+async def test_scoped_webhook_lookup_denied_still_exposes_manual_setup(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, registration_raises: bool
+) -> None:
+    """A denied webhook lookup must not hide setup or interrupt issue syncing."""
+    monkeypatch.setenv("PRELOOP_URL", "https://preloop.example.com")
+    tracker = _tracker(cloud_id=CLOUD_ID)
+    tracker.jira_client = MagicMock()
+    tracker.jira_client._session.get.side_effect = JIRAError(
+        status_code=status_code, text="Webhook management unavailable"
+    )
+    blocked = MagicMock(status_code=status_code)
+    if registration_raises:
+        tracker.jira_client._session.post.side_effect = JIRAError(
+            status_code=status_code, text="Webhook management unavailable"
+        )
+    else:
+        tracker.jira_client._session.post.return_value = blocked
+    tracker._post_webhook = MagicMock(return_value=blocked)
+    org = models.Organization(
+        id="22222222-2222-2222-2222-222222222222",
+        identifier="example-site",
+        webhook_secret="org-webhook-secret",
+    )
+    project = models.Project(id="project-1", identifier="PRJ")
+    second = models.Project(id="project-2", identifier="OTHER")
+    row = models.Tracker(
+        id=tracker.tracker_id,
+        tracker_type="jira",
+        connection_details=dict(tracker.connection_details),
+    )
+    client = AsyncMock(spec=TrackerClient)
+    client.client = tracker
+    client.tracker_type = "jira"
+    client.scan_projects.return_value = [project, second]
+    client.scan_issues.return_value = ([MagicMock()], 0)
+    db = MagicMock()
+
+    def persist_details(
+        db: object, *, db_obj: models.Tracker, obj_in: dict[str, Any]
+    ) -> models.Tracker:
+        db_obj.connection_details = obj_in["connection_details"]
+        return db_obj
+
+    with (
+        patch("preloop.sync.trackers.jira.crud_tracker") as crud_tracker,
+        patch("preloop.sync.trackers.jira.crud_webhook") as crud_webhook,
+        patch("preloop.sync.scanner.core.crud_organization"),
+        patch("preloop.api.endpoints.trackers.crud_organization") as api_orgs,
+    ):
+        crud_tracker.get.return_value = row
+        crud_tracker.update.side_effect = persist_details
+        crud_webhook.get_by_project_id.return_value = None
+        api_orgs.get_for_tracker.return_value = [org]
+        stats = await _process_organization(db, client, org, None, False)
+        manual = _jira_manual_webhook(db, row, include_secret=True)
+
+    assert stats["organizations"]["errors"] == 0
+    assert stats["projects"] == 2
+    assert stats["issues"] == 2
+    assert client.scan_issues.await_count == 2
+    tracker.jira_client._session.get.assert_called_once()
+    tracker.jira_client._session.post.assert_called_once()
+    assert row.connection_details["webhook_status"] == WEBHOOK_STATUS_MANUAL_REQUIRED
+    assert manual is not None
+    assert manual.url == (
+        f"https://preloop.example.com/api/v1/private/webhooks/jira/{org.id}"
+    )
+    assert manual.secret == org.webhook_secret
+    assert manual.events == [
+        "jira:issue_created",
+        "jira:issue_updated",
+        "comment_created",
+        "comment_updated",
+    ]
+    assert TOKEN not in str(manual.model_dump())
+
+
+@pytest.mark.parametrize(
+    ("scoped", "status_code", "expected_error"),
+    [
+        (False, 401, TrackerAuthenticationError),
+        (False, 403, TrackerResponseError),
+        (True, 500, TrackerResponseError),
+    ],
+)
+def test_webhook_registration_preserves_other_library_errors(
+    scoped: bool, status_code: int, expected_error: type[Exception]
+) -> None:
+    """Only scoped permission failures should enter manual setup fallback."""
+    tracker = _tracker(**({"cloud_id": CLOUD_ID} if scoped else {}))
+    tracker.jira_client = MagicMock()
+    tracker.jira_client._session.post.side_effect = JIRAError(
+        status_code=status_code, text="Registration failed"
+    )
+    tracker._register_webhook_alternate = MagicMock()
+    with patch("preloop.sync.trackers.jira.crud_webhook") as crud_webhook:
+        crud_webhook.get_by_project_id.return_value = None
+        with pytest.raises(expected_error):
+            tracker.register_webhook(
+                db=MagicMock(),
+                project=models.Project(id="project-1", identifier="PRJ"),
+                webhook_url="https://preloop.example.com/webhook",
+                secret="test-secret",
+            )
+    tracker._register_webhook_alternate.assert_not_called()
+
+
+def test_classic_webhook_lookup_authentication_error_is_preserved() -> None:
+    """A classic token's authentication failure remains visible to its caller."""
+    tracker = _tracker()
+    tracker.jira_client = MagicMock()
+    tracker.jira_client._session.get.side_effect = JIRAError(
+        status_code=401, text="Invalid credentials"
+    )
+    project = models.Project(id="project-1", identifier="PRJ")
+
+    with pytest.raises(TrackerAuthenticationError):
+        tracker.is_webhook_registered_for_project(
+            project, "https://preloop.example.com/webhook"
+        )
 
 
 def test_library_init_keeps_a_classic_token_client():
