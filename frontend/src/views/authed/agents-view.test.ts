@@ -199,6 +199,18 @@ describe('AgentsView', () => {
     }
   });
 
+  it('does not render fleet coverage or request fleet endpoints', async () => {
+    // Device fleet visibility is an admin surface outside the Agents page.
+    const el = await fixture<AgentsView>(html`<agents-view></agents-view>`);
+    await waitForAgents(el);
+    expect(el.shadowRoot!.querySelector('fleet-coverage-panel')).to.equal(null);
+    expect(customElements.get('fleet-coverage-panel')).to.equal(undefined);
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    expect(urls.filter((url) => url.includes('/api/v1/fleet/'))).to.deep.equal(
+      []
+    );
+  });
+
   it('treats an agents page without items as empty instead of crashing', async () => {
     // A partial response (an older server, a generic stub) used to throw
     // "reading 'length'" from the count label on every render.
