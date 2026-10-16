@@ -4396,10 +4396,14 @@ class ContainerAgentExecutor(AgentExecutor):
             repositories = self._resolve_git_clone_repositories(
                 execution_context, git_config
             )
-            repo_url = (
-                repositories[0].get("repository_url") if repositories else None
-            ) or self._extract_repo_url_from_trigger(
-                execution_context.get("trigger_event_data") or {}
+            # Bindings from issue trackers identify the code-host project rather
+            # than carrying a URL. Restore must resolve it exactly as clone does:
+            # checkpoint capture intentionally removes the original git config.
+            repo_url = self._resolve_repository_clone_url(
+                repositories[0] if repositories else {},
+                0,
+                execution_context,
+                execution_context.get("trigger_event_data") or {},
             )
             if repo_url:
                 repo_url = strip_url_credentials(repo_url)
