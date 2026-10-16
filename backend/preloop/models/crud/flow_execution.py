@@ -1256,6 +1256,49 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
             .all()
         )
 
+    def get_successful_for_bitbucket_head(
+        self,
+        db: Session,
+        *,
+        flow_id: uuid.UUID,
+        account_id: uuid.UUID,
+        tracker_object_key: str,
+        head_sha: str,
+    ) -> Optional[models.FlowExecution]:
+        """Find a successful review of this Bitbucket PR head, across history.
+
+        Args:
+            db: Database session.
+            flow_id: Flow receiving the update.
+            account_id: Owning account.
+            tracker_object_key: Bitbucket repository and pull request identity.
+            head_sha: Current source commit hash.
+
+        Returns:
+            A successful execution on this PR head, or None.
+        """
+        if not tracker_object_key.startswith("bitbucket:"):
+            return None
+        payload_match = tracker_object_payload_match(tracker_object_key)
+        if payload_match is None:
+            return None
+        details = models.FlowExecution.trigger_event_details
+        return (
+            db.query(models.FlowExecution)
+            .options(load_only(models.FlowExecution.id))
+            .join(models.Flow)
+            .filter(
+                models.FlowExecution.flow_id == flow_id,
+                models.Flow.account_id == account_id,
+                models.FlowExecution.status == "SUCCEEDED",
+                payload_match,
+                details["payload"]["pullrequest"]["source"]["commit"]["hash"].astext
+                == head_sha,
+            )
+            .order_by(models.FlowExecution.start_time.desc())
+            .first()
+        )
+
     def get_recent_for_pull_request(
         self,
         db: Session,

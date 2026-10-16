@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from collections.abc import Generator
 from typing import Any
@@ -2307,3 +2307,58 @@ async def test_refused_resumes_do_not_burn_the_budget_or_fan_out(
         assert (thread.cursor or {}).get("launch_failures", 0) >= 2
         assert thread.stop_reason == "resume_launch_retry"
         assert len(crud_flow_feedback.pending(db, thread.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "status,head,repo,number,same_flow,same_account,expected",
+    [
+        ("SUCCEEDED", "head", "ws/repo", 7, True, True, True),
+        ("FAILED", "head", "ws/repo", 7, True, True, False),
+        ("RUNNING", "head", "ws/repo", 7, True, True, False),
+        ("SUCCEEDED", "old", "ws/repo", 7, True, True, False),
+        ("SUCCEEDED", "head", "ws/other", 7, True, True, False),
+        ("SUCCEEDED", "head", "ws/repo", 8, True, True, False),
+        ("SUCCEEDED", "head", "ws/repo", 7, False, True, False),
+        ("SUCCEEDED", "head", "ws/repo", 7, True, False, False),
+    ],
+)
+def test_successful_bitbucket_head_lookup(
+    database: Engine,
+    status: str,
+    head: str,
+    repo: str,
+    number: int,
+    same_flow: bool,
+    same_account: bool,
+    expected: bool,
+) -> None:
+    """Only successful reviews of this account, flow, PR and head deduplicate."""
+    from preloop.models.crud import crud_flow_execution
+
+    with Session(database) as db:
+        thread = create_thread(db)
+        execution = crud_flow_execution.get(db, id=thread.latest_execution_id)
+        execution.status = status
+        execution.trigger_event_details = {
+            "source": "bitbucket",
+            "payload": {
+                "repository": {"full_name": repo},
+                "pullrequest": {"id": number, "source": {"commit": {"hash": head}}},
+            },
+        }
+        db.commit()
+        # A fresh identity map ensures previously loaded attributes cannot
+        # hide an unnecessarily wide SELECT in the existence lookup.
+        lookup_flow_id = thread.flow_id if same_flow else uuid.uuid4()
+        lookup_account_id = thread.account_id if same_account else uuid.uuid4()
+        db.expunge_all()
+        found = crud_flow_execution.get_successful_for_bitbucket_head(
+            db,
+            flow_id=lookup_flow_id,
+            account_id=lookup_account_id,
+            tracker_object_key="bitbucket:ws/repo:pr:7",
+            head_sha="head",
+        )
+        assert (found is not None) == expected
+        if found is not None:
+            assert {"evidence_archive", "result"} <= inspect(found).unloaded

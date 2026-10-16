@@ -886,6 +886,22 @@ class FeedbackProvider:
             "account_id": user.get("account_id"),
         }
 
+    @staticmethod
+    def _bitbucket_summary(body: str) -> bool:
+        """Recognize automation prose without dropping marked inline findings."""
+        text = body.lower()
+        if "preloop approves this pr" in text:
+            return True
+        if re.search(r"<!--\s*preloop-implementation[:\s]", text):
+            return True
+        if re.search(r"<!--\s*preloop-review:", text):
+            # Severity markers identify actionable findings. Summary and
+            # reviewed-sha markers only describe a completed review.
+            return (
+                re.search(r":severity:(?:critical|high|medium|low)\s*-->", text) is None
+            )
+        return False
+
     async def _bitbucket(self) -> FeedbackState:
         """Reconcile a Bitbucket Cloud pull request.
 
@@ -1007,11 +1023,20 @@ class FeedbackProvider:
             or comments_data.get("next")
         ):
             state.blocked_reason = "provider_page_limit"
-        state.feedback = (
-            self._comments(inline, "inline_comment", sha)
-            + self._comments(general, "comment", sha)
-            + self._comments(reviews, "review", sha)
-        )
+        # The connected account can post both reviews and implementation
+        # updates. Identity alone cannot distinguish them. Only current change
+        # requests authorize review feedback; approval supersedes old prose.
+        requesting_ids = {review["id"] for review in reviews}
+        state.feedback = self._comments(reviews, "review", sha)
+        for items, kind in ((inline, "inline_comment"), (general, "comment")):
+            actionable_comments = [
+                item
+                for item in items
+                if item["user"]["id"] in requesting_ids
+                and not self._bitbucket_summary(item["body"])
+            ]
+            state.feedback.extend(self._comments(actionable_comments, kind, sha))
+
         state.feedback += [receipt("ci", item, head_sha=sha) for item in failed]
         current = await get(base)
         state.closed = str(current.get("state") or "").upper() in closed_states

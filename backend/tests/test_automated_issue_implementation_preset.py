@@ -817,3 +817,8 @@ async def test_git_host_preset_placeholders_unchanged(
     assert interpolate_git_config_text(config["pull_request_description"], event) == (
         "Automated implementation for #12\n\nCloses #12"
     )
+
+
+def test_implementation_summary_carries_feedback_marker(prompt: str) -> None:
+    """Shared Bitbucket accounts must distinguish their own update comments."""
+    assert "<!-- preloop-implementation:summary -->" in prompt

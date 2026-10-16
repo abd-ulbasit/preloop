@@ -2618,6 +2618,35 @@ class FlowTriggerService:
                             )
                             continue
 
+                    # Bitbucket emits pullrequest:updated for description and
+                    # other metadata edits too. A completed review on this PR
+                    # head remains authoritative after its execution finishes.
+                    if (
+                        event_source == "bitbucket"
+                        and event_type == "pull_request_updated"
+                        and commit_sha
+                        and account_id
+                    ):
+                        pr_key = self._extract_resource_key(event_data)
+                        if (
+                            pr_key
+                            and crud_flow_execution.get_successful_for_bitbucket_head(
+                                self.db,
+                                flow_id=flow.id,
+                                account_id=uuid.UUID(str(account_id)),
+                                tracker_object_key=pr_key,
+                                head_sha=commit_sha,
+                            )
+                            is not None
+                        ):
+                            logger.info(
+                                "Skipping flow %s: PR %s head %s already succeeded",
+                                flow.id,
+                                pr_key,
+                                commit_sha,
+                            )
+                            continue
+
                     # A new head on a pull request supersedes this flow's
                     # run on the older head when the flow opts in (#1032).
                     # Stopped before the new execution is created, and before

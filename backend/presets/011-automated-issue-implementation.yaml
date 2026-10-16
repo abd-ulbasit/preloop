@@ -288,7 +288,9 @@ prompt_template: |
   One closing comment on the issue is welcome and optional: use
   `add_comment` with the same summary, decisions, and skipped items. On a
   resume, update your earlier comment with `update_comment` rather than
-  adding another one.
+  adding another one. Include `<!-- preloop-implementation:summary -->` in
+  every implementation summary comment you post on the pull request so the
+  feedback loop can distinguish your updates from requested changes.
 
   Use best practices for the project's language and framework. Handle edge
   cases and error conditions.
