@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from copy import deepcopy
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -647,7 +648,6 @@ def test_untrusted_logs_are_bounded_and_redacted() -> None:
 async def test_missing_repository_permission_allows_only_known_repairs(
     endpoint: str,
 ) -> None:
-    from datetime import datetime, timedelta
     from preloop.services.flow_feedback import decide
     from preloop.sync.exceptions import TrackerPermissionError
 
@@ -1349,6 +1349,9 @@ def bitbucket_fixture(
     closed: bool = False,
     statuses_next: bool = False,
     wrong_repo: bool = False,
+    comments: list[dict[str, Any]] | None = None,
+    approved: bool = False,
+    checks_passed: bool = False,
 ) -> tuple[FeedbackProvider, list[str]]:
     paths: list[str] = []
     reads = 0
@@ -1359,6 +1362,8 @@ def bitbucket_fixture(
         if path.endswith("/pullrequests/7"):
             reads += 1
             pr = deepcopy(_bb_pr())
+            if approved:
+                pr["participants"] = pr["participants"][:1]
             if closed:
                 pr["state"] = "MERGED"
             if wrong_repo:
@@ -1375,7 +1380,7 @@ def bitbucket_fixture(
                     {
                         "uuid": "{s-1}",
                         "key": "ci/tests",
-                        "state": "FAILED",
+                        "state": "SUCCESSFUL" if checks_passed else "FAILED",
                         "updated_on": "2026-09-26",
                         "url": "https://ci.example/build/1",
                     }
@@ -1412,6 +1417,8 @@ def bitbucket_fixture(
                     },
                 ]
             }
+            if comments is not None:
+                data["values"] = comments
             return SimpleNamespace(json=lambda data=data: data)
         raise AssertionError(path)
 
@@ -1493,3 +1500,90 @@ def test_bitbucket_trusted_reviewer_identities() -> None:
     assert reviewer_is_trusted(policy, account_actor)
     stranger = {"id": "44444444-4444-4444-4444-444444444444", "bot": True}
     assert not reviewer_is_trusted(policy, stranger)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("approved", [True, False])
+async def test_bitbucket_approval_comments_never_request_repairs(
+    approved: bool,
+) -> None:
+    """A shared connected account's approvals and summaries are not feedback."""
+    bodies = [
+        "✅ Preloop approves this PR",
+        "<!-- preloop-review:flow-id:pr-reviewer -->\nPreloop Code Review",
+        "<!-- preloop-review:reviewed-sha:head -->\nSummary",
+        "<!-- preloop-implementation:summary -->\nEdge Case Fixed",
+    ]
+    provider, _ = bitbucket_fixture(
+        approved=approved,
+        comments=[
+            {
+                "id": n,
+                "content": {"raw": body},
+                "user": {"uuid": "{" + BB_REVIEWER_UUID + "}"},
+            }
+            for n, body in enumerate(bodies)
+        ],
+    )
+    state = await provider.read()
+    assert not [i for i in state.feedback if i["kind"] in {"comment", "inline_comment"}]
+    # Approval does not suppress a genuine CI failure.
+    assert any(i["kind"] == "ci" for i in state.feedback)
+
+
+@pytest.mark.asyncio
+async def test_bitbucket_approved_review_suppresses_old_change_comments() -> None:
+    """Current approval supersedes earlier unresolved review prose."""
+    provider, _ = bitbucket_fixture(approved=True)
+    state = await provider.read()
+    assert state.reviews_passed
+    assert [i["kind"] for i in state.feedback] == ["ci"]
+
+
+@pytest.mark.asyncio
+async def test_bitbucket_only_approval_is_ready_without_a_repair() -> None:
+    """Approval-only Bitbucket PRs complete the loop without spending a turn."""
+    from preloop.services.flow_feedback import decide
+
+    provider, _ = bitbucket_fixture(
+        approved=True,
+        checks_passed=True,
+        comments=[
+            {
+                "id": 1,
+                "content": {"raw": "✅ Preloop approves this PR"},
+                "user": {"uuid": "{" + BB_REVIEWER_UUID + "}"},
+            }
+        ],
+    )
+    state = await provider.read()
+    assert state.feedback == []
+    now = datetime(2026, 10, 16)
+    thread = SimpleNamespace(
+        expires_at=now + timedelta(days=1),
+        policy={},
+        turns=0,
+        cost=0,
+        no_progress=0,
+        cursor={},
+    )
+    assert decide(thread, state, [], now=now) == ("ready", None)
+
+
+@pytest.mark.asyncio
+async def test_bitbucket_marked_change_finding_remains_actionable() -> None:
+    """Filtering summary markers must preserve real marked review findings."""
+    provider, _ = bitbucket_fixture(
+        comments=[
+            {
+                "id": 1,
+                "content": {
+                    "raw": "<!-- preloop-review:flow-id:reviewer:severity:HIGH -->\nFix the parser"
+                },
+                "inline": {"path": "a.py", "to": 3},
+                "user": {"uuid": "{" + BB_REVIEWER_UUID + "}"},
+            }
+        ]
+    )
+    state = await provider.read()
+    assert any(i["kind"] == "inline_comment" for i in state.feedback)

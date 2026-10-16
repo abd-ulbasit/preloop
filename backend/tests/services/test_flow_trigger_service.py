@@ -2124,3 +2124,56 @@ async def test_container_trigger_is_refused_before_execution_creation(
     with pytest.raises(RunnerCapabilityError, match="working Docker daemon"):
         await flow_trigger_service.trigger_flow(sample_flow.id)
     create.assert_not_called()
+
+
+@pytest.mark.parametrize("already_reviewed", [True, False])
+async def test_bitbucket_unchanged_successful_head_is_not_reviewed_again(
+    flow_trigger_service: FlowTriggerService,
+    sample_flow: MagicMock,
+    already_reviewed: bool,
+) -> None:
+    """A metadata-only PR update must not repeat a successful head review."""
+    event = {
+        "source": "bitbucket",
+        "type": "pull_request_updated",
+        "account_id": str(uuid.uuid4()),
+        "payload": {
+            "repository": {"full_name": "ws/repo"},
+            "pullrequest": {"id": 7, "source": {"commit": {"hash": "head"}}},
+        },
+    }
+    with (
+        patch("preloop.services.flow_trigger_service.crud_flow") as flows,
+        patch(
+            "preloop.services.flow_trigger_service.crud_flow_execution"
+        ) as executions,
+        patch(
+            "preloop.services.flow_trigger_service.get_nats_client",
+            new_callable=AsyncMock,
+        ),
+        patch("preloop.services.flow_trigger_service.asyncio.create_task") as launch,
+        patch.object(
+            flow_trigger_service,
+            "_find_running_execution_for_commit",
+            return_value=None,
+        ),
+        patch.object(flow_trigger_service, "_is_out_of_order_head", return_value=False),
+        patch.object(
+            flow_trigger_service,
+            "_find_active_execution_for_tracker_object",
+            return_value=None,
+        ),
+    ):
+        flows.get_by_trigger.return_value = [sample_flow]
+        executions.get_successful_for_bitbucket_head.return_value = (
+            MagicMock(status="SUCCEEDED") if already_reviewed else None
+        )
+        await flow_trigger_service.process_event(event)
+        executions.get_successful_for_bitbucket_head.assert_called_once_with(
+            flow_trigger_service.db,
+            flow_id=sample_flow.id,
+            account_id=uuid.UUID(event["account_id"]),
+            tracker_object_key="bitbucket:ws/repo:pr:7",
+            head_sha="head",
+        )
+        assert launch.call_count == (0 if already_reviewed else 1)
