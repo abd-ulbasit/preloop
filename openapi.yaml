@@ -25026,6 +25026,10 @@ components:
           type: boolean
           title: Is Superuser
           default: false
+        is_account_owner:
+          type: boolean
+          title: Is Account Owner
+          default: false
         permissions:
           anyOf:
           - items:
@@ -39578,6 +39582,12 @@ components:
             maxLength: 200
           - type: 'null'
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Workstation Fingerprint
         hostname:
           anyOf:
           - type: string
@@ -39677,6 +39687,11 @@ components:
         name:
           type: string
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workstation Fingerprint
         hostname:
           anyOf:
           - type: string
@@ -39829,6 +39844,11 @@ components:
         name:
           type: string
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workstation Fingerprint
         hostname:
           anyOf:
           - type: string

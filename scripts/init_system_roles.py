@@ -29,6 +29,13 @@ dotenv.load_dotenv()
 # where endpoints enforce create/edit/delete separately; manage_* covers broader
 # admin operations on that resource.
 SYSTEM_PERMISSIONS: Dict[str, List[Dict[str, str]]] = {
+    "device_fleet": [
+        {"name": "view_device_fleet", "description": "View device fleet evidence"},
+        {
+            "name": "manage_device_fleet",
+            "description": "Manage device fleet alert rules",
+        },
+    ],
     "account": [
         {
             "name": "manage_account",

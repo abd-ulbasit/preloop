@@ -32,6 +32,7 @@ from preloop.agents.runner_launch import (
     prepare_runner_delivery,
 )
 from preloop.api.auth import get_current_active_user
+from preloop.services.fleet_findings import evaluate_fleet_findings
 from preloop.models import models, schemas
 from preloop.models.crud import (
     crud_api_key,
@@ -305,7 +306,15 @@ def register_runner(
             "last_heartbeat": datetime.now(timezone.utc),
             "ephemeral": body.ephemeral or existing.ephemeral,
         }
-        for field in ("name", "hostname", "os", "arch", "labels", "instance_id"):
+        for field in (
+            "name",
+            "hostname",
+            "os",
+            "arch",
+            "labels",
+            "instance_id",
+            "workstation_fingerprint",
+        ):
             if value := getattr(body, field):
                 updates[field] = value
         existing = crud_flow_runner.update(db, db_obj=existing, obj_in=updates)
@@ -317,6 +326,7 @@ def register_runner(
         )
         if body.harness_inventory is not None:
             record_harness_inventory(db, existing, body.harness_inventory)
+        evaluate_fleet_findings(db, account_id=existing.account_id)
         emit_runner_updated(existing, db)
         return schemas.RunnerRegisterResponse(
             **_to_response(existing, db, current_user).model_dump(by_alias=True),
@@ -333,6 +343,7 @@ def register_runner(
             "instance_id": body.instance_id,
             "name": name,
             "hostname": body.hostname,
+            "workstation_fingerprint": body.workstation_fingerprint,
             "os": body.os,
             "arch": body.arch,
             "labels": body.labels or [],
@@ -349,6 +360,7 @@ def register_runner(
         )
     if body.harness_inventory is not None:
         record_harness_inventory(db, row, body.harness_inventory)
+    evaluate_fleet_findings(db, account_id=row.account_id)
     emit_runner_updated(row, db)
     return schemas.RunnerRegisterResponse(
         **_to_response(row, db, current_user).model_dump(by_alias=True), token=token
@@ -1015,6 +1027,7 @@ async def runner_ws(
                     )
                 crud_flow_runner.set_presence_signals(db, runner, **presence_signals)
                 presence_changed = _refresh_presence(db, runner)
+                evaluate_fleet_findings(db, account_id=runner.account_id)
                 reply: Dict[str, Any] = {"type": "ack", "concurrency": runner.capacity}
                 if inventory_wanted:
                     reply["inventory_wanted"] = True

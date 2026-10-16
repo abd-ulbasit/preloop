@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from typing import Annotated, Any, Literal, Optional
 
+from preloop.services.fleet_findings import evaluate_fleet_findings
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -2602,6 +2604,7 @@ def _link_discovery_candidates(
         )
         return
     if linked:
+        evaluate_fleet_findings(db, account_id=account.id)
         logger.info("Linked %s discovery candidate(s) to agent %s", linked, agent_id)
 
 

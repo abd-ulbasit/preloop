@@ -232,6 +232,86 @@ describe('AttentionView', () => {
     localStorage.clear();
   });
 
+  it('shows only enabled fleet Attention findings and hides the all-clear state', async () => {
+    permissions = ['view_device_fleet', 'manage_device_fleet'];
+    approvalsResponse = [];
+    executionsResponse = [];
+    policiesResponse = [];
+    fetchStub
+      .withArgs('/api/v1/features')
+      .resolves(json({ features: { fleet_coverage: true } }));
+    fetchStub.withArgs('/api/v1/fleet/settings').resolves(
+      json({
+        schema_version: 1,
+        rules: {
+          traffic_without_runner: {
+            enabled: true,
+            channels: { attention: true },
+            window_minutes: 60,
+            grace_minutes: 30,
+            not_onboarded_days: 3,
+          },
+          discovered_not_onboarded: {
+            enabled: true,
+            channels: { attention: false },
+            window_minutes: 60,
+            grace_minutes: 30,
+            not_onboarded_days: 3,
+          },
+        },
+      })
+    );
+    fetchStub.withArgs('/api/v1/fleet/findings').resolves(
+      json({
+        items: [
+          {
+            id: 'finding-1',
+            rule: 'traffic_without_runner',
+            state: 'open',
+            opened_at: new Date().toISOString(),
+            device_key: 'fp:example',
+            evidence: { runner_state: 'offline' },
+            limitation: 'This is not proof of bypass.',
+          },
+          {
+            id: 'finding-2',
+            rule: 'discovered_not_onboarded',
+            state: 'open',
+            opened_at: new Date().toISOString(),
+            evidence: {},
+            limitation: 'Self reported.',
+          },
+        ],
+      })
+    );
+    const view = await fixture<AttentionView>(
+      html`<attention-view></attention-view>`
+    );
+    await waitUntil(() => !(view as any).loading);
+    await view.updateComplete;
+    expect(view.shadowRoot!.textContent).to.include('Agent traffic continued');
+    expect(view.shadowRoot!.textContent).not.to.include(
+      'Discovered agents have not'
+    );
+    expect(view.shadowRoot!.textContent).not.to.include(
+      'Nothing needs you right now'
+    );
+    expect(view.shadowRoot!.querySelector('a[href*="device=fp%3Aexample"]')).to
+      .exist;
+  });
+
+  it('does not read fleet endpoints without the capability', async () => {
+    const view = await fixture<AttentionView>(
+      html`<attention-view></attention-view>`
+    );
+    await waitUntil(() => !(view as any).loading);
+    expect(
+      fetchStub
+        .getCalls()
+        .filter((call) => String(call.args[0]).includes('/fleet/'))
+    ).to.have.length(0);
+  });
+
   it('explains a permissions failure and retries decisions independently of pending analytics', async () => {
     let release!: () => void;
     pendingGatewaySummary = new Promise<void>((resolve) => {
