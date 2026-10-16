@@ -741,6 +741,8 @@ def clone_preset(
 ):
     """Clone a flow preset.
 
+    Creates a disabled copy for configuration before explicit activation.
+    The preset event types may have no source or project scope yet.
     Creates a copy of the preset for the user's account with template tracking
     enabled. The cloned flow will auto-update when the preset changes, unless
     the user customizes the prompt or tools.

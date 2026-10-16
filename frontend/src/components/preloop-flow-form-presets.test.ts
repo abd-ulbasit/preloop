@@ -121,7 +121,26 @@ describe('PreloopFlowForm presets', () => {
 
     const payload = await submit(element);
     expect(payload.source_preset_id).to.equal('preset-002');
+    expect(payload.is_enabled).to.equal(false);
+    expect(
+      element.shadowRoot!.querySelector('[data-testid=preset-disabled-notice]')
+        ?.textContent
+    ).to.include('saved disabled');
     expect(payload).to.not.have.property('id');
+  });
+
+  it('preserves explicitly enabled and disabled existing flows', async () => {
+    for (const is_enabled of [true, false]) {
+      const element = await mount({
+        id: 'configured-flow',
+        name: 'Configured reviewer',
+        prompt_template: 'Review',
+        is_enabled,
+      });
+      const payload = await submit(element);
+      expect(payload.is_enabled).to.equal(is_enabled);
+      element.remove();
+    }
   });
 
   it('keeps issue_opened when Issue Triage is selected on a GitHub tracker', async () => {
