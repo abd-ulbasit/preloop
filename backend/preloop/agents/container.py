@@ -5673,6 +5673,11 @@ true
         parsed_url = urlparse(strip_url_credentials(repo_url))
         scheme = parsed_url.scheme
         if scheme not in {"http", "https"}:
+            self.logger.warning(
+                "create_pull_request is enabled but GitLab MR creation was "
+                "skipped: unsupported repository URL scheme %s",
+                scheme,
+            )
             return ""
         gitlab_host = parsed_url.netloc
         if "@" in gitlab_host:
@@ -6528,7 +6533,7 @@ trap _preloop_publication_cleanup EXIT
 
         Uses the tracker URL and project slug to construct a clone URL in the
         format:
-        - GitLab: https://{host}/{slug}.git
+        - GitLab: {tracker_scheme}://{host}/{slug}.git
         - GitHub: https://github.com/{slug}.git
 
         The URL is deliberately credential-free (issue #173). The tracker token
@@ -6626,7 +6631,7 @@ trap _preloop_publication_cleanup EXIT
                 slug = project.slug
 
                 if tracker_type == "gitlab":
-                    # GitLab format: https://{host}/{slug}.git (no credentials)
+                    # Preserve the instance's HTTP(S) scheme and custom port.
                     if not tracker.url:
                         self.logger.warning(
                             f"GitLab tracker {tracker.id} has no URL configured"
@@ -6634,17 +6639,18 @@ trap _preloop_publication_cleanup EXIT
                         return None
 
                     # Parse the host from tracker URL
-                    # tracker.url might be like "https://gitlab.spacecode.ai" or "https://gitlab.com"
+                    # A scheme-less tracker URL defaults to HTTPS.
                     from urllib.parse import urlparse
 
                     parsed = urlparse(tracker.url)
                     host = parsed.netloc or parsed.path
+                    scheme = parsed.scheme or "https"
 
                     # Ensure slug ends with .git
                     if not slug.endswith(".git"):
                         slug = f"{slug}.git"
 
-                    clone_url = f"https://{host}/{slug}"
+                    clone_url = f"{scheme}://{host}/{slug}"
                     self.logger.info(
                         f"Constructed GitLab clone URL for {slug} on {host}"
                     )

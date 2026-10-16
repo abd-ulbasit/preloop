@@ -1,5 +1,7 @@
 # GitLab self-hosted tracker
 
+Editions: OSS, Cloud, Enterprise. Unless stated otherwise, everything on this page ships in OSS.
+
 A GitLab tracker synchronizes group projects and issues, registers webhooks,
 reviews merge requests and lets an implementation flow push a branch and open
 an MR. GitLab Community Edition uses project webhooks; group webhooks require
