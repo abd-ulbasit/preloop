@@ -629,7 +629,12 @@ def compute_policy_diff(
         return item.id
 
     current_map = {_model_io_name(item): item for item in (current.model_io or [])}
-    incoming_map = {_model_io_name(item): item for item in (incoming.model_io or [])}
+    # Import preserves existing model I/O rules when the section is omitted.
+    # Only an explicit list (including []) replaces it; preview the same plan.
+    incoming_model_io = (
+        current.model_io if incoming.model_io is None else incoming.model_io
+    )
+    incoming_map = {_model_io_name(item): item for item in (incoming_model_io or [])}
     for name in set(current_map.keys()) - set(incoming_map.keys()):
         changes.append(
             PolicyDiffItem(
