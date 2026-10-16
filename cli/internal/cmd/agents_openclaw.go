@@ -1209,14 +1209,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 			fmt.Fprintln(output, formatCLIError(hint)) //nolint:errcheck
 		}
 		if liveOutcome != nil && liveOutcome.Attempted {
-			// A probe the upstream provider refused (rate limit, billing) is
-			// inconclusive, not a failure: the static config checks passed and
-			// the gateway config stays in place, so persist "validated" and let
-			// live_validation_status carry the detail.
-			validationStatus := "validated"
-			if !liveOutcome.Passed && !liveValidationGatewayVerified {
-				validationStatus = "validation_failed"
-			}
+			validationStatus := deferredLiveValidationPersistStatus(liveOutcome)
 			if _, persistErr := validateManagedEnrollmentRecord(
 				client,
 				agent,
@@ -7502,6 +7495,13 @@ func configPathsForAgentSpec(home string, spec agentSpec) []string {
 	if spec.Name == devinAgentName {
 		if path, err := devinConfigPath("mcp_config.json"); err == nil {
 			addPath(path)
+		}
+	}
+	if spec.Name == "VSCode / Copilot" {
+		for _, dir := range userConfigDirs(home) {
+			for _, app := range []string{"Code", "Code - Insiders", "VSCodium"} {
+				addPath(filepath.Join(dir, app, "User", "mcp.json"))
+			}
 		}
 	}
 	for _, relPath := range spec.ConfigPaths {

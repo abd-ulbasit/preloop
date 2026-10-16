@@ -14,7 +14,6 @@ func TestAgentCapabilitiesRegistry(t *testing.T) {
 		"Claude Code":      {controlSupported, controlSupported, controlSupported},
 		"Claude Desktop":   {controlSupported, controlUnsupported, controlSupported},
 		"Cursor":           {controlUnsupported, controlSupported, controlSupported},
-		"Windsurf":         {controlUnsupported, controlUnsupported, controlSupported},
 		"VSCode / Copilot": {controlUnsupported, controlUnsupported, controlSupported},
 		"Gemini CLI":       {controlSupported, controlUnsupported, controlSupported},
 		"OpenCode":         {controlSupported, controlSupported, controlSupported},

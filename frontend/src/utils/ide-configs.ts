@@ -51,12 +51,12 @@ export ${envVarName}="YOUR_API_KEY_HERE"`,
     },
     {
       ide: 'ide-json',
-      ide_name: 'VSCode / Cursor / Windsurf',
+      ide_name: 'VSCode / Cursor / Devin',
       logo_path: '/images/logos/vscode.svg',
       logo_width: '40',
       prerequisites: [
         'Preloop API key (create in <a href="/console/settings/api-keys">Settings → API Keys</a>)',
-        'Works with Cursor, Windsurf, VSCode, and Antigravity',
+        'Works with Cursor, Devin, VSCode, and Antigravity',
       ],
       setup_instructions:
         'Add this to your MCP settings. Replace <code>YOUR_API_KEY_HERE</code> with your actual Preloop API key.',

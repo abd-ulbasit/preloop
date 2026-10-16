@@ -691,6 +691,18 @@ export class PreloopSessionObserver extends LitElement {
         gap: var(--sl-spacing-medium);
       }
 
+      /* The content panel owns scrolling. Its children must retain their
+         natural height, including errors and toolbars above long transcripts. */
+      .content > * {
+        flex-shrink: 0;
+      }
+
+      /* Shoelace's display: contents host otherwise exposes its shrinking
+         internal base as the flex item. Give the alert its own layout box. */
+      .content > sl-alert {
+        display: block;
+      }
+
       .toolbar {
         background: var(--sl-color-neutral-50);
         border: 1px solid var(--sl-color-neutral-200);

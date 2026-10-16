@@ -153,8 +153,8 @@ func TestPromptToOnboardCandidatesTiered_InteractiveTwoStepAsk(t *testing.T) {
 	if len(enrolledOrder) != 1 || enrolledOrder[0] != "OpenClaw" {
 		t.Fatalf("expected only the verified agent enrolled, got %v", enrolledOrder)
 	}
-	if len(outcomes) != 1 || outcomes[0].Agent.Name != "OpenClaw" {
-		t.Fatalf("expected a single OpenClaw outcome, got %#v", outcomes)
+	if len(outcomes) != 2 || outcomes[0].Agent.Name != "OpenClaw" || outcomes[1].Status != "skipped" {
+		t.Fatalf("expected OpenClaw and declined Cursor outcomes, got %#v", outcomes)
 	}
 	rendered := output.String()
 	if !strings.Contains(rendered, "lack automatic model-routing support or usable provider credentials") ||

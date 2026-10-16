@@ -34,7 +34,7 @@ describe('agent kinds', () => {
       'pi',
       'deepseek',
       'cursor',
-      'windsurf',
+      'devin',
       'vscode',
       'copilot_cli',
       'desktop_agent',
@@ -47,6 +47,7 @@ describe('agent kinds', () => {
   // kinds nobody has taught the console about: printing a command that cannot
   // work is worse than printing none.
   it('answers false for custom, external and unknown kinds', () => {
+    expect(isCliOnboardableAgentKind('windsurf')).to.equal(false);
     for (const kind of [
       'custom',
       'external_agent',

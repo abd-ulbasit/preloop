@@ -1424,12 +1424,8 @@ export class LandingView extends LitElement {
                   Cursor
                 </div>
                 <div class="agent-marquee-item">
-                  <img
-                    src="/images/logos/Windsurf-white-symbol.svg"
-                    alt="Windsurf"
-                    style="height: 24px;"
-                  />
-                  Windsurf
+                  <sl-icon name="robot" aria-hidden="true"></sl-icon>
+                  Devin
                 </div>
                 <div class="agent-marquee-item">
                   <img
@@ -1506,12 +1502,8 @@ export class LandingView extends LitElement {
                   Cursor
                 </div>
                 <div class="agent-marquee-item">
-                  <img
-                    src="/images/logos/Windsurf-white-symbol.svg"
-                    alt="Windsurf"
-                    style="height: 24px;"
-                  />
-                  Windsurf
+                  <sl-icon name="robot" aria-hidden="true"></sl-icon>
+                  Devin
                 </div>
                 <div class="agent-marquee-item">
                   <img

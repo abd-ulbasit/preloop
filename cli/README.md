@@ -328,6 +328,22 @@ inventory `partial` and use safe error codes. Even `complete` describes only
 the known registry and supported locations: an empty app list never asserts
 that a person or machine does not use AI.
 
+Interactive discovery ends with a row for every discovered agent, including
+unchanged enrollments, declined onboarding, and configs whose runtime is missing.
+Unchanged rows distinguish MCP-only configuration from model routing and show
+native-approval support and the explicit install/repair command. Devin Desktop's
+local agent and Devin CLI share the Devin configuration and appear as one agent;
+Windsurf is no longer an active discovery target. Existing local enrollments
+can still be undone with `preloop agents restore Windsurf` or
+`preloop agents offboard Windsurf` (also included in `offboard --all`). VS Code discovery includes the
+native Code, Code Insiders, and VSCodium user-profile MCP files.
+
+Gateway validation allows up to two minutes for a model response. A transport
+timeout is inconclusive: it preserves the managed gateway configuration and
+suggests `preloop agents validate <agent> --live`. It does not establish working
+credentials or routing. Failed or inconclusive probes make the batch summary
+partial, even when MCP onboarding succeeded.
+
 Managed OpenClaw and Hermes onboarding creates a durable managed credential, backs up the local config, adds or replaces the local MCP config with a managed `preloop` entry, writes a `preloop.control.control_ws_url` contract plus the standalone runtime plugin package name (`preloop-hermes-plugin` or `@preloop-ai/openclaw-plugin`), and may also import existing MCP servers plus rewrite supported model settings to Preloop's OpenAI-compatible gateway. Use `--dry-run` to preview changes first. `preloop agents onboard --all -y` also ensures every discovered OpenClaw/Hermes runtime plugin available to the CLI is installed and verified, including agents that were already onboarded locally and would otherwise be skipped by the config rewrite step.
 
 `install-runtime hermes` and `install-runtime openclaw` use their official

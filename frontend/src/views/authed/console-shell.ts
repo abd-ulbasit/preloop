@@ -298,15 +298,17 @@ export class ConsoleShell extends LitElement {
 
       .main-view {
         flex-grow: 1;
-        display: grid;
-        grid-template-rows: auto auto auto auto 1fr; /* Header, banners, content */
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
         overflow-y: hidden;
         background-color: var(--console-page);
       }
 
-      /* A popup has no header and no banner, so the content is the only row. */
-      .main-view.window-mode {
-        grid-template-rows: 1fr;
+      /* Banners keep their natural height; only the routed page expands.
+         This also works in popup mode and when more banners are added. */
+      .main-view > :not(.main-content) {
+        flex: 0 0 auto;
       }
 
       /* The page is the bottom rung of the ladder and every card sits one
@@ -317,6 +319,8 @@ export class ConsoleShell extends LitElement {
          box a view renders, so such a box is clipped and scrolled here
          instead of extending the document behind the shell. */
       .main-content {
+        flex: 1 1 0;
+        min-height: 0;
         position: relative;
         overflow-y: auto;
         overscroll-behavior: contain;

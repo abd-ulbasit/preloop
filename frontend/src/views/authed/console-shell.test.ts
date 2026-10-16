@@ -1870,6 +1870,42 @@ describe('ConsoleShell', () => {
       expect(sidebar(el).classList.contains('open')).to.be.true;
     });
 
+    it('keeps short pages below the header and collapses empty banners', async () => {
+      const el = await mount();
+      await waitUntil(() => el.shadowRoot!.querySelector('.main-content slot'));
+      const root = el.shadowRoot!;
+      const main = root.querySelector<HTMLElement>('.main-content')!;
+      const header = root.querySelector<HTMLElement>('console-header')!;
+      const banners = [
+        ...root.querySelectorAll<HTMLElement>(
+          'kill-switch-banner, approval-bypass-banner, runner-policy-banner, usage-nudge-banner'
+        ),
+      ];
+      // Isolate the shell layout from each banner's asynchronous API state.
+      for (const banner of banners) {
+        banner.style.cssText =
+          'display: block; height: 0; min-height: 0; overflow: hidden';
+      }
+      expect(main.getBoundingClientRect().top).to.be.closeTo(
+        header.getBoundingClientRect().bottom,
+        1
+      );
+      expect(main.getBoundingClientRect().height).to.be.greaterThan(200);
+      banners[2].style.height = '40px';
+      expect(main.getBoundingClientRect().top).to.be.closeTo(
+        header.getBoundingClientRect().bottom + 40,
+        1
+      );
+      const filler = document.createElement('div');
+      filler.style.minHeight = '5000px';
+      el.appendChild(filler);
+      main.scrollTop = 200;
+      expect(main.scrollTop).to.equal(200);
+      expect(main.getBoundingClientRect().bottom).to.be.at.most(
+        el.getBoundingClientRect().bottom + 1
+      );
+    });
+
     it('starts a newly opened page at the top of the content area', async () => {
       const originalPath = window.location.pathname;
       const el = await mount();

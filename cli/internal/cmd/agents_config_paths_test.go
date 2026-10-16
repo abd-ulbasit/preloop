@@ -108,3 +108,14 @@ func TestUserConfigDirsSkipsRelativeAndDuplicateEntries(t *testing.T) {
 		seen[dir] = struct{}{}
 	}
 }
+
+func TestVSCodeDiscoveryIncludesNativeProfiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("APPDATA", root)
+	paths := configPathsForAgentSpec(t.TempDir(), specByName(t, "VSCode / Copilot"))
+	for _, app := range []string{"Code", "Code - Insiders", "VSCodium"} {
+		if !containsPath(paths, filepath.Join(root, app, "User", "mcp.json")) {
+			t.Fatalf("missing %s user config: %v", app, paths)
+		}
+	}
+}
