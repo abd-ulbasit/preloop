@@ -983,6 +983,7 @@ export class ConsoleShell extends LitElement {
       this._canAccess('/console/approvals') ||
       this._canAccess('/console/runtime-sessions') ||
       this._canShowAuditEvents() ||
+      this._canShowWeeklyReview() ||
       this._canAccess('/console/artifacts') ||
       this._canAccess('/console/settings/records')
     );
@@ -996,8 +997,20 @@ export class ConsoleShell extends LitElement {
     );
   }
 
+  /**
+   * The Preloop Enterprise weekly governance review. Only the plugin
+   * advertises `governance_review`, so the OSS edition never shows it.
+   */
+  private _canShowWeeklyReview(): boolean {
+    return (
+      hasCapability(this.features, 'governance_review') &&
+      this._canAccess('/console/governance')
+    );
+  }
+
   private _isAuditActive(): boolean {
     return (
+      this._isNavActive('/console/governance') ||
       this._isNavActive('/console/approvals') ||
       this._isNavActive('/console/runtime-sessions') ||
       this._isNavActive('/console/audit') ||
@@ -1236,23 +1249,6 @@ export class ConsoleShell extends LitElement {
                           )
                         : nothing
                     }
-                    ${
-                      hasCapability(this.features, 'governance_review') &&
-                      this._canAccess('/console/governance')
-                        ? this._renderNavLink(
-                            '/console/governance',
-                            html`<span class="nav-row"
-                              ><sl-icon
-                                name="clipboard-check"
-                                slot="prefix"
-                              ></sl-icon
-                              ><span class="sidebar-label"
-                                >Governance</span
-                              ></span
-                            >`
-                          )
-                        : nothing
-                    }
                     ${this._renderNavLink(
                       '/console/trackers',
                       html`
@@ -1347,6 +1343,18 @@ export class ConsoleShell extends LitElement {
                                     '/console/runtime-sessions',
                                     html`<span class="nav-row">Sessions</span>`
                                   )}
+                                  ${
+                                    this._canShowWeeklyReview()
+                                      ? this._renderNavLink(
+                                          '/console/governance',
+                                          html`<span
+                                            class="nav-row"
+                                            title="What last week's agent sessions did against your AI usage policy"
+                                            >Weekly review</span
+                                          >`
+                                        )
+                                      : nothing
+                                  }
                                   ${
                                     this._canShowAuditEvents()
                                       ? this._renderNavLink(

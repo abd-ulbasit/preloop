@@ -556,11 +556,58 @@ describe('ConsoleShell', () => {
           (el as unknown as { _permissionsLoaded: boolean })._permissionsLoaded
       );
       await el.updateComplete;
-      expect(
-        !!el.shadowRoot!.querySelector('a[href="/console/governance"]')
-      ).to.equal(shown);
+      const link = el.shadowRoot!.querySelector(
+        'a[href="/console/governance"]'
+      );
+      expect(!!link).to.equal(shown);
+      if (link) {
+        // The weekly review looks back at what happened, so it lives in Audit.
+        expect(link.textContent!.trim()).to.equal('Weekly review');
+        const group = link.closest('details.nav-section');
+        expect(group?.querySelector('summary')?.textContent).to.contain(
+          'Audit'
+        );
+      }
     });
   }
+
+  it('opens the Audit group on the weekly review page', async () => {
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.endsWith('/features')
+        ? { features: { governance_review: true }, plugins: [] }
+        : url.endsWith('/users/me')
+          ? {
+              username: 'jane',
+              email: 'jane@example.com',
+              email_verified: true,
+              permissions: ['view_policies'],
+            }
+          : {};
+      return new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    window.history.pushState({}, '', '/console/governance');
+    try {
+      const el = await fixture<ConsoleShell>(
+        html`<console-shell></console-shell>`
+      );
+      await waitUntil(
+        () =>
+          (el as unknown as { _featuresLoaded: boolean })._featuresLoaded &&
+          (el as unknown as { _permissionsLoaded: boolean })._permissionsLoaded
+      );
+      await el.updateComplete;
+      const link = el.shadowRoot!.querySelector(
+        'a[href="/console/governance"]'
+      );
+      const group = link?.closest('details.nav-section') as HTMLDetailsElement;
+      expect(group?.open).to.equal(true);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
 
   it('has sidebar menu with Overview and Tools links', async () => {
     const el = (await fixture(

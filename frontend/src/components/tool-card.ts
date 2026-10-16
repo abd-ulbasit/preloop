@@ -1857,9 +1857,9 @@ export class ToolCard extends LitElement {
                       >
                         Select Existing Policy
                       </h4>
-                      <sl-button size="small" href="/console/governance">
+                      <sl-button size="small" href="/console/policies">
                         <sl-icon slot="prefix" name="shield-lock"></sl-icon>
-                        Manage in Governance
+                        Manage in Policies
                       </sl-button>
                     </div>
                     ${
