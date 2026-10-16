@@ -678,14 +678,9 @@ Latest collection windows remain independent per authenticated reporting source;
 commercial import policy and coverage endpoints are provided by the optional
 fleet service.
 
-The OSS Lit Agents page exposes a read-only fleet coverage panel only when
-`/features` advertises `fleet_coverage`. Coverage requests use an explicit
-freshness window; per-device application drilldown uses the existing evidence
-reader filtered by fingerprint within the authenticated account. Both readers
-preserve independent source windows, partial and capped results, and unknown
-verification. Account changes abort reads and discard pending results. CSV
-exports preserve scope and truncation, with formula-safe cells. Local inventory
-control and MCP route counts are not uploaded and are not inferred by this view.
+The OSS console ships no fleet coverage view. The Agents page shows managed
+and discovered agents only; device fleet views are not part of the open-source
+console.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
@@ -882,3 +877,11 @@ fallback is introduced. These new native adapters support fresh flows only,
 with no initial native resume or publication. See the
 [native profile guide](docs/guide/runners/quickstart-linux.md#codex-opencode-and-deepseek-native-profiles)
 for governance requirements and acceptance limits.
+
+Tool data policies also support CEL predicates on `tool.args` using `args`,
+`tool.name` and `tool.server`. These reuse the sensitive-data policy store,
+notice delivery and approval dispatch. Evaluation errors skip notify rules;
+deny and approval rules fail closed. A bounded CEL program cache shares compiled
+expressions between validation and evaluation without retaining request bindings.
+The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrates
+portable server allowlists, write approvals and bulk-export checks.

@@ -40,7 +40,6 @@ import '../../components/list-selection.ts';
 import '../../components/talk-button.ts';
 import '../../components/confirm-dialog.ts';
 import '../../components/discovered-agents-panel.ts';
-import '../../components/fleet-coverage-panel.ts';
 import { totalTokensOf } from '../../components/token-figures';
 import { confirmDialog, showToast } from '../../components/confirm-dialog';
 import type { ResourceAction } from '../../components/resource-actions.ts';
@@ -4833,9 +4832,6 @@ export class AgentsView extends LitElement {
               ? this.renderListView()
               : this.renderCardsView()
         }
-        <div class="content-bounds ${this.pageBoxClass}">
-          <fleet-coverage-panel></fleet-coverage-panel>
-        </div>
         ${
           this.effectiveView === 'canvas'
             ? nothing

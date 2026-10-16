@@ -149,6 +149,7 @@ metadata:
 sensitive_data:
   rules:
     - id: email-rule
+      description: Protect email addresses in tool arguments
       "on": [tool.args]
       types: [email]
       action: {action}
@@ -168,6 +169,7 @@ sensitive_data:
         rule_audit.assert_not_called()
         notice.assert_not_called()
     assert result.decision == action
+    assert result.description == "Protect email addresses in tool arguments"
 
 
 @pytest.mark.asyncio
