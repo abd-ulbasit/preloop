@@ -367,11 +367,6 @@ class BitbucketTracker(BaseTracker):
             ) from exc
 
         status_code = response.status_code
-        if self.managed and 300 <= status_code < 400:
-            raise TrackerResponseError(
-                "Refusing to follow a Bitbucket redirect with a managed credential.",
-                status_code=status_code,
-            )
         if status_code < 400 or status_code in set(allow_status):
             return response
         detail = _error_detail(response)
