@@ -384,7 +384,7 @@ import sys
 
 repo, base = sys.argv[1:]
 def git(*args: str) -> bytes:
-    return subprocess.check_output(["git", "-C", repo, *args])
+    return subprocess.check_output(["git", "--literal-pathspecs", "-C", repo, *args])
 try:
     # Never absorb uncommitted implementation work into a repair commit.
     status = git("status", "--porcelain", "-z").split(b"\0")

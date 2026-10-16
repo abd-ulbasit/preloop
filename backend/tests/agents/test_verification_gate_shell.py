@@ -347,6 +347,15 @@ class TestGateIntegration:
         assert (repo.repo / "link").is_symlink()
         assert (repo.repo / "untracked.txt").read_text() == "leave this  \n"
 
+    def test_repair_treats_changed_paths_literally(self, repo: GateRepo) -> None:
+        repo.add_file("feature*.txt", "text  \nend\n")
+        repo.commit()
+        repo.add_file("feature-private.txt", "synthetic scratch data\n")
+        result = repo.run_publisher(dict(PROFILE, strip_trailing_whitespace=True))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert repo._git("show", "--format=", "--name-only", "HEAD") == "feature*.txt"
+        assert "?? feature-private.txt" in repo._git("status", "--porcelain")
+
     def test_missing_base_branch_falls_back_to_unknown_default(self, repo: GateRepo):
         """The verifier itself falls back to the conservative default when
         the base ref is unusable (tested directly: the publisher's
