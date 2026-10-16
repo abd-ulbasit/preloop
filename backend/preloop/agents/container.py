@@ -42,7 +42,10 @@ from .kubernetes_placement import (
     priority_class_name as agent_priority_class_name,
 )
 from preloop.services.mcp_config_service import MCPConfigService
-from preloop.agents.verification import build_verification_gate_shell
+from preloop.agents.verification import (
+    build_verification_gate_shell,
+    build_whitespace_repair_shell,
+)
 from preloop.services.managed_credentials import MANAGED_AUTH_TYPE
 from preloop.services.tracker_git_token import APP_AUTH_TYPES
 from preloop.utils.git_credentials import (
@@ -6029,6 +6032,21 @@ true
                     if execution_context.get("checkpoint_env")
                     else ""
                 )
+
+                def repair_shell(path: str, repo_config: Dict[str, Any]) -> str:
+                    profile = verification_policy.profile
+                    if verification_policy.mode != "gate" or profile is None:
+                        return ""
+                    return build_whitespace_repair_shell(
+                        profile=profile.model_dump(),
+                        working_dir=path,
+                        base_branch=str(
+                            repo_config.get("pin_sha")
+                            or "origin/"
+                            + self._resolve_resume_base_branch(git_config, repo_config)
+                        ),
+                    )
+
                 isolated_prefix = ""
                 if publishes_report:
                     # Isolated mode never emits the report-publication block.
@@ -6039,7 +6057,10 @@ true
                 if len(repositories) == 1:
                     path = self._resolve_repository_clone_path(repositories[0], 0)
                     return (
-                        isolated_prefix + checkpoint + f"cd {shlex.quote(path)}\n"
+                        isolated_prefix
+                        + checkpoint
+                        + repair_shell(path, repositories[0])
+                        + f"cd {shlex.quote(path)}\n"
                         f"mkdir -p {EVIDENCE_DIR_PATH}\n"
                         f"git bundle create {EVIDENCE_DIR_PATH}/branch.bundle HEAD || exit 1\n"
                         f"git rev-parse HEAD > {EVIDENCE_DIR_PATH}/HEAD.txt || exit 1\n"
@@ -6070,7 +6091,7 @@ true
                         )
                     dest = f"{EVIDENCE_DIR_PATH}/repos/{slug}"
                     parts.append(
-                        f"cd {shlex.quote(path)}\n"
+                        repair_shell(path, repo_config) + f"cd {shlex.quote(path)}\n"
                         f"mkdir -p {shlex.quote(dest)}\n"
                         f"git bundle create {shlex.quote(dest)}/branch.bundle HEAD || exit 1\n"
                         f"git rev-parse HEAD > {shlex.quote(dest)}/HEAD.txt || exit 1\n"
@@ -6297,6 +6318,20 @@ export GIT_TERMINAL_PROMPT=0"""
                 # still leaves a recoverable artifact in the log stream.
                 # Note: Directory is guaranteed to exist because git clone validation would have failed earlier
                 repo_post_commands = [
+                    build_whitespace_repair_shell(
+                        profile=(
+                            verification_policy.profile.model_dump()
+                            if verification_policy.mode == "gate"
+                            and verification_policy.profile is not None
+                            else {}
+                        ),
+                        working_dir=full_path,
+                        base_branch=(
+                            safe_source
+                            if safe_source != safe_target
+                            else f"origin/{publication_base}"
+                        ),
+                    ),
                     f"cd {full_path}",
                     # Resume clones source==target, so origin/<branch>..HEAD
                     # still counts local commits the branch-vs-branch range

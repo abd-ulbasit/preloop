@@ -330,7 +330,8 @@ _SETUP_FAILED_RE = re.compile(
 # the crash DENIED line, and the blocked-run reason), including either
 # order of the publisher's DENIED echo vs the VERDICT line.
 _VERIFICATION_BLOCKED_RE = re.compile(
-    r"PRELOOP_VERIFICATION_VERDICT DENY status=blocked"
+    r"Verification blocked:"
+    r"|PRELOOP_VERIFICATION_VERDICT DENY status=blocked"
     r"|PRELOOP_VERIFICATION_DENIED status=blocked"
     r"|verification gate refused publication.{0,400}status=blocked"
     r"|required checks unavailable, empty, timed out, or working tree changed"
@@ -342,7 +343,8 @@ _VERIFICATION_BLOCKED_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _VERIFICATION_FAILED_RE = re.compile(
-    r"PRELOOP_VERIFICATION_DENIED"
+    r"Verification failed:"
+    r"|PRELOOP_VERIFICATION_DENIED"
     r"|PRELOOP_VERIFICATION_VERDICT DENY"
     r"|Isolated verification check .+ failed with exit",
     re.IGNORECASE,

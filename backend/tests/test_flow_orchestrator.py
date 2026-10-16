@@ -334,7 +334,9 @@ class TestFlowExecutionOrchestrator:
             trigger_event_data={},
             nats_client=MagicMock(),
         )
-        orchestrator.flow = MagicMock(prompt_template="Complete the requested task.")
+        orchestrator.flow = MagicMock(
+            git_clone_config=None, prompt_template="Complete the requested task."
+        )
 
         resolved_prompt = await orchestrator._resolve_prompt()
 
@@ -363,7 +365,9 @@ class TestFlowExecutionOrchestrator:
             trigger_event_data={"_resume": {"execution_id": "prior"}},
             nats_client=MagicMock(),
         )
-        orchestrator.flow = MagicMock(prompt_template="Continue the implementation.")
+        orchestrator.flow = MagicMock(
+            git_clone_config=None, prompt_template="Continue the implementation."
+        )
 
         resolved_prompt = await orchestrator._resolve_prompt()
 
@@ -395,9 +399,10 @@ class TestFlowExecutionOrchestrator:
             nats_client=MagicMock(),
         )
         orchestrator.flow = MagicMock(
+            git_clone_config=None,
             prompt_template=(
                 "Evaluate the subject and write a rich report.\n" + eval_contract
-            )
+            ),
         )
 
         resolved_prompt = await orchestrator._resolve_prompt()
@@ -425,7 +430,8 @@ class TestFlowExecutionOrchestrator:
             nats_client=MagicMock(),
         )
         orchestrator.flow = MagicMock(
-            prompt_template="Body: {{payload.description|truncate(1024)}}"
+            git_clone_config=None,
+            prompt_template="Body: {{payload.description|truncate(1024)}}",
         )
 
         resolved_prompt = await orchestrator._resolve_prompt()
@@ -446,7 +452,9 @@ class TestFlowExecutionOrchestrator:
             trigger_event_data={"payload": {"description": body}},
             nats_client=MagicMock(),
         )
-        orchestrator.flow = MagicMock(prompt_template="Body: {{payload.description}}")
+        orchestrator.flow = MagicMock(
+            git_clone_config=None, prompt_template="Body: {{payload.description}}"
+        )
 
         resolved_prompt = await orchestrator._resolve_prompt()
 
@@ -464,10 +472,11 @@ class TestFlowExecutionOrchestrator:
             nats_client=MagicMock(),
         )
         orchestrator.flow = MagicMock(
+            git_clone_config=None,
             prompt_template=(
                 "Short: {{payload.description|truncate(10)}}\n"
                 "Long: {{payload.description|truncate(2000)}}"
-            )
+            ),
         )
 
         resolved_prompt = await orchestrator._resolve_prompt()
@@ -503,11 +512,12 @@ class TestFlowExecutionOrchestrator:
             nats_client=MagicMock(),
         )
         orchestrator.flow = MagicMock(
+            git_clone_config=None,
             prompt_template=(
                 "As your FINAL action, write /workspace/result.json.\n"
                 f'Required shape ({audit_schema_marker}): {{ "schema": '
                 f'"{audit_schema_marker}", "verdict": "pass" }}'
-            )
+            ),
         )
 
         resolved_prompt = await orchestrator._resolve_prompt()

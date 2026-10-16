@@ -8,6 +8,8 @@ itself under that key is demoted to ``verification_reported``.
 
 from unittest.mock import MagicMock
 
+import pytest
+
 
 from preloop.agents.verification import (
     VERIFICATION_DENIED_MARKER,
@@ -238,3 +240,79 @@ class TestVerificationFailureCategories:
             )
             is None
         )
+
+
+class TestVerificationPrompt:
+    def test_checks_and_conditions_are_visible_before_implementation(self) -> None:
+        from preloop.services.verification import verification_prompt_instructions
+
+        config = {
+            "verification": {
+                "mode": "gate",
+                "profile": {
+                    "profile_id": "example",
+                    "always": [
+                        {
+                            "id": "whitespace",
+                            "command": "git diff --check",
+                            "reason": "format",
+                        }
+                    ],
+                    "rules": [
+                        {
+                            "id": "perl",
+                            "description": "Perl",
+                            "path_globs": ["lib/*.pm"],
+                            "commands": [
+                                {"id": "tests", "command": "prove t", "reason": "tests"}
+                            ],
+                        }
+                    ],
+                    "unknown_default": [
+                        {"id": "fallback", "command": "make test", "reason": "unknown"}
+                    ],
+                },
+            }
+        }
+        prompt = verification_prompt_instructions(config)
+        for expected in (
+            "git diff --check",
+            "lib/*.pm",
+            "prove t",
+            "make test",
+            "Automatic whitespace repair is disabled",
+        ):
+            assert expected in prompt
+        assert verification_prompt_instructions({}) == ""
+
+
+@pytest.mark.asyncio
+async def test_launch_prompt_includes_effective_repository_profile() -> None:
+    from types import SimpleNamespace
+
+    orchestrator = _orchestrator()
+    orchestrator.flow = SimpleNamespace(
+        prompt_template="Implement the issue.", git_clone_config=None
+    )
+    orchestrator._repository_binding = SimpleNamespace(
+        git_clone_config={
+            "verification": {
+                "mode": "gate",
+                "profile": {
+                    "profile_id": "bound-repository",
+                    "always": [
+                        {
+                            "id": "git-diff-check",
+                            "command": "git diff --check main...HEAD",
+                            "reason": "whitespace",
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    prompt = await orchestrator._resolve_prompt()
+    assert "Implement the issue." in prompt
+    assert "[git-diff-check]: git diff --check main...HEAD" in prompt
+    assert "Automatic whitespace repair is disabled" in prompt
+    assert "For paths without a matching rule, also run:" not in prompt

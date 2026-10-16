@@ -498,3 +498,58 @@ async def test_failed_check_or_unconfirmed_teardown_never_populates_cache(
         again = await verify_hosted_publication(executor, policy, b"bundle")
         assert again.checks[0]["exit_code"] == 0
         assert check.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_hosted_check_includes_bounded_diagnostic() -> None:
+    policy = SimpleNamespace(
+        execution_id=str(uuid4()),
+        base_sha="a" * 40,
+        verification_image="toolchain@sha256:" + "b" * 64,
+        verification_policy=resolve_verification_policy(
+            {
+                "verification": {
+                    "mode": "gate",
+                    "profile": {
+                        "profile_id": "example",
+                        "always": [
+                            {
+                                "id": "git-diff-check",
+                                "command": "git diff --check",
+                                "reason": "format",
+                            }
+                        ],
+                    },
+                }
+            }
+        ),
+    )
+
+    async def fail(*args: object) -> int:
+        logs = args[-1]
+        assert isinstance(logs, list)
+        logs.append("lib/Widget.pm:17: trailing whitespace.\n" + "extra\n" * 20)
+        return 2
+
+    with (
+        patch(
+            "preloop.services.publication_hosted_verifier.inspect_bundle",
+            return_value={
+                "head_sha": "c" * 40,
+                "changed_files": ["lib/Widget.pm"],
+                "bundle_sha256": "d" * 64,
+            },
+        ),
+        patch(
+            "preloop.services.publication_hosted_verifier._check_docker",
+            side_effect=fail,
+        ),
+    ):
+        with pytest.raises(PublicationError) as error:
+            await verify_hosted_publication(
+                SimpleNamespace(use_kubernetes=False), policy, b"bundle"
+            )
+    summary = str(error.value)
+    assert "git-diff-check" in summary
+    assert "lib/Widget.pm:17: trailing whitespace" in summary
+    assert summary.count("extra") == 4

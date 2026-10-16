@@ -1807,6 +1807,12 @@ class FlowExecutionOrchestrator:
                         f"No resolver found for prefix '{prefix}' and simple resolution failed for {item.raw}"
                     )
 
+        from preloop.services.verification import verification_prompt_instructions
+
+        resolved_prompt += verification_prompt_instructions(
+            self._effective_git_clone_config()
+        )
+
         feedback_prompt = (self.trigger_event_data or {}).get("_feedback_prompt")
         if isinstance(feedback_prompt, str):
             resolved_prompt += "\n\n" + feedback_prompt

@@ -248,6 +248,10 @@ def main(argv):
             any_blocked = True
         elif record["exit_code"] not in (None, 0):
             any_failed = True
+        if record["exit_code"] != 0:
+            with open(log_path, "rb") as log:
+                excerpt = log.read(2048).decode("utf-8", errors="ignore")
+                record["output_excerpt"] = "\n".join(excerpt.splitlines()[:5])
         record["duration_seconds"] = round(time.monotonic() - started, 4)
         records.append(record)
     final_commit = _git_ok(repo, "rev-parse", "HEAD")
@@ -284,6 +288,12 @@ def main(argv):
     allowed = bool(decision["allowed"])
     status = decision["status"]
     reason = decision["reason"]
+    if not allowed:
+        failed = next((row for row in records if row.get("exit_code") not in (None, 0)
+                       or row.get("skipped_reason")), None)
+        if failed:
+            detail = failed.get("output_excerpt") or failed.get("skipped_reason") or ""
+            reason = "Verification refused: %s: %s" % (failed["id"], detail)
     evidence["allowed"] = allowed
     evidence["status"] = status
     evidence["reason"] = reason
@@ -297,7 +307,7 @@ def main(argv):
     compact["changed_files_count"] = len(changed_files)
     compact["changed_files_sample"] = changed_files[:200]
     print("PRELOOP_VERIFICATION " + json.dumps(compact, separators=(",", ":"), sort_keys=True), flush=True)
-    print("PRELOOP_VERIFICATION_VERDICT %s status=%s reason=%s" % ("ALLOW" if allowed else "DENY", status, reason), flush=True)
+    print("PRELOOP_VERIFICATION_VERDICT %s status=%s reason=%s" % ("ALLOW" if allowed else "DENY", status, " | ".join(reason.splitlines())), flush=True)
     return 0 if allowed else DENIED_EXIT
 
 
@@ -360,4 +370,78 @@ def build_verification_gate_shell(
         f"  exit {VERIFIER_EXIT_DENIED}",
         "fi",
     ]
+    # The publisher repairs before exporting recovery artifacts. Verification
+    # itself must not mutate the commit that those artifacts describe.
     return "\n".join(lines)
+
+
+WHITESPACE_REPAIR_PY = r"""import os
+import re
+import subprocess
+import sys
+
+repo, base = sys.argv[1:]
+def git(*args: str) -> bytes:
+    return subprocess.check_output(["git", "--literal-pathspecs", "-C", repo, *args])
+try:
+    # Never absorb uncommitted implementation work into a repair commit.
+    status = git("status", "--porcelain", "-z").split(b"\0")
+    if any(row and not row.startswith(b"?? ") for row in status):
+        raise ValueError("whitespace repair requires a clean tracked tree")
+    merge_base = git("merge-base", base, "HEAD").decode().strip()
+    paths = git("diff", "--name-only", "--diff-filter=ACMR", "-z", merge_base, "HEAD")
+    modes: dict[bytes, bytes] = {}
+    for entry in git("ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+        if entry:
+            metadata, path = entry.split(b"\t", 1)
+            modes[path] = metadata.split(b" ", 1)[0]
+    repaired = []
+    for raw in paths.split(b"\0"):
+        if not raw:
+            continue
+        path = os.fsdecode(raw)
+        full = os.path.join(repo, path)
+        # Skip symlinks, submodules, binary and non-UTF-8 files.
+        if modes.get(raw) not in (b"100644", b"100755") or os.path.islink(full):
+            continue
+        if os.path.commonpath([os.path.realpath(repo), os.path.realpath(full)]) != os.path.realpath(repo):
+            raise ValueError("changed file escapes the repository")
+        with open(full, "rb") as stream:
+            original = stream.read()
+        if b"\0" in original:
+            continue
+        try:
+            original.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        fixed = re.sub(rb"[ \t]+(?=\r?$)", b"", original, flags=re.MULTILINE)
+        if fixed != original:
+            with open(full, "wb") as stream:
+                stream.write(fixed)
+            repaired.append(path)
+    if repaired:
+        git("add", "--", *repaired)
+        git("-c", "core.hooksPath=/dev/null", "commit", "--no-gpg-sign", "-m",
+            "Strip trailing whitespace before verification")
+        print("PRELOOP_WHITESPACE_REPAIRED files=%d head=%s" %
+              (len(repaired), git("rev-parse", "HEAD").decode().strip()), flush=True)
+except (OSError, ValueError, subprocess.CalledProcessError):
+    print("PRELOOP_VERIFICATION_DENIED status=blocked reason=whitespace repair failed", flush=True)
+    sys.exit(3)
+"""
+
+
+def build_whitespace_repair_shell(
+    *, profile: Mapping[str, Any], working_dir: str, base_branch: str
+) -> str:
+    """Build an explicitly enabled repair before exporting or verifying commits."""
+    if not profile.get("strip_trailing_whitespace", False):
+        return ""
+    return (
+        f"python3 - {shlex.quote(working_dir)} {shlex.quote(base_branch)} "
+        "<<'PRELOOP_WHITESPACE_REPAIR'\n"
+        + WHITESPACE_REPAIR_PY
+        + "\nPRELOOP_WHITESPACE_REPAIR\n"
+        + "PRELOOP_REPAIR_RC=$?\n"
+        + 'if [ "$PRELOOP_REPAIR_RC" -ne 0 ]; then exit 3; fi\n'
+    )

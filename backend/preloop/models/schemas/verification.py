@@ -82,6 +82,14 @@ class VerificationProfile(BaseModel):
     version: Literal["v1"] = "v1"
     profile_id: str = Field(description="Stable profile name, e.g. 'default'")
     description: str = Field(default="")
+    strip_trailing_whitespace: bool = Field(
+        default=False,
+        description=(
+            "Before verification, strip trailing spaces and tabs from changed UTF-8 "
+            "text files and append a repair commit. Requires a clean tracked tree; "
+            "all required checks still run on the final commit. Disabled by default."
+        ),
+    )
     # Inexpensive hooks required on every change (lint, format, fast unit
     # suites).
     always: List[VerificationCommand] = Field(default_factory=list)

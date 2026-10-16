@@ -52,6 +52,28 @@ The profile has three parts:
   says what to configure: a runnable repository profile is required before
   strict verification is enabled on a live flow.
 
+The launch prompt lists the configured `always` commands, each rule's path
+patterns and commands, and `unknown_default` commands. The agent can choose
+new paths while implementing, so the prompt includes all conditional rules;
+the gate selects the applicable checks from the final diff.
+
+Whitespace checking stays strict by default. `git diff --check` rejects trailing
+spaces and tabs, including on otherwise blank lines. A failed gate summary
+includes the check ID and the first five log lines (at most 2 KiB), so the run
+and its Attention card identify the file and line without opening the archive.
+Diagnostic summaries are secret-scrubbed; full check logs remain in evidence.
+
+A trusted profile can opt into `strip_trailing_whitespace: true` beside
+`profile_id`. Before verification, the runner strips trailing spaces and tabs
+from changed regular UTF-8 text files, preserving line endings. It skips binary
+files, non-UTF-8 files, symlinks and submodules. This applies to the entire changed
+file, so enable it only where trailing whitespace has no semantic meaning.
+It requires a clean tracked tree and appends a repair commit, preserving the
+implementer's existing commits. It does not remove blank lines at EOF or repair
+other `git diff --check` errors. Every required check still runs on the repaired
+commit; any remaining failure refuses publication. Isolated publication exports
+the repaired bundle and verifies it independently before publishing.
+
 Customize the profile per repository:
 
 ```yaml
