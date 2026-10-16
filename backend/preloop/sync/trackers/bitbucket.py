@@ -16,8 +16,9 @@ Authentication (``Tracker.auth_type``):
 * ``managed_oauth``: no token is stored. A ``credential_source`` (see
   ``preloop.services.managed_credentials``) is asked for a fresh access
   token before every request, a 401 forces exactly one refresh, the API
-  origin is pinned to ``https://api.bitbucket.org/2.0`` and redirects are
-  refused. There is no Basic fallback and no stale-token fallback.
+  origin is pinned to ``https://api.bitbucket.org/2.0``. GET redirects are
+  validated at every hop and bounded; write redirects are refused. There is
+  no Basic fallback and no stale-token fallback.
 
 App passwords are rejected up front (see ``preloop.utils.bitbucket``).
 
@@ -31,7 +32,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
 from sqlalchemy.orm import Session
@@ -255,8 +256,8 @@ class BitbucketTracker(BaseTracker):
         headers, auth = self._auth(token)
         async with httpx.AsyncClient(
             timeout=HTTP_TIMEOUT_SECONDS,
-            # A managed access token is pinned to the API origin: a redirect
-            # could carry it elsewhere, so it is reported instead of followed.
+            # Managed redirects are validated explicitly before sending a
+            # credential to each destination; never let httpx follow them.
             follow_redirects=not self.managed,
             transport=self._transport,
         ) as client:
@@ -301,17 +302,54 @@ class BitbucketTracker(BaseTracker):
         url = self._url(path)
         try:
             if self.managed:
-                # Fresh credential before the request; a 401 forces exactly one
-                # rotation and retry. A second 401 is reported, never looped.
-                token = await self._managed_token()
-                response = await self._send(
-                    method, url, params=params, json=json, token=token
-                )
-                if response.status_code == 401:
-                    token = await self._managed_token(force_refresh=True)
+                # Refresh at most once across the entire redirect chain.
+                refreshed = False
+                for redirect_count in range(4):
+                    token = await self._managed_token()
                     response = await self._send(
                         method, url, params=params, json=json, token=token
                     )
+                    if response.status_code == 401 and not refreshed:
+                        token = await self._managed_token(force_refresh=True)
+                        refreshed = True
+                        response = await self._send(
+                            method, url, params=params, json=json, token=token
+                        )
+                    if not 300 <= response.status_code < 400:
+                        break
+                    location = response.headers.get("Location", "")
+                    if (
+                        method.upper() != "GET"
+                        or response.status_code not in {301, 302, 303, 307, 308}
+                        or redirect_count == 3
+                        or not location
+                        or any(ord(char) < 32 for char in location)
+                    ):
+                        raise TrackerResponseError(
+                            "Refusing unsafe or excessive Bitbucket redirect.",
+                            status_code=response.status_code,
+                        )
+                    destination = urljoin(str(response.url), location)
+                    target = urlsplit(destination)
+                    # Keep credentials on the pinned API origin and namespace.
+                    # Decode only to inspect traversal: encoded CR in Bitbucket's
+                    # commit-range path is valid and stays encoded on the wire.
+                    decoded_path = unquote(target.path)
+                    if (
+                        (target.scheme, target.netloc) != ("https", "api.bitbucket.org")
+                        or target.fragment
+                        or not target.path.startswith("/2.0/")
+                        or "\\" in decoded_path
+                        or any(part in {".", ".."} for part in decoded_path.split("/"))
+                        or decoded_path.rstrip("/").endswith(_FORBIDDEN_SUFFIXES)
+                    ):
+                        raise TrackerResponseError(
+                            "Refusing unsafe Bitbucket redirect destination.",
+                            status_code=response.status_code,
+                        )
+                    url = self._url(destination)
+                    # The Location query replaces the original request params.
+                    params = None
             else:
                 response = await self._send(method, url, params=params, json=json)
                 if (
