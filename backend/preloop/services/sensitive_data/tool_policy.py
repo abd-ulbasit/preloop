@@ -437,13 +437,15 @@ def evaluate_tool_target(
     base_config = detector_config or DetectorConfig()
     union_types: List[str] = []
     for rule in selected:
+        if rule.condition is not None:
+            continue
         for item in config.types_for_rule(rule):
             if item not in union_types:
                 union_types.append(item)
     timeout_ms = max(rule.detector_timeout_ms for rule in selected)
     scan = (
         scan_with_timeout(leaves, base_config.with_types(union_types), timeout_ms)
-        if leaves
+        if leaves and union_types
         else ScanSummary(text_sha256=_sha256_hex(""))
     )
 
@@ -455,6 +457,45 @@ def evaluate_tool_target(
     )
     for rule in selected:
         action = rule.action_value()
+        if rule.condition is not None:
+            from preloop.services.policy_evaluator import (
+                _evaluate_cel_condition_on_bindings,
+            )
+
+            try:
+                matched = _evaluate_cel_condition_on_bindings(
+                    rule.condition,
+                    {
+                        "args": payload,
+                        "tool": {"name": tool_name, "server": server_name or ""},
+                    },
+                )
+            except ValueError:
+                if action == NOTIFY:
+                    continue
+                matched = True
+                action = DENY
+            if not matched:
+                continue
+            view = ScanSummary(
+                text_sha256=_sha256_hex(json.dumps(payload, sort_keys=True))
+            )
+            if action == NOTIFY:
+                outcome.notices.append((rule, view))
+                continue
+            outcome.action, outcome.rule, outcome.summary = action, rule, view
+            outcome.reason = rule.description or "Tool argument policy matched"
+            if record:
+                _audit(outcome, target, tool_name, account_id, user_id, correlation_id)
+            return _finish(
+                outcome,
+                record=record,
+                target=target,
+                tool_name=tool_name,
+                account_id=account_id,
+                user_id=user_id,
+                correlation_id=correlation_id,
+            )
         if scan.timed_out:
             if action == NOTIFY:
                 continue

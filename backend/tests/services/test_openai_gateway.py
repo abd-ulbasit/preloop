@@ -2463,6 +2463,77 @@ def test_aggregate_codex_sse_stream_captures_function_call_with_arguments_deltas
     assert chat["choices"][0]["finish_reason"] == "tool_calls"
 
 
+@pytest.mark.parametrize("status", ["in_progress", "incomplete"])
+@pytest.mark.parametrize("source", ["stream", "terminal", "mixed"])
+@pytest.mark.parametrize("item_type", ["function_call", "custom_tool_call"])
+@pytest.mark.parametrize("arguments", ["", '{"target":', '{"target":"worker"}'])
+def test_aggregate_codex_events_rejects_unfinished_tool_call(
+    item_type: str, arguments: str, status: str, source: str
+) -> None:
+    """An interrupted tool stream must not poison the client's saved history."""
+    from preloop.services.model_gateway_errors import ModelGatewayAPIError
+
+    service = OpenAIGatewayService(
+        MagicMock(),
+        ModelGatewayAuthContext(
+            token="token",
+            user=SimpleNamespace(id="user-1", account_id="account-1"),
+        ),
+    )
+    item = {
+        "id": "tool_1",
+        "type": item_type,
+        "name": "example_tool",
+        "call_id": "call_1",
+        "status": status,
+        "arguments" if item_type == "function_call" else "input": arguments,
+    }
+    event = (
+        {"type": "response.completed", "response": {"output": [item]}}
+        if source != "stream"
+        else {"type": "response.output_item.added", "item": item}
+    )
+    events = [event]
+    if source == "mixed":
+        statusless_item = {key: value for key, value in item.items() if key != "status"}
+        events.insert(
+            0, {"type": "response.output_item.added", "item": statusless_item}
+        )
+    with pytest.raises(ModelGatewayAPIError, match="unfinished tool call"):
+        service._aggregate_codex_events(events)
+
+
+@pytest.mark.parametrize(
+    "terminal_output", ["invalid", 1, {"invalid": True}, [None, 1, "invalid"]]
+)
+def test_aggregate_codex_events_ignores_malformed_terminal_candidates(
+    terminal_output: object,
+) -> None:
+    """Malformed terminal metadata must not break valid streamed output."""
+    service = OpenAIGatewayService(
+        MagicMock(),
+        ModelGatewayAuthContext(
+            token="token",
+            user=SimpleNamespace(id="user-1", account_id="account-1"),
+        ),
+    )
+    item = {
+        "id": "tool_1",
+        "type": "function_call",
+        "name": "example_tool",
+        "call_id": "call_1",
+        "status": "completed",
+        "arguments": "{}",
+    }
+    result = service._aggregate_codex_events(
+        [
+            {"type": "response.output_item.done", "item": item},
+            {"type": "response.completed", "response": {"output": terminal_output}},
+        ]
+    )
+    assert result["output"] == [item]
+
+
 def test_aggregate_codex_sse_stream_skips_truncated_response_completed_event():
     """If ``response.completed`` arrives truncated (mirrors the
     vercel/ai#14473 reproduction), aggregation must still produce a valid
