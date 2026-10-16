@@ -56,6 +56,7 @@ from sqlalchemy.exc import (
 from sqlalchemy.orm import Session
 
 from preloop.config import settings
+from preloop.services.model_context_limits import resolve_model_context_limits
 from preloop.utils.sentry_filters import gateway_upstream_call
 from preloop.models.crud import (
     crud_ai_model,
@@ -2127,6 +2128,41 @@ class OpenAIGatewayService:
             )
             raise
 
+    @staticmethod
+    def _responses_output_budget(
+        model: GatewayModel, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Bound hosted reasoning turns before both billing and chat translation.
+
+        Some hosted chat endpoints default to 1024 output tokens, which can
+        be exhausted by reasoning alone. Never silently expand a caller's
+        explicit cap, a model ceiling, or a native Responses request.
+        """
+        if (
+            any(
+                payload.get(key) is not None
+                for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
+            )
+            or not str(getattr(model, "model_identifier", "")).startswith("deepseek-")
+            # These provider routes always transcode; custom/OpenAI-shaped
+            # routes can optimistically probe native Responses then fall back.
+            or str(getattr(model, "provider_name", "")).lower()
+            not in {"qwen", "dashscope"}
+            or not alibaba_pricing.is_alibaba(model)
+            or not model_billing_is_hosted(model)
+            or should_use_responses_passthrough(model)
+        ):
+            return payload
+        allowance = settings.gateway_hosted_reasoning_max_output_tokens
+        limits = resolve_model_context_limits(
+            model_identifier=model.model_identifier,
+            provider_name=model.provider_name,
+            model_parameters=model.model_parameters,
+        )
+        if limits.max_output_tokens is not None:
+            allowance = min(allowance, limits.max_output_tokens)
+        return {**payload, "max_output_tokens": allowance}
+
     @gateway_database_scope
     def create_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Handle OpenAI Responses API-compatible requests."""
@@ -2140,6 +2176,7 @@ class OpenAIGatewayService:
             )
 
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses"
         )
@@ -3571,6 +3608,7 @@ class OpenAIGatewayService:
         self._begin_request_accounting()
         self._adopt_openai_native_session_id(payload)
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses_stream"
         )
@@ -3696,6 +3734,7 @@ class OpenAIGatewayService:
             )
             reasoning_buffer = StringIO()
             reasoning_bytes = 0
+            upstream_finish_reason: Optional[str] = None
             reasoning_output_index: Optional[int] = None
             try:
                 yield self._sse_event(
@@ -3737,6 +3776,8 @@ class OpenAIGatewayService:
                             ),
                         )
                     choices = chunk_dict.get("choices") or []
+                    if choices and choices[0].get("finish_reason"):
+                        upstream_finish_reason = choices[0]["finish_reason"]
                     delta = (choices[0].get("delta") or {}) if choices else {}
                     reasoning_delta = delta.get("reasoning_content")
                     if (
@@ -3937,6 +3978,18 @@ class OpenAIGatewayService:
                     # Fail the stream loudly instead so the client retries or
                     # errors visibly; silent truncation is the #109/#117
                     # failure mode this path already guards against.
+                    if upstream_finish_reason == "length":
+                        raise ModelGatewayAPIError(
+                            provider="openai",
+                            status_code=502,
+                            code="output_budget_exhausted",
+                            message=(
+                                "Upstream exhausted the output token budget before "
+                                "producing text or tool calls. Increase the explicit "
+                                "output limit or reduce reasoning effort; no review "
+                                "or task completion was produced."
+                            ),
+                        )
                     raise ModelGatewayAPIError(
                         provider="openai",
                         status_code=502,
@@ -8225,8 +8278,10 @@ class OpenAIGatewayService:
 
         for source_key, target_key in (
             ("temperature", "temperature"),
-            ("max_tokens", "max_tokens"),
+            # Match budget preflight's alias precedence exactly.
             ("max_completion_tokens", "max_tokens"),
+            ("max_output_tokens", "max_tokens"),
+            ("max_tokens", "max_tokens"),
             ("top_p", "top_p"),
         ):
             if payload.get(source_key) is not None and target_key not in kwargs:

@@ -1726,6 +1726,15 @@ class Settings(BaseSettings):
             "send Authorization: Bearer."
         ),
     )
+    gateway_hosted_reasoning_max_output_tokens: int = Field(
+        8192,
+        ge=256,
+        le=32768,
+        description=(
+            "Default output allowance for hosted Alibaba DeepSeek Responses "
+            "requests without an explicit limit; included in budget preflight"
+        ),
+    )
     billing_budget_default_estimated_output_tokens: int = Field(
         1024,
         description=(
@@ -2160,6 +2169,9 @@ class Settings(BaseSettings):
                 "AGENT_CONTROL_ALLOW_QUERY_TOKEN", "true"
             ).lower()
             in ("true", "1", "t", "yes"),
+            gateway_hosted_reasoning_max_output_tokens=int(
+                os.getenv("GATEWAY_HOSTED_REASONING_MAX_OUTPUT_TOKENS", "8192")
+            ),
             billing_budget_default_estimated_output_tokens=int(
                 os.getenv("BILLING_BUDGET_DEFAULT_ESTIMATED_OUTPUT_TOKENS", "1024")
             ),
