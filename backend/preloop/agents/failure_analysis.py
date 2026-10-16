@@ -623,6 +623,20 @@ def analyze_agent_failure(logs_text: str) -> AgentFailureAnalysis:
     if not lines:
         return AgentFailureAnalysis(message="")
 
+    # Gate output follows the agent and supersedes earlier provider noise.
+    for line in reversed(logs_text.splitlines()):
+        marker = "PRELOOP_VERIFICATION_VERDICT "
+        if line.startswith(marker + "ALLOW "):
+            break
+        if line.startswith(marker + "DENY "):
+            reason = line.partition(" reason=")[2]
+            status = "blocked" if "status=blocked" in line else "failed"
+            detail = " ".join(reason.split()) or "publication refused"
+            message = f"Verification {status}: {detail}"
+            return AgentFailureAnalysis(
+                message=_finalize(message), evidence=_finalize(line)
+            )
+
     setup_failure = _scan_setup_failure(logs_text)
     if setup_failure is not None:
         return setup_failure

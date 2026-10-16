@@ -238,3 +238,47 @@ class TestVerificationFailureCategories:
             )
             is None
         )
+
+
+class TestVerificationPrompt:
+    def test_checks_and_conditions_are_visible_before_implementation(self) -> None:
+        from preloop.services.verification import verification_prompt_instructions
+
+        config = {
+            "verification": {
+                "mode": "gate",
+                "profile": {
+                    "profile_id": "example",
+                    "always": [
+                        {
+                            "id": "whitespace",
+                            "command": "git diff --check",
+                            "reason": "format",
+                        }
+                    ],
+                    "rules": [
+                        {
+                            "id": "perl",
+                            "description": "Perl",
+                            "path_globs": ["lib/*.pm"],
+                            "commands": [
+                                {"id": "tests", "command": "prove t", "reason": "tests"}
+                            ],
+                        }
+                    ],
+                    "unknown_default": [
+                        {"id": "fallback", "command": "make test", "reason": "unknown"}
+                    ],
+                },
+            }
+        }
+        prompt = verification_prompt_instructions(config)
+        for expected in (
+            "git diff --check",
+            "lib/*.pm",
+            "prove t",
+            "make test",
+            "Automatic whitespace repair is disabled",
+        ):
+            assert expected in prompt
+        assert verification_prompt_instructions({}) == ""

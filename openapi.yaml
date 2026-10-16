@@ -46225,6 +46225,13 @@ components:
           type: string
           title: Description
           default: ''
+        strip_trailing_whitespace:
+          type: boolean
+          title: Strip Trailing Whitespace
+          description: Before verification, strip trailing spaces and tabs from changed
+            UTF-8 text files and append a repair commit. Requires a clean tracked
+            tree; all required checks still run on the final commit. Disabled by default.
+          default: false
         always:
           items:
             $ref: '#/components/schemas/VerificationCommand'

@@ -257,6 +257,96 @@ class TestGateIntegration:
         # The denial marker is visible for the failure classifier.
         assert repo.marker_lines(result.stdout, VERIFICATION_DENIED_MARKER)
 
+    @pytest.mark.parametrize("repair", [False, True])
+    def test_whitespace_failure_is_readable_and_repair_is_opt_in(
+        self, repo: GateRepo, repair: bool
+    ) -> None:
+        from preloop.agents.failure_analysis import analyze_agent_failure
+
+        repo.add_file("docs/page.md", "text  \n   \nend\n")
+        original = repo.commit()
+        profile = dict(
+            PROFILE,
+            strip_trailing_whitespace=repair,
+            always=[
+                {
+                    "id": "git-diff-check",
+                    "command": "git diff --check main...HEAD",
+                    "reason": "whitespace",
+                }
+            ],
+        )
+        result = repo.run_publisher(profile)
+        evidence = repo.evidence_json()
+        if repair:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert evidence["commit_sha"] != original
+            assert evidence["commit_sha"] == repo._git("rev-parse", "HEAD")
+            assert repo._git("rev-parse", "HEAD^") == original
+            assert (repo.repo / "docs/page.md").read_text() == "text\n\nend\n"
+            assert (repo.evidence / "published.marker").exists()
+        else:
+            assert result.returncode == VERIFIER_EXIT_DENIED
+            assert repo._git("rev-parse", "HEAD") == original
+            assert not (repo.evidence / "published.marker").exists()
+            assert "docs/page.md:1: trailing whitespace" in evidence["reason"]
+            message = analyze_agent_failure(
+                "Wrote git recovery artifacts under /workspace/evidence\n"
+                + result.stdout
+            ).message
+            from preloop.services.flow_failure_category import derive_failure_category
+
+            assert (
+                derive_failure_category(status="FAILED", error_message=message)
+                == "verification_failed"
+            )
+            assert "git-diff-check" in message
+            assert "docs/page.md:1: trailing whitespace" in message
+
+    def test_whitespace_repair_does_not_bypass_other_checks(
+        self, repo: GateRepo
+    ) -> None:
+        repo.add_file("feature.py", "text  \nend\n")
+        repo.commit()
+        profile = dict(
+            PROFILE,
+            strip_trailing_whitespace=True,
+            unknown_default=[_check_that_fails(repo.evidence)],
+        )
+        result = repo.run_publisher(profile)
+        assert result.returncode == VERIFIER_EXIT_DENIED
+        assert not (repo.evidence / "published.marker").exists()
+        assert repo.evidence_json()["status"] == "failed"
+
+    def test_whitespace_repair_refuses_dirty_work(self, repo: GateRepo) -> None:
+        repo.add_file("feature.py", "text  \nend\n")
+        head = repo.commit()
+        repo.add_file("feature.py", "uncommitted work\n")
+        result = repo.run_publisher(dict(PROFILE, strip_trailing_whitespace=True))
+        assert result.returncode == VERIFIER_EXIT_DENIED
+        assert repo._git("rev-parse", "HEAD") == head
+        assert (repo.repo / "feature.py").read_text() == "uncommitted work\n"
+        assert not (repo.evidence / "published.marker").exists()
+
+    def test_repair_preserves_binary_symlink_and_crlf(self, repo: GateRepo) -> None:
+        repo.add_file("text.txt", "")
+        (repo.repo / "text.txt").write_bytes(b"hello  \r\nend\r\n")
+        binary = b"\x00binary  \n"
+        (repo.repo / "binary.dat").write_bytes(binary)
+        (repo.repo / "invalid.dat").write_bytes(b"\xff  \n")
+        (repo.repo / "link").symlink_to("text.txt")
+        repo.commit()
+        repo.add_file("untracked.txt", "leave this  \n")
+        assert (
+            repo.run_publisher(dict(PROFILE, strip_trailing_whitespace=True)).returncode
+            == 0
+        )
+        assert (repo.repo / "text.txt").read_bytes() == b"hello\r\nend\r\n"
+        assert (repo.repo / "binary.dat").read_bytes() == binary
+        assert (repo.repo / "invalid.dat").read_bytes() == b"\xff  \n"
+        assert (repo.repo / "link").is_symlink()
+        assert (repo.repo / "untracked.txt").read_text() == "leave this  \n"
+
     def test_missing_base_branch_falls_back_to_unknown_default(self, repo: GateRepo):
         """The verifier itself falls back to the conservative default when
         the base ref is unusable (tested directly: the publisher's
@@ -574,6 +664,34 @@ class TestLegacyReportedOutcome:
         )
         assert checkpoint.exists() == checkpoint_enabled, result.stdout + result.stderr
         return result
+
+    @pytest.mark.parametrize("isolated", [False, True])
+    def test_repair_is_exported_in_recovery_bundle(
+        self, repo: GateRepo, monkeypatch: pytest.MonkeyPatch, isolated: bool
+    ) -> None:
+        repo.add_file("feature.py", "text  \nend\n")
+        original = repo.commit()
+        repo._git("update-ref", "refs/remotes/origin/main", "main")
+        result = self.run_generated(
+            repo,
+            monkeypatch,
+            b'{"status":"success"}',
+            profile=dict(PROFILE, strip_trailing_whitespace=True),
+            isolated=isolated,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        final = repo._git("rev-parse", "HEAD")
+        assert final != original
+        assert repo._git("rev-parse", "HEAD^") == original
+        bundle = repo.repo.parent / "workspace/evidence/branch.bundle"
+        assert repo._git("bundle", "list-heads", str(bundle)).split()[0] == final
+        if not isolated:
+            evidence = json.loads(
+                (
+                    repo.repo.parent / "workspace/evidence/verification/evidence.json"
+                ).read_text()
+            )
+            assert evidence["commit_sha"] == final
 
     @pytest.mark.parametrize("status", ["failure", "failed", "error", " ERROR "])
     @pytest.mark.parametrize("provider", ["github", "gitlab"])

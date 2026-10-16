@@ -164,7 +164,11 @@ async def verify_hosted_publication(
                 )
                 if exit_code != 0:
                     raise PublicationError(
-                        f"Isolated verification check {check.id} failed with exit {exit_code}; ensure the configured generic toolchain image includes its dependencies"
+                        f"Isolated verification check {check.id} failed with exit {exit_code}: "
+                        + (
+                            " ".join("".join(logs).splitlines()[:5])[:2048]
+                            or "no diagnostic output; check the toolchain dependencies"
+                        )
                     )
     except (PublicationError, TimeoutError, DockerError, ApiException, OSError) as exc:
         if outcomes:

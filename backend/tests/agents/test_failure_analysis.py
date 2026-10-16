@@ -553,3 +553,28 @@ def test_runtime_setup_markers_still_report_setup_failure(reason: str) -> None:
     assert analyze_agent_failure(f"PRELOOP_SETUP_FAILED {reason}").message.startswith(
         "Setup commands failed"
     )
+
+
+def test_gate_failure_overrides_provider_noise_and_scrubs_diagnostics() -> None:
+    logs = (
+        "attempt 1 failed: HTTP 503\n"
+        "Wrote git recovery artifacts under /workspace/evidence\n"
+        "PRELOOP_VERIFICATION_VERDICT DENY status=failed reason=Verification refused: "
+        "git-diff-check: lib/Widget.pm:17: trailing whitespace. "
+        "Authorization: Bearer example-secret-token\n"
+        "PRELOOP_VERIFICATION_DENIED verdict=DENY reason=verification gate refused publication rc=3"
+    )
+    analysis = analyze_agent_failure(logs)
+    assert "git-diff-check" in analysis.message
+    assert "lib/Widget.pm:17" in analysis.message
+    assert "example-secret-token" not in analysis.message
+    assert analysis.transient is False
+
+
+def test_latest_allow_does_not_reuse_earlier_denial() -> None:
+    analysis = analyze_agent_failure(
+        "PRELOOP_VERIFICATION_VERDICT DENY status=failed reason=old failure\n"
+        "PRELOOP_VERIFICATION_VERDICT ALLOW status=passed reason=all required checks passed\n"
+        "Error: git push rejected"
+    )
+    assert not analysis.message.startswith("Verification failed:")

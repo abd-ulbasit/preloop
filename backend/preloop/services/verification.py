@@ -369,3 +369,37 @@ def describe_effective_publication_policy(
         blockers=blockers,
         runtime_validation_required=isolated,
     )
+
+
+def verification_prompt_instructions(git_config: Optional[Mapping[str, Any]]) -> str:
+    """Expose the trusted checks before the implementer chooses its changed paths."""
+    policy = resolve_verification_policy(git_config or {})
+    if policy.mode != "gate" or policy.profile is None:
+        return ""
+    profile = policy.profile
+    lines = [
+        "REQUIRED VERIFICATION CHECKS (trusted flow profile):",
+        "Run the always checks and every rule matching your final changed paths "
+        "before your final commit. Fix every failure. The gate reruns them on "
+        "the final commit; failed checks refuse publication.",
+        "PRELOOP_VERIFY_BASE and PRELOOP_VERIFY_HEAD are set by the gate; "
+        "when testing manually set them to the PR base ref and HEAD.",
+    ]
+    for check in profile.always:
+        lines.append(f"- Always [{check.id}]: {check.command}")
+    for rule in profile.rules:
+        lines.append(f"- Rule {rule.id}, paths {rule.path_globs}:")
+        for check in rule.commands:
+            lines.append(f"  [{check.id}]: {check.command}")
+    lines.append("For paths without a matching rule, also run:")
+    for check in profile.unknown_default:
+        lines.append(f"- [{check.id}]: {check.command}")
+    lines.append(
+        "Trailing whitespace, including spaces on blank lines, fails git diff --check. "
+        + (
+            "The profile enables automatic whitespace repair before verification."
+            if profile.strip_trailing_whitespace
+            else "Automatic whitespace repair is disabled; remove it before committing."
+        )
+    )
+    return "\n\n" + "\n".join(lines)
