@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from unittest.mock import patch
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,14 @@ def git(repo: Path, *args: str) -> str:
     ).strip()
 
 
+@pytest.mark.parametrize("project_bound", [False, True])
 @pytest.mark.parametrize(
     "remote_state",
     ["missing", "behind", "equal", "diverged", "unavailable", "wrong_branch"],
 )
-def test_restore_preserves_unpublished_work(tmp_path: Path, remote_state: str) -> None:
+def test_restore_preserves_unpublished_work(
+    tmp_path: Path, remote_state: str, project_bound: bool
+) -> None:
     upstream = tmp_path / "upstream.git"
     upstream.mkdir()
     git(upstream, "init", "--bare", "--initial-branch=main")
@@ -75,14 +79,26 @@ def test_restore_preserves_unpublished_work(tmp_path: Path, remote_state: str) -
             ],
         },
     }
+    repository = context["git_clone_config"]["repositories"][0]
+    resolved_url = repository["repository_url"]
+    if project_bound:
+        # Jira bindings select a code-host project, not an explicit clone URL.
+        repository.pop("repository_url")
+        repository["project_id"] = "bound-code-project"
+        context["trigger_project_id"] = "jira-project"
+    with patch.object(
+        executor, "_get_repo_url_from_project", return_value=resolved_url
+    ) as resolve_project:
+        script = executor._wrap_clone_with_workspace_restore("exit 99", context)
+    if project_bound:
+        resolve_project.assert_called_once_with("bound-code-project", None)
     home = tmp_path / "home"
     home.mkdir()
     result = subprocess.run(
         [
             "bash",
             "-c",
-            "set -e\n"
-            + executor._wrap_clone_with_workspace_restore("exit 99", context),
+            "set -e\n" + script,
         ],
         env={
             **os.environ,
