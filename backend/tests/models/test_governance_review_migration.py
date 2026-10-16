@@ -28,6 +28,9 @@ MIGRATION_PATH = (
     / "versions"
     / "20261016_governance_review.py"
 )
+THRESHOLDS_MIGRATION_PATH = MIGRATION_PATH.with_name(
+    "20261019_gov_detector_thresholds.py"
+)
 
 TABLES = {
     "governance_policy_document": GovernancePolicyDocument,
@@ -38,13 +41,13 @@ TABLES = {
 }
 
 
-def _load_migration() -> ModuleType:
-    """Import the migration module by path (its name starts with digits)."""
+def _load_migration(path: Path = MIGRATION_PATH) -> ModuleType:
+    """Import a migration module by path (its name starts with digits)."""
     spec = importlib.util.spec_from_file_location(
-        "governance_review_migration", MIGRATION_PATH
+        f"governance_review_migration_{path.stem}", path
     )
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load migration {MIGRATION_PATH}")
+        raise RuntimeError(f"Cannot load migration {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -80,6 +83,7 @@ def test_downgrade_upgrade_on_empty_database_matches_the_orm(
         for table in TABLES:
             assert not inspect(db_session.connection()).has_table(table)
         migration.upgrade()
+        _load_migration(THRESHOLDS_MIGRATION_PATH).upgrade()
 
     for table, model in TABLES.items():
         assert _column_names(db_session, table) == {
@@ -174,6 +178,7 @@ def test_downgrade_upgrade_on_seeded_database(
         for table in TABLES:
             assert not inspect(db_session.connection()).has_table(table)
         migration.upgrade()
+        _load_migration(THRESHOLDS_MIGRATION_PATH).upgrade()
 
     for table, model in TABLES.items():
         assert _column_names(db_session, table) == {
@@ -204,3 +209,24 @@ def test_upgrade_recreates_the_one_active_document_index(db_session: Session) ->
     assert active["unique"] is True
     assert active["column_names"] == ["account_id"]
     assert "is_active" in str(active.get("dialect_options", {}))
+
+
+def test_thresholds_migration_adds_and_drops_its_column(db_session: Session) -> None:
+    """The review settings column comes and goes without touching the rest."""
+    migration = _load_migration()
+    _ensure_upgraded(db_session, migration)
+    thresholds = _load_migration(THRESHOLDS_MIGRATION_PATH)
+    with _operations(db_session):
+        if "detector_thresholds" not in _column_names(
+            db_session, "governance_review_settings"
+        ):
+            thresholds.upgrade()
+        thresholds.downgrade()
+    assert "detector_thresholds" not in _column_names(
+        db_session, "governance_review_settings"
+    )
+    with _operations(db_session):
+        thresholds.upgrade()
+    assert "detector_thresholds" in _column_names(
+        db_session, "governance_review_settings"
+    )

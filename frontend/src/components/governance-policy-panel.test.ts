@@ -30,7 +30,57 @@ interface Version {
 }
 
 /** An in-memory governance API, enough to round-trip the panel. */
-function fakeServer(mode = 'on_platform', extraVersions = 0) {
+function thresholdGroups(
+  saved: Record<string, Record<string, unknown>> | null
+) {
+  const value = (kind: string, key: string, fallback: number | string) =>
+    saved?.[kind]?.[key] ?? fallback;
+  return [
+    {
+      kind: 'retry_limit',
+      label: 'Repeated errors',
+      help: 'Flag the same error repeated in one session.',
+      fields: [
+        {
+          key: 'count',
+          label: 'Repeats in one session',
+          default: 5,
+          minimum: 2,
+          maximum: 1000,
+          integer: true,
+          unit: 'repeats',
+          choices: [],
+          value: value('retry_limit', 'count', 5),
+          source: saved?.retry_limit?.count ? 'settings' : 'default',
+        },
+      ],
+    },
+    {
+      kind: 'model_per_task',
+      label: 'Model per task',
+      help: 'Flag a top-tier model used for work of this kind.',
+      fields: [
+        {
+          key: 'triage',
+          label: 'Triage',
+          default: 'small',
+          integer: false,
+          choices: ['small', 'large', 'any'],
+          value: value('model_per_task', 'triage', 'small'),
+          source: 'default',
+        },
+      ],
+    },
+  ];
+}
+
+function fakeServer(
+  mode = 'on_platform',
+  extraVersions = 0,
+  options: { legacyBlocks?: number; thresholds?: boolean } = {}
+) {
+  let legacyBlocks = options.legacyBlocks ?? 0;
+  let savedThresholds: Record<string, Record<string, unknown>> | null = null;
   const versions: Version[] = [
     {
       id: 'v1',
@@ -69,6 +119,7 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
     watchlist: {
       policy_document_version: active().version,
       fingerprint: 'f',
+      legacy_rule_blocks: legacyBlocks,
       rules: [
         {
           rule_ref: 'prefer.retry_limit',
@@ -122,6 +173,19 @@ function fakeServer(mode = 'on_platform', extraVersions = 0) {
       if (restore && method === 'POST') {
         const source = versions.find((v) => v.version === Number(restore[1]))!;
         addVersion(source.body_markdown);
+        return json(document());
+      }
+      if (path === '/api/v1/governance-review/review-settings') {
+        if (options.thresholds === false) return json({ detail: 'x' }, 404);
+        if (method === 'PUT') savedThresholds = body.detector_thresholds;
+        return json({
+          groups: thresholdGroups(savedThresholds),
+          legacy_rule_blocks: legacyBlocks,
+        });
+      }
+      if (path === '/api/v1/governance-review/policy/convert-legacy-rules') {
+        legacyBlocks = 0;
+        addVersion('# Converted');
         return json(document());
       }
       if (path === '/api/v1/governance-review/settings') {
@@ -282,13 +346,118 @@ describe('governance-policy-panel', () => {
     ).to.contain('Own small model');
   });
 
-  it('marks must and prefer rules, must first', async () => {
+  it('does not list compiled rule refs', async () => {
     server = fakeServer();
     const element = await mount(true);
-    const chips = [
-      ...element.shadowRoot!.querySelectorAll('.rules .rule-class'),
-    ].map((chip) => chip.textContent!.trim());
-    expect(chips).to.deep.equal(['Must', 'Prefer']);
+    const text = element.shadowRoot!.textContent!;
+    expect(text).not.to.contain('prefer.retry_limit');
+    expect(text).not.to.contain('governance-rule');
+    expect(element.shadowRoot!.querySelector('.rules')).to.equal(null);
+  });
+
+  it('explains that the policy is plain language', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    const intro = element.shadowRoot!.querySelector('.policy-intro')!;
+    expect(intro.textContent).to.contain('plain language');
+    const textarea = element.shadowRoot!.querySelector(
+      'textarea.policy-source'
+    ) as HTMLTextAreaElement;
+    expect(textarea.getAttribute('aria-label')).to.equal('AI usage policy');
+  });
+
+  it('shows what the review measures and saves a changed number', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    await waitUntil(() => element.shadowRoot!.querySelector('form.thresholds'));
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    expect(String(input.value)).to.equal('5');
+    expect(input.getAttribute('label')).to.equal('Repeats in one session');
+    input.value = '8';
+    input.dispatchEvent(new Event('sl-input'));
+    await element.updateComplete;
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.save-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() =>
+      server.calls.some(
+        (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+      )
+    );
+    const put = server.calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+    );
+    expect(put?.body).to.deep.equal({
+      detector_thresholds: { retry_limit: { count: 8 } },
+    });
+  });
+
+  it('resets the measured checks to their defaults', async () => {
+    server = fakeServer();
+    const element = await mount(true);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('sl-button.reset-thresholds')
+    );
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.reset-thresholds'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() =>
+      server.calls.some(
+        (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+      )
+    );
+    const put = server.calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/review-settings')
+    );
+    expect(put?.body).to.deep.equal({ detector_thresholds: null });
+  });
+
+  it('gives read-only members disabled measured checks', async () => {
+    server = fakeServer();
+    const element = await mount(false);
+    await waitUntil(() => element.shadowRoot!.querySelector('form.thresholds'));
+    const input = element.shadowRoot!.querySelector(
+      'sl-input[data-field="retry_limit.count"]'
+    ) as HTMLInputElement;
+    expect(input.hasAttribute('disabled')).to.equal(true);
+    expect(
+      element.shadowRoot!.querySelector('sl-button.save-thresholds')
+    ).to.equal(null);
+  });
+
+  it('hides the measured checks on a server without them', async () => {
+    server = fakeServer('on_platform', 0, { thresholds: false });
+    const element = await mount(true);
+    expect(element.shadowRoot!.querySelector('form.thresholds')).to.equal(null);
+    expect(element.shadowRoot!.querySelector('textarea.policy-source')).to
+      .exist;
+  });
+
+  it('offers to move legacy rule blocks into the settings', async () => {
+    server = fakeServer('on_platform', 0, { legacyBlocks: 3 });
+    const element = await mount(true);
+    const notice = element.shadowRoot!.querySelector('.legacy-blocks')!;
+    expect(notice.textContent!.replace(/\s+/g, ' ')).to.contain(
+      '3 hidden rule blocks'
+    );
+    (
+      element.shadowRoot!.querySelector(
+        'sl-button.convert-legacy'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => !element.shadowRoot!.querySelector('.legacy-blocks'));
+    expect(
+      server.calls.some(
+        (c) => c.method === 'POST' && c.url.endsWith('/convert-legacy-rules')
+      )
+    ).to.equal(true);
+    expect(versionRows(element)[0]).to.equal('2');
   });
 
   it('labels rule headings in the preview with their class', () => {
@@ -309,11 +478,13 @@ describe('governance-policy-panel', () => {
       PRIVACY_SENTENCE
     );
     await waitUntil(
-      () => element.shadowRoot!.querySelectorAll('sl-option').length > 0
+      () =>
+        element.shadowRoot!.querySelectorAll('sl-select.model sl-option')
+          .length > 0
     );
-    const options = [...element.shadowRoot!.querySelectorAll('sl-option')].map(
-      (option) => option.getAttribute('value')
-    );
+    const options = [
+      ...element.shadowRoot!.querySelectorAll('sl-select.model sl-option'),
+    ].map((option) => option.getAttribute('value'));
     expect(options).to.deep.equal(['m-own']);
   });
 

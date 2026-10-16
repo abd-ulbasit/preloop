@@ -56,6 +56,9 @@ POLICY_DOCUMENT_SOURCES: tuple[str, ...] = (
 #: 64 KiB, the spec cap on ``body_markdown``.
 POLICY_DOCUMENT_BODY_MAX_BYTES = 64 * 1024
 
+#: Cap on the stored review settings for the measured checks.
+DETECTOR_THRESHOLDS_MAX_BYTES = 4 * 1024
+
 #: Review mode. A missing settings row is not stored; the CRUD layer fills
 #: the deployment default.
 REVIEW_MODE_ON_PLATFORM = "on_platform"
@@ -251,6 +254,14 @@ class GovernanceReviewSettings(Base):
         UUID(as_uuid=True),
         ForeignKey("governance_review_run.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    detector_thresholds: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "Review settings the measured checks read, keyed by rule kind. "
+            "Null or a missing key keeps the default."
+        ),
     )
 
     def __repr__(self) -> str:

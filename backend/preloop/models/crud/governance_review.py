@@ -503,6 +503,67 @@ class CRUDGovernanceReviewSettings(CRUDBase[GovernanceReviewSettings]):
         db.refresh(row)
         return row
 
+    def set_thresholds(
+        self,
+        db: Session,
+        *,
+        account_id: UUID,
+        detector_thresholds: Optional[dict[str, Any]],
+        commit: bool = True,
+    ) -> GovernanceReviewSettings:
+        """Store the review settings the measured checks read.
+
+        A new row gets the deployment default mode. An existing row keeps
+        its mode. The plugin validates the keys; this layer only bounds the
+        stored value.
+
+        Args:
+            db: Database session.
+            account_id: Owning account.
+            detector_thresholds: Settings keyed by rule kind, or None to go
+                back to the defaults.
+            commit: Commit when True, flush otherwise.
+
+        Returns:
+            The stored settings row.
+
+        Raises:
+            GovernanceReviewValidationError: The value is not an object or
+                is larger than ``DETECTOR_THRESHOLDS_MAX_BYTES``.
+        """
+        if detector_thresholds is not None:
+            if not isinstance(detector_thresholds, dict):
+                raise GovernanceReviewValidationError(
+                    "detector_thresholds must be an object"
+                )
+            if _json_size(detector_thresholds) > gov.DETECTOR_THRESHOLDS_MAX_BYTES:
+                raise GovernanceReviewValidationError(
+                    "detector_thresholds exceeds "
+                    f"{gov.DETECTOR_THRESHOLDS_MAX_BYTES} bytes"
+                )
+        statement = pg_insert(GovernanceReviewSettings).values(
+            id=uuid4(),
+            account_id=account_id,
+            mode=default_review_mode(),
+            detector_thresholds=detector_thresholds,
+        )
+        statement = statement.on_conflict_do_update(
+            constraint="uq_governance_review_settings_account",
+            set_={
+                "detector_thresholds": statement.excluded.detector_thresholds,
+                "updated_at": func.now(),
+            },
+        )
+        db.execute(statement)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        row = self.get_for_account(db, account_id=account_id)
+        assert row is not None
+        db.refresh(row)
+        return row
+
 
 def _pair_digest(
     digest: Any, summary: Any
