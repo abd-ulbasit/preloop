@@ -2463,6 +2463,40 @@ def test_aggregate_codex_sse_stream_captures_function_call_with_arguments_deltas
     assert chat["choices"][0]["finish_reason"] == "tool_calls"
 
 
+@pytest.mark.parametrize("status", ["in_progress", "incomplete"])
+@pytest.mark.parametrize("from_completed", [False, True])
+@pytest.mark.parametrize("item_type", ["function_call", "custom_tool_call"])
+@pytest.mark.parametrize("arguments", ["", '{"target":', '{"target":"worker"}'])
+def test_aggregate_codex_events_rejects_unfinished_tool_call(
+    item_type: str, arguments: str, status: str, from_completed: bool
+) -> None:
+    """An interrupted tool stream must not poison the client's saved history."""
+    from preloop.services.model_gateway_errors import ModelGatewayAPIError
+
+    service = OpenAIGatewayService(
+        MagicMock(),
+        ModelGatewayAuthContext(
+            token="token",
+            user=SimpleNamespace(id="user-1", account_id="account-1"),
+        ),
+    )
+    item = {
+        "id": "tool_1",
+        "type": item_type,
+        "name": "example_tool",
+        "call_id": "call_1",
+        "status": status,
+        "arguments" if item_type == "function_call" else "input": arguments,
+    }
+    event = (
+        {"type": "response.completed", "response": {"output": [item]}}
+        if from_completed
+        else {"type": "response.output_item.added", "item": item}
+    )
+    with pytest.raises(ModelGatewayAPIError, match="unfinished tool call"):
+        service._aggregate_codex_events([event])
+
+
 def test_aggregate_codex_sse_stream_skips_truncated_response_completed_event():
     """If ``response.completed`` arrives truncated (mirrors the
     vercel/ai#14473 reproduction), aggregation must still produce a valid
