@@ -30,21 +30,26 @@ type runnerLogBuffer struct {
 	logAcknowledgements bool
 	inflight            []*runnerLogBatch
 
+	governance    *hostExecGovernanceGate
+	secrets       []string // Runner-delivered scoped credentials, redacted before parsing/logging.
 	native        bool
 	nativeCapture cursorCapture
 	nativeResults int
 	// harness selects the native stream parser. Empty means Cursor
 	// stream-json, which keeps older call sites unchanged.
-	harness        string
-	copilotCapture copilotCapture
-	claudeCapture  claudeCapture
-	mu             sync.Mutex
-	partial        []byte
-	discarding     bool
-	pending        []string
-	pendingBytes   int
-	results        []string
-	overflow       bool
+	harness         string
+	copilotCapture  copilotCapture
+	claudeCapture   claudeCapture
+	codexCapture    codexCapture
+	openCodeCapture openCodeCapture
+	deepSeekCapture deepSeekCapture
+	mu              sync.Mutex
+	partial         []byte
+	discarding      bool
+	pending         []string
+	pendingBytes    int
+	results         []string
+	overflow        bool
 }
 
 func (b *runnerLogBuffer) Write(data []byte) (int, error) {
@@ -80,12 +85,26 @@ func (b *runnerLogBuffer) Write(data []byte) (int, error) {
 }
 
 func (b *runnerLogBuffer) appendLineLocked(line string) {
+	if b.governance != nil && b.governance.observe(line) {
+		return
+	}
+	for _, secret := range b.secrets {
+		if secret != "" {
+			line = strings.ReplaceAll(line, secret, "[REDACTED]")
+		}
+	}
 	if b.native && b.harness == hostExecHarnessCopilot {
 		if !applyCopilotLine(&b.copilotCapture, line) {
 			return
 		}
 	} else if b.native && b.harness == hostExecHarnessClaude {
 		applyClaudeLine(&b.claudeCapture, line)
+	} else if b.native && b.harness == hostExecHarnessCodex {
+		applyCodexLine(&b.codexCapture, line)
+	} else if b.native && b.harness == hostExecHarnessOpenCode {
+		applyOpenCodeLine(&b.openCodeCapture, line)
+	} else if b.native && b.harness == hostExecHarnessDeepSeek {
+		applyDeepSeekLine(&b.deepSeekCapture, line)
 	} else if b.native {
 		var event cursorStreamEvent
 		if json.Unmarshal([]byte(line), &event) == nil {
@@ -286,6 +305,15 @@ func nativeRunnerResult(b *runnerLogBuffer, waitErr error) (map[string]any, erro
 	}
 	if b.harness == hostExecHarnessClaude {
 		return claudeRunnerResult(b.claudeCapture)
+	}
+	if b.harness == hostExecHarnessCodex {
+		return codexRunnerResult(b.codexCapture)
+	}
+	if b.harness == hostExecHarnessOpenCode {
+		return openCodeRunnerResult(b.openCodeCapture)
+	}
+	if b.harness == hostExecHarnessDeepSeek {
+		return deepSeekRunnerResult(b.deepSeekCapture)
 	}
 	if b.nativeResults != 1 || !b.nativeCapture.HasResult {
 		return nil, fmt.Errorf("host execution exited without a valid structured completion result")

@@ -438,6 +438,12 @@ var (
 // COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN rather than a file.
 func hostExecHarnessEnvAllowed(harness, key string) bool {
 	switch harness {
+	case hostExecHarnessCodex:
+		return key == "CODEX_HOME" || key == "CODEX_API_KEY" || key == "OPENAI_API_KEY"
+	case hostExecHarnessOpenCode:
+		return key == "OPENCODE_CONFIG" || key == "OPENCODE_CONFIG_DIR" || key == "OPENCODE_CONFIG_CONTENT" || key == "XDG_CACHE_HOME"
+	case hostExecHarnessDeepSeek:
+		return key == "DSH_HOME"
 	case hostExecHarnessDevin:
 		return key == "DEVIN_API_KEY"
 	case hostExecHarnessCursor:

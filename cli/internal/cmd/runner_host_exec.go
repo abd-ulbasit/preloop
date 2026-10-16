@@ -188,7 +188,7 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 	}
 	harness := hostExecProfileHarness(profile)
 	if harness == "" {
-		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot, devin or claude")
+		return hostExecProfile{}, fmt.Errorf("host profile executable must be cursor-agent, copilot, devin, claude, codex, opencode or dsh")
 	}
 	if len(profile.ModelMap) > 64 {
 		return hostExecProfile{}, fmt.Errorf("model_map supports at most 64 entries")
@@ -197,6 +197,15 @@ func normalizeHostExecProfile(profile hostExecProfile) (hostExecProfile, error) 
 		if !hostExecModelRe.MatchString(requested) || !hostExecModelRe.MatchString(alias) {
 			return hostExecProfile{}, fmt.Errorf("invalid model_map entry")
 		}
+	}
+	if harness == hostExecHarnessCodex {
+		return profile, validateCodexHostExecProfile(profile)
+	}
+	if harness == hostExecHarnessOpenCode {
+		return profile, validateOpenCodeHostExecProfile(profile)
+	}
+	if harness == hostExecHarnessDeepSeek {
+		return profile, validateDeepSeekHostExecProfile(profile)
 	}
 	if harness == hostExecHarnessDevin {
 		if err := validateDevinHostExecProfile(profile); err != nil {
@@ -294,6 +303,12 @@ func hostExecIsCursorBinary(executable string) bool {
 // the control plane checks against the leased agent type.
 func hostExecProfileHarness(profile hostExecProfile) string {
 	switch {
+	case hostExecBinaryBase(profile.Executable) == "codex":
+		return hostExecHarnessCodex
+	case hostExecBinaryBase(profile.Executable) == "opencode":
+		return hostExecHarnessOpenCode
+	case hostExecBinaryBase(profile.Executable) == "dsh":
+		return hostExecHarnessDeepSeek
 	case hostExecBinaryBase(profile.Executable) == "devin":
 		return hostExecHarnessDevin
 	case hostExecIsCursorBinary(profile.Executable):
@@ -638,11 +653,14 @@ type hostExecRun struct {
 	workspaceLabel string
 	// dirtyCheckDir is the authorized directory whose git tree must be
 	// clean before the CLI starts, or empty (managed run, or allow_dirty).
-	dirtyCheckDir string
-	checkout      *hostExecCheckout
-	publication   *hostExecPublication
-	resume        *hostExecResume
-	cleanup       func()
+	dirtyCheckDir   string
+	checkout        *hostExecCheckout
+	publication     *hostExecPublication
+	resume          *hostExecResume
+	stdinPrompt     string
+	preflight       func(context.Context) error
+	governanceNonce string
+	cleanup         func()
 }
 
 func newHostExecJobCmd(job map[string]any) (*exec.Cmd, string, time.Duration, error) {
@@ -670,7 +688,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	agentType, _ := job["agent_type"].(string)
 	wantHarness := hostExecHarnessForAgentType(agentType)
 	if wantHarness == "" || job["completion_protocol"] != hostExecCompletionProtocol {
-		return nil, fmt.Errorf("host job requires an explicit Cursor, Copilot, Devin or Claude Code host_exec protocol")
+		return nil, fmt.Errorf("host job requires an explicit supported harness host_exec protocol")
 	}
 	name := jobHostExecProfileName(job)
 	profile, err := lookupHostExecProfile(name)
@@ -777,7 +795,7 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 		}
 	}
 	var mcpArgs []string
-	if mcpToken != "" {
+	if mcpToken != "" && !isExtendedHostExecHarness(wantHarness) {
 		mcpArgs, files, err = hostExecMCPConfig(wantHarness, scratch, mcpToken)
 		if err != nil {
 			return nil, err
@@ -790,7 +808,19 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 		hostExecChildEnv(runtime.GOOS, wantHarness, profile, os.Environ()), job,
 	)
 	env = hostExecPrependPath(runtime.GOOS, env, hostExecBinaryDirs(bin, profile.Executable)...)
-	if wantHarness == hostExecHarnessCopilot {
+	if isExtendedHostExecHarness(wantHarness) {
+		var extraEnv, extraFiles []string
+		switch wantHarness {
+		case hostExecHarnessCodex:
+			args, stdin, extraEnv, extraFiles, err = prepareCodexHostExec(profile, job, workspace, scratch, mcpToken)
+		case hostExecHarnessOpenCode:
+			args, stdin, extraEnv, extraFiles, err = prepareOpenCodeHostExec(profile, job, workspace, scratch, mcpToken)
+		case hostExecHarnessDeepSeek:
+			args, stdin, extraEnv, extraFiles, err = prepareDeepSeekHostExec(profile, job, workspace, scratch, mcpToken)
+		}
+		files = append(files, extraFiles...)
+		env = mergeHostExecManagedEnv(env, extraEnv)
+	} else if wantHarness == hostExecHarnessCopilot {
 		if err = prepareCopilotHostExecHooks(profile); err == nil {
 			args, err = buildCopilotHostExecArgs(profile, job, mcpArgs...)
 		}
@@ -838,22 +868,40 @@ func newHostExecJob(job map[string]any) (*hostExecRun, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = workspace
 	cmd.Env = env
-	if stdin != "" {
+	governanceNonce := ""
+	if wantHarness == hostExecHarnessDeepSeek || wantHarness == hostExecHarnessOpenCode {
+		for _, entry := range env {
+			if strings.HasPrefix(entry, "PRELOOP_HOST_GOVERNANCE_NONCE=") {
+				governanceNonce = strings.TrimPrefix(entry, "PRELOOP_HOST_GOVERNANCE_NONCE=")
+			}
+		}
+		if governanceNonce == "" {
+			cleanup()
+			return nil, fmt.Errorf("host governance handshake was not prepared")
+		}
+	} else if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	cmd.SysProcAttr = hostExecSysProcAttr()
 	cmd.WaitDelay = 250 * time.Millisecond
+	var preflight func(context.Context) error
+	if wantHarness == hostExecHarnessCodex {
+		preflight = func(ctx context.Context) error { return codexApprovalRuntimeReady(ctx, profile.Executable, workspace) }
+	}
 	return &hostExecRun{
-		cmd:            cmd,
-		resultPath:     resultPath,
-		timeout:        hostExecTimeout(profile, job),
-		workspace:      workspace,
-		workspaceLabel: workspaceLabel,
-		dirtyCheckDir:  dirtyCheckDir,
-		checkout:       checkout,
-		publication:    publication,
-		resume:         resume,
-		cleanup:        cleanup,
+		preflight:       preflight,
+		cmd:             cmd,
+		stdinPrompt:     stdin,
+		governanceNonce: governanceNonce,
+		resultPath:      resultPath,
+		timeout:         hostExecTimeout(profile, job),
+		workspace:       workspace,
+		workspaceLabel:  workspaceLabel,
+		dirtyCheckDir:   dirtyCheckDir,
+		checkout:        checkout,
+		publication:     publication,
+		resume:          resume,
+		cleanup:         cleanup,
 	}, nil
 }
 
@@ -977,17 +1025,31 @@ func beginHostExecJob(
 	}
 	cmd, timeout := run.cmd, run.timeout
 	agentType, _ := job["agent_type"].(string)
-	buffer := &runnerLogBuffer{native: true, harness: hostExecHarnessForAgentType(agentType), resultPath: run.resultPath}
+	mcpToken, _ := jobHostExecMCPToken(job)
+	buffer := &runnerLogBuffer{native: true, harness: hostExecHarnessForAgentType(agentType), resultPath: run.resultPath, secrets: []string{mcpToken}}
+	var governance *hostExecGovernanceGate
+	if run.governanceNonce != "" {
+		governance, err = newHostExecGovernanceGate(cmd, run.stdinPrompt, run.governanceNonce)
+		if err != nil {
+			run.cleanup()
+			return err
+		}
+		buffer.governance = governance
+	}
 	cmd.Stdout, cmd.Stderr = buffer, buffer
 	gate := &hostExecGate{}
 	jobs.start(&runnerJob{executionID: executionID, cmd: cmd, halted: halted, hostGate: gate})
 	done := jobs.outcomes
 	go func() {
 		defer run.cleanup()
+		if governance != nil {
+			defer governance.close()
+		}
 		failed := func(status, msg string) {
 			buffer.finish()
 			done <- leasedJobOutcome{executionID: executionID, status: status, hostExec: true, profile: profile, errMsg: msg, exitCode: -1, logBuffer: buffer}
 		}
+
 		if run.workspaceLabel != "" {
 			buffer.note("preloop runner: working in authorized directory " + run.workspaceLabel)
 		}
@@ -1032,6 +1094,23 @@ func beginHostExecJob(
 				return
 			}
 		}
+		if run.preflight != nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			if !gate.setCancel(cancel) {
+				failed("STOPPED", "")
+				return
+			}
+			err := run.preflight(ctx)
+			cancel()
+			if halted.Load() {
+				failed("STOPPED", "")
+				return
+			}
+			if err != nil {
+				failed("FAILED", err.Error())
+				return
+			}
+		}
 		if err := gate.start(cmd); err != nil {
 			if errors.Is(err, errHostExecHaltedBeforeStart) {
 				failed("STOPPED", "")
@@ -1040,7 +1119,18 @@ func beginHostExecJob(
 			}
 			return
 		}
+		if governance != nil {
+			go governance.deliver(cmd)
+		}
 		outcome := waitHostExecJob(cmd, executionID, buffer, halted, timeout, profile)
+		if governance != nil {
+			governance.close()
+			<-governance.delivered
+			if governance.failed.Load() && outcome.status != "STOPPED" && outcome.status != "TIMEOUT" {
+				outcome.status = "FAILED"
+				outcome.errMsg = "host_governance_not_ready: the runtime did not activate Preloop governance before the task"
+			}
+		}
 		if buffer.harness == hostExecHarnessCopilot && outcome.status == "FAILED" {
 			outcome.errMsg = copilotHostExecFailure(buffer, profile, job, outcome.errMsg)
 		}

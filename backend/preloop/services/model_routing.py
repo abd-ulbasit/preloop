@@ -367,7 +367,11 @@ def validate_default_selection(
     from preloop.services.host_exec import is_host_exec_agent_type
 
     harness = (agent_type or "").strip().lower()
-    if not is_host_exec_agent_type(harness):
+    config = flow.agent_config if isinstance(flow.agent_config, dict) else {}
+    from preloop.services.host_exec import host_exec_harness, host_exec_profile_name
+
+    native_profile = host_exec_harness(harness) and host_exec_profile_name(config)
+    if not is_host_exec_agent_type(harness) and not native_profile:
         if ai_model_id is not None:
             load_usable_model(
                 db,
@@ -679,8 +683,13 @@ def resolve_routing_record(
     default_model_id = flow.ai_model_id
     from preloop.services.host_exec import is_host_exec_agent_type
 
-    if is_host_exec_agent_type(default_type) or (
-        ordered_rules and default_model_id is not None
+    if (
+        is_host_exec_agent_type(default_type)
+        or (
+            isinstance(flow.agent_config, dict)
+            and flow.agent_config.get("host_exec_profile")
+        )
+        or (ordered_rules and default_model_id is not None)
     ):
         validate_default_selection(
             db, flow, ai_model_id=default_model_id, agent_type=default_type or "codex"

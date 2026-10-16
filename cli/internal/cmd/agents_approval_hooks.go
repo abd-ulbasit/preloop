@@ -159,23 +159,46 @@ func preloopExecutableForHooks() string {
 	return exe
 }
 
+// codexHookExecutable quotes the executable for Codex's default hook shell.
+// Windows uses COMSPEC /C (not PowerShell); POSIX uses SHELL -lc. Refuse
+// expansion and control characters rather than trusting an ambiguous path.
+func codexHookExecutable(goos, executable string) (string, error) {
+	if executable == "" || strings.ContainsAny(executable, "\r\n\"';&|`$<>%!^") {
+		return "", fmt.Errorf("Codex hook executable path contains unsupported shell characters; install Preloop at a plain path and onboard again")
+	}
+	if goos == "windows" {
+		return "\"" + executable + "\"", nil
+	}
+	return "'" + executable + "'", nil
+}
+
+func executableForApprovalHookSource(source string) string {
+	executable := preloopExecutableForHooks()
+	if source == permissionSourceCodexCLI {
+		// installApprovalHooks validates before writing credentials or hooks.
+		quoted, _ := codexHookExecutable(runtime.GOOS, executable)
+		return quoted
+	}
+	return executable
+}
+
 // sessionHookCommand is the SessionStart / UserPromptSubmit hook (#1045).
 // It is a subcommand of permission-hook so the same ownership marker finds
 // and removes it.
 func sessionHookCommand(source string) string {
-	return fmt.Sprintf("%s agents permission-hook session --source %s", preloopExecutableForHooks(), source)
+	return fmt.Sprintf("%s agents permission-hook session --source %s", executableForApprovalHookSource(source), source)
 }
 
 // stopHookCommand is the Stop hook that delivers a note before a headless run
 // exits (#1551). It carries the same permission-hook ownership marker.
 func stopHookCommand(source string) string {
-	return fmt.Sprintf("%s agents permission-hook stop --source %s", preloopExecutableForHooks(), source)
+	return fmt.Sprintf("%s agents permission-hook stop --source %s", executableForApprovalHookSource(source), source)
 }
 
 // sessionEndHookCommand is the SessionEnd hook that fails notes whose only
 // session ended (#1551). Same ownership marker as the others.
 func sessionEndHookCommand(source string) string {
-	return fmt.Sprintf("%s agents permission-hook session-end --source %s", preloopExecutableForHooks(), source)
+	return fmt.Sprintf("%s agents permission-hook session-end --source %s", executableForApprovalHookSource(source), source)
 }
 
 // noteLifecycleHookEvents are the Claude Code events wired to the
@@ -184,7 +207,7 @@ func sessionEndHookCommand(source string) string {
 var noteLifecycleHookEvents = []string{"Stop", "SessionEnd"}
 
 func approvalHookCommand(source string) string {
-	return fmt.Sprintf("%s agents permission-hook --source %s", preloopExecutableForHooks(), source)
+	return fmt.Sprintf("%s agents permission-hook --source %s", executableForApprovalHookSource(source), source)
 }
 
 // resolveApprovalHookTimeoutSeconds returns the account default workflow
@@ -290,6 +313,11 @@ func installApprovalHooks(agent AgentConfig, baseURL, token string, out io.Write
 	source := permissionSourceForAgent(agent)
 	if source == "" {
 		return nil
+	}
+	if source == permissionSourceCodexCLI {
+		if _, err := codexHookExecutable(runtime.GOOS, preloopExecutableForHooks()); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("cannot install approval hook without a durable credential token")
