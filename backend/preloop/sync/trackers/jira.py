@@ -2903,6 +2903,13 @@ class JiraTracker(BaseTracker):
                     if f"project = {project.identifier.upper()}" in jql:
                         return True
             return False
+        except TrackerAuthenticationError:
+            if not self._scoped_gateway:
+                raise
+            # Scoped tokens can read issues through the gateway while Jira
+            # denies webhook administration on the site. Let registration try
+            # the supported endpoints and persist manual setup if all refuse.
+            return False
         except (TrackerConnectionError, TrackerResponseError):
             return False
 
