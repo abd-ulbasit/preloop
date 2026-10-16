@@ -131,6 +131,12 @@ to the API service. See [which gateway URL an agent calls](../../operations/mode
 for `PRELOOP_EXECUTION_GATEWAY_URL` and the URL resolution rules. Keep the
 upstream model URL on the model registration, separate from that agent URL.
 
+When a flow requests Preloop MCP tools, hosted Codex waits for that server
+to initialize before inference, with a 60-second startup timeout. Startup
+fails if the server is unavailable. This prevents a review from starting
+without its tracker tools when discovery exceeds Codex's optional-server
+startup grace period.
+
 ## Kubernetes egress
 
 With gateway routing, the network path is:

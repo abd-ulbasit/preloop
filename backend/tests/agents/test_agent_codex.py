@@ -2,6 +2,7 @@
 
 import logging
 import os
+import tomllib
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -330,6 +331,19 @@ class TestCodexBuildScript:
 
 class TestCodexAuthConfig:
     """Test _build_codex_auth_config method."""
+
+    @pytest.mark.parametrize("provider", ["openai", "preloop"])
+    def test_attached_mcp_is_ready_before_inference(self, provider: str) -> None:
+        """Reviewer tools must survive Codex's optional-server startup grace."""
+        script = CodexAgent({})._build_codex_auth_config(
+            "local-coder", provider, "https://models.example.com/v1"
+        )
+        config_text = script.split("cat > ~/.codex/config.toml << EOF\n", 1)[1]
+        config_text = config_text.split("\nEOF", 1)[0]
+        config_text = config_text.replace("$MCP_TOOL_TIMEOUT_SEC", "600")
+        server = tomllib.loads(config_text)["mcp_servers"]["preloop"]
+        assert server.get("required") is True
+        assert server.get("startup_timeout_sec", 10) >= 60
 
     @pytest.mark.parametrize("gateway_enabled", [None, False])
     def test_direct_chat_provider_rejected_before_launch(

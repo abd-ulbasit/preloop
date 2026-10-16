@@ -1015,6 +1015,11 @@ exit $CODEX_EXIT_CODE
             "[mcp_servers.preloop]\n"
             'url = "$PRELOOP_MCP_URL"\n'
             'bearer_token_env_var = "PRELOOP_API_TOKEN"\n'
+            # Optional MCP servers get only a short initial-catalog grace
+            # period in Codex. A flow that requested tools must wait for them
+            # or fail startup rather than silently run without those tools.
+            "required = true\n"
+            "startup_timeout_sec = 60\n"
             "tool_timeout_sec = $MCP_TOOL_TIMEOUT_SEC\n"
             if attach_mcp
             else ""
