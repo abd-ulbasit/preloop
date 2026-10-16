@@ -167,6 +167,7 @@ nav:
       - Gateway overhead: guide/concepts/gateway-overhead.md
       - Subject-scoped governance: guide/concepts/subject-scoped-governance.md
       - Policy-as-code: guide/concepts/policy-as-code.md
+      - Governing back-office AI use: guide/policies/back-office-ai.md
       - Runtime sessions: guide/concepts/runtime-sessions.md
       - Subagent session identity: guide/subagent-session-identity.md
 
