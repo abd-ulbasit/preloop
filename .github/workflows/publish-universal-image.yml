@@ -36,6 +36,7 @@ on:
       - 'environments/universal/Dockerfile'
       - 'environments/universal/*.sh'
       - 'environments/universal/*.py'
+      - 'environments/universal/bin/**'
       - 'environments/universal/fixtures/**'
       - 'environments/perl/perl-toolchain-smoke.sh'
       - 'environments/perl/fixtures/**'
@@ -77,6 +78,7 @@ jobs:
               - 'environments/universal/Dockerfile'
               - 'environments/universal/*.sh'
               - 'environments/universal/*.py'
+              - 'environments/universal/bin/**'
               - 'environments/universal/fixtures/**'
               - 'environments/perl/perl-toolchain-smoke.sh'
               - 'environments/perl/fixtures/**'
@@ -187,6 +189,7 @@ jobs:
         if: matrix.arch == 'amd64'
         run: docker buildx prune -af
 
+      # The final-image smoke requires preloop-preflight before any push.
       - name: Smoke offline
         if: matrix.arch == 'amd64'
         env:

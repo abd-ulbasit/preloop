@@ -25,6 +25,7 @@ RECIPE_PATHS = {
     "environments/universal/Dockerfile",
     "environments/universal/*.sh",
     "environments/universal/*.py",
+    "environments/universal/bin/**",
     "environments/universal/fixtures/**",
     "environments/perl/perl-toolchain-smoke.sh",
     "environments/perl/fixtures/**",

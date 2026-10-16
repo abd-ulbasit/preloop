@@ -52,6 +52,12 @@ network access, into `/opt/preloop-universal/m2`. The smoke then runs
 
 ## Smoke
 
+The publish workflow checks the final image for an executable
+`preloop-preflight` and runs `--help` offline before its language smoke.
+The guard comes from the checkout, so it also rejects older pinned images
+whose embedded smoke did not require preflight. A missing or broken binary
+fails the job before the image is pushed.
+
 ```bash
 environments/universal/run-smoke.sh preloop-codex-universal:local
 environments/universal/run-smoke.sh preloop-codex-universal:local \
