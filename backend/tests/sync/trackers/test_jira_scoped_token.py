@@ -17,7 +17,7 @@ from jira import JIRAError
 
 from preloop.api.endpoints.trackers import _jira_manual_webhook
 from preloop.models import models
-from preloop.sync.exceptions import TrackerAuthenticationError
+from preloop.sync.exceptions import TrackerAuthenticationError, TrackerResponseError
 from preloop.sync.scanner.core import TrackerClient, _process_organization
 from preloop.sync.trackers.factory import create_tracker_client
 from preloop.sync.trackers.jira import (
@@ -301,8 +301,9 @@ def test_classic_webhook_still_auto_registers():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [401, 403])
+@pytest.mark.parametrize("registration_raises", [False, True])
 async def test_scoped_webhook_lookup_denied_still_exposes_manual_setup(
-    monkeypatch: pytest.MonkeyPatch, status_code: int
+    monkeypatch: pytest.MonkeyPatch, status_code: int, registration_raises: bool
 ) -> None:
     """A denied webhook lookup must not hide setup or interrupt issue syncing."""
     monkeypatch.setenv("PRELOOP_URL", "https://preloop.example.com")
@@ -312,7 +313,12 @@ async def test_scoped_webhook_lookup_denied_still_exposes_manual_setup(
         status_code=status_code, text="Webhook management unavailable"
     )
     blocked = MagicMock(status_code=status_code)
-    tracker.jira_client._session.post.return_value = blocked
+    if registration_raises:
+        tracker.jira_client._session.post.side_effect = JIRAError(
+            status_code=status_code, text="Webhook management unavailable"
+        )
+    else:
+        tracker.jira_client._session.post.return_value = blocked
     tracker._post_webhook = MagicMock(return_value=blocked)
     org = models.Organization(
         id="22222222-2222-2222-2222-222222222222",
@@ -371,6 +377,36 @@ async def test_scoped_webhook_lookup_denied_still_exposes_manual_setup(
         "comment_updated",
     ]
     assert TOKEN not in str(manual.model_dump())
+
+
+@pytest.mark.parametrize(
+    ("scoped", "status_code", "expected_error"),
+    [
+        (False, 401, TrackerAuthenticationError),
+        (False, 403, TrackerResponseError),
+        (True, 500, TrackerResponseError),
+    ],
+)
+def test_webhook_registration_preserves_other_library_errors(
+    scoped: bool, status_code: int, expected_error: type[Exception]
+) -> None:
+    """Only scoped permission failures should enter manual setup fallback."""
+    tracker = _tracker(**({"cloud_id": CLOUD_ID} if scoped else {}))
+    tracker.jira_client = MagicMock()
+    tracker.jira_client._session.post.side_effect = JIRAError(
+        status_code=status_code, text="Registration failed"
+    )
+    tracker._register_webhook_alternate = MagicMock()
+    with patch("preloop.sync.trackers.jira.crud_webhook") as crud_webhook:
+        crud_webhook.get_by_project_id.return_value = None
+        with pytest.raises(expected_error):
+            tracker.register_webhook(
+                db=MagicMock(),
+                project=models.Project(id="project-1", identifier="PRJ"),
+                webhook_url="https://preloop.example.com/webhook",
+                secret="test-secret",
+            )
+    tracker._register_webhook_alternate.assert_not_called()
 
 
 def test_classic_webhook_lookup_authentication_error_is_preserved() -> None:
