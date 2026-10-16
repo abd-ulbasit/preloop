@@ -425,3 +425,8 @@ Optional `sensitive_data`, `access_rules`, `access_rule_mode`, `resource_access`
 or set to `null`. Explicit values replace the corresponding section; use `[]`
 for list sections or `{}` for configuration maps to reset them. The preview
 uses these same import rules.
+
+The `mcp_servers`, `approval_workflows`, and `tools` sections instead add or
+update named entries. Omitted/null sections, empty lists, and entries absent
+from a supplied list preserve the existing entries. Importing `[]` does not
+clear these sections, and the preview does not report those entries as removed.

@@ -221,3 +221,41 @@ def test_optional_replacement_sections_preserve_omission_and_preview_explicit_re
     )
     assert len(reset.changes) == 1
     assert reset.changes[0].path.startswith(f"$.{section}")
+
+
+@pytest.mark.parametrize(
+    "section,definition,edit",
+    [
+        (
+            "mcp_servers",
+            {"name": "existing", "url": "https://example.com"},
+            {"url": "https://changed.example.com"},
+        ),
+        ("approval_workflows", {"name": "existing"}, {"timeout_seconds": 600}),
+        ("tools", {"name": "existing", "source": "builtin"}, {"enabled": False}),
+    ],
+)
+def test_merge_sections_never_preview_deletion_of_unlisted_entries(
+    section: str,
+    definition: dict[str, object],
+    edit: dict[str, object],
+) -> None:
+    """Import upserts named entries and retains everything not in the list."""
+    base = {"metadata": {"name": "Synthetic policy"}}
+    current = PolicyDocument.model_validate({**base, section: [definition]})
+    for incoming in (base, {**base, section: None}, {**base, section: []}):
+        assert not compute_policy_diff(
+            current, PolicyDocument.model_validate(incoming)
+        ).changes
+    added = PolicyDocument.model_validate(
+        {**base, section: [{**definition, "name": "new"}]}
+    )
+    assert [
+        (item.path, item.operation)
+        for item in compute_policy_diff(current, added).changes
+    ] == [(f"$.{section}[name=new]", "add")]
+    changed = PolicyDocument.model_validate({**base, section: [{**definition, **edit}]})
+    assert [
+        (item.path, item.operation)
+        for item in compute_policy_diff(current, changed).changes
+    ] == [(f"$.{section}[name=existing]", "modify")]

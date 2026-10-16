@@ -297,8 +297,8 @@ class TestComputePolicyDiff:
         assert any(c.operation == "add" and "server2" in c.path for c in diff.changes)
         assert "addition" in diff.summary.lower()
 
-    def test_removed_server(self, base_policy):
-        """Test diff with removed MCP server."""
+    def test_empty_server_section_preserves_existing(self, base_policy):
+        """Importing an empty server section does not delete current servers."""
         modified = PolicyDocument(
             metadata=base_policy.metadata,
             mcp_servers=[],
@@ -309,11 +309,7 @@ class TestComputePolicyDiff:
         )
         diff = compute_policy_diff(base_policy, modified)
 
-        assert diff.has_changes is True
-        assert any(
-            c.operation == "remove" and "server1" in c.path for c in diff.changes
-        )
-        assert "removal" in diff.summary.lower()
+        assert not any(c.path.startswith("$.mcp_servers") for c in diff.changes)
 
     def test_modified_policy(self, base_policy):
         """Test diff with modified approval workflow."""

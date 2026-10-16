@@ -524,6 +524,8 @@ def compute_policy_diff(
         current_items: Optional[List[Any]],
         incoming_items: Optional[List[Any]],
         name_field: str = "name",
+        *,
+        replace: bool = True,
     ) -> None:
         current_map = {
             getattr(item, name_field): item for item in (current_items or [])
@@ -533,7 +535,7 @@ def compute_policy_diff(
         }
 
         # Removed items
-        for name in set(current_map.keys()) - set(incoming_map.keys()):
+        for name in (set(current_map) - set(incoming_map)) if replace else ():
             changes.append(
                 PolicyDiffItem(
                     path=f"{path}[name={name}]",
@@ -581,16 +583,23 @@ def compute_policy_diff(
             )
         )
 
+    # These sections upsert named entries; import never deletes unlisted entries.
+    # Omitted, null, and empty lists therefore all preserve existing items.
     # Compare MCP servers
-    diff_named_lists("$.mcp_servers", current.mcp_servers, incoming.mcp_servers)
+    diff_named_lists(
+        "$.mcp_servers", current.mcp_servers, incoming.mcp_servers, replace=False
+    )
 
     # Compare approval workflows
     diff_named_lists(
-        "$.approval_workflows", current.approval_workflows, incoming.approval_workflows
+        "$.approval_workflows",
+        current.approval_workflows,
+        incoming.approval_workflows,
+        replace=False,
     )
 
     # Compare tools
-    diff_named_lists("$.tools", current.tools, incoming.tools)
+    diff_named_lists("$.tools", current.tools, incoming.tools, replace=False)
     diff_named_lists(
         "$.access_rules",
         current.access_rules,
