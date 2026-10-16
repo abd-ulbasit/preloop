@@ -38049,6 +38049,12 @@ components:
       description: Model for creating a new project.
     ProjectIdentifier:
       properties:
+        key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Key
+          description: Jira project key, retained for legacy scope rule matching.
         id:
           type: string
           title: Id

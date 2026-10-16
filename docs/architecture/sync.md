@@ -111,3 +111,5 @@ For detailed rules on how Organizations and Projects limit scope during syncing 
 3.  **preloop.models:** Interacts with the PostgreSQL database to persist changes.
 
 Account-scoped organization identifier lookups exclude soft-deleted trackers, so a reconnect resolves the live tracker’s organization while retaining the prior tracker’s history. Tracker-scoped lookups remain available for explicit historical ownership.
+
+Jira project scope uses the stable numeric project ID, matching `Project.identifier`; the mutable Jira key remains `Project.slug`. Existing key-based scope rules continue matching only Jira projects returned for the selected tracker and organization. Explicit exclusions take precedence over inclusions, and editing/saving scope normalizes listed rules to numeric IDs.

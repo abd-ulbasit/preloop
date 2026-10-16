@@ -349,6 +349,9 @@ class TrackerTestRequest(BaseModel):
 
 
 class ProjectIdentifier(BaseModel):
+    key: Optional[str] = Field(
+        None, description="Jira project key, retained for legacy scope rule matching."
+    )
     id: str
     name: str
     identifier: str

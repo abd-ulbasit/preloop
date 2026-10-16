@@ -2028,7 +2028,7 @@ class JiraTracker(BaseTracker):
                 {
                     "id": project["id"],
                     "key": project["key"],  # Add the project key explicitly
-                    "identifier": project["key"],
+                    "identifier": str(project["id"]),
                     "name": project["name"],
                     "description": project.get("description", ""),
                     "url": f"{self.jira_url}/projects/{project['key']}",

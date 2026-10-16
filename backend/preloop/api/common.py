@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from preloop.utils.tracker_scope import project_scope_identifiers
 from preloop.models.db.session import get_db_session
 from preloop.api.auth import get_current_active_user
 from preloop.schemas.issue_compliance import CompliancePromptMetadata
@@ -85,23 +86,12 @@ async def get_tracker_client(
             project = None  # Treat as not found in this context
     else:
         # Assume project_id is a slug or identifier if not a UUID
-        project_list = crud_project.get_by_slug_or_identifier(
+        project = crud_project.get_by_slug_or_identifier(
             db,
             organization_id=organization.id,
             slug_or_identifier=project_id,
             account_id=current_user.account_id,
         )
-        if len(project_list) == 1:
-            project = project_list[0]
-        elif len(project_list) > 1:
-            # This shouldn't happen if org is specified, but handle defensively
-            logger.error(
-                f"Ambiguous project identifier '{project_id}' within organization '{organization.identifier}'."
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ambiguous project identifier '{project_id}' within organization.",
-            )
 
     if not project:
         # If project is still None after trying ID and slug/identifier
@@ -134,7 +124,11 @@ async def get_tracker_client(
     )
 
     org_identifier = organization.identifier
-    project_identifier = project.identifier
+    scope_identifiers = project_scope_identifiers(
+        tracker.tracker_type,
+        project.identifier,
+        jira_key=project.slug if tracker.tracker_type == "jira" else None,
+    )
 
     org_rules = [rule for rule in scope_rules if rule.scope_type == "ORGANIZATION"]
     project_rules = [rule for rule in scope_rules if rule.scope_type == "PROJECT"]
@@ -162,7 +156,7 @@ async def get_tracker_client(
 
     # Rule 2: Project must not be excluded
     project_excluded = any(
-        rule.rule_type == "EXCLUDE" and rule.identifier == project_identifier
+        rule.rule_type == "EXCLUDE" and rule.identifier in scope_identifiers
         for rule in project_rules
     )
     if project_excluded:
@@ -176,7 +170,7 @@ async def get_tracker_client(
     ]
     if project_level_includes:
         project_included = any(
-            rule.identifier == project_identifier for rule in project_level_includes
+            rule.identifier in scope_identifiers for rule in project_level_includes
         )
         if not project_included:
             raise HTTPException(
@@ -469,15 +463,20 @@ def get_accessible_projects(
             )
             continue
 
+        scope_identifiers = project_scope_identifiers(
+            tracker.tracker_type, project.identifier, jira_key=project.slug
+        )
         # Check project exclusion
-        if project.identifier in project_exclusions:
+        if scope_identifiers.intersection(project_exclusions):
             logger.debug(
                 f"Skipping project {project.name} ({project.identifier}) - in exclusion list"
             )
             continue
 
         # Check project inclusion (if any inclusion rules exist)
-        if project_inclusions and project.identifier not in project_inclusions:
+        if project_inclusions and not scope_identifiers.intersection(
+            project_inclusions
+        ):
             logger.debug(
                 f"Skipping project {project.name} ({project.identifier}) - not in inclusion list"
             )

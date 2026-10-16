@@ -1,0 +1,299 @@
+"""Jira scope uses stable project IDs and honors previously saved project keys."""
+
+from unittest.mock import AsyncMock, patch
+
+from fastapi import HTTPException
+
+import pytest
+from sqlalchemy.orm import Session
+from fastapi.testclient import TestClient
+
+from preloop.api.common import crud_project, get_accessible_projects, get_tracker_client
+from preloop.models import models
+from preloop.sync.scanner.core import TrackerClient
+from preloop.sync.trackers.jira import JiraTracker
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("organization_rule", ["INCLUDE", None, "EXCLUDE"])
+@pytest.mark.parametrize(
+    ("inclusions", "exclusions", "expected"),
+    [
+        (["10000"], [], ["10000"]),
+        (["PROJ"], [], ["10000"]),
+        ([], ["10000"], ["10001"]),
+        ([], ["PROJ"], ["10001"]),
+        (["10000"], ["PROJ"], []),
+        (["PROJ"], ["10000"], []),
+        (["UNSELECTED"], [], []),
+    ],
+)
+async def test_jira_listing_selection_matches_scanner(
+    db_session: Session,
+    test_user: models.User,
+    inclusions: list[str],
+    exclusions: list[str],
+    expected: list[str],
+    organization_rule: str | None,
+) -> None:
+    tracker = models.Tracker(
+        name="Jira",
+        tracker_type="jira",
+        account_id=test_user.account_id,
+        url="https://jira.example.com",
+    )
+    db_session.add(tracker)
+    db_session.flush()
+    org = models.Organization(
+        name="Jira", identifier="jira.example.com", tracker_id=tracker.id
+    )
+    db_session.add(org)
+    # A rule owned by a different tracker/account must never grant access.
+    from preloop.models.crud import crud_account
+
+    other_account = crud_account.create(
+        db_session, obj_in={"organization_name": "Other account"}
+    )
+    other = models.Tracker(
+        name="Other Jira",
+        tracker_type="jira",
+        account_id=other_account.id,
+        url="https://other.example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    db_session.add(
+        models.TrackerScopeRule(
+            tracker_id=other.id,
+            scope_type="ORGANIZATION",
+            rule_type="INCLUDE",
+            identifier=org.identifier,
+        )
+    )
+    db_session.add(
+        models.TrackerScopeRule(
+            tracker_id=other.id,
+            scope_type="PROJECT",
+            rule_type="INCLUDE",
+            identifier="OTHER",
+        )
+    )
+    if organization_rule:
+        db_session.add(
+            models.TrackerScopeRule(
+                tracker_id=tracker.id,
+                scope_type="ORGANIZATION",
+                rule_type=organization_rule,
+                identifier=org.identifier,
+            )
+        )
+    for rule_type, identifiers in [("INCLUDE", inclusions), ("EXCLUDE", exclusions)]:
+        for identifier in identifiers:
+            db_session.add(
+                models.TrackerScopeRule(
+                    tracker_id=tracker.id,
+                    scope_type="PROJECT",
+                    rule_type=rule_type,
+                    identifier=identifier,
+                )
+            )
+    db_session.flush()
+    with patch("preloop.sync.trackers.jira.JIRA"):
+        adapter = JiraTracker(
+            str(tracker.id),
+            "test-token",
+            {
+                "url": tracker.url,
+                "username": "test@example.com",
+            },
+        )
+    adapter._make_request = AsyncMock(
+        return_value=[
+            {"id": "10000", "key": "PROJ", "name": "Selected"},
+            {"id": "10001", "key": "OTHER", "name": "Other"},
+        ]
+    )
+    scanner = TrackerClient(tracker, initialize_client=False)
+    scanner.client = adapter
+    found = await scanner.scan_projects(db_session, org)
+    expected = expected if organization_rule == "INCLUDE" else []
+    assert sorted(project.identifier for project in found) == expected
+    assert all(project.organization_id == org.id for project in found)
+    # Existing projects are filtered by the same contract as discovery.
+    found_ids = {project.identifier for project in found}
+    for identifier, key in [("10000", "PROJ"), ("10001", "OTHER")]:
+        if identifier not in found_ids:
+            db_session.add(
+                models.Project(
+                    name=key,
+                    identifier=identifier,
+                    slug=key,
+                    organization_id=org.id,
+                )
+            )
+    db_session.flush()
+    visible = get_accessible_projects(db_session, test_user)
+    assert sorted(project.identifier for project in visible) == expected
+    # Exercise the real authorization gate using persisted project identities.
+    # Both the intended project and its unselected sibling must agree with scope.
+    with patch(
+        "preloop.api.common.create_tracker_client", new_callable=AsyncMock
+    ) as factory:
+        for identifier in ["10000", "10001"]:
+            stored = crud_project.get_by_slug_or_identifier(
+                db_session,
+                organization_id=org.id,
+                slug_or_identifier=identifier,
+                account_id=test_user.account_id,
+            )
+            assert stored is not None
+            for project_reference in [stored.id, identifier, stored.slug]:
+                factory.reset_mock()
+                if identifier in expected:
+                    result = await get_tracker_client(
+                        org.id, project_reference, db_session, test_user
+                    )
+                    assert result is factory.return_value
+                    factory.assert_awaited_once()
+                    assert factory.call_args.kwargs["tracker_id"] == str(tracker.id)
+                else:
+                    with pytest.raises(HTTPException) as denied:
+                        await get_tracker_client(
+                            org.id, project_reference, db_session, test_user
+                        )
+                    assert denied.value.status_code == 403
+                    factory.assert_not_awaited()
+    if "10000" in expected:
+        assert (
+            next(project for project in found if project.identifier == "10000").slug
+            == "PROJ"
+        )
+
+
+@pytest.mark.asyncio
+async def test_jira_listing_identifier_is_the_persisted_project_identity() -> None:
+    with patch("preloop.sync.trackers.jira.JIRA"):
+        adapter = JiraTracker(
+            "tracker",
+            "test-token",
+            {"url": "https://jira.example.com", "username": "test@example.com"},
+        )
+    adapter._make_request = AsyncMock(
+        return_value=[
+            {"id": "10000", "key": "PROJ", "name": "Selected"},
+        ]
+    )
+    listed = (await adapter.get_projects("jira.example.com"))[0]
+    transformed = adapter.transform_project(listed, "organization")
+    assert listed["identifier"] == transformed["identifier"] == "10000"
+    assert listed["key"] == transformed["slug"] == "PROJ"
+
+
+@pytest.mark.parametrize("endpoint", ["list-projects-for-org", "test-and-list-orgs"])
+def test_jira_scope_listing_serializes_legacy_key(
+    client: TestClient,
+    endpoint: str,
+) -> None:
+    from preloop.schemas.tracker_models import TrackerConnection
+
+    adapter = AsyncMock()
+    adapter.test_connection.return_value = TrackerConnection(
+        connected=True, message="ok"
+    )
+    adapter.get_organizations.return_value = [
+        {"id": "jira.example.com", "name": "Jira"}
+    ]
+    adapter.get_projects.return_value = [
+        {
+            "id": "10000",
+            "identifier": "10000",
+            "key": "PROJ",
+            "name": "Selected",
+        }
+    ]
+    payload = {
+        "tracker_type": "jira",
+        "url": "https://jira.example.com",
+        "api_key": "test-token",
+        "username": "test@example.com",
+        "organization_identifier": "jira.example.com",
+    }
+    with patch(
+        "preloop.api.endpoints.trackers.create_tracker_client", return_value=adapter
+    ):
+        response = client.post(f"/api/v1/trackers/{endpoint}", json=payload)
+    assert response.status_code == 200
+    listing = (
+        response.json()
+        if endpoint == "list-projects-for-org"
+        else response.json()["orgs"][0]["children"]
+    )
+    assert listing[0]["identifier"] == "10000"
+    assert listing[0]["key"] == "PROJ"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_reference", ["uuid", "identifier", "key", "missing"])
+async def test_tracker_gate_keeps_account_and_organization_boundaries(
+    db_session: Session,
+    test_user: models.User,
+    project_reference: str,
+) -> None:
+    """Alias rules never authorize a project through a different tenant or org."""
+    from preloop.models.crud import crud_account
+
+    tracker = models.Tracker(
+        name="Jira",
+        tracker_type="jira",
+        account_id=test_user.account_id,
+        url="https://jira.example.com",
+    )
+    db_session.add(tracker)
+    db_session.flush()
+    org = models.Organization(
+        name="Allowed", identifier="allowed", tracker_id=tracker.id
+    )
+    other_org = models.Organization(
+        name="Other", identifier="other", tracker_id=tracker.id
+    )
+    db_session.add_all([org, other_org])
+    db_session.flush()
+    project = models.Project(
+        name="Other project",
+        identifier="10000",
+        slug="PROJ",
+        organization_id=other_org.id,
+    )
+    db_session.add(project)
+    for scope_type, identifier in [
+        ("ORGANIZATION", org.identifier),
+        ("ORGANIZATION", other_org.identifier),
+        ("PROJECT", "PROJ"),
+    ]:
+        db_session.add(
+            models.TrackerScopeRule(
+                tracker_id=tracker.id,
+                scope_type=scope_type,
+                rule_type="INCLUDE",
+                identifier=identifier,
+            )
+        )
+    other_account = crud_account.create(
+        db_session, obj_in={"organization_name": "Other tenant"}
+    )
+    foreign_user = models.User(account_id=other_account.id, username="other")
+    db_session.flush()
+    reference = {
+        "uuid": project.id,
+        "identifier": project.identifier,
+        "key": project.slug,
+        "missing": "absent",
+    }[project_reference]
+    with patch(
+        "preloop.api.common.create_tracker_client", new_callable=AsyncMock
+    ) as factory:
+        for organization, user in [(org, test_user), (other_org, foreign_user)]:
+            with pytest.raises(HTTPException) as denied:
+                await get_tracker_client(organization.id, reference, db_session, user)
+            assert denied.value.status_code == 404
+        factory.assert_not_awaited()
