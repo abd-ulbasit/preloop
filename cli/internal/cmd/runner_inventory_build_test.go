@@ -533,16 +533,16 @@ func TestProbeCopilotLoginSDKProcess(t *testing.T) {
 }
 
 func TestCopilotModernStoredConfig(t *testing.T) {
-	for _, tc := range []struct{ name, config, verdict, want, host string }{
-		{"commented modern identity", "// Copilot configuration\n" + `{"model":"custom-model","authTokens":{},"lastLoggedInUser":{"host":"https://example.ghe.com","login":"example"},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedIn, harnessLoginSignedIn, "example.ghe.com"},
-		{"identity only unknown", `{"lastLoggedInUser":{"host":"https://example.ghe.com"}}`, harnessLoginUnknown, harnessLoginUnknown, ""},
-		{"token presence unknown", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginUnknown, ""},
-		{"signed out overrides credentials", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, ""},
-		{"modern overrides stale legacy identity", `{"logged_in_users":[{"host":"https://old.example.com"}],"loggedInUsers":[]}`, harnessLoginUnknown, harnessLoginUnknown, ""},
-		{"null modern aliases override stale legacy", `{"logged_in_users":[{"host":"https://old.example.com"}],"lastLoggedInUser":null,"loggedInUsers":null}`, harnessLoginUnknown, harnessLoginUnknown, ""},
-		{"legacy JSONC fallback", "// legacy configuration\n" + `{"logged_in_users":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "example.ghe.com"},
-		{"malformed config fails closed", `{"logged_in_users":[{"host":"https://example.ghe.com"}],`, harnessLoginUnknown, harnessLoginUnknown, ""},
-		{"malformed identity fails closed", `{"lastLoggedInUser":"invalid"}`, harnessLoginUnknown, harnessLoginUnknown, ""},
+	for _, tc := range []struct{ name, config, verdict, want, host, wantModel string }{
+		{"commented modern identity", "// Copilot configuration\n" + `{"model":"custom-model","authTokens":{},"lastLoggedInUser":{"host":"https://example.ghe.com","login":"example"},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedIn, harnessLoginSignedIn, "example.ghe.com", "custom-model"},
+		{"identity only unknown", `{"lastLoggedInUser":{"host":"https://example.ghe.com"}}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"token presence unknown", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"signed out overrides credentials", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, "", ""},
+		{"modern overrides stale legacy identity", `{"logged_in_users":[{"host":"https://old.example.com"}],"loggedInUsers":[]}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"null modern aliases override stale legacy", `{"logged_in_users":[{"host":"https://old.example.com"}],"lastLoggedInUser":null,"loggedInUsers":null}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"legacy JSONC fallback", "// legacy configuration\n" + `{"logged_in_users":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "example.ghe.com", ""},
+		{"malformed config fails closed", `{"logged_in_users":[{"host":"https://example.ghe.com"}],`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"malformed identity fails closed", `{"lastLoggedInUser":"invalid"}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -553,10 +553,10 @@ func TestCopilotModernStoredConfig(t *testing.T) {
 			if entry.LoginState != tc.want || entry.AccountHost != tc.host {
 				t.Fatalf("state/host = %s/%q, want %s/%q", entry.LoginState, entry.AccountHost, tc.want, tc.host)
 			}
-			if tc.name == "commented modern identity" {
+			if tc.wantModel != "" {
 				found := false
 				for _, model := range entry.Models {
-					found = found || model.ID == "custom-model"
+					found = found || model.ID == tc.wantModel
 				}
 				if !found {
 					t.Fatal("configured model missing from inventory")
