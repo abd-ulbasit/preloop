@@ -317,6 +317,25 @@ def test_metadata_only_workspace_still_allows_native_resume(
     source = service._load_source(account, execution_id)
     assert source["native_resume_available"] is True
     assert source["native_resume_expires_at"] == expires_at
+    existing = SimpleNamespace(
+        id=execution_id,
+        flow_id=flow_id,
+        state="stopped",
+        stop_reason="flow_disabled",
+        latest_execution_id=execution_id,
+        active_execution_id=None,
+    )
+    monkeypatch.setattr(service.crud_flow_feedback, "find", lambda *a, **k: [existing])
+    assert (
+        service._load_source(account, execution_id)["native_reactivation_available"]
+        is True
+    )
+    existing.stop_reason = "no_progress"
+    assert (
+        service._load_source(account, execution_id)["native_reactivation_available"]
+        is False
+    )
+    existing.stop_reason = "flow_disabled"
 
     workspace.manifest = {"metadata": {}}
     refused = service._load_source(account, execution_id)
