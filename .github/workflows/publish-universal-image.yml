@@ -36,6 +36,7 @@ on:
       - 'environments/universal/Dockerfile'
       - 'environments/universal/*.sh'
       - 'environments/universal/*.py'
+      - 'environments/universal/bin/**'
       - 'environments/universal/fixtures/**'
       - 'environments/perl/perl-toolchain-smoke.sh'
       - 'environments/perl/fixtures/**'
@@ -77,6 +78,7 @@ jobs:
               - 'environments/universal/Dockerfile'
               - 'environments/universal/*.sh'
               - 'environments/universal/*.py'
+              - 'environments/universal/bin/**'
               - 'environments/universal/fixtures/**'
               - 'environments/perl/perl-toolchain-smoke.sh'
               - 'environments/perl/fixtures/**'
@@ -187,6 +189,7 @@ jobs:
         if: matrix.arch == 'amd64'
         run: docker buildx prune -af
 
+      # The final-image smoke requires preloop-preflight before any push.
       - name: Smoke offline
         if: matrix.arch == 'amd64'
         env:
@@ -260,7 +263,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      # Push the index and set the package public.
+      # Push the index; anonymous access is verified separately.
       packages: write
       # Mint the Sigstore certificate for the index digest.
       id-token: write
@@ -312,22 +315,21 @@ jobs:
           subject-digest: ${{ steps.index.outputs.digest }}
           push-to-registry: true
 
-      - name: Make package public
+      - name: Verify anonymous digest access
         env:
-          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.index.outputs.digest }}
         run: |
           set -euo pipefail
-          name="preloop-codex-universal"
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
           for _ in 1 2 3 4 5 6; do
-            if gh api --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}" \
-              -f visibility=public
+            if docker --config "$anonymous_config" manifest inspect \
+              "${IMAGE}@${DIGEST}" >/dev/null
             then
-              echo "package ${name} is public"
+              echo "published digest is anonymously accessible"
               exit 0
             fi
             sleep 10
           done
-          echo "could not set ${name} public; anonymous pull would fail" >&2
+          echo "anonymous access failed; make the package public in GitHub package settings" >&2
           exit 1

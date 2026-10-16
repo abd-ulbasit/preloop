@@ -9,11 +9,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Index digest published by Publish Universal Image when #1716 merged
-# (run 38650782681). The attestation subject is this same digest.
+# Index digest published by Publish Universal Image from main e6f6078ba543
+# (run 38827918917). The attestation subject is this same digest.
 _HOSTED_CODEX_IMAGE = (
     "ghcr.io/preloop/preloop-codex-universal@sha256:"
-    "2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de"
+    "c6f75840defd44b6a6b187302acf165e245b378844098c8b57442bceee5f5b96"
 )
 _DIGEST_PIN = re.compile(r"@sha256:[0-9a-f]{64}\Z")
 _codex_tag_warning_emitted = False

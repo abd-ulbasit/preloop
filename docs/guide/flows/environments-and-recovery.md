@@ -82,6 +82,9 @@ linters and shellcheck. The Publish Universal Image workflow
 (`.github/workflows/publish-universal-image.yml`) builds linux/amd64 and
 linux/arm64, smokes amd64 with `environments/universal/run-smoke.sh`, and
 publishes the multi-arch index to `ghcr.io/preloop/preloop-codex-universal`.
+The container package must be public in GitHub package settings; after pushing
+and attesting the index, the workflow verifies anonymous digest access and
+fails if access is unavailable.
 
 A pull request and the weekly schedule build and smoke only; they do not
 push. A version tag, a manual run on main, and a merge to main that changes
@@ -90,7 +93,7 @@ the recipe publish. Tags are `sha-<12 hex chars of the commit>` and
 `ghcr.io/preloop/preloop-codex-universal@sha256:<digest>`, and the workflow
 attests that digest. The hosted default is that published digest, pinned in
 `backend/preloop/agents/images.py` as
-`ghcr.io/preloop/preloop-codex-universal@sha256:2ce76f7bab752582f34122bc714ba48db1e3b5964a91cd1e0e496c8461eaf6de`.
+`ghcr.io/preloop/preloop-codex-universal@sha256:c6f75840defd44b6a6b187302acf165e245b378844098c8b57442bceee5f5b96`.
 Helm `agents.codexImage` sets `CODEX_IMAGE` on the API and worker pods when
 an operator overrides it. Leave it empty to use the core default. A
 tag-valued `CODEX_IMAGE` logs one warning at startup. Private runners can

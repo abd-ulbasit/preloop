@@ -259,7 +259,14 @@ def test_run_smoke_uses_the_entrypoint_and_names_a_missing_tool() -> None:
 
 @pytest.mark.parametrize(
     "script",
-    [SMOKE, RUN_SMOKE, TOOLS_SH, CODEX_ENV, UNIVERSAL / "remove-tool.sh"],
+    [
+        SMOKE,
+        RUN_SMOKE,
+        TOOLS_SH,
+        CODEX_ENV,
+        UNIVERSAL / "remove-tool.sh",
+        UNIVERSAL / "check-preflight.sh",
+    ],
 )
 def test_scripts_pass_bash_n(script: Path) -> None:
     result = subprocess.run(
@@ -397,3 +404,48 @@ def test_manifest_cli_exits_nonzero_for_a_tag(
     )
     assert code == 1
     assert not out.exists()
+
+
+@pytest.mark.parametrize("state", ["missing", "available", "broken", "not_executable"])
+def test_preflight_publish_guard_requires_an_executable_binary(
+    tmp_path: Path, state: str
+) -> None:
+    """The publish gate rejects images built before preflight was installed."""
+    if state != "missing":
+        binary = tmp_path / "preloop-preflight"
+        binary.write_text('#!/bin/sh\n[ "$1" = "--help" ]\n')
+        if state == "broken":
+            binary.write_text("#!/bin/sh\nexit 42\n")
+        binary.chmod(0o644 if state == "not_executable" else 0o755)
+    result = subprocess.run(
+        [BASH, str(UNIVERSAL / "check-preflight.sh")],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": str(tmp_path), "PRELOOP_DISABLE_TELEMETRY": "true"},
+    )
+    if state == "available":
+        assert result.returncode == 0, result.stderr
+        assert "PASS preloop-preflight" in result.stdout
+    else:
+        assert result.returncode != 0
+        if state == "missing":
+            assert "missing required tool: preloop-preflight" in result.stderr
+        assert "PASS " not in result.stdout
+
+
+def test_publish_smoke_checks_preflight_in_the_target_image() -> None:
+    """Use the checked-out guard even when the image embeds an older smoke."""
+    text = RUN_SMOKE.read_text()
+    assert '-s < "$dir/check-preflight.sh"' in text
+    assert text.index("check-preflight.sh") < text.index(
+        "/opt/preloop-universal/smoke.sh"
+    )
+
+
+def test_both_architectures_require_preflight_during_build() -> None:
+    """The arm64 publication must also fail if preflight cannot execute."""
+    text = DOCKERFILE.read_text()
+    copy = "COPY environments/universal/bin/preloop-preflight /usr/local/bin/preloop-preflight"
+    guard = "RUN --network=none preloop-preflight --help >/dev/null"
+    assert text.index(copy) < text.index(guard)

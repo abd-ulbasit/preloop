@@ -74,6 +74,14 @@ fi
 env_args+=(-e "CODEX_BASE_IMAGE=${base}")
 
 run_smoke() {
+    # Check the final image, including binaries copied after its build smoke.
+    # Supply the guard from this checkout rather than trusting an older image.
+    docker run --rm -i --network none \
+        --entrypoint /opt/entrypoint.sh \
+        ${env_args[@]+"${env_args[@]}"} \
+        ${user_args[@]+"${user_args[@]}"} \
+        "$1" \
+        -s < "$dir/check-preflight.sh" || return $?
     # ${user_args[@]+...} stays safe when the array is empty under set -u.
     docker run --rm --network none \
         --entrypoint /opt/entrypoint.sh \
@@ -88,11 +96,11 @@ expect_pass_lines() {
     local lang
     local count
     count="$(grep -c '^PASS ' <<<"$output" || true)"
-    if [ "$count" -ne 7 ]; then
-        echo "FAIL: expected 7 PASS lines, found ${count}" >&2
+    if [ "$count" -ne 8 ]; then
+        echo "FAIL: expected 8 PASS lines, found ${count}" >&2
         return 1
     fi
-    for lang in python java go rust typescript perl shell; do
+    for lang in preloop-preflight python java go rust typescript perl shell; do
         if ! grep -qx "PASS ${lang}" <<<"$output"; then
             echo "FAIL: missing PASS ${lang}" >&2
             return 1
