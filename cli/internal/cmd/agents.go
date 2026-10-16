@@ -2045,13 +2045,13 @@ func runAgentsValidate(cmd *cobra.Command, args []string) error {
 			liveResult, liveErr := runManagedAgentLiveValidation(client, agent, currentLiveValidationInputs(existingValidation, result))
 			if liveResult != nil {
 				result = mergeStringMaps(result, liveResult.ValidationResult)
-				if liveResult.Attempted && !liveResult.Passed {
-					status = "validation_failed"
-				}
+				status = deferredLiveValidationPersistStatus(liveResult)
 			}
 			if liveErr != nil {
 				fmt.Printf("  live_validation_error: %v\n", liveErr)
-				status = "validation_failed"
+				if !liveValidationOutcomeKeepsGatewayConfig(liveResult) {
+					status = "validation_failed"
+				}
 				result["live_validation_error"] = liveErr.Error()
 			}
 		} else if runLiveValidation {
@@ -2340,6 +2340,8 @@ func runAgentsRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	discovered = appendRetiredEnrolledAgents(discovered)
+
 	agent, err := findDiscoveredAgent(discovered, args[0])
 	if err != nil {
 		return err
@@ -2399,13 +2401,17 @@ func runAgentsRestore(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("✓ Restored %s config from %s\n", resolveAgentDisplayName(agent), state.BackupPath)
 	restartHermesGatewayAfterReconfig(agent, os.Stdout)
-	printMutatingCommandUndo(
-		os.Stdout,
-		fmt.Sprintf(
-			"preloop agents onboard %s",
-			shellQuoteAgentName(resolveAgentDisplayName(agent)),
-		),
-	)
+	if strings.EqualFold(agent.Name, "Windsurf") {
+		fmt.Println("Windsurf is retired. Run preloop agents offboard Windsurf to remove its managed enrollment; onboard Devin for the replacement app.")
+	} else {
+		printMutatingCommandUndo(
+			os.Stdout,
+			fmt.Sprintf(
+				"preloop agents onboard %s",
+				shellQuoteAgentName(resolveAgentDisplayName(agent)),
+			),
+		)
+	}
 	return nil
 }
 
@@ -2440,6 +2446,8 @@ func runAgentsOffboard(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	discovered = appendRetiredEnrolledAgents(discovered)
 
 	if len(args) == 0 {
 		client, err := api.NewClient(FlagToken, FlagURL)
@@ -3747,9 +3755,7 @@ func detectInstalledAgent(home string, spec agentSpec) (string, bool) {
 	}
 	bootstrapPath := expandAgentConfigPath(home, filepath.Join(home, spec.BootstrapConfigPath))
 	if spec.Name == "VSCode / Copilot" {
-		if dirs := userConfigDirs(home); len(dirs) > 0 {
-			bootstrapPath = filepath.Join(dirs[0], "Code", "User", "mcp.json")
-		}
+		return detectVSCodeInstall(home)
 	}
 	if spec.Name == devinAgentName {
 		if path, err := devinConfigPath("mcp_config.json"); err == nil {

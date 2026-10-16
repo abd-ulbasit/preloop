@@ -137,7 +137,21 @@ def _truncate_realtime_event(event: dict[str, Any]) -> dict[str, Any]:
             payload["conversation_preview"], dict
         ):
             preview = payload["conversation_preview"].copy()
-            preview["messages"] = []
+            # The history endpoint retains the full sanitized preview. Realtime
+            # only needs recent text for canvas bubbles; dropping every message
+            # made large Claude conversations look silent while still active.
+            messages = preview.get("messages")
+            preview["messages"] = [
+                {
+                    "source": str(message.get("source", ""))[:16],
+                    "role": str(message.get("role", ""))[:32],
+                    "text": message["text"][:300],
+                    "redacted": bool(message.get("redacted")),
+                    "truncated": True,
+                }
+                for message in (messages[-2:] if isinstance(messages, list) else [])
+                if isinstance(message, dict) and isinstance(message.get("text"), str)
+            ]
             metadata = preview.get("metadata")
             if isinstance(metadata, dict):
                 preview["metadata"] = {

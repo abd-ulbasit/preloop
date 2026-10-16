@@ -2262,6 +2262,7 @@ export class AgentsView extends LitElement {
     if (!agent.live_validation_supported) return 'neutral';
     if (agent.live_validation_status === 'passed') return 'success';
     if (agent.live_validation_status === 'failed') return 'danger';
+    if (agent.live_validation_status === 'timeout') return 'warning';
     if (agent.live_validation_status === 'throttled') return 'warning';
     if (agent.live_validation_status === 'not_run') return 'neutral';
     return 'warning';
@@ -2271,6 +2272,8 @@ export class AgentsView extends LitElement {
     if (!agent.live_validation_supported) return 'No live check';
     if (agent.live_validation_status === 'passed') return 'Live validated';
     if (agent.live_validation_status === 'failed') return 'Live check failed';
+    if (agent.live_validation_status === 'timeout')
+      return 'Live check timed out, unverified';
     if (agent.live_validation_status === 'throttled')
       return 'Live check throttled, unverified';
     if (agent.live_validation_status === 'upstream_unavailable')
@@ -3111,7 +3114,7 @@ export class AgentsView extends LitElement {
    */
   private shouldShowValidationBadge(agent: ManagedAgentSummary): boolean {
     if (!agent.live_validation_supported) return false;
-    return ['failed', 'throttled', 'upstream_unavailable'].includes(
+    return ['failed', 'throttled', 'upstream_unavailable', 'timeout'].includes(
       agent.live_validation_status
     );
   }

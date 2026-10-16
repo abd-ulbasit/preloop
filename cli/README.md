@@ -333,7 +333,9 @@ unchanged enrollments, declined onboarding, and configs whose runtime is missing
 Unchanged rows distinguish MCP-only configuration from model routing and show
 native-approval support and the explicit install/repair command. Devin Desktop's
 local agent and Devin CLI share the Devin configuration and appear as one agent;
-Windsurf is no longer an active discovery target. VS Code discovery includes the
+Windsurf is no longer an active discovery target. Existing local enrollments
+can still be undone with `preloop agents restore Windsurf` or
+`preloop agents offboard Windsurf` (also included in `offboard --all`). VS Code discovery includes the
 native Code, Code Insiders, and VSCodium user-profile MCP files.
 
 Gateway validation allows up to two minutes for a model response. A transport

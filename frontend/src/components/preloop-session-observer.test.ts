@@ -6,6 +6,7 @@ import {
 } from '../services/unified-websocket-manager';
 import { resetConfirmDialogForTests } from './confirm-dialog';
 import './preloop-session-observer';
+import { loadShoelaceTokens } from '../utils/test-shoelace-theme';
 import type { PreloopSessionObserver } from './preloop-session-observer';
 
 describe('PreloopSessionObserver', () => {
@@ -400,6 +401,33 @@ describe('PreloopSessionObserver', () => {
     expect(
       embedded.shadowRoot!.querySelector('.observer')!.getAttribute('style')
     ).to.contain('min-height: 520px');
+  });
+
+  it('keeps errors readable above a long transcript in the bounded panel', async () => {
+    await loadShoelaceTokens();
+    const el = await fixture<PreloopSessionObserver>(
+      html`<preloop-session-observer
+        layout="full"
+        .sessions=${[session]}
+      ></preloop-session-observer>`
+    );
+    await waitUntil(
+      () => !!(el as any).activeSessionId && !(el as any).loadingSessionId
+    );
+    (el as any).error =
+      'Session refresh failed. Retry to load recent activity.';
+    await el.updateComplete;
+    const content = el.shadowRoot!.querySelector<HTMLElement>('.content')!;
+    const filler = document.createElement('div');
+    filler.style.cssText = 'height: 5000px; min-height: 5000px';
+    content.appendChild(filler);
+    const alert = content.querySelector<HTMLElement>('sl-alert')!;
+    await (alert as any).updateComplete;
+    await waitUntil(
+      () => alert.getBoundingClientRect().height > 40,
+      'alert collapsed above the transcript'
+    );
+    expect(content.scrollHeight).to.be.greaterThan(content.clientHeight);
   });
 
   it('switches replay layout to chat transcript', async () => {

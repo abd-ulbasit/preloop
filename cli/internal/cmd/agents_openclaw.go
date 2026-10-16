@@ -1209,14 +1209,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 			fmt.Fprintln(output, formatCLIError(hint)) //nolint:errcheck
 		}
 		if liveOutcome != nil && liveOutcome.Attempted {
-			// A probe the upstream provider refused (rate limit, billing) is
-			// inconclusive, not a failure: the static config checks passed and
-			// the gateway config stays in place, so persist "validated" and let
-			// live_validation_status carry the detail.
-			validationStatus := "validated"
-			if !liveOutcome.Passed && !liveValidationGatewayVerified {
-				validationStatus = "validation_failed"
-			}
+			validationStatus := deferredLiveValidationPersistStatus(liveOutcome)
 			if _, persistErr := validateManagedEnrollmentRecord(
 				client,
 				agent,

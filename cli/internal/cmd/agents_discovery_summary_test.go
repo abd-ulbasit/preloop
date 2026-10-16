@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/preloop/preloop/cli/internal/testenv"
 	"net/url"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -106,5 +109,46 @@ func TestRepairedConfigOverridesSavedRollbackBeforeValidation(t *testing.T) {
 	}
 	if saved["gateway_provider_ok"] != false {
 		t.Fatal("saved result was mutated")
+	}
+}
+
+func TestVSCodeBootstrapMatchesInstalledVariant(t *testing.T) {
+	for command, app := range map[string]string{"code": "Code", "code-insiders": "Code - Insiders", "codium": "VSCodium"} {
+		t.Run(command, func(t *testing.T) {
+			home := t.TempDir()
+			testenv.SetHome(t, home)
+			t.Setenv("APPDATA", filepath.Join(home, "AppData"))
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			previous := runtimeExecutableProbe
+			runtimeExecutableProbe = func(candidate string) (string, error) {
+				if candidate == command {
+					return "/bin/" + candidate, nil
+				}
+				return "", exec.ErrNotFound
+			}
+			t.Cleanup(func() { runtimeExecutableProbe = previous })
+			path, ok := detectInstalledAgent(home, specByName(t, "VSCode / Copilot"))
+			if !ok || filepath.Base(filepath.Dir(filepath.Dir(path))) != app {
+				t.Fatalf("%s: %q, %v", command, path, ok)
+			}
+		})
+	}
+}
+
+func TestRetiredWindsurfEnrollmentRemainsUndoable(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	if got := appendRetiredEnrolledAgents(nil); len(got) != 0 {
+		t.Fatal("unenrolled retired app surfaced")
+	}
+	path := filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")
+	if err := saveLocalEnrollmentState(&localEnrollmentState{AgentName: "Windsurf", ConfigPath: path, DisplayName: "Legacy editor"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Windsurf", "Legacy editor"} {
+		agent, err := findDiscoveredAgent(appendRetiredEnrolledAgents(nil), name)
+		if err != nil || agent.ConfigPath != path {
+			t.Fatalf("%s: %+v %v", name, agent, err)
+		}
 	}
 }

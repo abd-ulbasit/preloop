@@ -1017,6 +1017,23 @@ describe('AgentsView', () => {
     expect(badge?.getAttribute('variant')).to.equal('warning');
   });
 
+  it('reports a completed timeout as unverified rather than pending', async () => {
+    localStorage.setItem('preloop.agents.view_mode', 'cards');
+    agentItems = [
+      {
+        ...makeAgent('agent-1', 'Claude Code Workspace', 'claude_code'),
+        live_validation_passed: false,
+        live_validation_status: 'timeout',
+      },
+    ];
+    const el = await fixture<AgentsView>(html`<agents-view></agents-view>`);
+    await waitForAgents(el);
+    expect((el.shadowRoot?.textContent || '').replace(/\s+/g, ' ')).to.contain(
+      'Live check timed out, unverified'
+    );
+    expect(el.shadowRoot?.textContent).not.to.contain('Live check pending');
+  });
+
   it('surfaces a red badge on the list when validation failed', async () => {
     localStorage.setItem('preloop.agents.view_mode', 'cards');
     agentItems = [
