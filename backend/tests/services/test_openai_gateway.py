@@ -4843,3 +4843,60 @@ def test_bedrock_embedding_region_metadata_overrides_secret(
         kwargs = service._build_embedding_kwargs(ai_model, payload={"input": "hello"})
     assert kwargs["aws_region_name"] == (metadata_region or "us-east-1")
     assert kwargs["api_key"] == "synthetic-key"
+
+
+@pytest.mark.parametrize(
+    "provider_name,stream,payload,expected",
+    [
+        ("openai-compatible", False, {}, {"temperature": 0, "top_p": 0.8}),
+        ("custom", True, {}, {"temperature": 0, "top_p": 0.8}),
+        (
+            "openai-compatible",
+            True,
+            {"temperature": 0.7, "top_p": 0},
+            {"temperature": 0.7, "top_p": 0},
+        ),
+        ("openai", False, {}, {}),
+    ],
+)
+def test_compatible_chat_sampling_defaults(
+    provider_name: str,
+    stream: bool,
+    payload: dict[str, float],
+    expected: dict[str, float],
+) -> None:
+    """Apply portable local defaults when Codex omits client sampling controls."""
+    auth_context = ModelGatewayAuthContext(
+        token="token",
+        user=SimpleNamespace(id="user-1", account_id="account-1"),
+    )
+    service = OpenAIGatewayService(MagicMock(), auth_context)
+    ai_model = SimpleNamespace(
+        provider_name=provider_name,
+        model_identifier="local-coder",
+        api_endpoint="https://models.example.com/v1",
+        meta_data={},
+        model_parameters={"temperature": 0, "top_p": 0.8, "num_ctx": 32768},
+    )
+    with (
+        patch("preloop.services.openai_gateway.get_secret_service") as secrets,
+        patch(
+            "preloop.services.openai_gateway.checked_model_api_base",
+            return_value=ai_model.api_endpoint,
+        ),
+    ):
+        secrets.return_value.resolve_ai_model_credentials.return_value = (
+            SimpleNamespace(credential_type="api_key", value="local-only")
+        )
+        kwargs = service._build_completion_kwargs(
+            ai_model,
+            messages=[{"role": "user", "content": "Review this change"}],
+            payload=payload,
+            stream=stream,
+            provider="openai",
+        )
+
+    assert {
+        key: kwargs[key] for key in ("temperature", "top_p") if key in kwargs
+    } == expected
+    assert "num_ctx" not in kwargs

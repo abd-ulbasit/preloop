@@ -81,7 +81,9 @@ authorization header):
   "api_key": "local-only",
   "model_parameters": {
     "context_window": 32768,
-    "max_output_tokens": 4096
+    "max_output_tokens": 4096,
+    "temperature": 0,
+    "top_p": 0.8
   },
   "meta_data": {
     "gateway": {
@@ -96,6 +98,12 @@ authorization header):
   }
 }
 ```
+
+For compatible-provider chat requests and Responses transcoding, stored
+`temperature` and `top_p` are defaults when the client omits those controls.
+Explicit client values win. Native Responses passthrough forwards the client
+payload instead. Other server options, such as Ollama `num_ctx`, belong in
+the model server configuration.
 
 Zero prices express zero marginal API charges; they do not account for your
 hardware or electricity. Configure your own prices to meter internal usage.
@@ -139,6 +147,12 @@ Kubernetes NetworkPolicy selects Pods/namespaces or IP blocks, not DNS
 names; match your CNI's supported policy format. A permissive agent policy
 cannot fix a blocked gateway-to-model connection. Allow the API's egress
 too when using server-side generation or live model discovery.
+
+The default hosted Codex setup installs its pinned CLI from npm, so allow
+its package registry or an approved registry mirror during setup. An
+environment profile that already packages the required CLI can avoid that
+installation. Any configured dependency setup commands need their own
+registry or mirror access too.
 
 Avoid giving agent Jobs direct model-server access when all inference is
 intended to pass through Preloop's gateway governance and accounting.
