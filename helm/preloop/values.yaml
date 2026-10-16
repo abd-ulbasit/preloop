@@ -727,7 +727,7 @@ otlp:
 
 # Weekly governance review (Enterprise). Both values are unset by default
 # and then render no env, so the application defaults apply. See
-# docs/guide/governance-review.md.
+# https://docs.preloop.ai/guide/governance-review/.
 governanceReview:
   # true or false sets GOVERNANCE_REVIEW_ENABLED (the hourly digest sweep and
   # the Monday review schedule). Unset keeps the default, which is on.

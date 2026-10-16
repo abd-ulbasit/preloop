@@ -441,7 +441,7 @@ deployments. See `docs/guide/observability-otlp.md`.
 ### Governance review parameters
 
 Each value renders its environment variable on the API, worker and scheduler
-deployments only when set. See `docs/guide/governance-review.md`.
+deployments only when set. See `https://docs.preloop.ai/guide/governance-review/`.
 
 | Name | Description | Value |
 | ---- | ----------- | ----- |
