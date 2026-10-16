@@ -140,3 +140,16 @@ async def test_dispatch_uses_snapshot_identity_and_works_without_a_session() -> 
     assert event.runtime_session_id is None
     assert "synthetic-secret" not in repr(event)
     assert "example.com" not in repr(event)
+
+
+def test_plugin_lookup_failure_does_not_change_execution_outcome() -> None:
+    with patch(
+        "preloop.plugins.base.get_plugin_manager",
+        side_effect=RuntimeError("synthetic plugin failure"),
+    ):
+        publish_dispatch_observation(
+            account_id=str(uuid4()),
+            server_id=str(uuid4()),
+            registry_revision="2026-10-16T12:00:00",
+            runtime_session_id=None,
+        )

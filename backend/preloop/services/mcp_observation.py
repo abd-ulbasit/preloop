@@ -46,10 +46,10 @@ def publish_dispatch_observation(
         return
     from preloop.plugins.base import get_plugin_manager
 
-    observer = get_plugin_manager().get_service("mcp_inventory_observer")
-    if observer is None:
-        return
     try:
+        observer = get_plugin_manager().get_service("mcp_inventory_observer")
+        if observer is None:
+            return
         observer.observe(
             MCPDispatchObservation(
                 account_id=UUID(account_id),
