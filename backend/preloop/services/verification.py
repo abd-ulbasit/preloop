@@ -381,7 +381,9 @@ def verification_prompt_instructions(git_config: Optional[Mapping[str, Any]]) ->
         "REQUIRED VERIFICATION CHECKS (trusted flow profile):",
         "Run the always checks and every rule matching your final changed paths "
         "before your final commit. Fix every failure. The gate reruns them on "
-        "the final commit; failed checks refuse publication.",
+        "the final commit; failed checks refuse publication. For commit-range "
+        "checks, commit first, test the final HEAD, and append repair commits "
+        "if necessary.",
         "PRELOOP_VERIFY_BASE and PRELOOP_VERIFY_HEAD are set by the gate; "
         "when testing manually set them to the PR base ref and HEAD.",
     ]

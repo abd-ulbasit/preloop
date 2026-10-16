@@ -6,6 +6,7 @@ the execution result under ``verification``, while anything the agent wrote
 itself under that key is demoted to ``verification_reported``.
 """
 
+import pytest
 from unittest.mock import MagicMock
 
 
@@ -282,3 +283,34 @@ class TestVerificationPrompt:
         ):
             assert expected in prompt
         assert verification_prompt_instructions({}) == ""
+
+
+@pytest.mark.asyncio
+async def test_launch_prompt_includes_effective_repository_profile() -> None:
+    from types import SimpleNamespace
+
+    orchestrator = _orchestrator()
+    orchestrator.flow = SimpleNamespace(
+        prompt_template="Implement the issue.", git_clone_config=None
+    )
+    orchestrator._repository_binding = SimpleNamespace(
+        git_clone_config={
+            "verification": {
+                "mode": "gate",
+                "profile": {
+                    "profile_id": "bound-repository",
+                    "always": [
+                        {
+                            "id": "git-diff-check",
+                            "command": "git diff --check main...HEAD",
+                            "reason": "whitespace",
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    prompt = await orchestrator._resolve_prompt()
+    assert "Implement the issue." in prompt
+    assert "[git-diff-check]: git diff --check main...HEAD" in prompt
+    assert "Automatic whitespace repair is disabled" in prompt
