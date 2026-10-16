@@ -21,8 +21,10 @@ test("published package loads once and denies native writes before execution", a
   const packageRoot = new URL("../", import.meta.url);
   const manifest = JSON.parse(fs.readFileSync(new URL("package.json", packageRoot), "utf8"));
   const entrypoint = new URL(manifest.main, packageRoot);
-  const factories = loadFactories(await import(entrypoint.href));
-  assert.equal(factories.length, 1, "named/default factory aliases must deduplicate");
+  const entrypointModule = await import(entrypoint.href);
+  const factories = loadFactories(entrypointModule);
+  assert.equal(Object.keys(entrypointModule).length, 1, "expose one factory name");
+  assert.equal(factories.length, 1, "load exactly one factory");
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "preloop-opencode-package-"));
   const config = path.join(directory, "opencode.json");
