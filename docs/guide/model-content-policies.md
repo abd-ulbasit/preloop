@@ -32,8 +32,9 @@ evaluation when no access rule matches (`No access rules defined` /
 next to Tools), available by default to users with `view_policies` permission.
 Operators can hide the page with `PRELOOP_POLICIES_CONSOLE=false`; instance
 admins retain access and backend permission checks remain in force.
-`/console/governance` redirects there. The per-tool
-widget on Tools is unchanged.
+The per-tool approval widget on Tools links here through **Manage in Policies**.
+In the OSS edition, `/console/governance` redirects here. With the Enterprise
+weekly review enabled, that route opens the report under **Audit > Weekly review**.
 
 Create, edit, disable, and delete rules from the Rules list. The
 primary action is Describe a change: the account default model proposes
