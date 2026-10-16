@@ -1501,6 +1501,7 @@ async def test_connection_and_list_orgs(
                     id=p["id"],
                     name=p["name"],
                     identifier=p["id"],
+                    key=p.get("key"),
                     type="project",
                     group=p.get("group"),
                 )

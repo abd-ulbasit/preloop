@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
+from fastapi.testclient import TestClient
 
+from preloop.api.common import get_accessible_projects
 from preloop.models import models
 from preloop.sync.scanner.core import TrackerClient
 from preloop.sync.trackers.jira import JiraTracker
@@ -115,6 +117,21 @@ async def test_jira_listing_selection_matches_scanner(
     expected = expected if include_organization else []
     assert sorted(project.identifier for project in found) == expected
     assert all(project.organization_id == org.id for project in found)
+    # Existing projects are filtered by the same contract as discovery.
+    found_ids = {project.identifier for project in found}
+    for identifier, key in [("10000", "PROJ"), ("10001", "OTHER")]:
+        if identifier not in found_ids:
+            db_session.add(
+                models.Project(
+                    name=key,
+                    identifier=identifier,
+                    slug=key,
+                    organization_id=org.id,
+                )
+            )
+    db_session.flush()
+    visible = get_accessible_projects(db_session, test_user)
+    assert sorted(project.identifier for project in visible) == expected
     if "10000" in expected:
         assert (
             next(project for project in found if project.identifier == "10000").slug
@@ -139,3 +156,46 @@ async def test_jira_listing_identifier_is_the_persisted_project_identity() -> No
     transformed = adapter.transform_project(listed, "organization")
     assert listed["identifier"] == transformed["identifier"] == "10000"
     assert listed["key"] == transformed["slug"] == "PROJ"
+
+
+@pytest.mark.parametrize("endpoint", ["list-projects-for-org", "test-and-list-orgs"])
+def test_jira_scope_listing_serializes_legacy_key(
+    client: TestClient,
+    endpoint: str,
+) -> None:
+    from preloop.schemas.tracker_models import TrackerConnection
+
+    adapter = AsyncMock()
+    adapter.test_connection.return_value = TrackerConnection(
+        connected=True, message="ok"
+    )
+    adapter.get_organizations.return_value = [
+        {"id": "jira.example.com", "name": "Jira"}
+    ]
+    adapter.get_projects.return_value = [
+        {
+            "id": "10000",
+            "identifier": "10000",
+            "key": "PROJ",
+            "name": "Selected",
+        }
+    ]
+    payload = {
+        "tracker_type": "jira",
+        "url": "https://jira.example.com",
+        "api_key": "test-token",
+        "username": "test@example.com",
+        "organization_identifier": "jira.example.com",
+    }
+    with patch(
+        "preloop.api.endpoints.trackers.create_tracker_client", return_value=adapter
+    ):
+        response = client.post(f"/api/v1/trackers/{endpoint}", json=payload)
+    assert response.status_code == 200
+    listing = (
+        response.json()
+        if endpoint == "list-projects-for-org"
+        else response.json()["orgs"][0]["children"]
+    )
+    assert listing[0]["identifier"] == "10000"
+    assert listing[0]["key"] == "PROJ"

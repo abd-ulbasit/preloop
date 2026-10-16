@@ -10,6 +10,8 @@ from urllib.parse import urljoin
 import secrets
 from sqlalchemy.orm import Session
 
+from preloop.utils.tracker_scope import project_scope_identifiers
+
 from preloop.models.crud import (
     crud_account,
     crud_issue,
@@ -310,9 +312,11 @@ class TrackerClient:
                 # Jira scope previously saved keys while persisted identity uses
                 # numeric IDs. Match that legacy key only within this Jira
                 # tracker's fetched project; exclusions always take precedence.
-                scope_identifiers = {str(project_identifier)}
-                if self.tracker.tracker_type == "jira" and proj_data.get("key"):
-                    scope_identifiers.add(str(proj_data["key"]))
+                scope_identifiers = project_scope_identifiers(
+                    self.tracker.tracker_type,
+                    project_identifier,
+                    jira_key=proj_data.get("key"),
+                )
                 if scope_identifiers.intersection(project_exclusions):
                     logger.info(
                         f"Skipping project {project_name} ({project_identifier}) because it is in the exclusion list."
