@@ -61,6 +61,7 @@ def test_restore_preserves_unpublished_work(
     before = git(restored, "status", "--porcelain")
     executor = ContainerAgentExecutor("codex", {}, image="test:latest")
     context = {
+        "account_id": "bound-account",
         "checkpoint_env": {"PRELOOP_CHECKPOINT_GET_TOKEN": "test-capability"},
         "_git_source_branch": "implementation/other"
         if remote_state == "wrong_branch"
@@ -91,7 +92,7 @@ def test_restore_preserves_unpublished_work(
     ) as resolve_project:
         script = executor._wrap_clone_with_workspace_restore("exit 99", context)
     if project_bound:
-        resolve_project.assert_called_once_with("bound-code-project", None)
+        resolve_project.assert_called_once_with("bound-code-project", "bound-account")
     home = tmp_path / "home"
     home.mkdir()
     result = subprocess.run(
