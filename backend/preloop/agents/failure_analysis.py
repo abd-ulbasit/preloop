@@ -628,9 +628,16 @@ def analyze_agent_failure(logs_text: str) -> AgentFailureAnalysis:
         marker = "PRELOOP_VERIFICATION_VERDICT "
         if line.startswith(marker + "ALLOW "):
             break
-        if line.startswith(marker + "DENY "):
+        if line.startswith(marker + "DENY ") or line.startswith(
+            "PRELOOP_VERIFICATION_DENIED status=blocked reason="
+        ):
             reason = line.partition(" reason=")[2]
-            status = "blocked" if "status=blocked" in line else "failed"
+            status = (
+                "blocked"
+                if line.startswith(marker + "DENY status=blocked ")
+                or line.startswith("PRELOOP_VERIFICATION_DENIED status=blocked ")
+                else "failed"
+            )
             detail = " ".join(reason.split()) or "publication refused"
             message = f"Verification {status}: {detail}"
             return AgentFailureAnalysis(

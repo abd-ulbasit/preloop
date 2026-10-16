@@ -578,3 +578,18 @@ def test_latest_allow_does_not_reuse_earlier_denial() -> None:
         "Error: git push rejected"
     )
     assert not analysis.message.startswith("Verification failed:")
+
+
+def test_repair_failure_is_a_readable_verification_block() -> None:
+    from preloop.services.flow_failure_category import derive_failure_category
+
+    analysis = analyze_agent_failure(
+        "Wrote git recovery artifacts under /workspace/evidence\n"
+        "PRELOOP_VERIFICATION_DENIED status=blocked reason=whitespace repair failed"
+    )
+    assert analysis.message == "Verification blocked: whitespace repair failed"
+    assert (
+        derive_failure_category(status="FAILED", error_message=analysis.message)
+        == "verification_blocked"
+    )
+    assert analysis.transient is False
