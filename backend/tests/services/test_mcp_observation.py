@@ -63,9 +63,11 @@ def test_missing_revision_and_no_plugin_emit_nothing() -> None:
         )
 
 
-def test_observer_failure_does_not_change_execution_outcome() -> None:
+def test_observer_failure_does_not_change_execution_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     observer = MagicMock()
-    observer.observe.side_effect = RuntimeError("synthetic failure")
+    observer.observe.side_effect = RuntimeError("synthetic-sensitive-detail")
     with patch(
         "preloop.plugins.base.get_plugin_manager",
         return_value=SimpleNamespace(get_service=lambda name: observer),
@@ -77,6 +79,9 @@ def test_observer_failure_does_not_change_execution_outcome() -> None:
             runtime_session_id=None,
         )
     observer.observe.assert_called_once()
+    assert "RuntimeError" in caplog.text
+    assert "synthetic-sensitive-detail" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.parametrize(
@@ -153,3 +158,91 @@ def test_plugin_lookup_failure_does_not_change_execution_outcome() -> None:
             registry_revision="2026-10-16T12:00:00",
             runtime_session_id=None,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [RuntimeError, ImportError])
+async def test_wrapper_preserves_completed_result_when_observation_raises(
+    error_type: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from unittest.mock import AsyncMock
+    from mcp.types import TextContent
+    from preloop.services import dynamic_fastmcp as dispatch
+    from preloop.services.dynamic_mcp_server import UserContext
+
+    account_id = str(uuid4())
+    gateway = dispatch.DynamicFastMCP("synthetic")
+    gateway.set_user_context_provider(
+        lambda: UserContext(
+            user_id=str(uuid4()), account_id=account_id, username="synthetic"
+        )
+    )
+    snapshot = dispatch.GrantDispatchSnapshot(
+        account_id=account_id,
+        tool_name="read",
+        server_name="synthetic",
+        upstream_name="read",
+        registry_revision="2026-10-16T12:00:00",
+        client_config={"server_id": str(uuid4())},
+    )
+    client = SimpleNamespace(
+        call_tool=AsyncMock(
+            return_value=[TextContent(type="text", text="synthetic-ok")]
+        )
+    )
+    monkeypatch.setattr(
+        dispatch,
+        "get_mcp_client_pool",
+        lambda: SimpleNamespace(get_client=AsyncMock(return_value=client)),
+    )
+    monkeypatch.setattr(gateway, "_grant_dispatch_denial", AsyncMock(return_value=None))
+    monkeypatch.setattr(gateway, "_halt_dispatch_denial", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        gateway,
+        "_observe_mcp_dispatch",
+        AsyncMock(side_effect=error_type("synthetic-sensitive-detail")),
+    )
+    monkeypatch.setattr(
+        "preloop.services.approval_helper.require_approval",
+        AsyncMock(return_value=(True, None)),
+    )
+    monkeypatch.setattr(dispatch, "apply_output_filters", lambda items, **kwargs: items)
+    wrapper = gateway._create_proxied_tool_wrapper(
+        "read", account_id, "Synthetic read", {"properties": {}}
+    )
+    token = dispatch._grant_dispatch_var.set(snapshot)
+    try:
+        result = await wrapper()
+    finally:
+        dispatch._grant_dispatch_var.reset(token)
+    assert result == "synthetic-ok"
+    client.call_tool.assert_awaited_once_with("read", {})
+    assert error_type.__name__ in caplog.text
+    assert "synthetic-sensitive-detail" not in caplog.text
+
+
+def test_plugin_import_failure_is_safe_and_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import builtins
+    from typing import Any
+
+    original_import = builtins.__import__
+
+    def importing(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "preloop.plugins.base":
+            raise ImportError("synthetic-sensitive-detail")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=importing):
+        publish_dispatch_observation(
+            account_id=str(uuid4()),
+            server_id=str(uuid4()),
+            registry_revision="2026-10-16T12:00:00",
+            runtime_session_id=None,
+        )
+    assert "ImportError" in caplog.text
+    assert "synthetic-sensitive-detail" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

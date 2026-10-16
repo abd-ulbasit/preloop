@@ -1,5 +1,6 @@
 """Tenant-scoped MCP review persistence. The caller owns the transaction."""
 
+import logging
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -8,6 +9,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+
+logger = logging.getLogger(__name__)
 
 
 class CRUDMCPInventory:
@@ -21,11 +24,13 @@ class CRUDMCPInventory:
             select(models.MCPServer.id, models.MCPServer.updated_at)
             .where(models.MCPServer.account_id == account_id)
             .order_by(models.MCPServer.id)
-            .limit(limit)
+            .limit(limit + 1)
             .with_for_update()
         ).all()
         if not servers:
             return
+        if len(servers) > limit:
+            logger.warning("MCP registry reconciliation is incomplete: bound exceeded")
         stmt = insert(models.MCPInventoryFinding).values(
             [
                 {
@@ -37,7 +42,7 @@ class CRUDMCPInventory:
                     "first_seen_at": at,
                     "last_seen_at": at,
                 }
-                for server_id, updated_at in servers
+                for server_id, updated_at in servers[:limit]
             ]
         )
         db.execute(

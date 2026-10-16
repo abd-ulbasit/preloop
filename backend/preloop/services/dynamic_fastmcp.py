@@ -1994,7 +1994,13 @@ async def {internal_name}({params_str}):
             return _wrapper_tool_error(denial, status="refused")
         # Call tool on external server
         result = await client.call_tool(upstream_name, arguments)
-        await self._observe_mcp_dispatch(snapshot, user_context)
+        try:
+            await self._observe_mcp_dispatch(snapshot, user_context)
+        except Exception as observation_error:
+            logger.warning(
+                "Safe MCP observation could not be scheduled (%s)",
+                type(observation_error).__name__,
+            )
         # Keep isError/structuredContent before filters rebuild the list.
         upstream = result
         logger.info(

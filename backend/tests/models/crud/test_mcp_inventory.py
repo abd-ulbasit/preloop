@@ -107,3 +107,30 @@ def test_owned_revision_required_and_evidence_is_deduplicated(
         )
         == 1
     )
+
+
+def test_reconciliation_reports_registry_beyond_its_bound(
+    db_session: Session, test_user: models.User, caplog: pytest.LogCaptureFixture
+) -> None:
+    for index in range(2):
+        crud_mcp_server.create(
+            db_session,
+            obj_in={
+                "account_id": test_user.account_id,
+                "name": f"synthetic-{index}",
+                "url": "http://example.com/mcp",
+            },
+        )
+    crud_mcp_inventory.reconcile_configured(
+        db_session, account_id=test_user.account_id, at=datetime.now(UTC), limit=1
+    )
+    assert (
+        len(
+            crud_mcp_inventory.list_with_context(
+                db_session, account_id=test_user.account_id
+            )
+        )
+        == 1
+    )
+    assert "MCP registry reconciliation is incomplete" in caplog.text
+    assert "example.com" not in caplog.text

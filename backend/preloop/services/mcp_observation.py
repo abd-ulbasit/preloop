@@ -44,9 +44,9 @@ def publish_dispatch_observation(
     """
     if not registry_revision:
         return
-    from preloop.plugins.base import get_plugin_manager
-
     try:
+        from preloop.plugins.base import get_plugin_manager
+
         observer = get_plugin_manager().get_service("mcp_inventory_observer")
         if observer is None:
             return
@@ -61,5 +61,9 @@ def publish_dispatch_observation(
                 else None,
             )
         )
-    except Exception:
-        logger.warning("Safe MCP observation could not be recorded")
+    except Exception as exc:
+        # Exception messages/tracebacks can contain registry secrets or rejected
+        # input values. Keep diagnostics to the error category only.
+        logger.warning(
+            "Safe MCP observation could not be recorded (%s)", type(exc).__name__
+        )
