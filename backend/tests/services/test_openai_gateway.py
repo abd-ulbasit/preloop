@@ -2503,6 +2503,37 @@ def test_aggregate_codex_events_rejects_unfinished_tool_call(
         service._aggregate_codex_events(events)
 
 
+@pytest.mark.parametrize(
+    "terminal_output", ["invalid", 1, {"invalid": True}, [None, 1, "invalid"]]
+)
+def test_aggregate_codex_events_ignores_malformed_terminal_candidates(
+    terminal_output: object,
+) -> None:
+    """Malformed terminal metadata must not break valid streamed output."""
+    service = OpenAIGatewayService(
+        MagicMock(),
+        ModelGatewayAuthContext(
+            token="token",
+            user=SimpleNamespace(id="user-1", account_id="account-1"),
+        ),
+    )
+    item = {
+        "id": "tool_1",
+        "type": "function_call",
+        "name": "example_tool",
+        "call_id": "call_1",
+        "status": "completed",
+        "arguments": "{}",
+    }
+    result = service._aggregate_codex_events(
+        [
+            {"type": "response.output_item.done", "item": item},
+            {"type": "response.completed", "response": {"output": terminal_output}},
+        ]
+    )
+    assert result["output"] == [item]
+
+
 def test_aggregate_codex_sse_stream_skips_truncated_response_completed_event():
     """If ``response.completed`` arrives truncated (mirrors the
     vercel/ai#14473 reproduction), aggregation must still produce a valid

@@ -6097,10 +6097,13 @@ class OpenAIGatewayService:
         # arguments string can then make every subsequent request fail.
         # Inspect both sources: a statusless streamed item must not hide an
         # explicitly unfinished item in the terminal response.
-        candidate_items = list(items_by_id.values()) + (
-            (completed_response or {}).get("output") or []
-        )
+        candidate_items = list(items_by_id.values())
+        terminal_output = (completed_response or {}).get("output")
+        if isinstance(terminal_output, list):
+            candidate_items.extend(terminal_output)
         for item in candidate_items:
+            if not isinstance(item, dict):
+                continue
             if item.get("type") in {"function_call", "custom_tool_call"} and item.get(
                 "status"
             ) in {"in_progress", "incomplete"}:
