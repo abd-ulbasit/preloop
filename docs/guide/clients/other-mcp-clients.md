@@ -26,7 +26,7 @@ That gives you the MCP firewall (access rules, approvals, audit) for every tool 
 | Cursor | Automatic | **Manual BYOK**: AI panel incl. Agent mode (see below) |
 | [Claude Desktop](claude-desktop.md) | Automatic | **Managed config**: the default onboarding installs the direct route on this device; `--model-route direct` or `apps-gateway` prints the MDM configuration |
 | Windsurf | Automatic | Not available |
-| VS Code / Copilot | Automatic | **Manual BYOK**: Chat: Manage Language Models -> Add Models -> Custom Endpoint (see below) |
+| VS Code / Copilot | Native user-profile configuration; verify session authentication | **Manual BYOK**: Chat: Manage Language Models -> Add Models -> Custom Endpoint (see below) |
 | Copilot CLI | Automatic (`~/.copilot/mcp-config.json`) | Not rewritten on onboard. `preloop copilot` sets the gateway env vars |
 | Antigravity | Automatic | Not available: locked to Google-hosted models, no custom base URL |
 | Devin | Automatic | Not available: inference runs in Cognition's cloud |
@@ -75,7 +75,7 @@ What to expect:
 
 ## VS Code / Copilot Chat
 
-Onboarding writes `~/.vscode/mcp.json` and leaves model routing alone. Copilot Chat's Custom Endpoint is the manual BYOK path, the same class as Cursor's Settings -> Models override. There is no config file `preloop agents onboard` can rewrite: `github.copilot.chat.customOAIModels` is deprecated.
+Current CLI builds use the native VS Code user-profile `mcp.json` and retain `~/.vscode/mcp.json` for existing enrollments. Confirm the active file with **MCP: Open User Configuration** and server state with **MCP: List Servers**. Onboarding leaves model routing alone. Copilot Chat's Custom Endpoint is the manual BYOK path, the same class as Cursor's Settings -> Models override. Onboarding does not rewrite `chatLanguageModels.json`: `github.copilot.chat.customOAIModels` is deprecated.
 
 Click path: **Chat: Manage Language Models** -> **Add Models** -> **Custom Endpoint** (`vendor` `customendpoint`), then `chatLanguageModels.json`.
 
@@ -87,7 +87,7 @@ Set `toolCalling` to `true`. Point each model's `url` at the full gateway path:
 
 The `apiKey` is the Preloop agent credential. A URL with no API path gets `/v1/<api>` appended, so use the full path. Chat and Agent mode (and utility tasks you point at the gateway) are the metered surfaces. Inline completions, semantic search, and embeddings stay on GitHub.
 
-Plan entitlement, checked 2026-10-10 against the [VS Code language models doc](https://code.visualstudio.com/docs/agent-customization/language-models), the [2026-06-18 BYOK post](https://code.visualstudio.com/blogs/2026/06/18/byok-vscode), [GitHub's bring-your-own-key page](https://docs.github.com/en/copilot/concepts/models/bring-your-own-key), and [Changing the AI model for GitHub Copilot Chat](https://docs.github.com/en/copilot/how-tos/use-ai-models/change-the-chat-model): BYOK works with no Copilot plan. Those pages do not name Copilot Free, Pro, and Pro+ as separate rows. Copilot Business and Copilot Enterprise need an admin policy (**Bring Your Own Language Model Key in VS Code** on the VS Code page, **Bring Your Own Language Model Key in Select IDEs** on the GitHub chat-model page). A licensed Business or Enterprise seat was not checked. The sanitized file, the six-step founder checklist, and the console Cost and Models checks are in [VS Code Copilot Chat](vscode-copilot.md).
+Plan entitlement, rechecked 2026-10-16 against the [VS Code language models doc](https://code.visualstudio.com/docs/agent-customization/language-models), the [2026-06-18 BYOK post](https://code.visualstudio.com/blogs/2026/06/18/byok-vscode), [GitHub's bring-your-own-key page](https://docs.github.com/en/copilot/concepts/models/bring-your-own-key), and [Changing the AI model for GitHub Copilot Chat](https://docs.github.com/en/copilot/how-tos/use-ai-models/change-the-chat-model): BYOK works with no Copilot plan. Those pages do not name Copilot Free, Pro, and Pro+ as separate rows. Copilot Business and Copilot Enterprise need an admin policy (**Bring Your Own Language Model Key in VS Code** on the VS Code page, **Bring Your Own Language Model Key in Select IDEs** on the GitHub chat-model page). A licensed Business or Enterprise seat was not checked. The sanitized file, the reproducible checklist and the 2026-10-16 interactive result are in [VS Code Copilot Chat](vscode-copilot.md#interactive-verification-2026-10-16). That test verified Chat Completions and an Agent built-in tool roundtrip; native MCP discovery worked, but new-harness MCP authentication remained unverified.
 
 ## Copilot CLI
 
