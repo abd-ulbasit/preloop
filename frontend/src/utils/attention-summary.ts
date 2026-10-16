@@ -60,9 +60,16 @@ export function summariseAttentionItems(
 
 export function publishAttentionSummary(
   items: AttentionItem[],
-  fleetFindingCount = 0
+  fleetFindingCount?: number
 ): void {
-  const summary = summariseAttentionItems(items, fleetFindingCount);
+  // Overview cannot derive fleet findings. Keep the last known count until
+  // Attention refreshes it explicitly; auth changes clear the stored summary.
+  const fleetCount =
+    fleetFindingCount ??
+    readAttentionSummary()?.counts.find((entry) => entry.kind === 'fleet')
+      ?.count ??
+    0;
+  const summary = summariseAttentionItems(items, fleetCount);
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(summary));
   } catch {

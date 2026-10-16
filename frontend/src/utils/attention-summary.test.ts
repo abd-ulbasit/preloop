@@ -94,6 +94,21 @@ describe('attention summary', () => {
     );
   });
 
+  it('preserves fleet counts across Overview updates until explicitly refreshed', () => {
+    publishAttentionSummary([], 2);
+    publishAttentionSummary([item('flow')]);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '3 items need attention: 1 flow, 2 fleet findings'
+    );
+    publishAttentionSummary([], 0);
+    publishAttentionSummary([]);
+    expect(readAttentionSummary()?.total).to.equal(0);
+    publishAttentionSummary([], 2);
+    invalidateApiCaches();
+    publishAttentionSummary([]);
+    expect(readAttentionSummary()?.total).to.equal(0);
+  });
+
   it('is forgotten when the account changes', () => {
     publishAttentionSummary([item('flow')]);
     expect(readAttentionSummary()?.total).to.equal(1);
