@@ -160,6 +160,22 @@ describe('Device fleet', () => {
     expect(view.shadowRoot.querySelector('a[href*="runner=runner-1"]')).to
       .exist;
   });
+  it('reloads detail and settings on same-route query navigation', async () => {
+    setup();
+    const view = await mount();
+    view.onBeforeEnter({
+      search: '?device=' + encodeURIComponent(device.device_key),
+    });
+    await waitUntil(() => !view.loading);
+    await view.updateComplete;
+    expect(view.shadowRoot.querySelector('a[href*="runner=runner-1"]')).to
+      .exist;
+    view.onBeforeEnter({ search: '?tab=settings' });
+    await waitUntil(() => !view.loading);
+    await view.updateComplete;
+    expect(view.shadowRoot.querySelector('form')).to.exist;
+  });
+
   it('saves complete opt-in settings using the shared wire contract', async () => {
     history.replaceState({}, '', '?tab=settings');
     setup();

@@ -15,6 +15,8 @@ export interface FleetAgent {
   kind: string;
   status: string;
   managed_agent_id: string | null;
+  owner_user_id?: string | null;
+  name?: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
 }
@@ -35,6 +37,7 @@ export interface DeviceFleetDevice {
   agents: FleetAgent[];
   sources: Record<string, unknown>[];
   possible_same_machine_as: string[];
+  findings: FleetFinding[];
 }
 export interface DeviceFleetPage {
   items: DeviceFleetDevice[];

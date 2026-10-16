@@ -272,3 +272,58 @@ def _add_usage(
         )
     )
     db.flush()
+
+
+def test_fingerprint_visibility_and_heartbeat_rotation(
+    db_session: Session, test_user: models.User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from preloop.api.endpoints import runners
+    from preloop.models.crud import crud_flow_runner, crud_user
+    from preloop.services.runner_service import runner_console_payload
+    from preloop.utils import permissions
+
+    row = crud_flow_runner.create(
+        db_session,
+        obj_in={
+            "account_id": test_user.account_id,
+            "registered_by_user_id": test_user.id,
+            "name": "Example runner",
+            "token_hash": "synthetic",
+            "workstation_fingerprint": "a" * 64,
+        },
+    )
+    member = crud_user.create(
+        db_session,
+        obj_in={
+            "account_id": test_user.account_id,
+            "username": "example-member",
+            "email": "member@example.com",
+            "hashed_password": "synthetic",
+            "is_active": True,
+        },
+    )
+    monkeypatch.setattr(permissions, "user_holds_permission", lambda *args: False)
+    assert (
+        runners._to_response(row, db_session, test_user).workstation_fingerprint
+        == "a" * 64
+    )
+    assert runners._to_response(row, db_session, member).workstation_fingerprint is None
+    assert runners._to_response(row).workstation_fingerprint is None
+    assert "workstation_fingerprint" not in runner_console_payload(row)
+    monkeypatch.setattr(
+        permissions,
+        "user_holds_permission",
+        lambda db, viewer, permission: permission == "manage_agents",
+    )
+    assert (
+        runners._to_response(row, db_session, member).workstation_fingerprint
+        == "a" * 64
+    )
+    runners._record_runner_fingerprint(db_session, row, "b" * 64)
+    assert row.workstation_fingerprint == "b" * 64
+    for malformed in [None, "raw-id", "C" * 64, {}, 3]:
+        runners._record_runner_fingerprint(db_session, row, malformed)
+        assert row.workstation_fingerprint == "b" * 64
+    row.ephemeral = True
+    runners._record_runner_fingerprint(db_session, row, "c" * 64)
+    assert row.workstation_fingerprint == "b" * 64

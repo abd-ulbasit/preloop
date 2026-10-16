@@ -4,6 +4,7 @@ import { Router } from '../../router';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { formatLocalDateTime, formatRelativeTime } from '../../utils/date';
 import {
+  fleetFindingTitle,
   fleetAccess,
   fleetHref,
   getDeviceFleet,
@@ -33,6 +34,7 @@ export class DeviceFleetView extends LitElement {
   @state() private search = '';
   @state() private runnerState = '';
   @state() private saving = false;
+  @state() private sortDescending = false;
   private controller?: AbortController;
   private routeSearch = location.search;
   onBeforeEnter(context: { search: string }): void {
@@ -256,6 +258,11 @@ export class DeviceFleetView extends LitElement {
           .toLowerCase()
           .includes(this.search.toLowerCase())
     );
+    devices.sort(
+      (a, b) =>
+        (this.sortDescending ? -1 : 1) *
+        (a.hostname || a.device_key).localeCompare(b.hostname || b.device_key)
+    );
     return html`<div class="summary" aria-label="Device counts">
         <span><strong>${page.summary.devices}</strong> devices</span
         ><span
@@ -296,7 +303,15 @@ export class DeviceFleetView extends LitElement {
               <table>
                 <thead>
                   <tr>
-                    <th>Device</th>
+                    <th
+                      aria-sort=${this.sortDescending ? 'descending' : 'ascending'}
+                    >
+                      <button
+                        @click=${() => (this.sortDescending = !this.sortDescending)}
+                      >
+                        Device ${this.sortDescending ? '↓' : '↑'}
+                      </button>
+                    </th>
                     <th>Runner</th>
                     <th>Agents</th>
                     <th>Users</th>
@@ -334,7 +349,7 @@ export class DeviceFleetView extends LitElement {
         page.unassigned_agents.length
           ? html`<h2>Agents not tied to a known device</h2>
               <ul>
-                ${page.unassigned_agents.map((agent) => html`<li>${agent.kind} (${agent.status})</li>`)}
+                ${page.unassigned_agents.map((agent) => html`<li>${agent.managed_agent_id ? html`<a href=${`/console/agents/${encodeURIComponent(agent.managed_agent_id)}`}>${agent.name || agent.kind}</a>` : agent.name || agent.kind} (${agent.status}) · ${agent.owner_user_id ? `Owner ${agent.owner_user_id}` : 'Owner unknown'}</li>`)}
               </ul>`
           : nothing
       }`;
@@ -345,6 +360,18 @@ export class DeviceFleetView extends LitElement {
       <p class="meta">${device.device_key}</p>
       <div class="table-wrap">
         <table>
+          <thead>
+            <tr>
+              <th>Runner</th>
+              <th>Agents</th>
+              <th>Users</th>
+              <th>Last seen</th>
+              <th>Collection</th>
+              <th>Inventory</th>
+              <th>Roster</th>
+              <th>Verification</th>
+            </tr>
+          </thead>
           <tbody>
             <tr>
               ${this.states(device)}
@@ -352,6 +379,27 @@ export class DeviceFleetView extends LitElement {
           </tbody>
         </table>
       </div>
+      ${
+        device.findings.length
+          ? html`<h2>Findings</h2>
+              ${device.findings.map(
+                (finding) =>
+                  html`<details>
+                    <summary>
+                      ${finding.title || fleetFindingTitle(finding.rule)}
+                      (${finding.state})
+                    </summary>
+                    <p>${finding.detail}</p>
+                    <p>${finding.limitation}</p>
+                    <p>
+                      Opened ${this.timestamp(finding.opened_at)}, evaluated
+                      ${this.timestamp(finding.last_evaluated_at)}
+                    </p>
+                    <pre>${JSON.stringify(finding.evidence, null, 2)}</pre>
+                  </details>`
+              )}`
+          : nothing
+      }
       <h2>Runners</h2>
       <ul>
         ${device.runners.map((runner) => html`<li><a href=${`/console/settings/runners?runner=${encodeURIComponent(runner.id)}`}>${runner.name}</a> (${runner.state})</li>`)}

@@ -39588,6 +39588,8 @@ components:
             pattern: ^[0-9a-f]{64}$
           - type: 'null'
           title: Workstation Fingerprint
+          description: Self-reported tenant-salted correlation key, not attested device
+            identity.
         hostname:
           anyOf:
           - type: string
@@ -39692,6 +39694,8 @@ components:
           - type: string
           - type: 'null'
           title: Workstation Fingerprint
+          description: Self-reported correlation key; only the registrant and manage_agents
+            holders can read it.
         hostname:
           anyOf:
           - type: string
@@ -39849,6 +39853,8 @@ components:
           - type: string
           - type: 'null'
           title: Workstation Fingerprint
+          description: Self-reported correlation key; only the registrant and manage_agents
+            holders can read it.
         hostname:
           anyOf:
           - type: string

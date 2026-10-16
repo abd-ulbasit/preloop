@@ -289,6 +289,8 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	stopFingerprintRefresh := startRunnerFingerprintRefresh(client, deviceRef)
+	defer stopFingerprintRefresh()
 	// Checkouts of sessions that did not survive the restart are garbage;
 	// a session restored from disk keeps its clone.
 	_ = cleanupSessionWorkspaces(liveSessionCheckouts())
@@ -349,6 +351,7 @@ func loadOrRegisterRunner(
 	if concurrency < 1 {
 		concurrency = config.DefaultRunnerConcurrency
 	}
+	runnerFingerprint.Store("")
 	req := map[string]any{
 		"harness_inventory":      runnerInventory.current(true),
 		"host_exec_profiles":     hostExecAdvertisements(),
@@ -366,6 +369,7 @@ func loadOrRegisterRunner(
 	}
 	if fingerprint := runnerWorkstationFingerprint(client, deviceRefs...); fingerprint != "" {
 		req["workstation_fingerprint"] = fingerprint
+		runnerFingerprint.Store(fingerprint)
 	}
 	if existing, err := readRunnerState(); err == nil && existing.ID != "" && existing.Token != "" {
 		req["runner_id"] = existing.ID
