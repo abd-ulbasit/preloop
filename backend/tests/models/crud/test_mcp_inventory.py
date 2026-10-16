@@ -81,3 +81,29 @@ def test_owned_revision_required_and_evidence_is_deduplicated(
     assert server.status == "active"
     assert "url" not in models.MCPInventoryFinding.__table__.columns
     assert "arguments" not in models.MCPInventoryFinding.__table__.columns
+    configured.ignored_until = now + timedelta(days=1)
+    db_session.flush()
+    crud_mcp_inventory.reconcile_configured(
+        db_session, account_id=test_user.account_id, at=now + timedelta(seconds=2)
+    )
+    rows = crud_mcp_inventory.list_with_context(
+        db_session, account_id=test_user.account_id
+    )
+    assert len(rows) == 2
+    assert all(state == "unapproved" for _, state, _ in rows)
+    assert all(updated_at == server.updated_at for _, _, updated_at in rows)
+    configured = next(
+        row for row, _, _ in rows if row.evidence_class == "configured_route"
+    )
+    assert configured.ignored_until == now + timedelta(days=1)
+    assert configured.first_seen_at == now
+    assert configured.last_seen_at == now + timedelta(seconds=2)
+    assert crud_mcp_inventory.list_with_context(db_session, account_id=other.id) == []
+    assert (
+        len(
+            crud_mcp_inventory.list_with_context(
+                db_session, account_id=test_user.account_id, limit=1
+            )
+        )
+        == 1
+    )

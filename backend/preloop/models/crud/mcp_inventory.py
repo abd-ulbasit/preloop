@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,78 @@ from preloop.models import models
 
 class CRUDMCPInventory:
     """Store declarations and evidence without changing execution permissions."""
+
+    def reconcile_configured(
+        self, db: Session, *, account_id: UUID, at: datetime, limit: int = 500
+    ) -> None:
+        """Lock current owned revisions and upsert configuration in one batch."""
+        servers = db.execute(
+            select(models.MCPServer.id, models.MCPServer.updated_at)
+            .where(models.MCPServer.account_id == account_id)
+            .order_by(models.MCPServer.id)
+            .limit(limit)
+            .with_for_update()
+        ).all()
+        if not servers:
+            return
+        stmt = insert(models.MCPInventoryFinding).values(
+            [
+                {
+                    "id": uuid4(),
+                    "account_id": account_id,
+                    "server_id": server_id,
+                    "registry_revision": updated_at.isoformat(),
+                    "evidence_class": "configured_route",
+                    "first_seen_at": at,
+                    "last_seen_at": at,
+                }
+                for server_id, updated_at in servers
+            ]
+        )
+        db.execute(
+            stmt.on_conflict_do_update(
+                constraint="uq_mcp_inventory_finding",
+                set_={
+                    "first_seen_at": func.least(
+                        models.MCPInventoryFinding.first_seen_at, at
+                    ),
+                    "last_seen_at": func.greatest(
+                        models.MCPInventoryFinding.last_seen_at, at
+                    ),
+                },
+            )
+        )
+
+    def list_with_context(
+        self, db: Session, *, account_id: UUID, limit: int = 500
+    ) -> list[tuple[models.MCPInventoryFinding, str | None, datetime | None]]:
+        """Read bounded evidence and tenant-scoped declaration/currentness at once."""
+        finding = models.MCPInventoryFinding
+        review = models.MCPInventoryReview
+        server = models.MCPServer
+        rows = db.execute(
+            select(finding, review.approval_state, server.updated_at)
+            .outerjoin(
+                review,
+                and_(
+                    review.account_id == finding.account_id,
+                    review.server_id == finding.server_id,
+                    review.registry_revision == finding.registry_revision,
+                ),
+            )
+            .outerjoin(
+                server,
+                and_(
+                    server.account_id == finding.account_id,
+                    server.id == finding.server_id,
+                ),
+            )
+            .where(finding.account_id == account_id)
+            .order_by(finding.first_seen_at.desc(), finding.id)
+            .limit(limit)
+            .execution_options(populate_existing=True)
+        )
+        return [(row[0], row[1], row[2]) for row in rows]
 
     def lock(self, db: Session, *, account_id: UUID) -> None:
         """Serialize observations and decisions for one account."""
