@@ -130,7 +130,7 @@ func TestNativePreparedProtocolProcesses(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(entry), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(entry, []byte("export function apply() {}"), 0600); err != nil {
+	if err := os.WriteFile(entry, []byte(`export function apply(ctx) {ctx.tools.guard(() => undefined);ctx.on("tools/pre-execute", async (_exec,next) => next());}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -179,7 +179,7 @@ func TestNativePreparedProtocolProcesses(t *testing.T) {
 							wrapper = path
 						}
 					}
-					script := `import {pathToFileURL} from 'node:url';const m=await import(pathToFileURL(process.argv[1]).href);if(m.default)await m.default({client:{mcp:{status:async()=>({data:{"preloop-flow":{status:"connected"}}})}}});else await m.apply({get:()=>({await:async()=>{}}),tools:{schemas:()=>[{name:'mcp__preloop-flow__test'}]}},{});`
+					script := `import {pathToFileURL} from 'node:url';const m=await import(pathToFileURL(process.argv[1]).href);if(m.default)await m.default({client:{mcp:{status:async()=>({data:{"preloop-flow":{status:"connected"}}})}}});else await m.apply({on:()=>()=>{},get:()=>({await:async()=>{}}),tools:{guard:()=>()=>{},schemas:()=>[{name:'mcp__preloop-flow__test'}]}},{});`
 					invoke := exec.Command(node, "--input-type=module", "-e", script, wrapper)
 					invoke.Env = append(os.Environ(), env...)
 					output, nodeErr := invoke.CombinedOutput()
@@ -200,6 +200,24 @@ func TestNativePreparedProtocolProcesses(t *testing.T) {
 					var acknowledged map[string]any
 					if err := json.Unmarshal([]byte(strings.TrimSpace(string(output))), &acknowledged); err != nil {
 						t.Fatalf("ack is not one JSON line: %v %q", err, output)
+					}
+					if tc.name == "deepseek" {
+						for _, invalid := range []string{
+							`export function apply() {}`,
+							`export function apply(ctx) {ctx.tools.guard(() => undefined);}`,
+							`export function apply(ctx) {ctx.on('tools/pre-execute', async (_exec,next) => next());}`,
+							`export function apply(ctx) {ctx.tools.guard(() => undefined)();ctx.on('tools/pre-execute', async (_exec,next) => next());}`,
+						} {
+							if err := os.WriteFile(entry, []byte(invalid), 0600); err != nil {
+								t.Fatal(err)
+							}
+							rejected := exec.Command(node, "--input-type=module", "-e", script, wrapper)
+							rejected.Env = append(os.Environ(), env...)
+							output, rejectErr := rejected.CombinedOutput()
+							if rejectErr == nil || strings.Contains(string(output), `"type":"preloop_governance_ready"`) {
+								t.Fatalf("inactive governance acknowledged: %v %s", rejectErr, output)
+							}
+						}
 					}
 					mockPath := entry
 					if tc.name == "opencode" {

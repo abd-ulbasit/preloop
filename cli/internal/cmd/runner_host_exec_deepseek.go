@@ -80,7 +80,41 @@ func prepareDeepSeekHostExec(p hostExecProfile, job map[string]any, workspace, s
 export const name = 'preloop-host-governance';
 export const inject = ['tools', 'agents'];
 export async function apply(ctx, options) {
- await installed.apply(ctx, options);
+ // Observe only registrations made by this plugin, without modifying the
+ // shared context while sibling plugins activate concurrently.
+ const guards = new Set();
+ const hooks = new Set();
+ const track = (target, method, args, registrations) => {
+  const dispose = Reflect.apply(method, target, args);
+  if (typeof dispose !== 'function') throw new Error('Preloop governance registration has no disposer');
+  const registration = {active: true};
+  registrations.add(registration);
+  return () => { registration.active = false; return dispose(); };
+ };
+ const tools = ctx.tools;
+ const observedTools = new Proxy(tools, {get(target, key) {
+  const value = Reflect.get(target, key, target);
+  if (key === 'guard') return (...args) => {
+   if (typeof args[0] !== 'function') throw new Error('Preloop governance guard missing');
+   return track(target, value, args, guards);
+  };
+  return typeof value === 'function' ? value.bind(target) : value;
+ }});
+ const observedContext = new Proxy(ctx, {get(target, key) {
+  if (key === 'tools') return observedTools;
+  const value = Reflect.get(target, key, target);
+  if (key === 'on') return (...args) => {
+   if (args[0] === 'tools/pre-execute') {
+    if (typeof args[1] !== 'function') throw new Error('Preloop governance hook missing');
+    return track(target, value, args, hooks);
+   }
+   return Reflect.apply(value, target, args);
+  };
+  return typeof value === 'function' ? value.bind(target) : value;
+ }});
+ const governanceActive = () => [...guards].some(item => item.active) && [...hooks].some(item => item.active);
+ await installed.apply(observedContext, options);
+ if (!governanceActive()) throw new Error('Preloop governance tool guards did not register');
  process.stdout.write(JSON.stringify({type: 'preloop_governance_ready', nonce: process.env.PRELOOP_HOST_GOVERNANCE_NONCE}) + '\n');
 }
 `
@@ -90,6 +124,7 @@ export async function apply(ctx, options) {
  if (!loader || typeof loader.await !== 'function') return;
  await loader.await();
  if (!ctx.tools.schemas().some(tool => tool.name.startsWith('mcp__preloop-flow__'))) return;
+ if (!governanceActive()) return;
  process.stdout.write`, 1)
 		module = strings.Replace(module, " + '\\n');\n}", " + '\\n');\n })().catch(() => {}); });\n}", 1)
 	}

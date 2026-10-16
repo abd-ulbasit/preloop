@@ -647,3 +647,29 @@ def test_usage_link_requires_native_profile_for_dual_runtime(
         None, account_id=str(uuid4()), flow_execution_id=execution.id
     )
     assert (link is not None) is native
+
+
+@pytest.mark.parametrize(
+    ("kind", "label"),
+    [("codex", "Codex"), ("opencode", "OpenCode"), ("deepseek", "DeepSeek CLI (dsh)")],
+)
+@pytest.mark.parametrize("pool", ["server", None])
+def test_native_default_pool_error_names_selected_harness(
+    monkeypatch: pytest.MonkeyPatch, kind: str, label: str, pool: str | None
+) -> None:
+    from preloop.services import model_routing
+
+    monkeypatch.setattr(
+        model_routing, "_account_default_runner_pool", lambda *args: None
+    )
+    flow = SimpleNamespace(
+        agent_config={"host_exec_profile": "local"}, runner_pool=pool
+    )
+    with pytest.raises(model_routing.ModelRoutingError) as error:
+        model_routing.validate_default_selection(
+            None, flow, agent_type=kind, ai_model_id=None
+        )
+    assert str(error.value) == (
+        f"{label} defaults require a named host profile and a private "
+        "runner pool (flow.runner_pool or account.default_runner_pool)"
+    )

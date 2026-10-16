@@ -27,7 +27,7 @@ HOST_EXEC_HARNESSES: Mapping[str, str] = {
 HOST_EXEC_AGENT_TYPES = frozenset({"cursor", "copilot", "devin", "claude_code"})
 # These harnesses also support Docker; native execution requires an explicit profile.
 HOST_EXEC_PROFILE_AGENT_TYPES = frozenset(HOST_EXEC_HARNESSES)
-_HOST_EXEC_LABELS = {
+HOST_EXEC_LABELS = {
     "cursor": "Cursor",
     "copilot": "Copilot CLI",
     "devin": "Devin CLI",
@@ -637,7 +637,7 @@ def host_exec_flow_error(
                 )
             if uses_mcp and kind in _WORKSPACE_MCP_IN_CWD:
                 return (
-                    f"{_HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
+                    f"{HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
                     "working directory, so a flow with Preloop tools cannot run "
                     "it in an authorized directory; remove the tools or "
                     "agent_config.workspace"
@@ -842,7 +842,7 @@ def finalize_runner_completion(
             return (
                 "FAILED",
                 "Completion does not identify the leased "
-                f"{_HOST_EXEC_LABELS[agent_type]} harness",
+                f"{HOST_EXEC_LABELS[agent_type]} harness",
                 result,
             )
         from preloop.services.host_exec_publication import (

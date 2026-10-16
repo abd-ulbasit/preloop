@@ -356,7 +356,7 @@ def validate_default_selection(
 ) -> None:
     """Validate defaults/pinned identity without widening rule or matrix targets.
 
-    A named private Cursor or Copilot CLI profile uses the runner's local
+    A named private host CLI profile uses the runner's local
     credentials and model map. The pool check matches ``resolve_runner_pool`` for the
     flow-level and account-default steps (not the "any online runner" auto
     fallback): ``flow.runner_pool``, then ``account.default_runner_pool``.
@@ -398,7 +398,9 @@ def validate_default_selection(
         or pool is None
         or _is_server_pool(pool)
     ):
-        label = "Cursor" if harness == "cursor" else "Copilot CLI"
+        from preloop.services.host_exec import HOST_EXEC_LABELS
+
+        label = HOST_EXEC_LABELS[harness]
         raise ModelRoutingError(
             f"{label} defaults require a named host profile and a private "
             "runner pool (flow.runner_pool or account.default_runner_pool)"
