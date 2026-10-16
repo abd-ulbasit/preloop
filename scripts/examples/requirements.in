@@ -1,4 +1,6 @@
 # Regenerate with: uv pip compile --universal --generate-hashes --python-version 3.12 scripts/examples/requirements.in -o scripts/examples/requirements.txt
 fastmcp
+# 1.30.0 reclaims idle Streamable HTTP sessions (GHSA-84m7-p3x7-pcfv).
+mcp>=1.30.0,<2
 fastapi
 uvicorn

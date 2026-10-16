@@ -54,6 +54,17 @@ if ! py="$(find_system_python)"; then
   exit 0
 fi
 
+# venv records this path's directory as pyvenv.cfg "home" and loads the
+# stdlib from home/../lib. A PATH symlink outside the prefix misses that
+# lookup. Relocated setup-python builds then fall back to their compiled
+# prefix /opt/hostedtoolcache, which exists only on GitHub-hosted runners,
+# so ensurepip fails on self-hosted CI. Use the real binary.
+resolved="$("${py}" -c 'import os,sys; print(os.path.realpath(sys.executable))')" || {
+  echo "No system Python ${MM} on PATH; will use actions/setup-python"
+  exit 0
+}
+py="${resolved}"
+
 venv_dir="${RUNNER_TEMP}/preloop-python"
 rm -rf "${venv_dir}"
 if ! "${py}" -m venv "${venv_dir}"; then

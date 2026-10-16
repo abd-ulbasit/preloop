@@ -8,6 +8,24 @@ import pytest
 from rig import CASES, Fixture, assess, bundle_digest, events, fresh
 
 
+def test_image_installs_the_locked_claude_code_with_npm_ci() -> None:
+    """Scorecard treats `npm install` as unpinned; `npm ci` checks the lock."""
+    root = Path(__file__).resolve().parent
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    assert "npm install" not in dockerfile
+    assert "npm ci --omit=dev --prefix /opt/claude-code" in dockerfile
+    assert "rm -rf /usr/local/lib/node_modules" not in dockerfile
+    assert (
+        "cp -a /opt/claude-code/node_modules/@anthropic-ai /usr/local/lib/node_modules/"
+    ) in dockerfile
+    package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    assert package["dependencies"]["@anthropic-ai/claude-code"] == "2.1.296"
+    lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+    locked = lock["packages"]["node_modules/@anthropic-ai/claude-code"]
+    assert locked["version"] == "2.1.296"
+    assert str(locked["integrity"]).startswith("sha512-")
+
+
 def test_denied_marker_absence_without_app_is_not_a_pass(tmp_path: Path) -> None:
     with Fixture(tmp_path / "marker", 200, "deny") as fixture:
         assert assess("deny", fixture, fixture.marker, 0)["result"] == "failed"

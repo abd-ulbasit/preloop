@@ -83,6 +83,10 @@ after the page scroller moved to the content area.
 
 ### Security
 
+- The `mcp` SDK is at least 1.30.0 on the 1.x line. Older 1.x releases never
+  reclaimed stateful Streamable HTTP sessions, so a client that could reach
+  the endpoint could grow process memory without a bound
+  ([GHSA-84m7-p3x7-pcfv](https://osv.dev/GHSA-84m7-p3x7-pcfv)).
 - Gateway IdP rejection logs no longer include the issuer claim. That claim
   is a slice of the bearer, so the log line now carries the same short
   fingerprint already used for the token (CodeQL

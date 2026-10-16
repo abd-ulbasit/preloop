@@ -792,6 +792,20 @@ refresher.apply(json.load(sys.stdin))
 model = SimpleNamespace(provider_name="qwen", model_identifier="example-chat", api_endpoint="https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 print(json.dumps(estimate(model, prompt_tokens=1000, completion_tokens=1000, usage_details=None)))
 """
+    # A fresh process, so the parent's in-memory catalog cannot leak in.
+    # Keep the dynamic linker path: actions/setup-python's Linux build has
+    # a RUNPATH of /opt/hostedtoolcache, and a self-hosted toolcache is
+    # somewhere else. Dropping LD_LIBRARY_PATH makes this interpreter exit
+    # 127 before the snippet runs.
+    child_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", "backend"),
+        "PRELOOP_DISABLE_TELEMETRY": "true",
+        "TESTING": "true",
+    }
+    linker = os.environ.get("LD_LIBRARY_PATH")
+    if linker:
+        child_env["LD_LIBRARY_PATH"] = linker
     for _ in range(2):
         process = subprocess.run(
             [sys.executable, "-c", code],
@@ -800,12 +814,7 @@ print(json.dumps(estimate(model, prompt_tokens=1000, completion_tokens=1000, usa
             capture_output=True,
             check=True,
             timeout=30,
-            env={
-                "PATH": os.environ.get("PATH", ""),
-                "PYTHONPATH": os.environ.get("PYTHONPATH", "backend"),
-                "PRELOOP_DISABLE_TELEMETRY": "true",
-                "TESTING": "true",
-            },
+            env=child_env,
         )
         assert json.loads(process.stdout) == pytest.approx(0.001)
 

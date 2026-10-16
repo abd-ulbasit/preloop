@@ -7,3 +7,5 @@
 !examples/
 !examples/claude-app-verification/
 !examples/claude-app-verification/rig.py
+!examples/claude-app-verification/package.json
+!examples/claude-app-verification/package-lock.json

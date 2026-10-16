@@ -6,9 +6,11 @@ It establishes whether that app consumes its local hook and executes or blocks
 a harmless Bash marker action. It is a partial implementation of #1182, not
 proof of backend policy evaluation, managed enforcement, or fleet compliance.
 
-The app version is pinned in `Dockerfile` and checked at runtime. The initial
-pin matches the version available when this pilot was developed; updating it
-requires reviewing the fixture protocol and repeating actual-app validation.
+The app version is pinned in `package.json` and `package-lock.json`. The image
+installs that lock with `npm ci`, which checks each package integrity hash,
+and the rig checks the running version. The initial pin matches the version
+available when this pilot was developed; updating it requires reviewing the
+fixture protocol and repeating actual-app validation.
 The fixture contract is `cooperative-hook-v1`; the report includes the running
 rig hash, installed app package hash, CLI binary hash and configuration revisions. Python unit tests exercise
 the fixture and evidence checks only and cannot establish application coverage.
@@ -17,8 +19,9 @@ the fixture and evidence checks only and cannot establish application coverage.
 
 Requires Docker with Linux containers and network access during image build to
 fetch public Go dependencies and the pinned npm application package. Run from a
-checkout. A Dockerfile-specific allowlist sends only Go source, module files
-and the rig script as build input; no host Claude installation is used.
+checkout. A Dockerfile-specific allowlist sends only Go source, module files,
+the rig script, and the npm lock as build input; no host Claude installation
+is used.
 
 ```sh
 PRELOOP_DISABLE_TELEMETRY=true examples/claude-app-verification/run.sh \
