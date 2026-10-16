@@ -153,6 +153,8 @@ class CRUDFlowFeedback:
                 active is None
                 or active.status not in SESSIONLESS_RETRY_STATUSES
                 or active.total_tokens
+                or active.tool_calls_count
+                or active.estimated_cost
                 or active.cli_session
             ):
                 raise ValueError(

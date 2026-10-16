@@ -2377,6 +2377,8 @@ def test_successful_bitbucket_head_lookup(
         "cost",
         "no_progress",
         "worked",
+        "tools",
+        "spent",
     ],
 )
 def test_native_reactivation_preserves_authority_and_limits(
@@ -2412,6 +2414,10 @@ def test_native_reactivation_preserves_authority_and_limits(
             thread.no_progress = 2
         if failure == "worked":
             failed.total_tokens = 1
+        if failure == "tools":
+            failed.tool_calls_count = 1
+        if failure == "spent":
+            failed.estimated_cost = 0.01
         db.commit()
         before = (
             thread.turns,

@@ -228,6 +228,8 @@ def _load_source(
             and active.flow_id == flow.id
             and active.status in {"FAILED", "TIMED_OUT"}
             and not active.total_tokens
+            and not active.tool_calls_count
+            and not active.estimated_cost
             and not active.cli_session
         )
         return {
@@ -249,6 +251,7 @@ def _load_source(
                 and existing.state == "stopped"
                 and existing.stop_reason == "flow_disabled"
                 and existing.latest_execution_id == execution_id
+                and str(existing.id) == str(thread_id)
                 and native_resume_available
                 and active_recoverable
             ),
