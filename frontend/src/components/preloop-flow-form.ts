@@ -3354,7 +3354,7 @@ export class PreloopFlowForm extends LitElement {
       max_iterations: preset.max_iterations,
       max_budget: preset.max_budget,
       custom_commands: preset.custom_commands,
-      is_enabled: true,
+      is_enabled: false,
     };
     this.syncRoutingRulesFromConfig(preset.agent_config);
     this.syncLabelRulesFromConfig(preset.agent_config);
@@ -4289,6 +4289,18 @@ export class PreloopFlowForm extends LitElement {
         @sl-invalid=${this.openInvalidField}
       >
         ${this.renderReferenceListsWarning()}
+        ${
+          this.sourcePresetId && this.flow.is_enabled === false
+            ? html`<sl-alert
+                variant="primary"
+                open
+                data-testid="preset-disabled-notice"
+                >This preset copy will be saved disabled. Configure its tracker
+                and project scope, then enable it from Flows when
+                ready.</sl-alert
+              >`
+            : nothing
+        }
         ${
           !this.flow.id
             ? html`

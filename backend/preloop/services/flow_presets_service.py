@@ -160,8 +160,9 @@ def clone_preset_for_account(
     bound_ai_model_id: Optional[UUID] = None,
     flow_crud: Any = None,
     clear_event_triggers: bool = False,
+    is_enabled: bool = False,
 ) -> Any:
-    """Clone a global preset into an account-owned enabled flow.
+    """Clone a global preset into a disabled account-owned flow by default.
 
     Args:
         db: Database session.
@@ -178,6 +179,9 @@ def clone_preset_for_account(
         clear_event_triggers: When True, the clone has no tracker event
             trigger (empty types, no source). Used by ad-hoc run-preset so
             the first run does not also subscribe to ``issue_labeled``.
+        is_enabled: Explicit activation for callers such as ad-hoc run-preset,
+            which also clear tracker triggers. Ordinary copies stay disabled
+            until the user configures their scope and enables them.
 
     Returns:
         The created flow row.
@@ -218,7 +222,7 @@ def clone_preset_for_account(
         **preset_dict,
         name=final_name,
         is_preset=False,
-        is_enabled=True,
+        is_enabled=is_enabled,
         account_id=str(account_id),
         ai_model_id=bound_ai_model_id,
         source_preset_id=str(preset.id),

@@ -152,6 +152,7 @@ def test_create_flow_uses_preset_name_and_default_model():
     clone.assert_called_once()
     assert clone.call_args.kwargs["name"] == preset.name
     assert clone.call_args.kwargs["clear_event_triggers"] is True
+    assert clone.call_args.kwargs["is_enabled"] is True
 
 
 def test_create_flow_403_without_create_flows():

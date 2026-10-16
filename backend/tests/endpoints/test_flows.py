@@ -610,6 +610,9 @@ async def test_clone_preset(mock_account: Account, mocker: MockerFixture):
     )
 
     preset = _make_preset(flow_id)  # presets ship without a bound model
+    preset.trigger_event_source = None
+    preset.trigger_project_ids = None
+    preset.trigger_event_types = ["pull_request_opened"]
     mock_crud_flow.get.return_value = preset
     # Mock get_by_name_and_account to return None (no existing flow with that name)
     mock_crud_flow.get_by_name_and_account.return_value = None
@@ -638,6 +641,9 @@ async def test_clone_preset(mock_account: Account, mocker: MockerFixture):
     mock_crud_flow.create.assert_called_once()
     flow_in = mock_crud_flow.create.call_args.kwargs["flow_in"]
     assert flow_in.ai_model_id == account_model.id
+    assert flow_in.is_enabled is False
+    assert flow_in.trigger_event_source is None
+    assert flow_in.trigger_event_types == ["pull_request_opened"]
 
 
 @pytest.mark.asyncio
