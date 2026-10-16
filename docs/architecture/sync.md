@@ -4,6 +4,14 @@ Editions: OSS. Contributor documentation for this repository.
 
 Preloop Sync polls issue trackers, generates embeddings, and writes through `preloop.models`. This chapter covers the scheduler/worker, tracker clients, the sync data flow, and tracker scope rules.
 
+Initial tracker discovery and explicit manual sync use the on-demand worker
+lane and bypass organization polling cooldowns. Scheduled polling retains the
+cooldown and shares the same worker slot. Organizations are resolved within
+the selected tracker, so reconnecting cannot reassign another tracker's row
+or inherit its polling timestamps. Webhook cleanup selects and deletes only
+associations wholly owned by the deleted tracker through the CRUD layer;
+empty scopes perform no deletion.
+
 Private webhook ingress prepares database changes on a worker thread and closes
 the session before publishing any NATS tasks, including validation notifications
 and unknown-project sync requests. Issue/comment transformations initialize no

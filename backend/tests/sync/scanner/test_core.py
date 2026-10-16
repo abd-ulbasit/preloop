@@ -207,13 +207,13 @@ async def test_tracker_client_scan_organizations(
                 scope_type="ORGANIZATION", rule_type="INCLUDE", identifier="test-org"
             )
         ]
-        mock_crud_org.get_by_identifier.return_value = None
+        mock_crud_org.get_by_identifier_and_tracker.return_value = None
 
         # Act
         await client.scan_organizations(mock_db_session)
 
         # Assert
-        mock_crud_org.get_by_identifier.assert_called_once()
+        mock_crud_org.get_by_identifier_and_tracker.assert_called_once()
         mock_crud_org.create.assert_called_once()
 
 
@@ -931,7 +931,7 @@ async def test_scan_organizations_skips_unincluded(
                 scope_type="ORGANIZATION", rule_type="INCLUDE", identifier="org-1"
             )
         ]
-        mock_crud_org.get_by_identifier.return_value = None
+        mock_crud_org.get_by_identifier_and_tracker.return_value = None
         mock_crud_org.create.return_value = Organization(identifier="org-1")
         client.client.transform_organization = MagicMock(
             side_effect=lambda d: {"identifier": d["id"], "name": d["name"]}
