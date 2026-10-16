@@ -95,7 +95,7 @@ def _render_preset(description: str) -> str:
     return rendered
 
 
-def _agent_context(prompt: str) -> dict:
+def _agent_context(prompt: str, harness: str) -> dict:
     return {
         "prompt": prompt,
         "execution_id": "a8844f7a-ab85-4ef6-9b7d-3282f5f10398",
@@ -103,7 +103,7 @@ def _agent_context(prompt: str) -> dict:
         "flow_name": "pull-request-reviewer",
         "agent_config": {},
         "model_identifier": "claude-sonnet-4-5",
-        "model_provider": "anthropic",
+        "model_provider": "openai" if harness == "codex" else "anthropic",
         "model_api_key": "sk-test",
         "opencode_model": "claude-sonnet-4-5",
         "codex_model": "gpt-5.4",
@@ -137,7 +137,7 @@ class TestNoLauncherStringReachesTheKernelLimit:
     def test_the_generated_script_stays_far_under_the_limit(self, harness):
         agent_class, builder = BUILDERS[harness]
         prompt = _render_preset(_huge_description())
-        script = getattr(agent_class({}), builder)(_agent_context(prompt))
+        script = getattr(agent_class({}), builder)(_agent_context(prompt, harness))
         assert len(script.encode()) < MAX_LAUNCH_STRING_BYTES
         # And the prompt is not what makes it big: none of it is in there.
         assert prompt[:200] not in script
@@ -146,7 +146,7 @@ class TestNoLauncherStringReachesTheKernelLimit:
         """The full Job payload: args, wrapper, script chunks, prompt chunks."""
         agent_class, builder = BUILDERS[harness]
         prompt = _render_preset(_huge_description())
-        script = getattr(agent_class({}), builder)(_agent_context(prompt))
+        script = getattr(agent_class({}), builder)(_agent_context(prompt, harness))
 
         wrapped = ContainerAgentExecutor._wrap_kubernetes_args_for_artifacts(
             ["-c", script]
@@ -174,7 +174,7 @@ class TestNoLauncherStringReachesTheKernelLimit:
         """
         agent_class, builder = BUILDERS[harness]
         prompt = "PR body:\n" + _huge_description()  # 200 KiB, uncapped
-        script = getattr(agent_class({}), builder)(_agent_context(prompt))
+        script = getattr(agent_class({}), builder)(_agent_context(prompt, harness))
         env = {
             **prompt_transport_env(prompt),
             **chunked_env(K8S_INNER_SCRIPT_ENV_PREFIX, script),

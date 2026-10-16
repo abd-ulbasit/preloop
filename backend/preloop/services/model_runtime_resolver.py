@@ -205,6 +205,7 @@ def _resolve_direct_ai_model_runtime(ai_model: AIModel) -> ResolvedModelRuntime:
     resolved_credentials = get_secret_service().resolve_ai_model_credentials(ai_model)
     return ResolvedModelRuntime(
         model_identifier=ai_model.model_identifier,
+        model_api_protocol=model_api_protocol(ai_model),
         model_provider=ai_model.provider_name,
         model_endpoint=ai_model.api_endpoint,
         model_api_key=(

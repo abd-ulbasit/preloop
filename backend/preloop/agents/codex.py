@@ -14,7 +14,9 @@ from preloop.utils.execve_limits import (
     build_prompt_materialization_shell,
     prompt_transport_env,
 )
+from preloop.services.flow_failure_category import FAILURE_CATEGORY_MODEL_CONFIG
 from preloop.services.mcp_config_service import MCPConfigService
+from preloop.services.model_api_protocol import CODEX_RESPONSES_REQUIRED
 from preloop.services.model_context_limits import (
     ModelContextLimits,
     limits_for_execution,
@@ -33,6 +35,7 @@ from .cli_session import (
     build_session_restore_shell,
     resume_cli_session,
 )
+from .errors import AgentStartError
 from .completion_nudge import (
     AGENT_OUTPUT_LOG_PATH,
     NUDGE_PROMPT_PATH,
@@ -478,6 +481,14 @@ fi
             else execution_context.get("model_provider", "openai")
         )
         model_provider = (model_provider or "openai").lower()
+        if (
+            not execution_context.get("model_gateway_enabled")
+            and model_provider != "openai"
+            and execution_context.get("model_api_protocol") != "responses"
+        ):
+            raise AgentStartError(
+                CODEX_RESPONSES_REQUIRED, category=FAILURE_CATEGORY_MODEL_CONFIG
+            )
         model_endpoint = (
             gateway_url_for_api(execution_context.get("model_gateway_url"), "openai")
             if execution_context.get("model_gateway_enabled")
@@ -1013,10 +1024,9 @@ exit $CODEX_EXIT_CODE
             # Custom provider: generate provider-specific config
             provider_key = model_provider.replace("-", "_").replace(" ", "_")
             env_key = f"{model_provider.upper().replace('-', '_')}_API_KEY"
-            # The Preloop gateway exposes the Responses API and translates it to the
-            # configured upstream provider. Direct OpenAI-compatible providers such as
-            # DeepSeek generally only expose chat/completions.
-            wire_api = "responses" if provider_key == "preloop" else "chat"
+            # Current Codex releases accept only the Responses wire protocol.
+            # Chat-only models are rejected before launch with gateway remediation.
+            wire_api = "responses"
 
             if not model_endpoint:
                 logger.warning(

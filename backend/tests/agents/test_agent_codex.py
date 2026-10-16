@@ -331,6 +331,23 @@ class TestCodexBuildScript:
 class TestCodexAuthConfig:
     """Test _build_codex_auth_config method."""
 
+    @pytest.mark.parametrize("gateway_enabled", [None, False])
+    def test_direct_chat_provider_rejected_before_launch(
+        self, gateway_enabled: bool | None
+    ) -> None:
+        context = {
+            "prompt": "review",
+            "model_provider": "anthropic",
+            "model_gateway_enabled": gateway_enabled,
+        }
+        from preloop.agents.errors import AgentStartError
+
+        with pytest.raises(
+            AgentStartError, match="Enable meta_data.gateway.enabled=true"
+        ) as caught:
+            CodexAgent({})._build_codex_script(context)
+        assert caught.value.category == "model_config"
+
     def test_openai_config(self):
         """Standard OpenAI config generates correct auth.json and config.toml."""
         agent = CodexAgent({})
@@ -357,7 +374,7 @@ class TestCodexAuthConfig:
         assert auth_block.index("rmcp_client = true") < auth_block.index(
             "[mcp_servers.preloop]"
         )
-        assert 'wire_api = "chat"' in auth_block
+        assert 'wire_api = "responses"' in auth_block
         assert "request_max_retries = 4" in auth_block
         assert "stream_max_retries = 5" in auth_block
 
@@ -371,15 +388,15 @@ class TestCodexAuthConfig:
         assert 'base_url = "http://preloop-api:8000/openai/v1"' in auth_block
         assert 'wire_api = "responses"' in auth_block
 
-    def test_direct_deepseek_provider_uses_chat_wire_api(self):
-        """DeepSeek direct mode should not ask Codex to call /responses."""
+    def test_custom_provider_config_uses_supported_wire_api(self):
+        """Configuration generation never emits the removed chat wire protocol."""
         agent = CodexAgent({})
         auth_block = agent._build_codex_auth_config(
             "deepseek-v4-pro", "deepseek", "https://api.deepseek.com/v1"
         )
         assert "DEEPSEEK_API_KEY" in auth_block
         assert 'base_url = "https://api.deepseek.com/v1"' in auth_block
-        assert 'wire_api = "chat"' in auth_block
+        assert 'wire_api = "responses"' in auth_block
         assert "request_max_retries = 4" in auth_block
         assert "stream_max_retries = 5" in auth_block
 
@@ -458,6 +475,7 @@ class TestCodexStreamIdleBound:
             "execution_id": "exec-1",
             "flow_name": "Manual PR Reviewer",
             "model_provider": provider,
+            "model_api_protocol": "responses",
             "model_identifier": "deepseek/deepseek-v4-flash",
             "model_endpoint": "https://openrouter.ai/api/v1",
             "agent_config": agent_config,

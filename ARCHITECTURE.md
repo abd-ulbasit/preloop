@@ -194,7 +194,11 @@ Hosted Codex defaults to the digest-pinned universal image
 (`ghcr.io/preloop/preloop-codex-universal`), which includes the distro Perl
 toolchain. Private runners can still build
 [`environments/perl`](environments/perl/README.md) and select it with
-`agent_config.image`. Native host profiles use no image.
+`agent_config.image`. Native host profiles use no image. Hosted Codex uses the
+Responses API; chat-only custom models must enable `meta_data.gateway.enabled`
+to use the gateway translation. Flow saves reject incompatible bindings with
+remediation, and legacy incompatible runs fail with `model_config` before launch.
+Direct providers explicitly configured for Responses remain supported.
 
 Native Copilot host profiles can publish through managed legacy publication
 (`backend/preloop/services/host_exec_publication.py`, runner

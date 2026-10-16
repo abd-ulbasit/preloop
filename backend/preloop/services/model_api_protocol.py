@@ -1,4 +1,4 @@
-"""Resolve the API that hosted OpenCode should use for a gateway model.
+"""Resolve model API capabilities for hosted agent configuration.
 
 Unknown models keep chat completions. Explicit Responses overrides and known
 endpoint-scoped capabilities opt into the native Responses SDK. No network
@@ -18,6 +18,13 @@ from preloop.services.openai_responses_passthrough import (
 )
 
 logger = logging.getLogger(__name__)
+
+CODEX_RESPONSES_REQUIRED = (
+    "Codex requires the Responses API. Enable meta_data.gateway.enabled=true "
+    "on this AI model to use the Preloop Responses gateway, or select a "
+    "provider endpoint explicitly configured to support Responses."
+)
+
 
 OPENCODE_ZEN_ENDPOINT = "https://opencode.ai/zen/v1"
 OPENCODE_ZEN_CATALOG_SOURCE = "https://models.dev/api.json"
@@ -101,3 +108,16 @@ def model_api_protocol(ai_model: models.AIModel) -> str:
         if identifier in OPENCODE_ZEN_RESPONSES_MODELS:
             return "responses"
     return "chat_completions"
+
+
+def codex_model_configuration_error(ai_model: models.AIModel) -> str | None:
+    """Return actionable remediation for a direct chat-only Codex model."""
+    metadata = ai_model.meta_data if isinstance(ai_model.meta_data, dict) else {}
+    gateway = metadata.get("gateway")
+    if isinstance(gateway, dict) and gateway.get("enabled"):
+        return None
+    if (ai_model.provider_name or "openai").strip().lower() == "openai":
+        return None
+    if model_api_protocol(ai_model) == "responses":
+        return None
+    return CODEX_RESPONSES_REQUIRED
