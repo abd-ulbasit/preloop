@@ -246,6 +246,14 @@ def manual_webhook_record(webhook_url: str) -> Dict[str, Any]:
     }
 
 
+class JiraWebhookCallbackConflictError(TrackerResponseError):
+    """Provider requires an existing callback; never trust it without DB proof."""
+
+    def __init__(self, callback_url: str) -> None:
+        super().__init__("Jira requires the OAuth user's existing webhook callback.")
+        self.callback_url = callback_url
+
+
 class JiraTracker(BaseTracker):
     """Jira tracker implementation."""
 
@@ -787,6 +795,14 @@ class JiraTracker(BaseTracker):
         created = first.get("createdWebhookId")
         if created is None:
             errors = first.get("errors") or ["no webhook id returned"]
+            for error in errors:
+                match = re.fullmatch(
+                    r"Only a single URL per user is allowed to be registered via REST API\. "
+                    r"The currently used URL: (\S+)",
+                    str(error),
+                )
+                if match:
+                    raise JiraWebhookCallbackConflictError(match.group(1))
             raise TrackerResponseError(
                 "Jira rejected the dynamic webhook: " + "; ".join(map(str, errors))
             )
@@ -844,6 +860,58 @@ class JiraTracker(BaseTracker):
                 "DELETE", "webhook", json_data={"webhookIds": ids}, api_version="3"
             )
 
+    def _validated_shared_callback(
+        self, db: Session, requested_url: str, callback_url: str
+    ) -> str:
+        """Accept an existing callback only with exact local registration proof."""
+        requested = urllib.parse.urlsplit(requested_url)
+        callback = urllib.parse.urlsplit(callback_url)
+        prefix = requested.path.rsplit("/", 1)[0] + "/"
+        try:
+            import uuid
+
+            anchor_id = uuid.UUID(callback.path.removeprefix(prefix))
+        except ValueError:
+            anchor_id = None
+        if (
+            requested.scheme != "https"
+            or (callback.scheme, callback.netloc)
+            != (requested.scheme, requested.netloc)
+            or callback.username
+            or callback.password
+            or callback.query
+            or callback.fragment
+            or not callback.path.startswith(prefix)
+            or anchor_id is None
+            or any(ord(c) < 33 for c in callback_url)
+        ):
+            raise TrackerResponseError(
+                "Jira callback conflict requires administrator attention."
+            )
+        context = crud_webhook.jira_callback_context(
+            db, tracker_id=str(self.tracker_id)
+        )
+        if context:
+            projects = crud_webhook.get_jira_callback_projects(
+                db,
+                callback_url=callback_url,
+                cloud_id=context[0],
+                provider_subject=context[1],
+            )
+            anchor = crud_organization.get_with_tracker(db, id=str(anchor_id))
+            anchor_context = (
+                crud_webhook.jira_callback_context(
+                    db, tracker_id=str(anchor.tracker_id)
+                )
+                if anchor is not None
+                else None
+            )
+            if projects and anchor_context == context:
+                return callback_url
+        raise TrackerResponseError(
+            "Jira callback conflict has no authorized local registration."
+        )
+
     async def sync_dynamic_webhooks(
         self, db: Session, projects: List[Project], webhook_url: str
     ) -> Dict[str, Any]:
@@ -864,10 +932,16 @@ class JiraTracker(BaseTracker):
             for project in projects
         }
         existing_ids = {row.external_id for row in rows.values() if row is not None}
+        existing_urls = {row.url for row in rows.values() if row is not None}
+        effective_url = webhook_url
+        if len(existing_urls) == 1 and webhook_url not in existing_urls:
+            effective_url = self._validated_shared_callback(
+                db, webhook_url, next(iter(existing_urls))
+            )
         coverage_ok = (
             len(existing_ids) == 1
             and all(row is not None for row in rows.values())
-            and all(row.url == webhook_url for row in rows.values())
+            and all(row.url == effective_url for row in rows.values())
         )
         if coverage_ok:
             webhook_id = next(iter(existing_ids))
@@ -882,9 +956,14 @@ class JiraTracker(BaseTracker):
                     "expires": expires,
                 }
 
-        webhook_id = await self.register_dynamic_webhook(
-            webhook_url, [self._project_jql_key(project) for project in projects]
-        )
+        keys = [self._project_jql_key(project) for project in projects]
+        try:
+            webhook_id = await self.register_dynamic_webhook(effective_url, keys)
+        except JiraWebhookCallbackConflictError as exc:
+            effective_url = self._validated_shared_callback(
+                db, webhook_url, exc.callback_url
+            )
+            webhook_id = await self.register_dynamic_webhook(effective_url, keys)
         stale = [i for i in existing_ids if i != webhook_id]
         for row in rows.values():
             if row is not None:
@@ -895,7 +974,7 @@ class JiraTracker(BaseTracker):
                 obj_in={
                     "project_id": project.id,
                     "external_id": webhook_id,
-                    "url": webhook_url,
+                    "url": effective_url,
                     # Dynamic deliveries are authenticated by the app's JWT,
                     # not by a per-hook secret.
                     "secret": "",

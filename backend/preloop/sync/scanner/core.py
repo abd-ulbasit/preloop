@@ -652,6 +652,7 @@ async def _process_organization(
                         e,
                     )
                     org_stats["organizations"]["errors"] += 1
+                    org_stats["errors"] += 1
             elif client.tracker_type == "jira":
                 if getattr(client.client, "webhook_status", None) == "manual_required":
                     logger.info(
@@ -902,6 +903,9 @@ async def scan_tracker(
                 db, client, org, since, force_update
             )
             stats["organizations"]["processed"] += 1
+            stats["organizations"]["errors"] += org_stats.get("organizations", {}).get(
+                "errors", 0
+            )
             for key in stats:
                 if not isinstance(stats[key], dict):
                     stats[key] += org_stats.get(key, 0)

@@ -564,3 +564,73 @@ def test_managed_jira_edit_keeps_site_binding_and_drops_credentials():
         _merge_managed_jira_details(
             previous, {"site_url": "https://evil.atlassian.net"}
         )
+
+
+@pytest.mark.asyncio
+async def test_shared_callback_conflict_registers_own_id_then_reconciles(monkeypatch):
+    """The existing owner's hook is neither reused as our id nor deleted."""
+    crud = FakeWebhookCrud()
+    anchor_id = uuid.uuid4()
+    old_project_id = uuid.uuid4()
+    callback = f"https://preloop.example/api/v1/private/webhooks/jira/{anchor_id}"
+    requested = f"https://preloop.example/api/v1/private/webhooks/jira/{uuid.uuid4()}"
+    existing = crud.create(
+        None, obj_in={"project_id": old_project_id, "external_id": "1", "url": callback}
+    )
+    crud.jira_callback_context = lambda *a, **kw: (CLOUD_ID, "jira-user")
+    crud.get_jira_callback_projects = lambda *a, **kw: [
+        SimpleNamespace(organization_id=anchor_id)
+    ]
+    monkeypatch.setattr("preloop.sync.trackers.jira.crud_webhook", crud)
+    monkeypatch.setattr(
+        "preloop.sync.trackers.jira.crud_organization.get_with_tracker",
+        lambda *a, **kw: SimpleNamespace(tracker_id="anchor-tracker"),
+    )
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"values": [{"id": 1}, {"id": 2}], "isLast": True}
+            )
+        if request.method == "PUT":
+            return httpx.Response(200, json={"expirationDate": "later"})
+        body = json.loads(request.content)
+        if body["url"] != callback:
+            return httpx.Response(
+                200,
+                json={
+                    "webhookRegistrationResult": [
+                        {
+                            "errors": [
+                                "Only a single URL per user is allowed to be registered via REST API. The currently used URL: "
+                                + callback
+                            ]
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200, json={"webhookRegistrationResult": [{"createdWebhookId": 2}]}
+        )
+
+    tracker = managed_tracker(FakeSource(["tok"]), handler)
+    project = SimpleNamespace(id=uuid.uuid4(), identifier="10000", slug="PRJ")
+    assert await tracker.sync_dynamic_webhooks(None, [project], requested) == {
+        "action": "registered",
+        "webhook_id": "2",
+    }
+    assert crud.rows[project.id].url == callback
+    assert crud.rows[project.id].external_id == "2"
+    assert crud.rows[old_project_id] is existing
+    assert crud.removed == []
+    assert [json.loads(r.content)["url"] for r in seen if r.method == "POST"] == [
+        requested,
+        callback,
+    ]
+    assert (await tracker.sync_dynamic_webhooks(None, [project], requested))[
+        "action"
+    ] == "refreshed"
+    assert len([r for r in seen if r.method == "POST"]) == 2
+    assert not any(r.method == "DELETE" for r in seen)

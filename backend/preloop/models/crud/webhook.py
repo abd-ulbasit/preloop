@@ -1,8 +1,9 @@
 """CRUD operations for Webhook model."""
 
 from typing import List, Optional
+from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Query, Session
 
 from preloop.models import models
@@ -53,6 +54,116 @@ class CRUDWebhook(CRUDBase[Webhook]):
             .filter(models.Webhook.id == id)
             .delete(synchronize_session=False)
         )
+
+    def jira_callback_context(
+        self, db: Session, *, tracker_id: str
+    ) -> Optional[tuple[str, str]]:
+        """Read callback namespace metadata without exposing grant secrets."""
+        row = (
+            db.query(models.Tracker, models.OAuthToken.provider_subject)
+            .join(
+                models.OAuthToken,
+                and_(
+                    models.OAuthToken.tracker_id == models.Tracker.id,
+                    models.OAuthToken.account_id == models.Tracker.account_id,
+                ),
+            )
+            .filter(
+                models.Tracker.id == tracker_id,
+                models.Tracker.tracker_type == "jira",
+                models.Tracker.auth_type == "managed_oauth",
+                models.OAuthToken.provider == "jira",
+                models.OAuthToken.auth_mode == "managed_oauth",
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        cloud_id = (row[0].connection_details or {}).get("cloud_id")
+        return (str(cloud_id), str(row[1])) if cloud_id and row[1] else None
+
+    def get_jira_callback_projects(
+        self,
+        db: Session,
+        *,
+        callback_url: str,
+        cloud_id: str,
+        provider_subject: str,
+        matched_ids: Optional[set[str]] = None,
+    ) -> List[models.Project]:
+        """Resolve only persisted callback owners with usable managed grants.
+
+        Provider signatures alone never grant site-wide delivery access. Each
+        returned project owns a registered id at this exact callback, under the
+        same Jira cloud and OAuth user. Tenant joins remain explicit.
+        """
+        now = datetime.now(timezone.utc)
+        query = (
+            db.query(models.Project)
+            .join(models.Webhook, models.Webhook.project_id == models.Project.id)
+            .join(
+                models.Organization,
+                models.Project.organization_id == models.Organization.id,
+            )
+            .join(models.Tracker, models.Organization.tracker_id == models.Tracker.id)
+            .join(
+                models.OAuthToken,
+                and_(
+                    models.OAuthToken.tracker_id == models.Tracker.id,
+                    models.OAuthToken.account_id == models.Tracker.account_id,
+                ),
+            )
+            .join(
+                models.OAuthProviderConfiguration,
+                and_(
+                    models.OAuthToken.configuration_id
+                    == models.OAuthProviderConfiguration.id,
+                    models.OAuthToken.account_id
+                    == models.OAuthProviderConfiguration.account_id,
+                ),
+            )
+            .filter(
+                models.Webhook.url == callback_url,
+                models.Webhook.organization_id.is_(None),
+                models.Project.is_active.is_(True),
+                models.Organization.is_active.is_(True),
+                models.Tracker.tracker_type == "jira",
+                models.Tracker.auth_type == "managed_oauth",
+                models.Tracker.is_deleted.is_(False),
+                models.Tracker.is_active.is_(True),
+                models.OAuthToken.provider == "jira",
+                models.OAuthToken.auth_mode == "managed_oauth",
+                models.OAuthToken.status == "active",
+                models.OAuthToken.provider_subject == provider_subject,
+                models.OAuthProviderConfiguration.enabled.is_(True),
+                models.OAuthProviderConfiguration.provider == "jira",
+                models.OAuthToken.canonical_instance
+                == models.OAuthProviderConfiguration.canonical_instance,
+                models.OAuthToken.configuration_version
+                == models.OAuthProviderConfiguration.version,
+                or_(
+                    models.OAuthToken.expires_at.is_(None),
+                    models.OAuthToken.expires_at > now,
+                    and_(
+                        models.OAuthToken.refresh_token_encrypted.isnot(None),
+                        or_(
+                            models.OAuthToken.refresh_token_expires_at.is_(None),
+                            models.OAuthToken.refresh_token_expires_at > now,
+                        ),
+                    ),
+                ),
+            )
+        )
+        if matched_ids is not None:
+            query = query.filter(models.Webhook.external_id.in_(matched_ids))
+        return [
+            p
+            for p in query.all()
+            if str(
+                (p.organization.tracker.connection_details or {}).get("cloud_id") or ""
+            )
+            == cloud_id
+        ]
 
     def get_by_project_id(
         self, db: Session, *, project_id: str, account_id: Optional[str] = None
