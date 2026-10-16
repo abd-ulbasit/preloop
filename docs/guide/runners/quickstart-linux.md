@@ -746,3 +746,8 @@ The server records received PR and native-session handoff markers before final
 completion, which preserves that metadata if a later terminal report is lost.
 A created PR by itself does not mean the agent process has finished or that the
 execution succeeded.
+
+## Account runner requirements
+
+See [Account runner requirements](policy.md) for console policy settings,
+compliance and member warnings.

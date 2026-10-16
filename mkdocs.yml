@@ -266,6 +266,7 @@ nav:
           - Jira repository binding: guide/flows/jira-repository-binding.md
 
   - Runners:
+      - Account runner requirements: guide/runners/policy.md
       - Linux quickstart: guide/runners/quickstart-linux.md
       - macOS quickstart: guide/runners/quickstart-macos.md
       - Windows quickstart: guide/runners/quickstart-windows.md

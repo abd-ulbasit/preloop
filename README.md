@@ -103,6 +103,9 @@ CI can trigger a flow too: the [`run-flow` GitHub Action](docs/guide/flows/githu
 
 Runners advertise `docker` only after a timed `docker ps` succeeds, and installed, enabled, signed-in agents contribute capability tags such as `cursor_cli` and `copilot_cli`. New runners accept tagged work by default; the console can enable untagged jobs or pause new work without stopping current jobs. Native Cursor and Copilot execution works without Docker.
 
+With an Enterprise runner policy provider, Account settings exposes account, role and team requirements; Runners shows member compliance and harness governance. Non-compliant members see a warning when the policy requests it. The console gates these controls on the provider feature and user permissions.
+
+
 [Native restricted CI setup](docs/guide/flows/restricted-ci.md) provides OSS console and `preloop ci` commands for a separate machine identity bound to one project and dedicated hosted flow. Its rotating keys can access only that principal's executions, results and completion subscriptions. Human administration uses safe metadata and one-time secrets; the operator-run Actions example verifies the current approved PR head and persisted completion before separately confirming review publication. The legacy action uses broader account credentials and rejects restricted CI tokens.
 
 ### Policy-as-code

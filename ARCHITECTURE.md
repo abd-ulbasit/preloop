@@ -849,3 +849,5 @@ pages and segment counts over each run's half-open window. Segment availability
 and the earliest retained summary date are derived from stored segments; reviewed
 session counts and stop reasons come from the persisted run. No analyser is
 required to browse fixture or existing findings.
+
+The capability-gated runner policy console consumes the Enterprise provider’s `/account/runner-policy`, paginated `/account/runner-compliance`, and member-only `/account/runner-compliance/me` APIs. Policy editing lives in Account settings, the roster in Runners, and the member warning in the console shell. OSS without `runner_requirement_policy` makes no requests to these routes; server permissions remain authoritative.
