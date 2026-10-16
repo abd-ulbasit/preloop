@@ -799,6 +799,8 @@ def _resolve_approval_workflow_id(
 
 def _sensitive_denial_text(outcome: Any, *, where: str) -> str:
     """Refusal shown to the agent. Types only, never the matched values."""
+    if outcome.rule is not None and outcome.rule.condition is not None:
+        return f"Access denied: {outcome.reason or outcome.rule.description or outcome.rule_id}"
     summary = outcome.detector_summary()
     types = ", ".join(summary.get("pii.types_found") or []) or "sensitive data"
     if summary.get("detector_timeout"):

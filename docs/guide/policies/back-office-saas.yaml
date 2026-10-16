@@ -1,0 +1,57 @@
+version: "1.0"
+metadata:
+  name: Back-office SaaS data safeguards
+  description: Notify on unapproved servers, review writes, and stop bulk exports.
+  tags: [back-office, mcp, example]
+
+# No server URLs, credentials, model IDs or existing users are required to import.
+# After import, assign reviewers to this workflow before sending real traffic.
+approval_workflows:
+  - name: back-office-review
+    timeout_seconds: 300
+    approvals_required: 1
+
+sensitive_data:
+  rules:
+    - id: back-office-unapproved-server
+      description: A connected assistant called a server outside our approved list.
+      "on": [tool.args]
+      condition: >-
+        !(tool.server in ['crm', 'marketing', 'warehouse', 'cdn-analytics'])
+      action: notify
+
+    - id: back-office-bulk-export
+      description: >-
+        Bulk export blocked. Request at most 10000 rows with explicit columns
+        and a filter, or ask an administrator for an approved export process.
+      "on": [tool.args]
+      condition: >-
+        tool.name.matches('(?i)(^|_)(export|download)(_|$)') ||
+        (has(args.operation) && args.operation.matches('(?i)\\b(export|download)\\b')) ||
+        (has(args.action) && args.action.matches('(?i)\\b(export|download)\\b')) ||
+        (has(args.limit) && args.limit > 10000) ||
+        (has(args.row_limit) && args.row_limit > 10000) ||
+        (has(args.max_rows) && args.max_rows > 10000) ||
+        (has(args.sql) && args.sql.matches('(?i)select\\s+\\*\\s+from\\b')) ||
+        (has(args.query) && args.query.matches('(?i)select\\s+\\*\\s+from\\b'))
+      action: deny
+
+    - id: back-office-approve-writes
+      description: A person must approve changes or deletions in CRM and warehouse data.
+      "on": [tool.args]
+      condition: >-
+        tool.server in ['crm', 'warehouse'] &&
+        tool.name.matches('(?i)(^|_)(create|insert|update|upsert|write|delete|remove|drop|truncate|merge)(_|$)')
+      action: require_approval
+      approval_workflow: back-office-review
+
+model_io:
+  - id: back-office-unapproved-premium-model
+    description: A session used a top-tier model outside our approved model list.
+    target: model.request
+    conditions:
+      - expression: >-
+          model.name in ['premium-approved', 'premium-unapproved'] &&
+          !(model.name in ['premium-approved'])
+        condition_type: cel
+        action: notify

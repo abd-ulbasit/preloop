@@ -871,3 +871,9 @@ session counts and stop reasons come from the persisted run. No analyser is
 required to browse fixture or existing findings.
 
 The capability-gated runner policy console consumes the Enterprise provider’s `/account/runner-policy`, paginated `/account/runner-compliance`, and member-only `/account/runner-compliance/me` APIs. Policy editing lives in Account settings, the roster in Runners, and the member warning in the console shell. OSS without `runner_requirement_policy` makes no requests to these routes; server permissions remain authoritative.
+
+Tool data policies also support CEL predicates on `tool.args` using `args`,
+`tool.name` and `tool.server`. These reuse the sensitive-data policy store,
+notice delivery and approval dispatch; evaluation errors deny the call.
+The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrates
+portable server allowlists, write approvals and bulk-export checks.

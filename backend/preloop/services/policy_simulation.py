@@ -299,6 +299,9 @@ async def simulate_policy(
     ):
         result.decision = sensitive.action
         result.matched_rule = sensitive.rule.id if sensitive.rule else None
+        result.description = sensitive.reason or (
+            sensitive.rule.description if sensitive.rule else None
+        )
     if request.model_text is not None:
         model_rules = (
             list(policy.model_io or [])

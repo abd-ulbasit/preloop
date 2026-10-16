@@ -176,6 +176,15 @@ sensitive_data:
 - Audit rows carry the rule id, target, types found, argument paths and a
   SHA-256 of the scanned text. With no rule in scope no detector runs.
 
+### Tool metadata and argument predicates
+
+For server allowlists, write-tool patterns and bulk-export checks, a
+`sensitive_data.rules` entry may use a CEL `condition` instead of detector
+`types`. It binds `args`, `tool.name` and `tool.server`, runs only on
+`tool.args`, and supports `notify`, `deny` and `require_approval`. Evaluation
+errors deny the call. A condition rule cannot use detector types or redact.
+See the downloadable pack in [Governing back-office AI use](policies/back-office-ai.md).
+
 ### Reference-only logging
 
 `sensitive_data.reference_only` names tools, servers or agents whose calls
