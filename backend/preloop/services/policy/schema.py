@@ -839,6 +839,33 @@ class SensitiveDataRule(BaseModel):
     approval_workflow: Optional[str] = Field(
         None, description="Approval workflow name for require_approval"
     )
+    condition: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=10000,
+        description=(
+            "CEL predicate instead of a detector scan, for tool.args only. "
+            "Bindings: args, tool.name and tool.server. Errors skip notify rules; others deny."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> "SensitiveDataRule":
+        """Keep predicate rules distinct from detector and redaction rules."""
+        if self.condition is None:
+            return self
+        if self.target_values() != ["tool.args"]:
+            raise ValueError("condition rules require on: [tool.args]")
+        if self.types is not None or self.action_value() == "redact":
+            raise ValueError("condition rules cannot set types or redact")
+        from preloop.services.cel_programs import compile_cel_program
+
+        try:
+            compile_cel_program(self.condition)
+        except Exception as exc:
+            raise ValueError("Invalid CEL condition") from exc
+        return self
+
     redact_upstream: bool = Field(
         False,
         description=(
