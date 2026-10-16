@@ -800,3 +800,176 @@ async def test_factory_refuses_managed_without_resolver_and_builds_with_one() ->
         )
         is None
     )
+
+
+@pytest.mark.parametrize("kind", ["diff", "diffstat"])
+async def test_managed_follows_canonical_diff_redirect(kind: str) -> None:
+    requests: List[httpx.Request] = []
+    grant = FakeGrant()
+    destination = f"/2.0/repositories/ws/repo/{kind}/ws/repo:abcdef123456%0D123456abcdef?context=3"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pullrequests/" in request.url.path:
+            return httpx.Response(302, headers={"Location": destination})
+        if kind == "diff":
+            return httpx.Response(200, text="diff --git a/test b/test")
+        return ok({"values": [{"status": "modified"}]})
+
+    tracker = make_managed(handler, requests, grant)
+    result = await (
+        tracker.get_pull_request_diff(2)
+        if kind == "diff"
+        else tracker.get_pull_request_diffstat(2)
+    )
+    assert result == (
+        "diff --git a/test b/test" if kind == "diff" else [{"status": "modified"}]
+    )
+    assert len(requests) == 2
+    assert requests[1].url.raw_path.endswith(b"abcdef123456%0D123456abcdef?context=3")
+    assert all(r.headers["Authorization"] == "Bearer token-a" for r in requests)
+    assert grant.calls == [False, False]
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://evil.example/2.0/repositories/ws/repo/diff/x",
+        "http://api.bitbucket.org/2.0/repositories/ws/repo/diff/x",
+        "https://user:password@api.bitbucket.org/2.0/repositories/ws/repo/diff/x",
+        "https://api.bitbucket.org:8443/2.0/repositories/ws/repo/diff/x",
+        "//evil.example/2.0/repositories/ws/repo/diff/x",
+        "/untrusted/path",
+        "/2.0/%2e%2e/untrusted",
+        "/2.0/repositories/ws/repo/pullrequests/2/merge",
+        "",
+    ],
+)
+async def test_managed_redirect_rejects_unsafe_destination(location: str) -> None:
+    requests: List[httpx.Request] = []
+    tracker = make_managed(
+        lambda r: httpx.Response(302, headers={"Location": location}),
+        requests,
+        FakeGrant(),
+    )
+    with pytest.raises(TrackerResponseError, match="redirect"):
+        await tracker.get_pull_request_diff(2)
+    assert len(requests) == 1
+
+
+async def test_managed_redirect_loop_is_bounded() -> None:
+    requests: List[httpx.Request] = []
+    tracker = make_managed(
+        lambda r: httpx.Response(302, headers={"Location": str(r.url)}),
+        requests,
+        FakeGrant(),
+    )
+    with pytest.raises(TrackerResponseError, match="redirect"):
+        await tracker.get_pull_request_diff(2)
+    assert len(requests) <= 4
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+async def test_managed_never_follows_write_redirect(method: str) -> None:
+    requests: List[httpx.Request] = []
+    tracker = make_managed(
+        lambda r: httpx.Response(
+            307, headers={"Location": "/2.0/repositories/ws/repo/comments"}
+        ),
+        requests,
+        FakeGrant(),
+    )
+    with pytest.raises(TrackerResponseError, match="redirect"):
+        await tracker._request(
+            method,
+            "repositories/ws/repo/pullrequests/2/comments",
+            json={"content": "test"},
+        )
+    assert len(requests) == 1
+
+
+async def test_managed_redirect_refreshes_once_and_keeps_query_at_destination() -> None:
+    requests: List[httpx.Request] = []
+    grant = FakeGrant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pullrequests/" in request.url.path:
+            return httpx.Response(
+                302,
+                headers={"Location": "/2.0/repositories/ws/repo/diff/range?context=3"},
+            )
+        if request.headers["Authorization"] == "Bearer token-a":
+            return ok({}, 401)
+        return httpx.Response(200, text="diff")
+
+    tracker = make_managed(handler, requests, grant)
+    result = await tracker._request(
+        "GET", "repositories/ws/repo/pullrequests/2/diff", params={"original": "only"}
+    )
+    assert result.text == "diff"
+    assert grant.calls == [False, False, True]
+    assert len(requests) == 3
+    assert str(requests[1].url.query, "ascii") == "context=3"
+    assert requests[2].headers["Authorization"] == "Bearer token-b"
+
+
+async def test_managed_validates_every_redirect_hop_before_sending_token() -> None:
+    requests: List[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        location = (
+            "/2.0/repositories/ws/repo/diff/range"
+            if "/pullrequests/" in request.url.path
+            else "https://evil.example/2.0/steal"
+        )
+        return httpx.Response(302, headers={"Location": location})
+
+    tracker = make_managed(handler, requests, FakeGrant())
+    with pytest.raises(TrackerResponseError, match="redirect"):
+        await tracker.get_pull_request_diff(2)
+    assert len(requests) == 2
+    assert all(r.url.host == "api.bitbucket.org" for r in requests)
+
+
+async def test_managed_redirected_diffstat_keeps_pagination() -> None:
+    requests: List[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pullrequests/" in request.url.path:
+            return httpx.Response(
+                302, headers={"Location": "/2.0/repositories/ws/repo/diffstat/range"}
+            )
+        if request.url.params.get("page") == "2":
+            return ok({"values": [{"status": "added"}]})
+        return ok(
+            {
+                "values": [{"status": "modified"}],
+                "next": "https://api.bitbucket.org/2.0/repositories/ws/repo/diffstat/range?page=2",
+            }
+        )
+
+    tracker = make_managed(handler, requests, FakeGrant())
+    assert await tracker.get_pull_request_diffstat(2) == [
+        {"status": "modified"},
+        {"status": "added"},
+    ]
+    assert len(requests) == 3
+
+
+async def test_managed_only_refreshes_once_across_redirect_chain() -> None:
+    requests: List[httpx.Request] = []
+    grant = FakeGrant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers["Authorization"] == "Bearer token-a":
+            return ok({}, 401)
+        if "/pullrequests/" in request.url.path:
+            return httpx.Response(
+                302, headers={"Location": "/2.0/repositories/ws/repo/diff/range"}
+            )
+        return ok({}, 401)
+
+    tracker = make_managed(handler, requests, grant)
+    with pytest.raises(TrackerAuthenticationError, match="Reconnect"):
+        await tracker.get_pull_request_diff(2)
+    assert grant.calls == [False, True, False]
+    assert len(requests) == 3

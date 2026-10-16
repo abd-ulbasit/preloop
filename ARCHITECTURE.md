@@ -478,7 +478,9 @@ behind MCP and REST, connection/scope testing, feedback reads, flow clone
 credentials, and the execution-bound publication credential endpoint) asks the
 plugin service `managed_oauth_resolver:<provider>` for a fresh credential
 right before network I/O, after the usual account/project authorization. The
-Bitbucket Cloud client pins the API origin, refuses redirects, forces exactly
+Bitbucket Cloud client pins the API origin, follows at most three validated GET
+redirects within the HTTPS API namespace (including canonical diff/diffstat
+commit-range URLs), refuses write or unsafe redirects, and forces exactly
 one refresh on a 401 and has no Basic or stale-key fallback; typed
 unavailable/reconnect-required/permission failures propagate instead of an
 anonymous clone or a GitHub fallback. Late publication reuses the GitHub App
