@@ -29,6 +29,7 @@ from preloop.models.schemas.flow import (
     ModelRoutingConfig,
     ModelRoutingRule,
 )
+from preloop.services.model_api_protocol import codex_model_configuration_error
 from preloop.services.runner_service import (
     _account_default_runner_pool,
     _explicit_pool,
@@ -79,10 +80,9 @@ def model_has_credential_source(model: models.AIModel) -> bool:
 def model_usable_for_agent(model: models.AIModel, agent_type: str) -> bool:
     """True when the agent harness can actually reach this model.
 
-    The codex harness talks to OpenAI directly, or to any other provider only
-    through an explicit endpoint (custom provider / gateway); a model row
-    without either fails inside the container. Other harnesses take the
-    endpoint from the model row as-is, so the credential check suffices.
+    Codex needs Responses: native OpenAI, the gateway, or an explicit
+    Responses-capable custom endpoint. Other harnesses take the endpoint
+    from the model row as-is, so the credential check suffices.
     """
     if not model_has_credential_source(model):
         return False
@@ -95,7 +95,9 @@ def model_usable_for_agent(model: models.AIModel, agent_type: str) -> bool:
         meta_data = model.meta_data if isinstance(model.meta_data, dict) else {}
         gateway = meta_data.get("gateway")
         gateway_enabled = isinstance(gateway, dict) and gateway.get("enabled")
-        return bool(model.api_endpoint or gateway_enabled)
+        return bool(model.api_endpoint or gateway_enabled) and not (
+            codex_model_configuration_error(model)
+        )
     return True
 
 
@@ -318,7 +320,12 @@ def load_usable_model(
     assert model is not None
     if not model_usable_for_agent(model, harness):
         raise ModelRoutingError(
-            f"ai_model_id '{ai_model_id}' is not usable with agent_type '{harness}'"
+            f"ai_model_id '{ai_model_id}' is not usable with agent_type '{harness}'. "
+            + (
+                (codex_model_configuration_error(model) or "")
+                if harness == "codex"
+                else ""
+            )
         )
     return model
 

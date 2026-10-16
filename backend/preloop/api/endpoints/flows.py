@@ -108,6 +108,7 @@ from preloop.services.built_in_models import (
     is_available_built_in_model,
 )
 from preloop.services.hosted_spend_guard import hosted_model_selectable
+from preloop.services.model_api_protocol import codex_model_configuration_error
 from preloop.services.model_routing import validate_stored_model_routing
 from preloop.services.product_provenance import (
     ProductProvenanceError,
@@ -158,6 +159,20 @@ def _owned_ci_execution(
     if execution is None:
         raise HTTPException(404, "Flow execution not found")
     return execution
+
+
+def _reject_codex_model(
+    db: Session, agent_type: Any, model_id: Any, account_id: Any
+) -> None:
+    """Validate Codex's selected model before persisting a flow."""
+    if str(agent_type).lower() != "codex" or model_id is None:
+        return
+    model = crud_ai_model.get(db, id=model_id)
+    if model is None or model.account_id not in (None, account_id):
+        raise HTTPException(status_code=422, detail="AI model not found")
+    error = codex_model_configuration_error(model)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
 
 
 def _reject_host_exec_flow(
@@ -335,6 +350,9 @@ def create_flow(
         flow_in.trigger_event_source = "webhook"
         flow_in.trigger_event_types = ["webhook"]
 
+    _reject_codex_model(
+        db, flow_in.agent_type, flow_in.ai_model_id, current_user.account_id
+    )
     _reject_host_exec_flow(
         agent_type=flow_in.agent_type,
         agent_config=flow_in.agent_config,
@@ -2954,6 +2972,16 @@ def update_flow(
         except CallableFlowsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    _reject_codex_model(
+        db,
+        flow_in.agent_type
+        if "agent_type" in flow_in.model_fields_set
+        else flow.agent_type,
+        flow_in.ai_model_id
+        if "ai_model_id" in flow_in.model_fields_set
+        else flow.ai_model_id,
+        current_user.account_id,
+    )
     _reject_host_exec_flow(
         agent_type=(
             flow_in.agent_type if flow_in.agent_type is not None else flow.agent_type
