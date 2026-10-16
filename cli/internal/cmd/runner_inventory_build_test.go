@@ -539,6 +539,7 @@ func TestCopilotModernStoredConfig(t *testing.T) {
 		{"token presence unknown", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginUnknown, ""},
 		{"signed out overrides credentials", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, ""},
 		{"modern overrides stale legacy identity", `{"logged_in_users":[{"host":"https://old.example.com"}],"loggedInUsers":[]}`, harnessLoginUnknown, harnessLoginUnknown, ""},
+		{"null modern aliases override stale legacy", `{"logged_in_users":[{"host":"https://old.example.com"}],"lastLoggedInUser":null,"loggedInUsers":null}`, harnessLoginUnknown, harnessLoginUnknown, ""},
 		{"legacy JSONC fallback", "// legacy configuration\n" + `{"logged_in_users":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "example.ghe.com"},
 		{"malformed config fails closed", `{"logged_in_users":[{"host":"https://example.ghe.com"}],`, harnessLoginUnknown, harnessLoginUnknown, ""},
 		{"malformed identity fails closed", `{"lastLoggedInUser":"invalid"}`, harnessLoginUnknown, harnessLoginUnknown, ""},

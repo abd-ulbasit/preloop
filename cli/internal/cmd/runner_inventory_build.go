@@ -356,8 +356,6 @@ type copilotStoredConfig struct {
 	Model            string              `json:"model"`
 	LastLoggedInUser *copilotStoredUser  `json:"last_logged_in_user"`
 	LoggedInUsers    []copilotStoredUser `json:"logged_in_users"`
-	ModernLastUser   *copilotStoredUser  `json:"lastLoggedInUser"`
-	ModernUsers      []copilotStoredUser `json:"loggedInUsers"`
 	legacyLogin      bool
 }
 
@@ -375,17 +373,27 @@ func readCopilotStoredConfig(dir string) copilotStoredConfig {
 	}
 	// Copilot writes a leading // comment. Preserve URL strings while removing
 	// comments, and reject malformed documents rather than using partial data.
-	if err := json.Unmarshal([]byte(stripJSONCComments(string(raw))), &cfg); err != nil {
+	wire := struct {
+		*copilotStoredConfig
+		ModernLastUser json.RawMessage `json:"lastLoggedInUser"`
+		ModernUsers    json.RawMessage `json:"loggedInUsers"`
+	}{copilotStoredConfig: &cfg}
+	if err := json.Unmarshal([]byte(stripJSONCComments(string(raw))), &wire); err != nil {
 		return copilotStoredConfig{}
 	}
 	cfg.legacyLogin = cfg.LastLoggedInUser != nil || len(cfg.LoggedInUsers) > 0
-	if cfg.ModernLastUser != nil || cfg.ModernUsers != nil {
+	if len(wire.ModernLastUser) != 0 || len(wire.ModernUsers) != 0 {
 		// Modern identity records can remain after logout. Only the CLI status
 		// probe (or explicit token environment) establishes login for this schema.
 		// Never decode authTokens or account login names.
 		cfg.legacyLogin = false
-		cfg.LastLoggedInUser = cfg.ModernLastUser
-		cfg.LoggedInUsers = cfg.ModernUsers
+		cfg.LastLoggedInUser, cfg.LoggedInUsers = nil, nil
+		if len(wire.ModernLastUser) != 0 && json.Unmarshal(wire.ModernLastUser, &cfg.LastLoggedInUser) != nil {
+			return copilotStoredConfig{}
+		}
+		if len(wire.ModernUsers) != 0 && json.Unmarshal(wire.ModernUsers, &cfg.LoggedInUsers) != nil {
+			return copilotStoredConfig{}
+		}
 	}
 	return cfg
 }
