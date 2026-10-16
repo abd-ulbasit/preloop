@@ -393,9 +393,10 @@ def verification_prompt_instructions(git_config: Optional[Mapping[str, Any]]) ->
         lines.append(f"- Rule {rule.id}, paths {rule.path_globs}:")
         for check in rule.commands:
             lines.append(f"  [{check.id}]: {check.command}")
-    lines.append("For paths without a matching rule, also run:")
-    for check in profile.unknown_default:
-        lines.append(f"- [{check.id}]: {check.command}")
+    if profile.unknown_default:
+        lines.append("For paths without a matching rule, also run:")
+        for check in profile.unknown_default:
+            lines.append(f"- [{check.id}]: {check.command}")
     lines.append(
         "Trailing whitespace, including spaces on blank lines, fails git diff --check. "
         + (

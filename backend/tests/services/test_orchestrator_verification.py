@@ -315,3 +315,4 @@ async def test_launch_prompt_includes_effective_repository_profile() -> None:
     assert "Implement the issue." in prompt
     assert "[git-diff-check]: git diff --check main...HEAD" in prompt
     assert "Automatic whitespace repair is disabled" in prompt
+    assert "For paths without a matching rule, also run:" not in prompt

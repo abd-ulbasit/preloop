@@ -21,6 +21,7 @@ from preloop.agents.verification import (
     VERIFICATION_MARKER,
     VERIFIER_EXIT_DENIED,
     build_verification_gate_shell,
+    build_whitespace_repair_shell,
 )
 from preloop.services.verification import (
     VERIFICATION_PRODUCER,
@@ -164,7 +165,11 @@ class GateRepo:
         path.write_text(content)
 
     def gate_shell(self, profile: dict, base: str = "main") -> str:
-        return build_verification_gate_shell(
+        return build_whitespace_repair_shell(
+            profile=profile,
+            working_dir=str(self.repo),
+            base_branch=base,
+        ) + build_verification_gate_shell(
             profile=profile,
             working_dir=str(self.repo),
             base_branch=base,
@@ -679,6 +684,7 @@ class TestLegacyReportedOutcome:
         self, repo: GateRepo, monkeypatch: pytest.MonkeyPatch, isolated: bool
     ) -> None:
         repo.add_file("feature.py", "text  \nend\n")
+        repo.add_file("other.py", "more  \nend\n")
         original = repo.commit()
         repo._git("update-ref", "refs/remotes/origin/main", "main")
         result = self.run_generated(
@@ -694,6 +700,9 @@ class TestLegacyReportedOutcome:
         assert repo._git("rev-parse", "HEAD^") == original
         bundle = repo.repo.parent / "workspace/evidence/branch.bundle"
         assert repo._git("bundle", "list-heads", str(bundle)).split()[0] == final
+        calls = (repo.repo.parent / "git-calls").read_text().splitlines()
+        assert sum(" ls-tree " in f" {call} " for call in calls) == 1
+        assert sum("status --porcelain -z" in call for call in calls) == 1
         if not isolated:
             evidence = json.loads(
                 (

@@ -370,11 +370,9 @@ def build_verification_gate_shell(
         f"  exit {VERIFIER_EXIT_DENIED}",
         "fi",
     ]
-    return build_whitespace_repair_shell(
-        profile=policy.profile.model_dump(),
-        working_dir=working_dir,
-        base_branch=base_branch,
-    ) + "\n".join(lines)
+    # The publisher repairs before exporting recovery artifacts. Verification
+    # itself must not mutate the commit that those artifacts describe.
+    return "\n".join(lines)
 
 
 WHITESPACE_REPAIR_PY = r"""import os
@@ -392,6 +390,11 @@ try:
         raise ValueError("whitespace repair requires a clean tracked tree")
     merge_base = git("merge-base", base, "HEAD").decode().strip()
     paths = git("diff", "--name-only", "--diff-filter=ACMR", "-z", merge_base, "HEAD")
+    modes: dict[bytes, bytes] = {}
+    for entry in git("ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+        if entry:
+            metadata, path = entry.split(b"\t", 1)
+            modes[path] = metadata.split(b" ", 1)[0]
     repaired = []
     for raw in paths.split(b"\0"):
         if not raw:
@@ -399,8 +402,7 @@ try:
         path = os.fsdecode(raw)
         full = os.path.join(repo, path)
         # Skip symlinks, submodules, binary and non-UTF-8 files.
-        entry = git("ls-tree", "HEAD", "--", path).split(b" ", 1)[0]
-        if entry not in (b"100644", b"100755") or os.path.islink(full):
+        if modes.get(raw) not in (b"100644", b"100755") or os.path.islink(full):
             continue
         if os.path.commonpath([os.path.realpath(repo), os.path.realpath(full)]) != os.path.realpath(repo):
             raise ValueError("changed file escapes the repository")
