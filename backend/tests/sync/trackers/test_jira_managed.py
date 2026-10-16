@@ -335,6 +335,21 @@ class FakeWebhookCrud:
         self.rows: Dict[Any, Any] = {}
         self.removed: List[Any] = []
 
+    def jira_callback_context(self, db, *, tracker_id):
+        return CLOUD_ID, "jira-user"
+
+    def jira_callback_namespace(self, db, *, callback_url, matched_ids=None):
+        return None
+
+    def set_jira_callback_namespace(self, db, **kwargs):
+        for row in self.rows.values():
+            if (
+                row.external_id == kwargs["external_id"]
+                and row.url == kwargs["callback_url"]
+            ):
+                row.jira_cloud_id = kwargs["cloud_id"]
+                row.jira_provider_subject = kwargs["provider_subject"]
+
     def get_by_project_id(self, db, *, project_id):
         return self.rows.get(project_id)
 
@@ -623,6 +638,8 @@ async def test_shared_callback_conflict_registers_own_id_then_reconciles(monkeyp
     }
     assert crud.rows[project.id].url == callback
     assert crud.rows[project.id].external_id == "2"
+    assert crud.rows[project.id].jira_cloud_id == CLOUD_ID
+    assert crud.rows[project.id].jira_provider_subject == "jira-user"
     assert crud.rows[old_project_id] is existing
     assert crud.removed == []
     assert [json.loads(r.content)["url"] for r in seen if r.method == "POST"] == [

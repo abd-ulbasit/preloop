@@ -494,7 +494,11 @@ callback URL. Registration retries that URL only after validating the configured
 HTTPS origin and persisted ownership under the same Jira cloud and OAuth user.
 Signed deliveries route by exact stored callback URL and returned webhook IDs,
 with active grants, current project scope, and subscriptions checked for each
-receiving tracker. They never fan out by site alone. Registration failures count
+receiving tracker. Verified cloud/user namespace metadata is retained on webhook
+rows and backfilled on a successful refresh, so disconnecting the original
+connection does not revoke another active connection's registered delivery.
+Legacy rows require a live anchor grant until that reconciliation. They never
+fan out by site alone. Registration failures count
 as scanner errors even when issue synchronization succeeds. Managed repository
 URL lookup permits an empty stored key; credentials still arrive through the
 orchestrator's managed resolver.

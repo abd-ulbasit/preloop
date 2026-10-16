@@ -545,12 +545,16 @@ def _prepare_shared_jira_webhook(
     if not isinstance(matched, list) or not 0 < len(matched) <= 100:
         raise denied
     matched_ids = {str(i) for i in matched if str(i).isdigit()}
-    context = crud_webhook.jira_callback_context(db, tracker_id=str(anchor.tracker_id))
-    if not matched_ids or context is None:
+    if not matched_ids:
         raise denied
     callback_url = urljoin(
         str(settings.preloop_url), f"/api/v1/private/webhooks/jira/{anchor.id}"
     )
+    context = crud_webhook.jira_callback_namespace(
+        db, callback_url=callback_url, matched_ids=matched_ids
+    ) or crud_webhook.jira_callback_context(db, tracker_id=str(anchor.tracker_id))
+    if context is None:
+        raise denied
     candidates = crud_webhook.get_jira_callback_projects(
         db,
         callback_url=callback_url,

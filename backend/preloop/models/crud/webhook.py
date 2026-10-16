@@ -82,6 +82,60 @@ class CRUDWebhook(CRUDBase[Webhook]):
         cloud_id = (row[0].connection_details or {}).get("cloud_id")
         return (str(cloud_id), str(row[1])) if cloud_id and row[1] else None
 
+    def jira_callback_namespace(
+        self,
+        db: Session,
+        *,
+        callback_url: str,
+        matched_ids: Optional[set[str]] = None,
+    ) -> Optional[tuple[str, str]]:
+        """Read registration proof retained independently of live grant links."""
+        query = (
+            db.query(models.Webhook.jira_cloud_id, models.Webhook.jira_provider_subject)
+            .join(models.Project, models.Webhook.project_id == models.Project.id)
+            .join(
+                models.Organization,
+                models.Project.organization_id == models.Organization.id,
+            )
+            .join(models.Tracker, models.Organization.tracker_id == models.Tracker.id)
+            .filter(
+                models.Webhook.url == callback_url,
+                models.Webhook.organization_id.is_(None),
+                models.Webhook.jira_cloud_id.isnot(None),
+                models.Webhook.jira_provider_subject.isnot(None),
+                models.Tracker.tracker_type == "jira",
+                models.Tracker.auth_type == "managed_oauth",
+            )
+        )
+        if matched_ids is not None:
+            query = query.filter(models.Webhook.external_id.in_(matched_ids))
+        contexts = {
+            (str(cloud), str(subject))
+            for cloud, subject in query.all()
+            if cloud and subject
+        }
+        return next(iter(contexts)) if len(contexts) == 1 else None
+
+    def set_jira_callback_namespace(
+        self,
+        db: Session,
+        *,
+        tracker_id: str,
+        external_id: str,
+        callback_url: str,
+        cloud_id: str,
+        provider_subject: str,
+    ) -> None:
+        """Backfill verified proof only on the registering tracker's own rows."""
+        self._for_tracker(db, tracker_id=tracker_id).filter(
+            models.Webhook.external_id == external_id,
+            models.Webhook.url == callback_url,
+            models.Webhook.organization_id.is_(None),
+        ).update(
+            {"jira_cloud_id": cloud_id, "jira_provider_subject": provider_subject},
+            synchronize_session="fetch",
+        )
+
     def get_jira_callback_projects(
         self,
         db: Session,
@@ -125,6 +179,14 @@ class CRUDWebhook(CRUDBase[Webhook]):
             .filter(
                 models.Webhook.url == callback_url,
                 models.Webhook.organization_id.is_(None),
+                or_(
+                    models.Webhook.jira_cloud_id.is_(None),
+                    models.Webhook.jira_cloud_id == cloud_id,
+                ),
+                or_(
+                    models.Webhook.jira_provider_subject.is_(None),
+                    models.Webhook.jira_provider_subject == provider_subject,
+                ),
                 models.Project.is_active.is_(True),
                 models.Organization.is_active.is_(True),
                 models.Tracker.tracker_type == "jira",

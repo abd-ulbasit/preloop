@@ -127,6 +127,22 @@ def test_expired_access_with_live_refresh_is_usable(db_session, callback_owner):
 
 def test_shared_callback_ids_preserve_account_ownership(db_session, callback_owner):
     first_tracker, _, _, first_project, _, callback = callback_owner
+    second_tracker, _, _, second_project, second_hook, _ = second_owner(
+        db_session, callback
+    )
+    assert first_tracker.account_id != second_tracker.account_id
+    assert owners(db_session, callback, ids={"1"}) == [first_project]
+    assert owners(db_session, callback, ids={"2"}) == [second_project]
+    assert {p.id for p in owners(db_session, callback, ids={"1", "2"})} == {
+        first_project.id,
+        second_project.id,
+    }
+    second_tracker.connection_details = {"cloud_id": "other-cloud"}
+    db_session.flush()
+    assert owners(db_session, callback, ids={"1", "2"}) == [first_project]
+
+
+def second_owner(db_session, callback):
     account = models.Account(organization_name="Second account", is_active=True)
     db_session.add(account)
     db_session.flush()
@@ -139,17 +155,141 @@ def test_shared_callback_ids_preserve_account_ownership(db_session, callback_own
     )
     db_session.add(user)
     db_session.flush()
-    second_tracker, _, _, second_project, second_hook, _ = make_owner(db_session, user)
+    result = make_owner(db_session, user)
+    second_hook = result[4]
     second_hook.url = callback
     second_hook.external_id = "2"
     db_session.flush()
-    assert first_tracker.account_id != second_tracker.account_id
-    assert owners(db_session, callback, ids={"1"}) == [first_project]
-    assert owners(db_session, callback, ids={"2"}) == [second_project]
-    assert {p.id for p in owners(db_session, callback, ids={"1", "2"})} == {
-        first_project.id,
-        second_project.id,
-    }
-    second_tracker.connection_details = {"cloud_id": "other-cloud"}
+    return result
+
+
+def test_real_anchor_disconnect_preserves_only_active_registered_target(
+    db_session, callback_owner, monkeypatch
+):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from preloop.api.endpoints import webhooks
+    from preloop.models.crud.managed_oauth import CRUDManagedOAuth
+
+    first_tracker, _, first_token, first_project, first_hook, callback = callback_owner
+    second_tracker, _, second_token, second_project, second_hook, _ = second_owner(
+        db_session, callback
+    )
+    for tracker, hook in [(first_tracker, first_hook), (second_tracker, second_hook)]:
+        crud_webhook.set_jira_callback_namespace(
+            db_session,
+            tracker_id=str(tracker.id),
+            external_id=hook.external_id,
+            callback_url=callback,
+            cloud_id="cloud",
+            provider_subject="user",
+        )
     db_session.flush()
-    assert owners(db_session, callback, ids={"1", "2"}) == [first_project]
+    store = CRUDManagedOAuth(engine=db_session.connection())
+    store.disconnect(
+        account_id=first_tracker.account_id,
+        grant_id=first_token.id,
+        expected_version=first_token.rotation_version,
+    )
+    db_session.expire_all()
+    assert first_token.tracker_id is None
+    assert first_token.status == "disconnected"
+    assert not first_tracker.is_active
+    assert (
+        crud_webhook.jira_callback_context(db_session, tracker_id=str(first_tracker.id))
+        is None
+    )
+    assert crud_webhook.jira_callback_namespace(
+        db_session, callback_url=callback, matched_ids={"1", "2"}
+    ) == ("cloud", "user")
+    assert owners(db_session, callback, ids={"1", "2"}) == [second_project]
+    monkeypatch.setattr(
+        webhooks,
+        "get_managed_webhook_verifier",
+        lambda _: SimpleNamespace(verify=lambda **kw: True),
+    )
+    monkeypatch.setattr(
+        webhooks.crud_tracker_scope_rule,
+        "get_by_tracker",
+        lambda *a, **kw: [
+            SimpleNamespace(
+                scope_type="ORGANIZATION", rule_type="INCLUDE", identifier="site"
+            )
+        ],
+    )
+    dispatch = Mock(return_value={"status": "success"})
+    monkeypatch.setattr(webhooks, "_prepare_webhook", dispatch)
+    from preloop.config import settings
+
+    monkeypatch.setattr(settings, "preloop_url", "https://preloop.example")
+    payload = {
+        "matchedWebhookIds": [1, 2],
+        "issue": {"fields": {"project": {"id": "10000", "key": "PRJ"}}},
+    }
+    result = webhooks._prepare_shared_jira_webhook(
+        str(first_project.organization_id),
+        json.dumps(payload).encode(),
+        {},
+        db_session,
+        webhooks._WebhookPlan(),
+    )
+    assert result["matched_trackers"] == 1
+    assert dispatch.call_args.args[1] == str(second_project.organization_id)
+    from preloop.sync.trackers.jira import JiraTracker
+
+    client = JiraTracker(
+        str(second_tracker.id),
+        "",
+        {"url": "https://jira.example"},
+        initialize_client=False,
+    )
+    requested = f"https://preloop.example/api/v1/private/webhooks/jira/{second_project.organization_id}"
+    assert (
+        client._validated_shared_callback(db_session, requested, callback) == callback
+    )
+    store.disconnect(
+        account_id=second_tracker.account_id,
+        grant_id=second_token.id,
+        expected_version=second_token.rotation_version,
+    )
+    db_session.expire_all()
+    dispatch.reset_mock()
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        webhooks._prepare_shared_jira_webhook(
+            str(first_project.organization_id),
+            json.dumps(payload).encode(),
+            {},
+            db_session,
+            webhooks._WebhookPlan(),
+        )
+    assert exc.value.status_code == 403
+    dispatch.assert_not_called()
+
+
+def test_namespace_migration_roundtrip_preserves_legacy_hook(
+    db_session, callback_owner
+):
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect
+
+    migration = importlib.import_module(
+        "preloop.models.alembic.versions.20261020_jira_callback_namespace"
+    )
+    connection = db_session.connection()
+    with Operations.context(MigrationContext.configure(connection)):
+        migration.downgrade()
+        assert "jira_cloud_id" not in {
+            c["name"] for c in inspect(connection).get_columns("webhook")
+        }
+        migration.upgrade()
+    db_session.expire_all()
+    hook = callback_owner[4]
+    assert hook.external_id == "1"
+    assert hook.jira_cloud_id is None
+    assert hook.jira_provider_subject is None

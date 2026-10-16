@@ -906,7 +906,10 @@ class JiraTracker(BaseTracker):
                 if anchor is not None
                 else None
             )
-            if projects and anchor_context == context:
+            stored_context = crud_webhook.jira_callback_namespace(
+                db, callback_url=callback_url
+            )
+            if projects and context in (anchor_context, stored_context):
                 return callback_url
         raise TrackerResponseError(
             "Jira callback conflict has no authorized local registration."
@@ -927,6 +930,13 @@ class JiraTracker(BaseTracker):
         """
         if not projects:
             return {"action": "none", "webhook_id": None}
+        context = crud_webhook.jira_callback_context(
+            db, tracker_id=str(self.tracker_id)
+        )
+        if context is None:
+            raise TrackerResponseError(
+                "Jira callback registration requires a bound managed grant."
+            )
         rows = {
             project.id: crud_webhook.get_by_project_id(db, project_id=project.id)
             for project in projects
@@ -950,6 +960,14 @@ class JiraTracker(BaseTracker):
             # app still owns; otherwise register a replacement below.
             if webhook_id in await self.list_dynamic_webhook_ids():
                 expires = await self.refresh_dynamic_webhooks([webhook_id])
+                crud_webhook.set_jira_callback_namespace(
+                    db,
+                    tracker_id=str(self.tracker_id),
+                    external_id=webhook_id,
+                    callback_url=effective_url,
+                    cloud_id=context[0],
+                    provider_subject=context[1],
+                )
                 return {
                     "action": "refreshed",
                     "webhook_id": webhook_id,
@@ -975,6 +993,8 @@ class JiraTracker(BaseTracker):
                     "project_id": project.id,
                     "external_id": webhook_id,
                     "url": effective_url,
+                    "jira_cloud_id": context[0],
+                    "jira_provider_subject": context[1],
                     # Dynamic deliveries are authenticated by the app's JWT,
                     # not by a per-hook secret.
                     "secret": "",

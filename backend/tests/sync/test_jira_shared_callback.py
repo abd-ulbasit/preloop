@@ -33,6 +33,9 @@ def routing(monkeypatch):
         "jira_callback_context",
         lambda *a, **kw: ("cloud", "user"),
     )
+    monkeypatch.setattr(
+        webhooks.crud_webhook, "jira_callback_namespace", lambda *a, **kw: None
+    )
     lookup = Mock(return_value=[project, project])
     monkeypatch.setattr(webhooks.crud_webhook, "get_jira_callback_projects", lookup)
     verifier = Mock()
@@ -208,8 +211,8 @@ def test_shared_callback_requires_owned_registration_and_matching_anchor(
         with pytest.raises(TrackerResponseError):
             tracker._validated_shared_callback(None, requested, callback)
     else:
-        # A retired anchor remains a namespace; only active persisted target
-        # owners returned by CRUD can receive deliveries through it.
+        # An inactive anchor with a retained grant supplies legacy proof;
+        # target ownership still comes from the active-grant CRUD query.
         routing.anchor.tracker.is_active = False
         assert tracker._validated_shared_callback(None, requested, callback) == callback
         monkeypatch.setattr(
