@@ -721,7 +721,9 @@ def compute_policy_diff(
         current.defaults.model_dump(exclude_none=True) if current.defaults else {}
     )
     incoming_defaults = (
-        incoming.defaults.model_dump(exclude_none=True) if incoming.defaults else {}
+        incoming.defaults.model_dump(exclude_none=True)
+        if incoming.defaults is not None
+        else current_defaults
     )
     if current_defaults != incoming_defaults:
         changes.append(

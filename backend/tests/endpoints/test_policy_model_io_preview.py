@@ -259,3 +259,16 @@ def test_merge_sections_never_preview_deletion_of_unlisted_entries(
         (item.path, item.operation)
         for item in compute_policy_diff(current, changed).changes
     ] == [(f"$.{section}[name=existing]", "modify")]
+
+
+@pytest.mark.parametrize("incoming", [{}, {"defaults": None}])
+def test_omitted_defaults_do_not_preview_a_settings_change(
+    incoming: dict[str, object],
+) -> None:
+    """The importer skips default validation when the block is absent."""
+    base = {"metadata": {"name": "Synthetic policy"}}
+    current = PolicyDocument.model_validate({**base, "defaults": {}})
+    preview = compute_policy_diff(
+        current, PolicyDocument.model_validate({**base, **incoming})
+    )
+    assert not preview.changes
