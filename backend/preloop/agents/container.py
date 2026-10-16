@@ -608,13 +608,14 @@ def build_gitlab_mr_capture_shell(
     encoded_path: str,
     branch: str,
     execution_link: str = "",
+    scheme: str = "https",
 ) -> str:
     """GitLab counterpart of :func:`build_github_pr_capture_shell`."""
 
     grep_mr = (
         'grep -o \'"web_url"[[:space:]]*:[[:space:]]*"[^"]*/merge_requests/[0-9]*"\''
     )
-    sed_url = 'sed \'s/.*"\\(https[^"]*\\)"$/\\1/\''
+    sed_url = r"""sed -E 's/.*"(https?:\/\/[^"]*)"$/\1/'"""
     return f"""
     # Initialised here, not only in the lookup fallback: the happy path
     # (URL in the create response) reads these under ``set -u``. The harness
@@ -628,10 +629,10 @@ def build_gitlab_mr_capture_shell(
       curl -sS \\
         -H "PRIVATE-TOKEN: {token_ref}" \\
         -o {PR_LOOKUP_FILE} \\
-        "https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests?state=opened&source_branch={branch}" \\
+        "{scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests?state=opened&source_branch={branch}" \\
         || echo "MR lookup by source branch failed"
       MR_URL=$({grep_mr} {PR_LOOKUP_FILE} 2>/dev/null | head -1 | {sed_url}) || true
-      {_existing_pr_failure_update_shell(kind="gitlab", api_url=f"https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests", authorization=f"PRIVATE-TOKEN: {token_ref}", branch=branch, execution_link=execution_link)}
+      {_existing_pr_failure_update_shell(kind="gitlab", api_url=f"{scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests", authorization=f"PRIVATE-TOKEN: {token_ref}", branch=branch, execution_link=execution_link)}
     fi
     if [ -n "${{PRELOOP_PROVENANCE_FAILED:-}}" ] && [ -z "${{PRELOOP_BODY_UPDATED:-}}" ]; then
       echo "PRELOOP_PR_METADATA_WARNING: existing pull request body was left unchanged" >&2
@@ -5670,6 +5671,9 @@ true
         from urllib.parse import quote, urlparse
 
         parsed_url = urlparse(strip_url_credentials(repo_url))
+        scheme = parsed_url.scheme
+        if scheme not in {"http", "https"}:
+            return ""
         gitlab_host = parsed_url.netloc
         if "@" in gitlab_host:
             gitlab_host = gitlab_host.split("@")[-1]
@@ -5688,7 +5692,7 @@ true
         -H "PRIVATE-TOKEN: {token_ref}" \\
         -H "Content-Type: application/json" \\
         --data-binary @{PR_PAYLOAD_FILE} \\
-        https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests \\
+        {scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests \\
         || echo "000")
       echo "MR create HTTP $HTTP_CODE"
       if [ "$HTTP_CODE" != "201" ]; then
@@ -5703,6 +5707,7 @@ true
             + build_gitlab_mr_capture_shell(
                 token_ref=token_ref,
                 gitlab_host=gitlab_host,
+                scheme=scheme,
                 encoded_path=encoded_path,
                 branch=safe_target,
                 execution_link=execution_link,
