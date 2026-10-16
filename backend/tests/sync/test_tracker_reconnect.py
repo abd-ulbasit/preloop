@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from preloop.models import models
-from preloop.models.crud import crud_account
+from preloop.models.crud import crud_account, crud_organization
 from preloop.sync import tasks
 from preloop.sync.scanner.core import TrackerClient
 
@@ -87,6 +87,14 @@ async def test_reconnect_does_not_reparent_recent_organization(
     db_session.refresh(original)
     assert original.tracker_id == old.id
     assert original.last_polling_update == recent
+    if old_deleted:
+        resolved = crud_organization.get_by_identifier(
+            db_session,
+            identifier="shared-workspace",
+            account_id=str(test_user.account_id),
+        )
+        assert resolved is not None
+        assert resolved.id == found[0].id
 
 
 @pytest.mark.asyncio
@@ -225,3 +233,34 @@ async def test_cleanup_handles_sparse_scopes_and_preserves_other_tracker_webhook
         assert db_session.get(models.Webhook, owned_id) is None
     for identifier in preserved_ids:
         assert db_session.get(models.Webhook, identifier) is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reports_skipped_ownership_recheck(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracker = models.Tracker(
+        id=uuid4(),
+        name="Deleted",
+        tracker_type="bitbucket",
+        url="https://example.com",
+        is_deleted=True,
+    )
+    webhook = models.Webhook(
+        id=uuid4(), external_id="hook", url="https://example.com/hook"
+    )
+    db = MagicMock(spec=Session)
+    with (
+        patch.object(tasks, "get_db_session", lambda: iter([db])),
+        patch.object(tasks.crud_tracker, "get_by_id", return_value=tracker),
+        patch.object(
+            tasks.crud_tracker, "has_other_live_for_endpoint", return_value=True
+        ),
+        patch.object(tasks.crud_webhook, "get_for_tracker", return_value=[webhook]),
+        patch.object(tasks.crud_webhook, "remove_for_tracker", return_value=0),
+        caplog.at_level("INFO", logger=tasks.logger.name),
+    ):
+        await tasks.cleanup_tracker_webhooks(str(tracker.id))
+    assert "no longer belongs to tracker" in caplog.text
+    assert "Deleted 0 webhooks" in caplog.text
+    assert f"Deleted webhook record {webhook.id}" not in caplog.text

@@ -109,3 +109,5 @@ For detailed rules on how Organizations and Projects limit scope during syncing 
         *   Generates vector embeddings for new/updated issue text.
         *   Calls functions in `preloop.models` to insert or update issue data and embeddings in the database.
 3.  **preloop.models:** Interacts with the PostgreSQL database to persist changes.
+
+Account-scoped organization identifier lookups exclude soft-deleted trackers, so a reconnect resolves the live tracker’s organization while retaining the prior tracker’s history. Tracker-scoped lookups remain available for explicit historical ownership.

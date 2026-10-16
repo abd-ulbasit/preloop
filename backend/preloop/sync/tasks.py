@@ -802,12 +802,21 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
                 )
 
         # Delete webhook records from our database
+        deleted_count = 0
         for webhook in webhooks:
             try:
-                crud_webhook.remove_for_tracker(
+                deleted = crud_webhook.remove_for_tracker(
                     db, id=str(webhook.id), tracker_id=tracker_id
                 )
-                logger.info(f"Deleted webhook record {webhook.id} from database")
+                deleted_count += deleted
+                if deleted:
+                    logger.info(f"Deleted webhook record {webhook.id} from database")
+                else:
+                    logger.warning(
+                        "Webhook %s no longer belongs to tracker %s; left in place",
+                        webhook.id,
+                        tracker_id,
+                    )
             except Exception as e:
                 logger.error(
                     f"Failed to delete webhook record {webhook.id}: {e}", exc_info=True
@@ -815,7 +824,7 @@ async def cleanup_tracker_webhooks(tracker_id: str) -> None:
 
         db.commit()
         logger.info(
-            f"Webhook cleanup completed for tracker {tracker_id}. Deleted {len(webhooks)} webhooks."
+            f"Webhook cleanup completed for tracker {tracker_id}. Deleted {deleted_count} webhooks."
         )
 
     except Exception as e:
