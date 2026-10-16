@@ -2,18 +2,20 @@
 
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
 import pytest
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from preloop.api.common import get_accessible_projects
+from preloop.api.common import crud_project, get_accessible_projects, get_tracker_client
 from preloop.models import models
 from preloop.sync.scanner.core import TrackerClient
 from preloop.sync.trackers.jira import JiraTracker
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("include_organization", [True, False])
+@pytest.mark.parametrize("organization_rule", ["INCLUDE", None, "EXCLUDE"])
 @pytest.mark.parametrize(
     ("inclusions", "exclusions", "expected"),
     [
@@ -32,7 +34,7 @@ async def test_jira_listing_selection_matches_scanner(
     inclusions: list[str],
     exclusions: list[str],
     expected: list[str],
-    include_organization: bool,
+    organization_rule: str | None,
 ) -> None:
     tracker = models.Tracker(
         name="Jira",
@@ -76,12 +78,12 @@ async def test_jira_listing_selection_matches_scanner(
             identifier="OTHER",
         )
     )
-    if include_organization:
+    if organization_rule:
         db_session.add(
             models.TrackerScopeRule(
                 tracker_id=tracker.id,
                 scope_type="ORGANIZATION",
-                rule_type="INCLUDE",
+                rule_type=organization_rule,
                 identifier=org.identifier,
             )
         )
@@ -114,7 +116,7 @@ async def test_jira_listing_selection_matches_scanner(
     scanner = TrackerClient(tracker, initialize_client=False)
     scanner.client = adapter
     found = await scanner.scan_projects(db_session, org)
-    expected = expected if include_organization else []
+    expected = expected if organization_rule == "INCLUDE" else []
     assert sorted(project.identifier for project in found) == expected
     assert all(project.organization_id == org.id for project in found)
     # Existing projects are filtered by the same contract as discovery.
@@ -132,6 +134,35 @@ async def test_jira_listing_selection_matches_scanner(
     db_session.flush()
     visible = get_accessible_projects(db_session, test_user)
     assert sorted(project.identifier for project in visible) == expected
+    # Exercise the real authorization gate using persisted project identities.
+    # Both the intended project and its unselected sibling must agree with scope.
+    with patch(
+        "preloop.api.common.create_tracker_client", new_callable=AsyncMock
+    ) as factory:
+        for identifier in ["10000", "10001"]:
+            stored = crud_project.get_by_slug_or_identifier(
+                db_session,
+                organization_id=org.id,
+                slug_or_identifier=identifier,
+                account_id=test_user.account_id,
+            )
+            assert stored is not None
+            for project_reference in [stored.id, identifier, stored.slug]:
+                factory.reset_mock()
+                if identifier in expected:
+                    result = await get_tracker_client(
+                        org.id, project_reference, db_session, test_user
+                    )
+                    assert result is factory.return_value
+                    factory.assert_awaited_once()
+                    assert factory.call_args.kwargs["tracker_id"] == str(tracker.id)
+                else:
+                    with pytest.raises(HTTPException) as denied:
+                        await get_tracker_client(
+                            org.id, project_reference, db_session, test_user
+                        )
+                    assert denied.value.status_code == 403
+                    factory.assert_not_awaited()
     if "10000" in expected:
         assert (
             next(project for project in found if project.identifier == "10000").slug
@@ -199,3 +230,70 @@ def test_jira_scope_listing_serializes_legacy_key(
     )
     assert listing[0]["identifier"] == "10000"
     assert listing[0]["key"] == "PROJ"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_reference", ["uuid", "identifier", "key", "missing"])
+async def test_tracker_gate_keeps_account_and_organization_boundaries(
+    db_session: Session,
+    test_user: models.User,
+    project_reference: str,
+) -> None:
+    """Alias rules never authorize a project through a different tenant or org."""
+    from preloop.models.crud import crud_account
+
+    tracker = models.Tracker(
+        name="Jira",
+        tracker_type="jira",
+        account_id=test_user.account_id,
+        url="https://jira.example.com",
+    )
+    db_session.add(tracker)
+    db_session.flush()
+    org = models.Organization(
+        name="Allowed", identifier="allowed", tracker_id=tracker.id
+    )
+    other_org = models.Organization(
+        name="Other", identifier="other", tracker_id=tracker.id
+    )
+    db_session.add_all([org, other_org])
+    db_session.flush()
+    project = models.Project(
+        name="Other project",
+        identifier="10000",
+        slug="PROJ",
+        organization_id=other_org.id,
+    )
+    db_session.add(project)
+    for scope_type, identifier in [
+        ("ORGANIZATION", org.identifier),
+        ("ORGANIZATION", other_org.identifier),
+        ("PROJECT", "PROJ"),
+    ]:
+        db_session.add(
+            models.TrackerScopeRule(
+                tracker_id=tracker.id,
+                scope_type=scope_type,
+                rule_type="INCLUDE",
+                identifier=identifier,
+            )
+        )
+    other_account = crud_account.create(
+        db_session, obj_in={"organization_name": "Other tenant"}
+    )
+    foreign_user = models.User(account_id=other_account.id, username="other")
+    db_session.flush()
+    reference = {
+        "uuid": project.id,
+        "identifier": project.identifier,
+        "key": project.slug,
+        "missing": "absent",
+    }[project_reference]
+    with patch(
+        "preloop.api.common.create_tracker_client", new_callable=AsyncMock
+    ) as factory:
+        for organization, user in [(org, test_user), (other_org, foreign_user)]:
+            with pytest.raises(HTTPException) as denied:
+                await get_tracker_client(organization.id, reference, db_session, user)
+            assert denied.value.status_code == 404
+        factory.assert_not_awaited()
