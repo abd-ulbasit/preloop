@@ -293,4 +293,77 @@ describe('AddTrackerModal managed Jira Cloud', () => {
     expect((element as any).jiraConnectHandle).to.equal(null);
     expect(stubs.getJiraSites.called).to.be.false;
   });
+  for (const ruleType of ['INCLUDE', 'EXCLUDE']) {
+    it(`restores a legacy Jira key ${ruleType} and saves the stable numeric ID`, async () => {
+      const { stubs, api: stubbedApi } = buildApi(sandbox, {
+        jira_cloud_oauth: true,
+      });
+      const orgId = 'example-site.atlassian.net';
+      stubs.listProjectsForOrg.resolves([
+        { id: '10000', key: 'PROJ', identifier: '10000', name: 'Selected' },
+      ]);
+      element = await fixture(
+        html`<add-tracker-modal ._api=${stubbedApi}></add-tracker-modal>`
+      );
+      await featureLoaded(element);
+      const state = element as any;
+      state.tracker = {
+        ...managedJira,
+        scope_rules: [
+          ...managedJira.scope_rules,
+          {
+            rule_type: ruleType,
+            scope_type: 'PROJECT',
+            identifier: 'PROJ',
+          },
+        ],
+      };
+      state.trackerType = 'jira';
+      state.trackerUrl = SITE;
+      state.authMethod = 'jira_oauth';
+      state.orgs = [{ id: orgId, name: 'Site' }];
+      state.selectedOrgs = { [orgId]: true };
+      state.includeFutureProjects = ruleType === 'EXCLUDE';
+      await state.loadProjects(orgId);
+      expect(state.selectedProjects[orgId]['10000']).to.equal(
+        ruleType === 'INCLUDE'
+      );
+      await state.handleSave();
+      expect(stubs.updateTracker.calledOnce).to.be.true;
+      expect(stubs.updateTracker.firstCall.args[1].scope_rules).to.deep.include(
+        {
+          rule_type: ruleType,
+          scope_type: 'PROJECT',
+          identifier: '10000',
+        }
+      );
+    });
+  }
+
+  it('saves numeric Jira IDs even with the older key-based listing response', async () => {
+    const { stubs, api: stubbedApi } = buildApi(sandbox, {
+      jira_cloud_oauth: true,
+    });
+    element = await fixture(
+      html`<add-tracker-modal ._api=${stubbedApi}></add-tracker-modal>`
+    );
+    await featureLoaded(element);
+    const state = element as any;
+    state.tracker = managedJira;
+    state.trackerType = 'jira';
+    state.authMethod = 'jira_oauth';
+    state.orgs = [{ id: 'site', name: 'Site' }];
+    state.selectedOrgs = { site: true };
+    state.projects = {
+      site: [{ id: '10000', key: 'PROJ', identifier: 'PROJ' }],
+    };
+    state.selectedProjects = { site: { '10000': true } };
+    state.includeFutureProjects = false;
+    await state.handleSave();
+    expect(stubs.updateTracker.firstCall.args[1].scope_rules).to.deep.include({
+      rule_type: 'INCLUDE',
+      scope_type: 'PROJECT',
+      identifier: '10000',
+    });
+  });
 });

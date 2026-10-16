@@ -2639,13 +2639,12 @@ export class AddTrackerModal extends LitElement {
         if (!this.includeFutureProjects) {
           this.selectedProjects[orgId] = projects.reduce(
             (acc: Record<string, boolean>, proj: any) => {
-              const scopeId = this.projectScopeIdentifier(proj);
               acc[proj.id] =
                 this.tracker?.scope_rules.some(
                   (rule: any) =>
                     rule.rule_type === 'INCLUDE' &&
                     rule.scope_type === 'PROJECT' &&
-                    String(rule.identifier) === scopeId
+                    this.projectMatchesScopeIdentifier(proj, rule.identifier)
                 ) ?? false;
               return acc;
             },
@@ -2654,12 +2653,11 @@ export class AddTrackerModal extends LitElement {
         } else {
           this.selectedProjects[orgId] = projects.reduce(
             (acc: Record<string, boolean>, proj: any) => {
-              const scopeId = this.projectScopeIdentifier(proj);
               acc[proj.id] = !this.tracker?.scope_rules.some(
                 (rule: any) =>
                   rule.rule_type === 'EXCLUDE' &&
                   rule.scope_type === 'PROJECT' &&
-                  String(rule.identifier) === scopeId
+                  this.projectMatchesScopeIdentifier(proj, rule.identifier)
               );
               return acc;
             },
@@ -2773,7 +2771,24 @@ export class AddTrackerModal extends LitElement {
     id: string;
     identifier?: string;
   }): string {
-    return String(project.identifier ?? project.id);
+    // Jira keys can change; its persisted project identity is the numeric ID.
+    return String(
+      this.trackerType === 'jira'
+        ? project.id
+        : (project.identifier ?? project.id)
+    );
+  }
+
+  private projectMatchesScopeIdentifier(
+    project: { id: string; identifier?: string; key?: string },
+    identifier: string
+  ): boolean {
+    return (
+      String(identifier) === this.projectScopeIdentifier(project) ||
+      (this.trackerType === 'jira' &&
+        project.key !== undefined &&
+        String(identifier) === String(project.key))
+    );
   }
 
   async handleSave() {

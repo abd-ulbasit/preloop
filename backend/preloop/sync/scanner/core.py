@@ -307,16 +307,22 @@ class TrackerClient:
                     )
                     continue
 
-                # Apply project-level filtering logic
-                # Condition 2: The project's identifier is not in project_exclusions.
-                if project_identifier in project_exclusions:
+                # Jira scope previously saved keys while persisted identity uses
+                # numeric IDs. Match that legacy key only within this Jira
+                # tracker's fetched project; exclusions always take precedence.
+                scope_identifiers = {str(project_identifier)}
+                if self.tracker.tracker_type == "jira" and proj_data.get("key"):
+                    scope_identifiers.add(str(proj_data["key"]))
+                if scope_identifiers.intersection(project_exclusions):
                     logger.info(
                         f"Skipping project {project_name} ({project_identifier}) because it is in the exclusion list."
                     )
                     continue
 
                 # Condition 3: Either there are no project_inclusions rules, OR the project's identifier is in project_inclusions.
-                if project_inclusions and project_identifier not in project_inclusions:
+                if project_inclusions and not scope_identifiers.intersection(
+                    project_inclusions
+                ):
                     logger.info(
                         f"Skipping project {project_name} ({project_identifier}) because it is not in the "
                         f"project inclusion list, and one is defined."
