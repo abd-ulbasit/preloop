@@ -99,7 +99,9 @@ class Plugin(ABC):
         These are exposed via the /api/v1/features endpoint for frontend use.
 
         Returns:
-            Dictionary of feature_name -> enabled (True)
+            Dictionary of feature_name -> enabled. Explicit False values are
+            preserved in /api/v1/features and disable capabilities that the
+            endpoint would otherwise enable by default.
 
         Example:
             return {

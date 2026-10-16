@@ -10,7 +10,7 @@ import {
 import { loadCapabilities, NO_CAPABILITIES } from '../capabilities';
 import { consoleRouteLoaders } from './console-route-loaders';
 import { routeLoadingRenderer } from './route-loading';
-import { getBrandConfig, isSaaS } from '../brand-config';
+import { getBrandConfig, isSaaS, isSelfHosted } from '../brand-config';
 import {
   pagesFromRuntimeConfig,
   type StaticMarkdownPage,
@@ -154,6 +154,7 @@ export class LitApp extends LitElement {
       {
         path: '/',
         action: (context, commands) => {
+          if (isSelfHosted()) return commands.redirect('/login');
           // Check if landing-view already exists in the outlet (from SSR moved in firstUpdated)
           const routerOutlet = this.renderRoot.querySelector('main');
           const existingLandingView =
@@ -204,6 +205,7 @@ export class LitApp extends LitElement {
       {
         path: '/pricing',
         action: (_context, commands) => {
+          if (isSelfHosted()) return commands.redirect('/login');
           const existing = this.reuseSsrStaticWrapper('/pricing');
           if (existing) {
             return existing;
