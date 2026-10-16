@@ -2144,6 +2144,10 @@ class OpenAIGatewayService:
                 for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
             )
             or not str(getattr(model, "model_identifier", "")).startswith("deepseek-")
+            # These provider routes always transcode; custom/OpenAI-shaped
+            # routes can optimistically probe native Responses then fall back.
+            or str(getattr(model, "provider_name", "")).lower()
+            not in {"qwen", "dashscope"}
             or not alibaba_pricing.is_alibaba(model)
             or not model_billing_is_hosted(model)
             or should_use_responses_passthrough(model)
@@ -8274,9 +8278,10 @@ class OpenAIGatewayService:
 
         for source_key, target_key in (
             ("temperature", "temperature"),
-            ("max_tokens", "max_tokens"),
+            # Match budget preflight's alias precedence exactly.
             ("max_completion_tokens", "max_tokens"),
             ("max_output_tokens", "max_tokens"),
+            ("max_tokens", "max_tokens"),
             ("top_p", "top_p"),
         ):
             if payload.get(source_key) is not None and target_key not in kwargs:

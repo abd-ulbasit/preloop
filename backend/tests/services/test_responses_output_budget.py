@@ -91,6 +91,8 @@ def test_default_never_expands_explicit_limit(field: str) -> None:
     [
         {"provider_name": "deepseek", "api_endpoint": "https://api.deepseek.com/v1"},
         {"model_identifier": "qwen3.5-plus"},
+        {"provider_name": "openai-compatible"},
+        {"provider_name": "custom"},
         {"meta_data": {}, "account_id": "byok-account"},
     ],
 )
@@ -225,3 +227,31 @@ def test_default_allowance_cannot_bypass_budget_denial(
         assert denied.value.status_code == 429
     assert budget.call_args.args[1]["max_output_tokens"] == 8192
     upstream.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"max_tokens": 8192, "max_output_tokens": 256}, 256),
+        (
+            {
+                "max_tokens": 8192,
+                "max_output_tokens": 512,
+                "max_completion_tokens": 256,
+            },
+            256,
+        ),
+    ],
+)
+def test_alias_precedence_matches_budget_estimate(
+    payload: dict[str, int], expected: int
+) -> None:
+    """Multiple aliases must not reserve a small cap then send a larger one."""
+    with patch("preloop.services.openai_gateway.get_secret_service") as secret:
+        secret.return_value.resolve_ai_model_credentials.return_value = SimpleNamespace(
+            credential_type="api_key", value="synthetic-secret"
+        )
+        kwargs = _service()._build_completion_kwargs(
+            _model(), messages=[], payload=payload, stream=True, provider="openai"
+        )
+    assert kwargs["max_tokens"] == expected

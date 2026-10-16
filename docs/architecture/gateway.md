@@ -215,7 +215,8 @@ The `provider_lookup` response counters explain recovery and unresolved work.
 
 ### Hosted reasoning output allowance
 
-For hosted Alibaba DeepSeek models using Responses-to-chat translation, requests
+For hosted Alibaba DeepSeek models on the `qwen` or `dashscope` provider routes,
+which always use Responses-to-chat translation, requests
 without an output limit receive an explicit allowance of 8,192 tokens, bounded by
 the model's configured output ceiling. Set
 `GATEWAY_HOSTED_REASONING_MAX_OUTPUT_TOKENS` (256–32,768) to change this default.
