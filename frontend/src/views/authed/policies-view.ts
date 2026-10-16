@@ -3660,43 +3660,56 @@ defaults:
     return html`
       <view-header
         headerText="Policies"
-        description="Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches."
+        description=${
+          this._activeTab === 'governance'
+            ? 'The AI usage policy the weekly review checks sessions against. It reports and never blocks work.'
+            : 'Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches.'
+        }
         width="extra-wide"
       >
-        <div slot="main-column">
-          <sl-button
-            size="small"
-            variant="primary"
-            @click=${this._openGenerateDialog}
-          >
-            <sl-icon slot="prefix" name="magic"></sl-icon>
-            Describe a change
-          </sl-button>
-          <sl-button size="small" @click=${() => this.openModelIODialog()}>
-            <sl-icon slot="prefix" name="plus-lg"></sl-icon>
-            Add rule
-          </sl-button>
-          <sl-tooltip content="Apply a policy YAML file, with a diff first">
-            <sl-button
-              size="small"
-              ?loading=${this._isUploading}
-              @click=${this._triggerImport}
-            >
-              <sl-icon slot="prefix" name="upload"></sl-icon>
-              Import YAML
-            </sl-button>
-          </sl-tooltip>
-          <sl-tooltip content="Download the active policy as YAML">
-            <sl-button
-              size="small"
-              ?loading=${this._isExporting}
-              @click=${this.exportPolicies}
-            >
-              <sl-icon slot="prefix" name="download"></sl-icon>
-              Export YAML
-            </sl-button>
-          </sl-tooltip>
-        </div>
+        ${
+          this._activeTab === 'governance'
+            ? nothing
+            : html`<div slot="main-column" class="rule-actions">
+                <sl-button
+                  size="small"
+                  variant="primary"
+                  @click=${this._openGenerateDialog}
+                >
+                  <sl-icon slot="prefix" name="magic"></sl-icon>
+                  Describe a change
+                </sl-button>
+                <sl-button
+                  size="small"
+                  @click=${() => this.openModelIODialog()}
+                >
+                  <sl-icon slot="prefix" name="plus-lg"></sl-icon>
+                  Add rule
+                </sl-button>
+                <sl-tooltip
+                  content="Apply a policy YAML file, with a diff first"
+                >
+                  <sl-button
+                    size="small"
+                    ?loading=${this._isUploading}
+                    @click=${this._triggerImport}
+                  >
+                    <sl-icon slot="prefix" name="upload"></sl-icon>
+                    Import YAML
+                  </sl-button>
+                </sl-tooltip>
+                <sl-tooltip content="Download the active policy as YAML">
+                  <sl-button
+                    size="small"
+                    ?loading=${this._isExporting}
+                    @click=${this.exportPolicies}
+                  >
+                    <sl-icon slot="prefix" name="download"></sl-icon>
+                    Export YAML
+                  </sl-button>
+                </sl-tooltip>
+              </div>`
+        }
       </view-header>
 
       <input
@@ -3771,7 +3784,7 @@ defaults:
                             panel="governance"
                             ?active=${this._activeTab === 'governance'}
                           >
-                            Governance policy
+                            AI usage policy
                           </sl-tab>`
                         : ''
                     }

@@ -113,8 +113,11 @@ describe('Governance findings', () => {
   }
   it('renders coverage, run history and a real finding anchor', async () => {
     const el = await mount();
-    expect(el.shadowRoot!.textContent).to.contain('(3 segments)');
-    expect(el.shadowRoot!.textContent).to.contain('summaries started');
+    const text = el.shadowRoot!.textContent!.replace(/\s+/g, ' ');
+    expect(text).to.contain('Week of Oct 5, 2026 to Oct 12, 2026 (UTC)');
+    expect(text).not.to.contain('segments');
+    expect(text).to.contain('Weekly review');
+    expect(text).to.contain('Broke a requirement in your policy.');
     expect(
       el.shadowRoot!.querySelector(
         'a[href="/console/governance/findings/finding-1"]'
@@ -155,6 +158,8 @@ describe('Governance findings', () => {
       el.shadowRoot!.querySelector('a[href="/console/audit?event=event-1"]')
     ).to.exist;
     expect(el.shadowRoot!.textContent).to.contain('must.tools');
+    expect(el.shadowRoot!.textContent).to.contain('Tools (requirement)');
+    expect(el.shadowRoot!.textContent).to.contain('Gateway usage data');
     (
       el.shadowRoot!.querySelector('[data-dismiss="expected"]') as HTMLElement
     ).click();
@@ -218,7 +223,7 @@ describe('Governance findings', () => {
       );
       if (state === 'zero') {
         expect(text).to.contain('Not yet reviewed');
-        expect(text).to.contain('first hourly sweep');
+        expect(text.replace(/\s+/g, ' ')).to.contain('first hourly sweep');
       }
       if (state === 'covered')
         expect(text).to.contain('No findings in the reviewed data');
@@ -368,5 +373,105 @@ describe('Governance findings', () => {
     await el.updateComplete;
     expect(el.shadowRoot!.querySelector('view-header')).to.equal(null);
     expect(api.callsTo(`${BASE}/findings`)).to.have.length(0);
+  });
+});
+
+describe('Governance findings clarity', () => {
+  it('names rules in plain words', async () => {
+    const { ruleLabel } = await import('./governance-view');
+    expect(ruleLabel('prefer.retry_limit')).to.equal(
+      'Retry limit (preference)'
+    );
+    expect(ruleLabel('must.data_handling')).to.equal(
+      'Data handling (requirement)'
+    );
+    expect(ruleLabel('must.account.2')).to.equal('Your policy (requirement)');
+    expect(ruleLabel('policy_notice.no-secrets')).to.equal(
+      'Policy rule no-secrets'
+    );
+    expect(ruleLabel(null)).to.equal('Not a policy rule');
+  });
+});
+
+describe('Governance week and banner', () => {
+  let api: MockApi;
+  let firstPage: GovernanceRun[];
+  const older: GovernanceRun = {
+    ...run,
+    id: 'run-0',
+    window_start: '2026-09-28T07:00:00Z',
+    window_end: '2026-10-05T07:00:00Z',
+    mode_after: 'off_over_budget',
+  };
+  beforeEach(() => {
+    signInForTest();
+    firstPage = [run, older];
+    api = mockApi({
+      capabilities: ['governance_review'],
+      routes: [
+        {
+          path: `${BASE}/runs`,
+          body: (call) =>
+            new URLSearchParams(call.search).get('offset') === '25'
+              ? [older]
+              : firstPage,
+        },
+        { path: `${BASE}/findings`, body: () => [] },
+      ],
+    });
+  });
+  afterEach(() => api.restore());
+
+  it('shows the chosen week and no stale over-budget banner', async () => {
+    const el = await fixture<GovernanceView>(
+      html`<governance-view></governance-view>`
+    );
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('Reviewed'));
+    const history = el.shadowRoot!.querySelector(
+      '[data-history]'
+    ) as HTMLDetailsElement;
+    history.open = true;
+    const weeks = history.querySelectorAll('tbody button');
+    (weeks[1] as HTMLButtonElement).click();
+    await waitUntil(
+      () =>
+        el
+          .shadowRoot!.textContent!.replace(/\s+/g, ' ')
+          .includes('Week of Sep 28'),
+      'chosen week'
+    );
+    await el.updateComplete;
+    const chosen = el.shadowRoot!.querySelector(
+      'select[name="run_id"]'
+    ) as HTMLSelectElement;
+    expect(chosen.value).to.equal('run-0');
+    expect(el.shadowRoot!.querySelector('.over-budget')).to.equal(null);
+  });
+
+  it('does not show the current budget banner on older run pages', async () => {
+    firstPage = Array.from({ length: 25 }, (_, i) => ({
+      ...run,
+      id: `recent-${i}`,
+    }));
+    const el = await fixture<GovernanceView>(
+      html`<governance-view></governance-view>`
+    );
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('Reviewed'));
+    const history = el.shadowRoot!.querySelector(
+      '[data-history]'
+    ) as HTMLDetailsElement;
+    history.open = true;
+    const olderButton = Array.from(history.querySelectorAll('sl-button')).find(
+      (button) => button.textContent!.includes('Older runs')
+    )!;
+    olderButton.click();
+    await waitUntil(() =>
+      el.shadowRoot!.querySelector(
+        'select[name="run_id"] option[value="run-0"]'
+      )
+    );
+    await el.updateComplete;
+    expect(el.shadowRoot!.textContent).to.contain('Sep 28');
+    expect(el.shadowRoot!.querySelector('.over-budget')).to.equal(null);
   });
 });

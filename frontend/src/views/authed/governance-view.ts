@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
+import '@shoelace-style/shoelace/dist/components/alert/alert.js';
+import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '../../components/view-header';
 import '../../components/resource-actions';
 import '../../components/list-toolbar';
@@ -49,6 +51,32 @@ const stopReason = (value: string): string =>
     governance_allowance_unknown: 'Model allowance unavailable',
     governance_price_unknown: 'Model pricing unavailable',
   })[value] ?? humanize(value);
+/** Plain words for a rule ref; the ref itself stays in `title`. */
+export function ruleLabel(ref: string | null | undefined): string {
+  if (!ref) return 'Not a policy rule';
+  const [prefix, ...rest] = ref.split('.');
+  if (prefix === 'policy_notice') return `Policy rule ${rest.join('.')}`;
+  const cls =
+    prefix === 'must' ? 'requirement' : prefix === 'prefer' ? 'preference' : '';
+  if (!cls) return ref;
+  if (rest[0] === 'account') return `Your policy (${cls})`;
+  return `${humanize(rest.join(' '))} (${cls})`;
+}
+const KIND_HELP: Record<string, string> = {
+  violation: 'Broke a requirement in your policy.',
+  inefficiency: 'Missed a preference. Costs time or money, never blocks.',
+  anomaly: 'Unusual activity your policy does not cover yet.',
+};
+const EVIDENCE_SOURCES: Record<string, string> = {
+  weekly_signals: 'Weekly usage counts',
+  governance_session_digest: 'Session summary',
+  summary: 'Session summary',
+  metadata: 'Gateway usage data',
+  policy_notice_hit: 'Policy rule match',
+  spend_outlier_finding: 'Spend outlier',
+};
+const evidenceSource = (value: string) =>
+  EVIDENCE_SOURCES[value] ?? humanize(value);
 const day = (value: string) =>
   new Date(value).toLocaleDateString(undefined, {
     year: 'numeric',
@@ -162,7 +190,13 @@ export class GovernanceView extends LitElement {
         cursor: pointer;
         font-weight: 500;
       }
+      .kinds {
+        font-size: var(--console-text-meta);
+        color: var(--console-meta-color);
+        gap: 2px 16px;
+      }
       .evidence {
+        margin: 0;
         border-left: 2px solid var(--sl-color-neutral-300);
         padding-left: var(--sl-spacing-medium);
         white-space: pre-wrap;
@@ -402,10 +436,9 @@ export class GovernanceView extends LitElement {
       </p>`;
     return html`<div class="summary" data-coverage>
         <p>
+          Week of ${day(run.window_start)} to ${day(run.window_end)} (UTC).
           Reviewed ${run.sessions_summarized} of ${run.sessions_considered}
-          sessions (${run.segments} segments) for the week of
-          ${day(run.window_start)} to ${day(run.window_end)}; summaries started
-          ${run.summaries_started_at ? day(run.summaries_started_at) : 'not yet'}.
+          sessions.
         </p>
         <sl-badge
           class="chip"
@@ -415,21 +448,27 @@ export class GovernanceView extends LitElement {
         >
         ${this.canCost && run.platform_cost !== undefined ? html`<span>Spend est. ${formatUsdExact(run.platform_cost + (run.account_cost ?? 0))}</span>` : nothing}
       </div>
-      ${run.sessions_summarized === 0 ? html`<p class="muted">Not yet reviewed. Session summaries begin accumulating from the first hourly sweep; the next report will include them. Metadata suggestions appear when available.</p>` : html`<p class="muted">Findings from summaries cover the ${run.sessions_summarized} reviewed sessions only.</p>`}
-      ${run.status === 'partial' || run.stop_reason ? html`<p class="warning">Partial data: ${run.stop_reason ? stopReason(run.stop_reason) : 'The run did not finish reviewing the full week'}. Findings cover only the data reviewed.</p>` : nothing}
+      ${run.sessions_summarized === 0 ? html`<p class="muted">Not yet reviewed. Session summaries start with the first hourly sweep after the review is turned on, and next week's review includes them. Findings from usage counts still appear below.</p>` : html`<p class="muted">Findings from summaries cover the ${run.sessions_summarized} reviewed sessions only.</p>`}
+      ${run.status === 'partial' || run.stop_reason ? html`<sl-alert variant="warning" open class="partial"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>Partial review: ${run.stop_reason ? stopReason(run.stop_reason) : 'the run did not finish the full week'}. Findings cover only what was reviewed.</sl-alert>` : nothing}
       ${
-        run.mode_after === 'off_over_budget' && !this.dismissedBudgetBanner
-          ? html`<p class="warning">
-              Governance review is off over budget.
-              ${this.canManage && hasPermission(this.permissions, 'view_policies') ? html`<a href="/console/policies?tab=governance">Keep on with my own model in Governance policy settings</a>.` : 'Ask an administrator to select an analysis model in Governance policy settings.'}
-              <sl-button
-                size="small"
-                @click=${() => {
-                  this.dismissedBudgetBanner = true;
-                }}
-                >Dismiss banner</sl-button
-              >
-            </p>`
+        // Only the newest run says what the review is doing now.
+        this.runOffset === 0 &&
+        run.id === this.runs[0]?.id &&
+        run.mode_after === 'off_over_budget' &&
+        !this.dismissedBudgetBanner
+          ? html`<sl-alert
+              variant="warning"
+              open
+              closable
+              class="over-budget"
+              @sl-after-hide=${() => {
+                this.dismissedBudgetBanner = true;
+              }}
+            >
+              <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+              The weekly review is off: it used up the free analysis allowance.
+              ${this.canManage && hasPermission(this.permissions, 'view_policies') ? html`<a href="/console/policies?tab=governance">Keep it on with your own model</a>.` : 'Ask someone who manages policies to keep it on with your own model.'}
+            </sl-alert>`
           : nothing
       }`;
   }
@@ -463,7 +502,7 @@ export class GovernanceView extends LitElement {
     );
     if (!filtered.length)
       return html`<p class="empty">
-        ${dismissed ? 'No dismissed findings match these filters.' : this.search || this.kind || this.severity || this.userId ? 'No findings match these filters.' : !this.selectedRun || this.selectedRun.sessions_summarized === 0 ? 'Not yet reviewed. No metadata findings available.' : 'No findings in the reviewed data.'}
+        ${dismissed ? 'No dismissed findings match these filters.' : this.search || this.kind || this.severity || this.userId ? 'No findings match these filters.' : !this.selectedRun || this.selectedRun.sessions_summarized === 0 ? 'Not yet reviewed. No findings from usage counts this week.' : 'No findings in the reviewed data.'}
       </p>`;
     return html`<div class="table-scroll finding-table">
         <table
@@ -475,7 +514,7 @@ export class GovernanceView extends LitElement {
               ${this.sortHeader('title', 'Finding')}
               <th>Kind</th>
               ${this.sortHeader('severity', 'Severity')}
-              <th>Rule</th>
+              <th>Policy rule</th>
               <th>Developer</th>
               ${dismissed ? html`<th>Dismissal</th>` : nothing}
               ${this.sortHeader('created_at', 'Found')}${this.canManage ? html`<th class="actions">Actions</th>` : nothing}
@@ -491,18 +530,22 @@ export class GovernanceView extends LitElement {
                       >${row.title}</a
                     >
                   </td>
-                  <td>${humanize(row.kind)}</td>
+                  <td title=${KIND_HELP[row.kind] ?? ''}>
+                    ${humanize(row.kind)}
+                  </td>
                   <td>
                     <sl-badge
                       class="chip"
                       pill
-                      variant=${row.severity === 'low' ? 'neutral' : 'warning'}
+                      variant=${row.severity === 'high' ? 'warning' : 'neutral'}
                       >${humanize(row.severity)}</sl-badge
                     >
                   </td>
-                  <td>${row.rule_ref ?? 'Metadata'}</td>
+                  <td title=${row.rule_ref ?? ''}>
+                    ${ruleLabel(row.rule_ref)}
+                  </td>
                   <td title=${row.user_id ?? ''}>
-                    ${row.user_name ?? (row.user_id ? `Member ${row.user_id.slice(0, 8)}` : 'Account')}
+                    ${row.user_name ?? (row.user_id ? `Member ${row.user_id.slice(0, 8)}` : 'Whole account')}
                   </td>
                   ${
                     dismissed
@@ -539,7 +582,7 @@ export class GovernanceView extends LitElement {
               >
               <p>
                 ${humanize(row.kind)} · ${humanize(row.severity)} ·
-                ${row.rule_ref ?? 'Metadata'}
+                ${ruleLabel(row.rule_ref)}
               </p>
               ${dismissed ? html`<p class="muted">${REASONS[row.dismissed_reason as DismissReason] ?? row.dismissed_reason} · ${row.dismissed_by_name ?? 'Former member'} · ${formatRelativeTime(row.dismissed_at!)}</p>` : nothing}${this.canManage ? html`<resource-actions menu-only .actions=${this.actions(row)}></resource-actions>` : nothing}
             </article>`
@@ -547,7 +590,7 @@ export class GovernanceView extends LitElement {
       </div>`;
   }
   private history() {
-    return html`<details open>
+    return html`<details data-history>
       <summary>Run history</summary>
       ${
         this.runs.length
@@ -598,7 +641,7 @@ export class GovernanceView extends LitElement {
                         <td class="number">${run.segments}</td>
                         ${this.canCost ? html`<td class="number">${run.platform_cost !== undefined ? formatUsdExact(run.platform_cost + (run.account_cost ?? 0)) : 'Unavailable'}</td>` : nothing}
                         <td>
-                          ${run.stop_reason ? stopReason(run.stop_reason) : 'None recorded'}
+                          ${run.stop_reason ? stopReason(run.stop_reason) : ''}
                         </td>
                       </tr>`
                   )}
@@ -631,17 +674,23 @@ export class GovernanceView extends LitElement {
     </details>`;
   }
   private detailView(row: GovernanceFinding) {
-    return html`<a href="/console/governance">All governance findings</a>
+    const week = this.runs.find((run) => run.id === row.run_id);
+    return html`<a href="/console/governance">All findings</a>
       <h2>${row.title}</h2>
+      ${week ? html`<p class="muted">Week of ${day(week.window_start)} to ${day(week.window_end)} (UTC)</p>` : nothing}
       <dl>
         <dt>Kind</dt>
-        <dd>${humanize(row.kind)}</dd>
+        <dd>
+          ${humanize(row.kind)}
+          <span class="muted">${KIND_HELP[row.kind] ?? ''}</span>
+        </dd>
         <dt>Severity</dt>
         <dd>${humanize(row.severity)}</dd>
         <dt>Rule</dt>
         <dd>
-          ${row.rule_ref ?? 'Metadata signal'}
-          ${hasPermission(this.permissions, 'view_policies') ? html`<a href="/console/policies?tab=governance">Review policy</a>` : nothing}
+          ${ruleLabel(row.rule_ref)}
+          ${row.rule_ref ? html`<code class="muted">${row.rule_ref}</code>` : nothing}
+          ${hasPermission(this.permissions, 'view_policies') ? html`<a href="/console/policies?tab=governance">Open the policy</a>` : nothing}
         </dd>
         ${
           row.agent_ref
@@ -673,7 +722,7 @@ export class GovernanceView extends LitElement {
                     ${evidence.excerpt}
                   </blockquote>
                   <p class="muted">
-                    ${evidence.source}
+                    ${evidenceSource(evidence.source)}
                     ${evidence.audit_event_id ? html`<a href=${`/console/audit?event=${encodeURIComponent(evidence.audit_event_id)}`}>Open in audit</a>` : nothing}
                   </p>`
             )
@@ -692,8 +741,11 @@ export class GovernanceView extends LitElement {
   }
   render() {
     if (!this.enabled && !this.loading && !this.error) return nothing;
-    return html`<view-header headerText="Governance">
-        ${hasPermission(this.permissions, 'view_policies') ? html`<a slot="main-column" href="/console/policies?tab=governance">Governance policy and settings</a>` : nothing}
+    return html`<view-header
+        headerText="Weekly review"
+        description="Each Monday, last week's agent sessions are checked against your AI usage policy. The review reports; it never blocks work."
+      >
+        ${hasPermission(this.permissions, 'view_policies') ? html`<a slot="main-column" href="/console/policies?tab=governance">Edit the policy</a>` : nothing}
       </view-header>
       ${
         this.error
@@ -708,9 +760,16 @@ export class GovernanceView extends LitElement {
             ? nothing
             : this.findingId
               ? this.detail
-                ? html`${this.coverage(this.selectedRun)}${this.detailView(this.detail)}`
+                ? this.detailView(this.detail)
                 : nothing
               : html` ${this.coverage(this.selectedRun)}
+                  <dl class="kinds" data-kind-legend>
+                    ${Object.entries(KIND_HELP).map(
+                      ([kind, help]) =>
+                        html`<dt>${humanize(kind)}</dt>
+                          <dd>${help}</dd>`
+                    )}
+                  </dl>
                   <section
                     class=${`collection ${this.viewMode === 'cards' ? 'cards-active' : ''}`}
                     aria-label="Findings"
@@ -782,7 +841,7 @@ export class GovernanceView extends LitElement {
                           @change=${this.changeFilter}
                         >
                           <option value="" disabled>Select a week</option>
-                          ${this.runs.map((run) => html`<option value=${run.id}>${day(run.window_start)}</option>`)}
+                          ${this.runs.map((run) => html`<option value=${run.id} ?selected=${run.id === this.selectedRun?.id}>${day(run.window_start)}</option>`)}
                         </select></label
                       >
                       <span slot="count"
