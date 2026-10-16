@@ -299,3 +299,6 @@ are future work. This experimental server/resource boundary does not attest the
 runner's executable, host or network origin.
 
 Native runner flows and remote sessions support Devin CLI with managed MCP and native approval hooks. See [remote sessions](docs/guide/runners/remote-sessions.md) for setup and per-harness limits.
+
+Run host Ollama and other loopback OpenAI-compatible servers through the gateway
+with [runner-proxied local models](docs/guide/runner-local-models.md).

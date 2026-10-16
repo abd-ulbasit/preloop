@@ -1029,6 +1029,12 @@ def checked_model_api_base(ai_model: Any, *, provider: str) -> Optional[str]:
             link-local. Status 400 so the call is not retried or paged as an
             upstream 502.
     """
+    if getattr(ai_model, "endpoint_type", "direct") == "runner":
+        raise ModelGatewayAPIError(
+            provider=provider,
+            status_code=400,
+            message="Runner models support chat completions only",
+        )
     api_base = model_api_base(ai_model)
     if not api_base:
         return None
@@ -8417,6 +8423,50 @@ class OpenAIGatewayService:
         # MCP-token traffic must still get attribution). Failures fail-open but
         # are logged so attribution holes stay visible.
         self._capture_tools_meta(original_tools)
+        if getattr(ai_model, "endpoint_type", "direct") == "runner":
+            from preloop.services.runner_model_proxy import runner_completion
+
+            if provider != "openai":
+                raise ModelGatewayAPIError(
+                    provider=provider,
+                    status_code=400,
+                    message="Runner models support OpenAI chat completions only",
+                )
+            if not ai_model.runner_id:
+                raise ModelGatewayAPIError(
+                    provider=provider,
+                    status_code=503,
+                    code="runner_offline",
+                    message="Runner is offline or was deleted",
+                )
+            parameters = dict(getattr(ai_model, "model_parameters", None) or {})
+            parameters.update(payload)
+            body = {
+                key: value
+                for key, value in parameters.items()
+                if key
+                in {
+                    "temperature",
+                    "top_p",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "stop",
+                    "tools",
+                    "tool_choice",
+                    "parallel_tool_calls",
+                    "response_format",
+                    "seed",
+                    "frequency_penalty",
+                    "presence_penalty",
+                }
+            }
+            body.update(
+                model=ai_model.model_identifier, messages=messages, stream=stream
+            )
+            if stream:
+                body["stream_options"] = {"include_usage": True}
+            self.release_db_for_wait(ai_model)
+            return runner_completion(ai_model, body, stream=stream)
         kwargs = self._build_completion_kwargs(
             ai_model,
             messages=messages,

@@ -33,6 +33,15 @@ class AIModel(Base):
     model_identifier: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True
     )
+    endpoint_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="direct", server_default="direct"
+    )
+    runner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("flow_runner.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     api_endpoint: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     api_key: Mapped[Optional[str]] = mapped_column(
         String, nullable=True

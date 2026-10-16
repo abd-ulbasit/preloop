@@ -87,6 +87,9 @@ from preloop.cra.persist import (
     resolve_persist_authority,
 )
 from preloop.utils.permissions import require_permission
+from preloop.schemas.ai_model import AIModelCreate, AIModelRead
+from preloop.models.crud import crud_ai_model
+from preloop.services.runner_model_proxy import RunnerModelConnection
 
 FlowRunner = models.FlowRunner
 User = models.User
@@ -96,6 +99,7 @@ logger = logging.getLogger(__name__)
 
 # runner_id -> live websocket (this process only)
 _live: Dict[str, WebSocket] = {}
+_model_connections: Dict[str, RunnerModelConnection] = {}
 # Sockets closed because their credential was revoked. The session loop
 # stops reading them instead of answering on a closed channel.
 _evicted: "weakref.WeakSet[WebSocket]" = weakref.WeakSet()
@@ -156,6 +160,9 @@ async def _evict_live_runner(
     connection = _live.pop(runner_key, None)
     if connection is None:
         return False
+    model_connection = _model_connections.pop(runner_key, None)
+    if model_connection is not None:
+        await model_connection.close()
     _evicted.add(connection)
     try:
         if halted_execution_ids:
@@ -278,6 +285,8 @@ def register_runner(
         [profile.model_dump() for profile in advertised]
     )
     capabilities["docker_available"] = body.docker_available
+    if body.model_proxy_version == 1:
+        capabilities["model_proxy_version"] = 1
     # Registration is the connecting process's full advertisement and
     # replaces the stored capabilities wholesale (no merge with the resumed
     # row): a CLI that omits the field (it predates remote sessions, or the
@@ -353,6 +362,34 @@ def register_runner(
     return schemas.RunnerRegisterResponse(
         **_to_response(row, db, current_user).model_dump(by_alias=True), token=token
     )
+
+
+@router.post("/runners/{runner_id}/models", response_model=AIModelRead)
+@require_permission("create_ai_models")
+def register_runner_model(
+    runner_id: UUID,
+    body: AIModelCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> models.AIModel:
+    """Register an explicitly approved local model for an account-owned runner."""
+    if not crud_flow_runner.get(
+        db, id=runner_id, account_id=str(current_user.account_id)
+    ):
+        raise HTTPException(status_code=404, detail="Runner not found")
+    data = body.model_dump()
+    data.update(endpoint_type="runner", runner_id=runner_id, provider_name="openai")
+    metadata = dict(data.get("meta_data") or {})
+    gateway = dict(metadata.get("gateway") or {})
+    gateway["enabled"] = True
+    metadata["gateway"] = gateway
+    data["meta_data"] = metadata
+    try:
+        return crud_ai_model.create_with_account(
+            db, obj_in=data, account_id=current_user.account_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/runners", response_model=List[schemas.RunnerResponse])
@@ -785,6 +822,18 @@ async def runner_ws(
     authenticated_hash = getattr(runner, "token_hash", None)
     if not isinstance(authenticated_hash, str):
         authenticated_hash = None
+    previous_models = _model_connections.pop(runner_key, None)
+    if previous_models is not None:
+        await previous_models.close()
+    model_connection = RunnerModelConnection(
+        websocket, str(runner.account_id), runner_key
+    )
+    if (getattr(runner, "capabilities", None) or {}).get("model_proxy_version") == 1:
+        try:
+            await asyncio.wait_for(model_connection.start(), timeout=3)
+        except Exception:
+            logger.warning("Runner model transport unavailable")
+    _model_connections[runner_key] = model_connection
     _live[runner_key] = websocket
     connection_id = secrets.token_hex(32)
     crud_flow_runner.set_publication_capabilities(
@@ -907,6 +956,9 @@ async def runner_ws(
                     {"type": "error", "error": "Runner connection was replaced"}
                 )
                 break
+            if msg_type == "model_response":
+                model_connection.response(raw)
+                continue
             if msg_type.startswith("publication_"):
                 execution_id = _parse_runner_execution_id(raw.get("execution_id"))
                 controller = publication_for(execution_id)
@@ -1317,6 +1369,9 @@ async def runner_ws(
                 "Private publication credential cleanup failed for runner %s", runner_id
             )
         finally:
+            if _model_connections.get(runner_key) is model_connection:
+                _model_connections.pop(runner_key, None)
+            await model_connection.close()
             _release_live_runner(runner_key, websocket)
             if crud_flow_runner.set_publication_capabilities(
                 db,

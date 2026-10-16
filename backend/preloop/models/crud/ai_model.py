@@ -9,10 +9,12 @@ from typing import Any, Dict, Optional, Sequence
 from sqlalchemy import case, or_
 from sqlalchemy.orm import Session, joinedload
 
-from preloop.models.models.ai_model import AIModel
+from preloop.models import models
 from preloop.models.crud.secret_reference import crud_secret_reference
 from preloop.services.secret_service import get_secret_service
 from .base import CRUDBase
+
+AIModel = models.AIModel
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,50 @@ class CRUDAIModel(CRUDBase[AIModel]):
         validate_qwen_endpoint(endpoint)
 
     @staticmethod
+    def _validate_runner_endpoint(
+        db: Session,
+        obj_data: Dict[str, Any],
+        *,
+        account_id: Any,
+        existing: Optional[AIModel] = None,
+    ) -> None:
+        """Validate complete runner routing identity on creates and partial writes."""
+        from preloop.models.crud.flow_runner import crud_flow_runner
+        from preloop.services.runner_model_proxy import normalize_local_base_url
+
+        def value(key: str, default: Any = None) -> Any:
+            return obj_data.get(key, getattr(existing, key, default))
+
+        endpoint_type = value("endpoint_type", "direct")
+        runner_id = value("runner_id")
+        if endpoint_type == "direct":
+            if runner_id is not None:
+                raise ValueError("Direct models cannot be bound to a runner")
+            return
+        if endpoint_type != "runner" or not runner_id:
+            raise ValueError("Runner endpoint requires runner_id")
+        if value("provider_name") != "openai":
+            raise ValueError("Runner models require the openai provider")
+        endpoint = normalize_local_base_url(value("api_endpoint") or "")
+        if any(
+            value(key)
+            for key in (
+                "api_key",
+                "credentials_secret_id",
+                "credential_type",
+                "credential_payload",
+                "credentials_backend_type",
+                "credentials_external_ref",
+            )
+        ):
+            raise ValueError("Runner models do not accept upstream credentials")
+        if not account_id or not crud_flow_runner.get(
+            db, id=runner_id, account_id=str(account_id)
+        ):
+            raise ValueError("Runner not found in this account")
+        obj_data["api_endpoint"] = endpoint
+
+    @staticmethod
     def _validate_local_api_endpoint(
         obj_data: Dict[str, Any],
         existing: Optional[AIModel] = None,
@@ -108,6 +154,11 @@ class CRUDAIModel(CRUDBase[AIModel]):
         alone, so a legacy localhost row can still be renamed. The live
         call refuses that stored endpoint until it is replaced.
         """
+        if (
+            obj_data.get("endpoint_type", getattr(existing, "endpoint_type", "direct"))
+            == "runner"
+        ):
+            return
         if "api_endpoint" not in obj_data:
             return
         endpoint = obj_data.get("api_endpoint")
@@ -474,6 +525,7 @@ class CRUDAIModel(CRUDBase[AIModel]):
                 and commit themselves.
         """
         obj_data = self._normalize_model_kind_fields(dict(obj_in))
+        self._validate_runner_endpoint(db, obj_data, account_id=account_id)
         self._validate_qwen_api_endpoint(obj_data)
         self._validate_local_api_endpoint(obj_data)
         self._normalize_azure_auth_fields(obj_data)
@@ -741,6 +793,9 @@ class CRUDAIModel(CRUDBase[AIModel]):
     ) -> AIModel:
         """Update an AIModel. If setting a model as default, ensure others are not."""
         obj_data = self._normalize_model_kind_fields(dict(obj_in))
+        self._validate_runner_endpoint(
+            db, obj_data, account_id=db_obj.account_id, existing=db_obj
+        )
         self._validate_qwen_api_endpoint(obj_data, existing=db_obj)
         self._validate_local_api_endpoint(obj_data, existing=db_obj)
         self._normalize_azure_auth_fields(obj_data, existing=db_obj)
