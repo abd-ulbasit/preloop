@@ -385,4 +385,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert candidate.down_revision == "20261014_model_detail_idx"
     hosted_credit = script.get_revision("20261018_hosted_credit")
     assert hosted_credit.down_revision == "20261017_gov_candidate_idx"
-    assert script.get_heads() == ["20261018_hosted_credit"]
+    thresholds = script.get_revision("20261019_gov_thresholds")
+    assert thresholds.down_revision == "20261018_hosted_credit"
+    assert script.get_heads() == ["20261019_gov_thresholds"]
