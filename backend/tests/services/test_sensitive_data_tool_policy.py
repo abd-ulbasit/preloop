@@ -11,6 +11,7 @@ from fastmcp.tools import Tool
 from fastmcp.tools.tool import ToolResult
 from mcp.types import TextContent
 from pydantic import ValidationError
+from pytest_mock import MockerFixture
 
 from preloop.services import policy_evaluator
 from preloop.services.dynamic_fastmcp import (
@@ -886,7 +887,7 @@ def test_load_sensitive_data_policy_returns_none_without_tool_rules(mocker) -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["deny", "require_approval", "notify"])
 async def test_tool_predicate_uses_live_dispatch(
-    proxied: tuple, monkeypatch: pytest.MonkeyPatch, mocker, action: str
+    proxied: tuple, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, action: str
 ) -> None:
     """Metadata predicates use the same refusal, approval and notice path."""
     mcp, client, _evaluate, approval = proxied

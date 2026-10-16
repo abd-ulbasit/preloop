@@ -120,9 +120,12 @@ def test_fifth_event_model_name(name: str, expected: str) -> None:
 
 def test_live_notices_workflow_and_denial_message() -> None:
     policy, _ = load_policy_from_string(PACK.read_text())
-    with patch(
-        "preloop.services.sensitive_data.tool_policy.schedule_policy_notice"
-    ) as notice:
+    with (
+        patch(
+            "preloop.services.sensitive_data.tool_policy.schedule_policy_notice"
+        ) as notice,
+        patch("preloop.services.sensitive_data.tool_policy._audit_rule"),
+    ):
         for server, name, expected in [
             ("unapproved", "read_record", "notify"),
             ("crm", "update_record", "require_approval"),
