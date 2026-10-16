@@ -3682,7 +3682,9 @@ class OpenAIGatewayService:
             created_at = int(time.time())
             text_item_id = f"msg_{response_id}"
             assistant_parts: List[str] = []
-            final_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            final_usage = self._responses_api_usage(
+                None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            )
             final_usage_details: Dict[str, Any] = {}
             recorded = False
             terminal_sent = False
@@ -6659,14 +6661,31 @@ class OpenAIGatewayService:
             "output_tokens": normalized["completion_tokens"],
             "total_tokens": normalized["total_tokens"],
         }
+
+        def complete_details(usage: Dict[str, Any]) -> Dict[str, Any]:
+            # Responses clients require these nested counters even when a chat
+            # provider omits them. Fill only the client-facing copy; raw usage
+            # remains unchanged for accounting's unknown-versus-zero handling.
+            reported = extract_token_details(raw_usage)
+            for key, counter, reported_key in (
+                ("input_tokens_details", "cached_tokens", "cache_read_tokens"),
+                ("output_tokens_details", "reasoning_tokens", "reasoning_tokens"),
+            ):
+                details = usage.get(key)
+                details = dict(details) if isinstance(details, dict) else {}
+                if details.get(counter) is None:
+                    details[counter] = reported[reported_key] or 0
+                usage[key] = details
+            return usage
+
         if not isinstance(raw_usage, dict):
-            return totals
+            return complete_details(totals)
         if "input_tokens" in raw_usage or "output_tokens" in raw_usage:
             merged = deepcopy(raw_usage)
             for key, value in totals.items():
                 if merged.get(key) is None:
                     merged[key] = value
-            return merged
+            return complete_details(merged)
         renamed = {
             "prompt_tokens": None,
             "completion_tokens": None,
@@ -6680,7 +6699,7 @@ class OpenAIGatewayService:
                 bridged.setdefault(key, deepcopy(value))
             elif renamed[key] and isinstance(value, dict):
                 bridged[renamed[key]] = deepcopy(value)
-        return bridged
+        return complete_details(bridged)
 
     # ------------------------------------------------------------------
     # Anthropic subscription-OAuth passthrough.

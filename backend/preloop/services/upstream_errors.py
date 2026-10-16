@@ -30,6 +30,8 @@ ERROR_CLASS_UPSTREAM_ERROR = "upstream_error"
 #: The gateway's own budget hard limit (#1447). Not an upstream class: it is
 #: recorded so the 429 it now answers with is never counted as a rate limit.
 ERROR_CLASS_BUDGET_EXCEEDED = "budget_exceeded"
+# Local hosted-credit holds are retryable capacity contention, not provider 429s.
+ERROR_CLASS_HOSTED_CREDIT_RESERVED = "hosted_credit_reserved"
 ERROR_CLASS_UPSTREAM_DISCONNECT = "upstream_disconnect"
 ERROR_CLASS_CLIENT_CANCELLED = "client_cancelled"
 # A deployment-provided hosted model the operator has not given a verified
@@ -323,6 +325,13 @@ def classify_upstream_error(exc: Exception) -> Optional[UpstreamErrorClass]:
     text = _exception_text(exc)
     status = _status_code(exc)
     retry_after = _retry_after_seconds(exc)
+    if getattr(exc, "error_class", None) == ERROR_CLASS_HOSTED_CREDIT_RESERVED:
+        return UpstreamErrorClass(
+            error_class=ERROR_CLASS_HOSTED_CREDIT_RESERVED,
+            status_code=429,
+            retry_after_seconds=getattr(exc, "retry_after_seconds", None)
+            or retry_after,
+        )
 
     if _contains(text, HOSTED_TARIFF_UNCONFIGURED_MARKERS):
         return UpstreamErrorClass(
@@ -462,6 +471,7 @@ _RETRYABLE_ERROR_CLASSES = frozenset(
         ERROR_CLASS_UPSTREAM_DISCONNECT,
         ERROR_CLASS_UPSTREAM_OVERLOADED,
         ERROR_CLASS_UPSTREAM_RATE_LIMITED,
+        ERROR_CLASS_HOSTED_CREDIT_RESERVED,
     }
 )
 

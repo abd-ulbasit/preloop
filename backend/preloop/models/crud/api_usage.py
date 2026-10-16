@@ -1437,9 +1437,11 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
             ApiUsage.status_code == 429,
-            # The gateway's budget denial is a 429 too (#1447); it is not a
-            # rate limit.
-            func.coalesce(ApiUsage.error_class, "") != "budget_exceeded",
+            # Local budget denials and hosted-credit holds also return 429;
+            # neither represents a provider rate limit.
+            func.coalesce(ApiUsage.error_class, "").notin_(
+                ("budget_exceeded", "hosted_credit_reserved")
+            ),
             exclude_replay_usage_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
