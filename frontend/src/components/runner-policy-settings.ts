@@ -301,7 +301,7 @@ export class RunnerPolicySettings extends LitElement {
         Required installs a runner at interactive login with a notice. Forbidden
         suppresses installation. Members can still use unenrolled machines; this
         policy does not block flow routing.
-        <a href="https://docs.preloop.ai/guide/runners">Runner setup</a>
+        <a href="https://docs.preloop.ai/guide/runners/policy/">Runner setup</a>
       </p>
       <p>
         Team overrides take precedence over role overrides, then the account

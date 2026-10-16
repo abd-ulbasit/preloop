@@ -98,7 +98,6 @@ export class RunnerComplianceView extends LitElement {
     const generation = ++this.generation;
     this.loading = true;
     this.error = '';
-    this.page = null;
     try {
       const page = await runnerPolicyRequest<RunnerCompliance>(
         `runner-compliance?skip=${skip}&limit=100`
@@ -137,7 +136,7 @@ export class RunnerComplianceView extends LitElement {
               <p>
                 ${Object.entries(this.page.counts)
                   .map(
-                    ([state, count]) => `${state.replace(/_/g, ' ')}: ${count}`
+                    ([state, count]) => `${complianceLabel(state)}: ${count}`
                   )
                   .join(' · ')}
               </p>

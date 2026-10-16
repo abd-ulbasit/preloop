@@ -53,6 +53,7 @@ describe('runner requirement console', () => {
   let mine: Record<string, unknown>;
   let requests: { url: string; init?: RequestInit }[];
   let rejectSave: boolean;
+  let rejectRoster: boolean;
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -78,6 +79,7 @@ describe('runner requirement console', () => {
     members = [member('never_connected')];
     total = 1;
     rejectSave = false;
+    rejectRoster = false;
     mine = {
       requirement: 'required',
       enforcement: 'warn',
@@ -111,7 +113,9 @@ describe('runner requirement console', () => {
         return json(policy);
       }
       if (url.endsWith('/runner-compliance/me')) return json(mine);
-      if (url.includes('/runner-compliance?'))
+      if (url.includes('/runner-compliance?')) {
+        if (rejectRoster)
+          return json({ detail: 'Temporary roster failure' }, 503);
         return json({
           members,
           total,
@@ -120,6 +124,7 @@ describe('runner requirement console', () => {
           counts: { never_connected: members.length },
           generated_at: '2026-01-01T12:00:00Z',
         });
+      }
       return json({ detail: 'Unexpected request' }, 404);
     });
   });
@@ -332,6 +337,45 @@ describe('runner requirement console', () => {
       '101–101 of 101'
     );
   });
+  it('keeps the current roster and page after failed pagination or refresh', async () => {
+    members = Array.from({ length: 100 }, (_, i) =>
+      member('compliant', `user-${i}`)
+    );
+    total = 201;
+    const el = await roster();
+    await waitUntil(() => !!el.shadowRoot!.querySelector('table'));
+    members = [member('stale', 'second-page')];
+    Array.from(el.shadowRoot!.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Next members'))!
+      .click();
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('second-page'));
+    rejectRoster = true;
+    Array.from(el.shadowRoot!.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Next members'))!
+      .click();
+    await waitUntil(() =>
+      el.shadowRoot!.textContent!.includes('Temporary roster failure')
+    );
+    expect(el.shadowRoot!.textContent).to.include('second-page');
+    Array.from(el.shadowRoot!.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Refresh compliance'))!
+      .click();
+    await waitUntil(
+      () =>
+        requests.filter((r) => r.url.includes('skip=100&limit=100')).length ===
+        2
+    );
+    expect(el.shadowRoot!.textContent).to.include('second-page');
+  });
+
+  it('preserves unknown server states and uses friendly labels for page counts', async () => {
+    members = [member('future_state' as MemberCompliance['state'])];
+    const el = await roster();
+    await waitUntil(() => !!el.shadowRoot!.querySelector('table'));
+    expect(el.shadowRoot!.textContent).to.include('future_state');
+    expect(el.shadowRoot!.textContent).to.include('Never connected: 1');
+  });
+
   it('warns an ordinary member through only the self endpoint', async () => {
     permissions = [];
     const el = await banner();

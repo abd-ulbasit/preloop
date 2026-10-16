@@ -74,11 +74,14 @@ export async function runnerPolicyRequest<T>(
   return response.json();
 }
 
-export const complianceLabel = (state: ComplianceState): string =>
-  ({
-    compliant: 'Compliant',
-    stale: 'Stale',
-    never_connected: 'Never connected',
-    in_grace: 'In grace period',
-    exempt: 'Exempt',
-  })[state];
+const COMPLIANCE_LABELS: Record<string, string> = {
+  compliant: 'Compliant',
+  stale: 'Stale',
+  never_connected: 'Never connected',
+  in_grace: 'In grace period',
+  exempt: 'Exempt',
+};
+
+/** Preserve server states introduced after this console version. */
+export const complianceLabel = (state: string): string =>
+  COMPLIANCE_LABELS[state] ?? state;

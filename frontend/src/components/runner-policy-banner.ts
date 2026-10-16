@@ -71,7 +71,7 @@ export class RunnerPolicyBanner extends LitElement {
     return html`<aside role="status" aria-label="Personal runner required">
       <strong>Your organization requires a personal Preloop runner.</strong>
       ${complianceLabel(this.status.state)}. ${this.status.message ?? ''}
-      <a href="https://docs.preloop.ai/guide/runners"
+      <a href="https://docs.preloop.ai/guide/runners/policy/"
         >Install or reconnect your runner</a
       >
     </aside>`;
