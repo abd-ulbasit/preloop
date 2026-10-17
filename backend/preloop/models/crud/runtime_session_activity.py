@@ -614,11 +614,27 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
         message: str,
         status: str,
         metadata: Optional[dict[str, Any]] = None,
+        author_display: Optional[str] = None,
+        author_auth_method: Optional[str] = None,
         timestamp: Optional[datetime] = None,
         commit: bool = True,
     ) -> RuntimeSessionActivity:
-        """Persist one operator-to-agent control message with secret-free metadata."""
+        """Persist one operator-to-agent control message with secret-free metadata.
+
+        Args:
+            author_display: Server-stamped public author label, never copied
+                from arbitrary message metadata.
+            author_auth_method: Server-derived credential classification, not
+                a credential. These attribution fields would otherwise match
+                the generic redactor's sensitive ``auth`` prefix.
+        """
         metadata = redact_dict(metadata) if metadata else metadata
+        if author_display is not None or author_auth_method is not None:
+            metadata = dict(metadata or {})
+            if author_display is not None:
+                metadata["author_display"] = author_display
+            if author_auth_method is not None:
+                metadata["author_auth_method"] = author_auth_method
         activity_timestamp = timestamp or datetime.now(timezone.utc)
         summary = message[:MAX_AGENT_CONTROL_MESSAGE_SUMMARY_LEN]
         db_obj = RuntimeSessionActivity(

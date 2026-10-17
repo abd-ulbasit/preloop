@@ -449,6 +449,8 @@ def _log_timeline(
         runtime_session_id=runtime_session_id,
         message=note.body or "",
         status="delivered",
+        author_display=note.author_display,
+        author_auth_method=note.author_auth_method,
         metadata={
             "kind": "operator_note",
             "note_id": note.command_id,

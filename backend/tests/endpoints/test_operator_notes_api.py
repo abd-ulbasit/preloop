@@ -1574,7 +1574,8 @@ def test_hook_note_enters_session_activity_only_after_delivery_ack(
     assert len(notes) == 1
     assert notes[0]["activity_type"] == "agent_control_message"
     assert notes[0]["summary"] == "Verify before continuing."
-    assert notes[0]["metadata"]["author_display"]
+    assert notes[0]["metadata"]["author_display"] == "Test User"
+    assert notes[0]["metadata"]["author_auth_method"] == "session"
     assert notes[0]["metadata"]["delivery_event"] == "pre_tool_use"
     receipt = client.get(f"{NOTES_URL}/{note_id}").json()
     assert receipt["author"]["display"] == "Test User"
