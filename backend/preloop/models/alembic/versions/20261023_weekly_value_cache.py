@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "20261023_weekly_value_cache"
-down_revision = "20261022_weekly_report_email"
+down_revision = "20261023_gov_retry_idx"
 branch_labels = None
 depends_on = None
 
