@@ -198,6 +198,16 @@ def _event(
     detail: str,
     at: datetime,
 ) -> None:
+    if event_type == "approval_requested":
+        request.requested_at = _naive(at)
+    elif event_type == "approval_complete":
+        request.resolved_at = _naive(at)
+        request.status = "declined" if "declined" in detail else "approved"
+        if detail.startswith("Auto-approved"):
+            request.auto_approved_reason = "bypass"
+    elif event_type == "expired":
+        request.status = "expired"
+        request.resolved_at = _naive(at)
     db.add(
         models.ApprovalEvent(
             approval_request_id=request.id,
@@ -515,11 +525,13 @@ def test_approval_counts_and_median(db_session: Session, test_user: User) -> Non
         db_session, account_id=test_user.account_id, start=START, end=END
     )
     assert signals.approvals == ApprovalSignals(
-        requested=4,
+        requested=3,
         granted=2,
         denied=1,
         expired=1,
         median_decision_seconds=30.0,
+        auto_approved=1,
+        auto_approved_reasons=({"reason": "bypass", "count": 1, "agent_count": 0},),
     )
 
 
