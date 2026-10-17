@@ -144,8 +144,20 @@ def record_unsubscribe(db: Session, *, account_id: UUID, user_id: UUID) -> None:
         record_interaction(db, message=message, kind="unsubscribe", commit=False)
 
 
+def _utc(value: datetime, *, aware: bool = True) -> datetime:
+    normalized = (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
+    return normalized if aware else normalized.replace(tzinfo=None)
+
+
 def _window(query: Any, column: Any, start: datetime, end: datetime) -> Any:
-    return query.filter(column >= start, column < end)
+    aware = bool(getattr(column.type, "timezone", False))
+    return query.filter(
+        column >= _utc(start, aware=aware), column < _utc(end, aware=aware)
+    )
 
 
 def spend(
@@ -180,8 +192,8 @@ def spend(
     )
     bounds: list[Any] = [
         text("api_usage.action_type = 'model_gateway'"),
-        usage.timestamp >= start,
-        usage.timestamp < end,
+        usage.timestamp >= _utc(start, aware=False),
+        usage.timestamp < _utc(end, aware=False),
         usage.account_id.is_not(None),
         or_(usage.currency.is_(None), usage.currency == "USD"),
     ]
@@ -302,7 +314,7 @@ def activity(
     if account_id:
         query = query.filter(event.account_id == account_id)
     for key, users, last in query.group_by(event.account_id).all():
-        item(key).update(active_users=users, last_active=last)
+        item(key).update(active_users=users, last_active=_utc(last))
     query = _window(
         db.query(
             usage.account_id,
@@ -322,9 +334,7 @@ def activity(
         value = item(key)
         value["requests"] = requests
         # Count distinct identities across event and usage sources below.
-        value["last_active"] = max(
-            filter(None, (value["last_active"], last.replace(tzinfo=timezone.utc)))
-        )
+        value["last_active"] = max(filter(None, (value["last_active"], _utc(last))))
     identities = _window(
         db.query(event.account_id.label("account_id"), event.user_id.label("user_id")),
         event.timestamp,
@@ -362,9 +372,7 @@ def activity(
     for key, count, last in query.group_by(session.account_id).all():
         value = item(key)
         value["sessions"] = count
-        value["last_active"] = max(
-            filter(None, (value["last_active"], last.replace(tzinfo=timezone.utc)))
-        )
+        value["last_active"] = max(filter(None, (value["last_active"], _utc(last))))
     names: dict[UUID, str | None] = (
         {
             key: name
@@ -412,8 +420,8 @@ def engagement(
         text(
             "event.event_type IN ('report_sent', 'report_open', 'report_click', 'report_unsubscribe')"
         ),
-        event.timestamp >= start,
-        event.timestamp < end,
+        event.timestamp >= _utc(start),
+        event.timestamp < _utc(end),
     )
     if account_id:
         query = query.filter(event.account_id == account_id)

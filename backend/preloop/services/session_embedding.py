@@ -266,6 +266,16 @@ def _deployment_api_key_for(base_url: str) -> Optional[str]:
     return None
 
 
+def embedding_funding(setting: SessionEmbeddingSetting) -> str:
+    """Identify deployment-paid remote embedding calls without exposing the key."""
+    return (
+        "platform"
+        if setting.provider == PROVIDER_OPENAI_COMPATIBLE
+        and _deployment_api_key_for(setting.base_url or "")
+        else "account"
+    )
+
+
 def build_provider(setting: SessionEmbeddingSetting) -> EmbeddingProvider:
     """Construct the provider one account's setting names.
 
@@ -635,6 +645,7 @@ def _record_usage(
             usage_source=usage_source,
             meta_data={
                 "purpose": SESSION_EMBEDDING_PURPOSE,
+                "funding": embedding_funding(setting),
                 "chunks": chunk_count,
                 "dimensions": int(setting.dimensions or EMBEDDING_DIMENSIONS),
                 "model_identity": model_identity,
