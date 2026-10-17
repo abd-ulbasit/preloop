@@ -109,10 +109,14 @@ def test_owned_revision_required_and_evidence_is_deduplicated(
     )
 
 
+@pytest.mark.parametrize("server_count", [1, 2])
 def test_reconciliation_reports_registry_beyond_its_bound(
-    db_session: Session, test_user: models.User, caplog: pytest.LogCaptureFixture
+    db_session: Session,
+    test_user: models.User,
+    caplog: pytest.LogCaptureFixture,
+    server_count: int,
 ) -> None:
-    for index in range(2):
+    for index in range(server_count):
         crud_mcp_server.create(
             db_session,
             obj_in={
@@ -132,5 +136,7 @@ def test_reconciliation_reports_registry_beyond_its_bound(
         )
         == 1
     )
-    assert "MCP registry reconciliation is incomplete" in caplog.text
+    assert ("MCP registry reconciliation is incomplete" in caplog.text) == (
+        server_count > 1
+    )
     assert "example.com" not in caplog.text
