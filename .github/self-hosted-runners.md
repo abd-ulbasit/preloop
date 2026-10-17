@@ -1,5 +1,32 @@
 # Self-hosted runners
 
+CI prefers GitHub-hosted `ubuntu-latest`. General self-hosted runners provide
+optional backend overflow when recent repository runs show hosted jobs queued
+without a runner for at least two minutes. This is a queue-pressure signal,
+not a measurement of GitHub's global capacity. The picker inspects at most ten
+recent runs, bounds each API request, and leaves every shard hosted when
+pressure or inventory cannot be read, the read token is absent, or
+`CI_SELF_HOSTED_TESTS=false`. Fork and Dependabot PRs always remain hosted.
+Trusted same-repository PRs and pushes may use overflow.
+
+Overflow requires **all** of `self-hosted`, `Linux`, `X64`, and
+`preloop-ci-general`, online and idle at selection time. Never give
+`preloop-ci-general` to the dedicated `gce-tests-only` pool. That pool is
+explicitly excluded from inventory even if it also carries default labels.
+Apply the readiness label only after checking runner acquisition, Ubuntu
+Python setup, writable workspaces, Docker access, and PostgreSQL/pgvector.
+Ubuntu 24.04 uses setup-python's Ubuntu build when system Python is not 3.11;
+it does not need a misleading `ubuntu-latest` label or a hosted toolcache.
+
+The picker assigns at most one overflow shard per observed idle runner,
+at most the number of delayed hosted jobs, and never more than half the
+backend matrix. Other jobs and at least half the backend shards stay hosted.
+This snapshot is not a reservation: another run can consume the runner or a VM
+can stop after selection. GitHub does not automatically move an already queued
+self-hosted job to hosted, and job timeouts do not bound queue time. If that
+happens, disable overflow with `CI_SELF_HOSTED_TESTS=false`, cancel the stalled
+run, and rerun it on hosted capacity. There is no VM provisioning in this flow.
+
 Backend CI prefers a Postgres that is already listening on the runner. The
 job creates a database named `preloop_ci_<run>_<attempt>_<shard>`, migrates
 it, and drops that database at the end. It does not stop the server.
@@ -124,8 +151,9 @@ group). If neither works, the step fails with
 ## Isolated execution host tests
 
 `gce-tests-only` is the registration label for the repository-scoped isolated
-test pool. Its runners register with `--no-default-labels`, so the backend
-overflow selector cannot accidentally choose them. Only a manual dispatch of
+test pool. Its runners must never carry `preloop-ci-general`; the backend
+overflow selector also explicitly rejects `gce-tests-only`, whether or not
+the runner carries default labels. Only a manual dispatch of
 `fuzz.yml` with `execution_host_tests: true` selects this pool; PRs and schedules
 keep their existing hosted routing.
 
