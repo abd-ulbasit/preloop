@@ -129,4 +129,16 @@ describe('weekly value evidence', () => {
       el.shadowRoot!.querySelector('details li')!.textContent
     ).not.to.include('No evidence');
   });
+  it('shows partial coverage alongside the evidence', async () => {
+    const note =
+      'Review evidence is partial for 1 observed PRs/MRs; counts include observed comments only.';
+    api = mockApi({
+      routes: [{ path, body: { ...result, coverage_notes: [note] } }],
+    });
+    const el = await fixture<WeeklyValueSection>(
+      html`<weekly-value-section></weekly-value-section>`
+    );
+    await waitUntil(() => !!el.shadowRoot!.querySelector('tbody'));
+    expect(el.shadowRoot!.textContent).to.include(note);
+  });
 });

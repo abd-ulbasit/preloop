@@ -263,4 +263,14 @@ def recorded_prs(
 
 def commit_evidence(db: Session) -> None:
     """Persist the digest's cache after its account savepoint has been released."""
-    db.commit()
+    expire = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    except Exception:
+        # A failed outer commit happens after the account savepoint is released.
+        # Restore the session before the sender advances to the next account.
+        db.rollback()
+        raise
+    finally:
+        db.expire_on_commit = expire

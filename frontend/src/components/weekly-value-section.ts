@@ -35,6 +35,7 @@ interface Outcome {
   review_comments_addressed: number;
 }
 interface WeeklyValue {
+  coverage_notes?: string[];
   items: Outcome[];
   method: string;
   prs_observed: number;
@@ -142,6 +143,7 @@ export class WeeklyValueSection extends LitElement {
         this.result && !this.loading && !this.error
           ? html`
               <p class="muted">${this.result.method}</p>
+              ${(this.result.coverage_notes ?? []).map((note) => html`<p class="muted">${note}</p>`)}
               <p class="muted">
                 ${this.result.window_start.slice(0, 10)} to
                 ${this.result.window_end.slice(0, 10)}. Forge evidence available

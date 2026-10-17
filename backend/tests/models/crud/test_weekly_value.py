@@ -206,3 +206,13 @@ def test_repository_contexts_and_recorded_prs_are_account_scoped(
     assert crud.recorded_prs(
         db_session, account_id=test_user.account_id, start=START, end=END
     ) == [PR]
+
+
+def test_commit_cache_preserves_loaded_accounts(db_session, test_user) -> None:
+    from sqlalchemy import inspect
+
+    account = crud_account.get(db_session, id=test_user.account_id)
+    original_expiry = db_session.expire_on_commit
+    crud.commit_evidence(db_session)
+    assert not inspect(account).expired
+    assert db_session.expire_on_commit is original_expiry
