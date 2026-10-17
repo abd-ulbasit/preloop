@@ -75,15 +75,15 @@ class FlowExecutionLogger:
         """
         log_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "server_name": server_name,
-            "tool_name": tool_name,
+            "server_name": scrub_secrets(server_name) or "",
+            "tool_name": scrub_secrets(tool_name) or "",
             "arguments": redact_dict(arguments),
             "status": status,
             "result_summary": result_summary,
             "error": error,
         }
         self.mcp_usage_logs.append(log_entry)
-        logger.debug(f"MCP tool call logged: {server_name}/{tool_name} - {status}")
+        logger.debug("MCP tool call recorded")
 
     def log_agent_action(
         self,

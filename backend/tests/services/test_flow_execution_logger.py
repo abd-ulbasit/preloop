@@ -688,3 +688,26 @@ def test_control_session_projection_uses_tracking_identity() -> None:
     assert execution.runtime_session_id == "live-example"
     execution.trigger_event_details = {}
     assert execution.runtime_session_id is None
+
+
+def test_native_tool_names_are_scrubbed_and_excluded_from_service_logs(caplog) -> None:
+    import json
+    import logging
+
+    logger = FlowExecutionLogger()
+    event = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call-example",
+                    "name": "Authorization: Bearer example-secret-token",
+                }
+            ]
+        },
+    }
+    with caplog.at_level(logging.DEBUG):
+        logger.parse_agent_logs([json.dumps(event)])
+    assert "example-secret-token" not in caplog.text
+    assert "example-secret-token" not in logger.mcp_usage_logs[0]["tool_name"]
