@@ -216,3 +216,28 @@ def test_commit_cache_preserves_loaded_accounts(db_session, test_user) -> None:
     crud.commit_evidence(db_session)
     assert not inspect(account).expired
     assert db_session.expire_on_commit is original_expiry
+
+
+def test_commit_cache_rolls_back_and_reraises_failed_transaction(
+    db_session, monkeypatch
+) -> None:
+    from unittest.mock import Mock
+
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
+
+    original_expiry = db_session.expire_on_commit
+    rollback = Mock(wraps=db_session.rollback)
+
+    def fail_commit() -> None:
+        db_session.execute(text("SELECT * FROM no_such_weekly_value_commit_table"))
+
+    monkeypatch.setattr(db_session, "rollback", rollback)
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+    with pytest.raises(ProgrammingError):
+        crud.commit_evidence(db_session)
+    rollback.assert_called_once_with()
+    assert db_session.expire_on_commit is original_expiry
+    assert db_session.is_active
+    assert isinstance(crud_account.get_multi(db_session, limit=1), list)
