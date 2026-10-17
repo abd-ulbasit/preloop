@@ -3159,7 +3159,12 @@ async def test_update_pull_request_invalid_review_action(
 
 
 @pytest.mark.asyncio
-async def test_update_pull_request_approve_gitlab(db_session: Session, test_user: User):
+@pytest.mark.parametrize(
+    "review_body", [None, "The arithmetic and tests look correct."]
+)
+async def test_update_pull_request_approve_gitlab(
+    db_session: Session, test_user: User, review_body: str | None
+) -> None:
     """
     Tests approving a GitLab MR.
     """
@@ -3209,15 +3214,23 @@ async def test_update_pull_request_approve_gitlab(db_session: Session, test_user
         mock_tracker = MagicMock()
         mock_tracker.tracker_type = "gitlab"
         mock_tracker.approve_merge_request = AsyncMock(return_value={"id": 123})
+        mock_tracker.create_mr_discussion = AsyncMock()
         mock_get_tracker.return_value = mock_tracker
 
         response = await mcp.update_pull_request(
             pull_request="group/project#10",
             review_action="approve",
+            review_body=review_body,
         )
 
     assert response.status == "updated"
     mock_tracker.approve_merge_request.assert_called_once_with("10")
+    if review_body:
+        mock_tracker.create_mr_discussion.assert_awaited_once_with(
+            mr_iid="10", body=review_body
+        )
+    else:
+        mock_tracker.create_mr_discussion.assert_not_awaited()
 
 
 @pytest.mark.asyncio

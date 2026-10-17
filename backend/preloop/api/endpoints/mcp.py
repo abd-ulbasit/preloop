@@ -2495,6 +2495,10 @@ async def update_pull_request(
                         pr_number
                     )
                     result_id = approval_result.get("id")
+                    if review_body:
+                        await tracker_client.create_mr_discussion(
+                            mr_iid=pr_number, body=review_body
+                        )
                     logger.info(f"Successfully approved MR {pr_number}")
 
                 elif review_action_lower == "request_changes":

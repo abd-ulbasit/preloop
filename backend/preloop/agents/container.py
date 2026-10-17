@@ -608,13 +608,14 @@ def build_gitlab_mr_capture_shell(
     encoded_path: str,
     branch: str,
     execution_link: str = "",
+    scheme: str = "https",
 ) -> str:
     """GitLab counterpart of :func:`build_github_pr_capture_shell`."""
 
     grep_mr = (
         'grep -o \'"web_url"[[:space:]]*:[[:space:]]*"[^"]*/merge_requests/[0-9]*"\''
     )
-    sed_url = 'sed \'s/.*"\\(https[^"]*\\)"$/\\1/\''
+    sed_url = r"""sed -E 's/.*"(https?:\/\/[^"]*)"$/\1/'"""
     return f"""
     # Initialised here, not only in the lookup fallback: the happy path
     # (URL in the create response) reads these under ``set -u``. The harness
@@ -628,10 +629,10 @@ def build_gitlab_mr_capture_shell(
       curl -sS \\
         -H "PRIVATE-TOKEN: {token_ref}" \\
         -o {PR_LOOKUP_FILE} \\
-        "https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests?state=opened&source_branch={branch}" \\
+        "{scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests?state=opened&source_branch={branch}" \\
         || echo "MR lookup by source branch failed"
       MR_URL=$({grep_mr} {PR_LOOKUP_FILE} 2>/dev/null | head -1 | {sed_url}) || true
-      {_existing_pr_failure_update_shell(kind="gitlab", api_url=f"https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests", authorization=f"PRIVATE-TOKEN: {token_ref}", branch=branch, execution_link=execution_link)}
+      {_existing_pr_failure_update_shell(kind="gitlab", api_url=f"{scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests", authorization=f"PRIVATE-TOKEN: {token_ref}", branch=branch, execution_link=execution_link)}
     fi
     if [ -n "${{PRELOOP_PROVENANCE_FAILED:-}}" ] && [ -z "${{PRELOOP_BODY_UPDATED:-}}" ]; then
       echo "PRELOOP_PR_METADATA_WARNING: existing pull request body was left unchanged" >&2
@@ -5670,6 +5671,14 @@ true
         from urllib.parse import quote, urlparse
 
         parsed_url = urlparse(strip_url_credentials(repo_url))
+        scheme = parsed_url.scheme
+        if scheme not in {"http", "https"}:
+            self.logger.warning(
+                "create_pull_request is enabled but GitLab MR creation was "
+                "skipped: unsupported repository URL scheme %s",
+                scheme,
+            )
+            return ""
         gitlab_host = parsed_url.netloc
         if "@" in gitlab_host:
             gitlab_host = gitlab_host.split("@")[-1]
@@ -5688,7 +5697,7 @@ true
         -H "PRIVATE-TOKEN: {token_ref}" \\
         -H "Content-Type: application/json" \\
         --data-binary @{PR_PAYLOAD_FILE} \\
-        https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests \\
+        {scheme}://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests \\
         || echo "000")
       echo "MR create HTTP $HTTP_CODE"
       if [ "$HTTP_CODE" != "201" ]; then
@@ -5703,6 +5712,7 @@ true
             + build_gitlab_mr_capture_shell(
                 token_ref=token_ref,
                 gitlab_host=gitlab_host,
+                scheme=scheme,
                 encoded_path=encoded_path,
                 branch=safe_target,
                 execution_link=execution_link,
@@ -6523,7 +6533,7 @@ trap _preloop_publication_cleanup EXIT
 
         Uses the tracker URL and project slug to construct a clone URL in the
         format:
-        - GitLab: https://{host}/{slug}.git
+        - GitLab: {tracker_scheme}://{host}/{slug}.git
         - GitHub: https://github.com/{slug}.git
 
         The URL is deliberately credential-free (issue #173). The tracker token
@@ -6621,7 +6631,7 @@ trap _preloop_publication_cleanup EXIT
                 slug = project.slug
 
                 if tracker_type == "gitlab":
-                    # GitLab format: https://{host}/{slug}.git (no credentials)
+                    # Preserve the instance's HTTP(S) scheme and custom port.
                     if not tracker.url:
                         self.logger.warning(
                             f"GitLab tracker {tracker.id} has no URL configured"
@@ -6629,17 +6639,22 @@ trap _preloop_publication_cleanup EXIT
                         return None
 
                     # Parse the host from tracker URL
-                    # tracker.url might be like "https://gitlab.spacecode.ai" or "https://gitlab.com"
+                    # A scheme-less tracker URL defaults to HTTPS.
                     from urllib.parse import urlparse
 
-                    parsed = urlparse(tracker.url)
-                    host = parsed.netloc or parsed.path
+                    parsed = urlparse(
+                        tracker.url
+                        if "://" in tracker.url
+                        else f"https://{tracker.url}"
+                    )
+                    host = parsed.netloc
+                    scheme = parsed.scheme
 
                     # Ensure slug ends with .git
                     if not slug.endswith(".git"):
                         slug = f"{slug}.git"
 
-                    clone_url = f"https://{host}/{slug}"
+                    clone_url = f"{scheme}://{host}/{slug}"
                     self.logger.info(
                         f"Constructed GitLab clone URL for {slug} on {host}"
                     )
