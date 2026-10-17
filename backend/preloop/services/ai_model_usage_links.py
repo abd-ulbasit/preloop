@@ -4,8 +4,10 @@ from sqlalchemy.orm import Session
 
 from preloop.models import crud, models
 from preloop.plugins.account_hooks import (
+    AuthorizationContext,
     VISIBLE_FLOW,
     VISIBLE_MANAGED_AGENT,
+    authorize,
     filter_viewable,
 )
 from preloop.schemas.ai_model import (
@@ -16,6 +18,19 @@ from preloop.schemas.ai_model import (
 from preloop.utils.permissions import user_holds_permission
 
 MAX_CONSUMERS = 5000
+
+
+def _can_view_consumers(db: Session, user: models.User, permission: str) -> bool:
+    """Respect account authorizer restrictions as well as role permissions."""
+    decision = authorize(
+        AuthorizationContext(account_id=user.account_id, db=db, user=user),
+        permission,
+        None,
+    )
+    return decision.allowed and (
+        bool(getattr(user, "is_superuser", False))
+        or user_holds_permission(db, user, permission)
+    )
 
 
 def configured_model_consumers(
@@ -35,9 +50,7 @@ def configured_model_consumers(
 
     account_id = str(user.account_id)
     result = AIModelUsedByResponse()
-    if getattr(user, "is_superuser", False) or user_holds_permission(
-        db, user, "view_agents"
-    ):
+    if _can_view_consumers(db, user, "view_agents"):
         agents = crud.crud_managed_agent.get_multi(
             db, account_id=account_id, limit=MAX_CONSUMERS + 1
         )
@@ -103,9 +116,7 @@ def configured_model_consumers(
                         agent_kind=agent.agent_kind,
                     )
                 )
-    if getattr(user, "is_superuser", False) or user_holds_permission(
-        db, user, "view_flows"
-    ):
+    if _can_view_consumers(db, user, "view_flows"):
         flows = crud.crud_flow.list_configured_for_model(
             db,
             account_id=account_id,

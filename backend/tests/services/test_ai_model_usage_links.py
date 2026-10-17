@@ -124,3 +124,17 @@ def test_consumer_permissions_are_checked_before_reads() -> None:
         assert result.agents == result.flows == []
         crud.crud_managed_agent.get_multi.assert_not_called()
         crud.crud_flow.list_configured_for_model.assert_not_called()
+
+
+def test_account_authorizer_can_deny_a_consumer_kind_even_for_superuser() -> None:
+    user = models.User(account_id=uuid4(), is_superuser=True)
+    with (
+        patch(f"{MODULE}.crud") as crud,
+        patch(f"{MODULE}.authorize", return_value=Row(allowed=False)),
+    ):
+        result = configured_model_consumers(
+            MagicMock(), user=user, model_id=str(uuid4())
+        )
+        assert result.agents == result.flows == []
+        crud.crud_managed_agent.get_multi.assert_not_called()
+        crud.crud_flow.list_configured_for_model.assert_not_called()
