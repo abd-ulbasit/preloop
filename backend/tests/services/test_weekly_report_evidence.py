@@ -93,6 +93,7 @@ def test_preferences_default_on_and_changes_are_audited(
     account = db_session.get(models.Account, test_user.account_id)
     assert preferences(db_session, account=account, user=test_user) == {
         "account_enabled": True,
+        "tracking_enabled": True,
         "user_enabled": True,
         "members_enabled": False,
         "member_policy_findings_enabled": False,
@@ -105,6 +106,7 @@ def test_preferences_default_on_and_changes_are_audited(
         user_enabled=False,
     ) == {
         "account_enabled": False,
+        "tracking_enabled": True,
         "user_enabled": False,
         "members_enabled": False,
         "member_policy_findings_enabled": False,

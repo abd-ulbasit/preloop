@@ -54,6 +54,7 @@ from preloop.services.session_embedding import (
     daily_cap_for,
     CHARS_PER_TOKEN,
     SESSION_EMBEDDING_PURPOSE,
+    embedding_funding,
     EmbeddingProvider,
     EmbeddingProviderError,
     build_provider,
@@ -383,6 +384,7 @@ def _record_usage(
             usage_source=usage_source,
             meta_data={
                 "purpose": SESSION_EMBEDDING_PURPOSE,
+                "funding": embedding_funding(setting),
                 "kind": "query",
                 "model_identity": model_identity,
             },

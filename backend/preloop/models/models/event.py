@@ -63,6 +63,15 @@ class Event(Base):
 
     __tablename__ = "event"
     __table_args__ = (
+        Index(
+            "ix_event_report_window",
+            "timestamp",
+            "account_id",
+            "event_type",
+            postgresql_where=text(
+                "event_type IN ('report_sent', 'report_open', 'report_click', 'report_unsubscribe')"
+            ),
+        ),
         # Latest activity per account (admin accounts list, last-activity
         # sort): one backward probe per account instead of aggregating the
         # whole table.

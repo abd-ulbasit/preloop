@@ -23,6 +23,10 @@ def preferences(
         "members_enabled": member_setting,
         "member_policy_findings_enabled": account.weekly_member_policy_findings_enabled,
         "account_enabled": account.weekly_report_enabled,
+        "tracking_enabled": (account.meta_data or {}).get(
+            "report_engagement_tracking", True
+        )
+        is not False,
         "user_enabled": prefs.weekly_report_enabled if prefs else True,
     }
 
@@ -36,6 +40,7 @@ def update_preferences(
     user_enabled: bool | None,
     members_enabled: bool | None = None,
     member_policy_findings_enabled: bool | None = None,
+    tracking_enabled: bool | None = None,
 ) -> dict[str, bool]:
     """Serialize account preference writes and commit the audit atomically."""
     account = (
@@ -51,6 +56,11 @@ def update_preferences(
         account.weekly_member_report_enabled = members_enabled
     if member_policy_findings_enabled is not None:
         account.weekly_member_policy_findings_enabled = member_policy_findings_enabled
+    if tracking_enabled is not None:
+        account.meta_data = {
+            **(account.meta_data or {}),
+            "report_engagement_tracking": tracking_enabled,
+        }
     if user_enabled is not None:
         prefs = notification_preferences.get_or_create(db, user.id)
         prefs.weekly_report_enabled = user_enabled
@@ -71,5 +81,9 @@ def update_preferences(
                 details={"field": key, "from": before[key], "to": value},
                 commit=False,
             )
+    if before["user_enabled"] and not after["user_enabled"]:
+        from preloop.models.crud.admin_analytics import record_unsubscribe
+
+        record_unsubscribe(db, account_id=account.id, user_id=user.id)
     db.commit()
     return after

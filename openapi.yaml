@@ -47608,6 +47608,9 @@ components:
         account_enabled:
           type: boolean
           title: Account Enabled
+        tracking_enabled:
+          type: boolean
+          title: Tracking Enabled
         user_enabled:
           type: boolean
           title: User Enabled
@@ -47620,6 +47623,7 @@ components:
       type: object
       required:
       - account_enabled
+      - tracking_enabled
       - user_enabled
       - members_enabled
       - member_policy_findings_enabled
@@ -47627,6 +47631,11 @@ components:
       description: Effective account and personal delivery switches.
     WeeklyReportPreferencesUpdate:
       properties:
+        tracking_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Tracking Enabled
         account_enabled:
           anyOf:
           - type: boolean
