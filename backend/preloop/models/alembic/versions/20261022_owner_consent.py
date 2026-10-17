@@ -1,7 +1,7 @@
 """Require owner consent for runner flows and other users' agent sessions.
 
 Revision ID: 20261022_owner_consent
-Revises: 20261023_gov_retry_idx
+Revises: 20261024_weekly_report_merge
 """
 
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "20261022_owner_consent"
-down_revision = "20261023_gov_retry_idx"
+down_revision = "20261024_weekly_report_merge"
 branch_labels = None
 depends_on = None
 

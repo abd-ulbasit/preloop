@@ -528,8 +528,8 @@ export class GovernancePolicyPanel extends LitElement {
       showToast(
         field === 'account_enabled'
           ? on
-            ? 'Weekly report emails are on for the account.'
-            : 'Weekly report emails are off for everyone in the account.'
+            ? 'Weekly reports for owners and admins are on.'
+            : 'Weekly reports for owners and admins are off.'
           : on
             ? 'You will get the weekly report email.'
             : 'You will no longer get the weekly report email.',
@@ -590,10 +590,12 @@ export class GovernancePolicyPanel extends LitElement {
                       'account_enabled',
                       (event.target as HTMLInputElement).checked
                     )}
-                  >Weekly report email for the account</sl-switch
+                  >Weekly report for owners and admins</sl-switch
                 >
                 <div class="meta">
-                  ${this._email.account_enabled ? 'Sent each Monday to members who have not opted out.' : 'Nobody in the account gets the weekly report email.'}
+                  ${this._email.account_enabled ? 'Owners and admins receive the report each Monday unless they opt out.' : 'Owners and admins do not receive the weekly report.'}
+                  Manage personal reports for members in
+                  <a href="/console/settings/account">Account settings</a>.
                   ${this.canManageAccount ? '' : ' Owners and admins can change this.'}
                 </div>
               </div>
@@ -601,7 +603,7 @@ export class GovernancePolicyPanel extends LitElement {
                 <sl-switch
                   class="email-user-switch"
                   ?checked=${this._email.user_enabled}
-                  ?disabled=${!this._email.account_enabled || !!this._switching}
+                  ?disabled=${!!this._switching}
                   @sl-change=${(event: Event) =>
                     void this._toggleEmail(
                       'user_enabled',

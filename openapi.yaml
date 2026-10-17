@@ -47255,10 +47255,18 @@ components:
         user_enabled:
           type: boolean
           title: User Enabled
+        members_enabled:
+          type: boolean
+          title: Members Enabled
+        member_policy_findings_enabled:
+          type: boolean
+          title: Member Policy Findings Enabled
       type: object
       required:
       - account_enabled
       - user_enabled
+      - members_enabled
+      - member_policy_findings_enabled
       title: WeeklyReportPreferences
       description: Effective account and personal delivery switches.
     WeeklyReportPreferencesUpdate:
@@ -47273,6 +47281,16 @@ components:
           - type: boolean
           - type: 'null'
           title: User Enabled
+        members_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Members Enabled
+        member_policy_findings_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Member Policy Findings Enabled
       additionalProperties: false
       type: object
       title: WeeklyReportPreferencesUpdate
