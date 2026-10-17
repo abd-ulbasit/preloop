@@ -197,6 +197,22 @@ class ApiUsage(Base):
 
     __table_args__ = (
         Index(
+            "ix_api_usage_admin_platform",
+            "timestamp",
+            "account_id",
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND meta_data ->> 'funding' = 'platform'"
+            ),
+        ),
+        Index(
+            "ix_api_usage_admin_legacy",
+            "ai_model_id",
+            "timestamp",
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND meta_data ->> 'funding' IS NULL"
+            ),
+        ),
+        Index(
             "ix_api_usage_governance_candidate",
             "account_id",
             "runtime_session_id",
