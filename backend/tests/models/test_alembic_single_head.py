@@ -411,4 +411,16 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert retry_index.down_revision == "20261022_weekly_report_email"
     value_cache = script.get_revision("20261023_weekly_value_cache")
     assert value_cache.down_revision == "20261023_gov_retry_idx"
-    assert script.get_heads() == ["20261023_weekly_value_cache"]
+    member_reports = script.get_revision("20261024_weekly_members")
+    assert member_reports.down_revision == "20261022_weekly_report_email"
+    report_merge = script.get_revision("20261024_weekly_report_merge")
+    assert set(report_merge.down_revision) == {
+        "20261023_gov_retry_idx",
+        "20261024_weekly_members",
+    }
+    value_merge = script.get_revision("20261025_weekly_value_merge")
+    assert set(value_merge.down_revision) == {
+        "20261023_weekly_value_cache",
+        "20261024_weekly_report_merge",
+    }
+    assert script.get_heads() == ["20261025_weekly_value_merge"]

@@ -657,7 +657,7 @@ describe('governance-policy-panel', () => {
     await waitUntil(() => server.settings.mode === 'on_platform');
   });
 
-  it('switches the weekly email for the account and for me', async () => {
+  it('switches the weekly email for owners/admins and for me', async () => {
     server = fakeServer('on_platform');
     const element = await mount(true);
     await waitUntil(() =>
@@ -677,6 +677,24 @@ describe('governance-policy-panel', () => {
       element.shadowRoot!.querySelector('.email-account-switch') as HTMLElement
     ).click();
     await waitUntil(() => server.email.account_enabled === false);
+    await waitUntil(() =>
+      element.shadowRoot!.textContent!.includes(
+        'Owners and admins do not receive'
+      )
+    );
+    const text = element.shadowRoot!.textContent!;
+    expect(text).to.contain('Weekly report for owners and admins');
+    expect(text).not.to.contain('Nobody in the account');
+    expect(
+      element
+        .shadowRoot!.querySelector('.email-user-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
+    expect(text).not.to.contain('Sent each Monday to members');
+    expect(
+      element.shadowRoot!.querySelector('a[href="/console/settings/account"]')
+        ?.textContent
+    ).to.contain('Account settings');
     const puts = server.calls.filter(
       (call) =>
         call.method === 'PUT' && call.url.includes('weekly-report/preferences')

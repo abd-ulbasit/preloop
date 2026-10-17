@@ -931,3 +931,13 @@ attribution. The shared console's weekly outcome component is gated by the
 `weekly_work_value` server capability and View cost permission. Attribution,
 forge fetching, scoring and the API live in the commercial plugin; an OSS
 server does not advertise or call them.
+
+Weekly report settings live in core Account fields and the audited
+`models.crud.weekly_report` transaction. `/api/v1/weekly-report/preferences`
+keeps individual unsubscribe separate from independent account controls for
+owner/admin delivery, member delivery, and member policy findings. An unset
+member-delivery field uses an optional edition service for its effective plan
+default. The capability-gated Lit settings card lives in OSS. Report queries in
+`models.crud.weekly_report_data` apply account and user attribution before
+aggregation; report orchestration and delivery remain in the commercial plugin.
+See [the settings contract](docs/weekly-report-v3.md).
