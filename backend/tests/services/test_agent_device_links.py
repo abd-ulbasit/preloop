@@ -41,3 +41,30 @@ def test_provider_receives_authenticated_user_and_returns_only_public_fields() -
         provider.assert_called_once_with(db, user=user, agent_id="agent-id")
         assert result[0].hostname == "workstation"
         assert "secret" not in result[0].model_dump()
+
+
+def test_provider_failure_is_logged_without_failing_agent_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with patch("preloop.services.agent_device_links.get_plugin_manager") as manager:
+        provider = manager.return_value.get_service.return_value.devices_for_agent
+        provider.side_effect = RuntimeError("Synthetic projection failure")
+        assert (
+            agent_device_links(
+                MagicMock(), user=models.User(), agent_id="example-agent"
+            )
+            == []
+        )
+    assert "Failed to load optional device links for agent example-agent" in caplog.text
+
+
+def test_incompatible_projection_response_is_also_isolated() -> None:
+    with patch("preloop.services.agent_device_links.get_plugin_manager") as manager:
+        provider = manager.return_value.get_service.return_value.devices_for_agent
+        provider.return_value = [{"device_key": "fp:" + "a" * 64}]
+        assert (
+            agent_device_links(
+                MagicMock(), user=models.User(), agent_id="example-agent"
+            )
+            == []
+        )
