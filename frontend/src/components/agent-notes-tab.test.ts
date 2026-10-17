@@ -194,6 +194,40 @@ describe('agent-notes-tab', () => {
       expect(composer.nextSession).to.equal(false);
     });
 
+    it('reads every page of live sessions', async () => {
+      const rows = Array.from({ length: 101 }, (_, i) =>
+        live(`s-${i}`, `run-${i}`)
+      );
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/session-targets')) {
+          const offset = Number(
+            new URL(url, location.origin).searchParams.get('offset')
+          );
+          return jsonResponse({
+            sessions: rows.slice(offset, offset + 100),
+            total: rows.length,
+          });
+        }
+        if (url.includes('/operator-notes'))
+          return jsonResponse({ notes: [], total: 0 });
+        return jsonResponse({ items: [] });
+      });
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await waitUntil(
+        () => target(el)?.querySelectorAll('sl-option').length === 102,
+        'all 101 live sessions and Next session'
+      );
+      const pages = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.includes('/session-targets'));
+      expect(pages).to.have.length(2);
+      expect(pages[1]).to.contain('offset=100');
+    });
+
     it('makes the operator choose between several live sessions', async () => {
       stubSessions([live('s-1', 'fixer'), live('s-2', 'reviewer')], []);
       const el = await fixture<AgentNotesTab>(

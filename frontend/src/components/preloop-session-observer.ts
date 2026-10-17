@@ -1026,8 +1026,12 @@ export class PreloopSessionObserver extends LitElement {
   private async refreshActivity(sessionId: string): Promise<void> {
     if (!this.loadedActivity[sessionId]) return;
     try {
-      const activity =
-        await getAccountRuntimeSessionActivityTimeline(sessionId);
+      const activity = await getAccountRuntimeSessionActivityTimeline(
+        sessionId,
+        {
+          operatorNoteId: this.focusTurnId,
+        }
+      );
       // The selection may have moved while the read was in flight.
       if (!this.loadedActivity[sessionId]) return;
       this.loadedActivity = {
@@ -1310,11 +1314,12 @@ export class PreloopSessionObserver extends LitElement {
           // message once (1.7 MB -> about 150 KB on a long session, #1586).
           history: 'delta',
         }),
-        getAccountRuntimeSessionActivityTimeline(sessionId).catch(
-          (error: unknown) =>
-            isHistoryUnavailable(error)
-              ? error
-              : { items: [] as RuntimeSessionActivityItem[] }
+        getAccountRuntimeSessionActivityTimeline(sessionId, {
+          operatorNoteId: this.focusTurnId,
+        }).catch((error: unknown) =>
+          isHistoryUnavailable(error)
+            ? error
+            : { items: [] as RuntimeSessionActivityItem[] }
         ),
       ]);
       if (isHistoryUnavailable(activity)) {

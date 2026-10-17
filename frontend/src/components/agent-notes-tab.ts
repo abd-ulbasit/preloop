@@ -22,7 +22,7 @@ import '@shoelace-style/shoelace/dist/components/select/select.js';
 import {
   cancelOperatorNote,
   getAccountRuntimeSessions,
-  listOperatorNoteSessionTargets,
+  listAllOperatorNoteSessionTargets,
   listOperatorNotesPage,
 } from '../api';
 import type { OperatorNote, OperatorNoteSessionTarget } from '../types';
@@ -311,7 +311,7 @@ export class AgentNotesTab extends LitElement {
     const agentId = this.agentId;
     if (!agentId) return;
     const [live, recent] = await Promise.allSettled([
-      listOperatorNoteSessionTargets(agentId),
+      listAllOperatorNoteSessionTargets(agentId),
       getAccountRuntimeSessions({
         agent: agentId,
         status: 'all',
@@ -319,8 +319,7 @@ export class AgentNotesTab extends LitElement {
       }),
     ]);
     if (agentId !== this.agentId) return;
-    const liveRows =
-      live.status === 'fulfilled' ? live.value.sessions || [] : [];
+    const liveRows = live.status === 'fulfilled' ? live.value : [];
     const recentRows =
       recent.status === 'fulfilled' ? recent.value.items || [] : [];
     const byId = new Map<string, NoteSessionRow>();

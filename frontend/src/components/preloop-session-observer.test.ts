@@ -1127,6 +1127,32 @@ describe('PreloopSessionObserver', () => {
       expect(panel.focusEventId).to.equal('event-1');
     });
 
+    it('asks for a linked note with the session activity', async () => {
+      // A note older than the recent activity page is only on the page
+      // when the read names it, and the link has to land on it.
+      const el = (await fixture(
+        html`<preloop-session-observer
+          .sessions=${[session]}
+          .focusTurnId=${'note-7'}
+          .selectedSessionId=${session.id}
+        ></preloop-session-observer>`
+      )) as PreloopSessionObserver;
+      await waitUntil(
+        () =>
+          fetchStub
+            .getCalls()
+            .some((call) => String(call.args[0]).includes('/activity')),
+        'Activity was never read',
+        { timeout: 3000 }
+      );
+      const activityUrl = fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .find((url) => url.includes('/activity'))!;
+      expect(activityUrl).to.contain('operator_note_id=note-7');
+      expect(el).to.exist;
+    });
+
     it('ignores an invalid replay param', async () => {
       window.history.replaceState(
         {},
