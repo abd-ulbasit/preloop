@@ -114,6 +114,28 @@ describe('LitApp routing', () => {
     ).to.deep.equal([]);
   });
 
+  it('redirects a missing release directly to the published predecessor', async () => {
+    (window as any).BRAND_CONFIG.edition = 'saas';
+    (window as any).BRAND_CONFIG.blog_release_slugs = ['preloop-0-16-0'];
+    window.history.replaceState({}, '', '/blog/preloop-0-17-1');
+    const before = window.history.length;
+    const el = await fixture<LitApp>(html`<lit-app></lit-app>`);
+    await waitUntil(() => window.location.pathname === '/blog/preloop-0-16-0');
+    await waitUntil(() => !!el.shadowRoot!.querySelector('static-view'));
+    expect((el.shadowRoot!.querySelector('static-view') as any).src).to.equal(
+      '/content/blog/preloop-0-16-0.html'
+    );
+    expect(window.history.length).to.equal(before);
+    expect(
+      fetchStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('/content/blog/preloop-0-17-1')
+        )
+    ).to.equal(false);
+    el.remove();
+  });
+
   it('removes capability listeners on disconnect and restores one on reconnect', async () => {
     const sync = sinon.stub(CapabilityRouteGate.prototype, 'sync').resolves([]);
     try {

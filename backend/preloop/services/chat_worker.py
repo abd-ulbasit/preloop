@@ -5,6 +5,8 @@ import asyncio
 import hashlib
 import logging
 import os
+import ssl
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -38,6 +40,20 @@ async def process_one(db: Session, app: Any) -> bool:
     if connection is None or not connection.enabled:
         crud_chat.transition(db, row, "cancelled", last_error="Connection disabled")
         return True
+    config = provider_config(connection)
+    if (
+        connection.provider == "slack"
+        and config.slack_token_expires_at
+        and config.slack_token_expires_at <= time.time()
+    ):
+        crud_chat.transition(
+            db,
+            row,
+            "failed" if row.attempts >= 3 else "pending",
+            next_attempt_at=datetime.utcnow() + timedelta(seconds=30),
+            last_error="Slack credentials expired; waiting for rotation or reinstall",
+        )
+        return True
     text = str(row.payload.get("text", ""))
     try:
         if row.reply is None:
@@ -64,7 +80,11 @@ async def process_one(db: Session, app: Any) -> bool:
                         ).hexdigest(),
                     )
                     crud_chat.transition(
-                        db, row, "processing", user_id=identity.user_id
+                        db,
+                        row,
+                        "processing",
+                        user_id=identity.user_id,
+                        payload={**row.payload, "actor_id": str(identity.user_id)},
                     )
                     reply = "Your Preloop identity is linked."
             else:
@@ -141,10 +161,16 @@ async def process_one(db: Session, app: Any) -> bool:
                             "view_approvals",
                         )
                         approve = external_command(
-                            connection.provider, f"/approve {request_id}"
+                            connection.provider,
+                            f"/approve {request_id}",
+                            direct=connection.provider == "mattermost"
+                            and not provider_config(connection).verification_secret,
                         )
                         deny = external_command(
-                            connection.provider, f"/deny {request_id}"
+                            connection.provider,
+                            f"/deny {request_id}",
+                            direct=connection.provider == "mattermost"
+                            and not provider_config(connection).verification_secret,
                         )
                         reply = f"Preloop approval {request_id} needs your review. Use {approve} or {deny}. Review full details in the dashboard before deciding."
                     elif text.startswith("/"):
@@ -262,8 +288,17 @@ async def process_one(db: Session, app: Any) -> bool:
                 broker = ChatBroker(db, connection, row.external_user_id, app)
                 broker.read_windows = row.payload.get("read_windows", {})
                 await broker.validate_reads(row.payload["read_proofs"])
+        if (
+            connection.provider == "mattermost"
+            and row.payload.get("transport") == "websocket"
+        ):
+            from preloop.services.mattermost_listener import verify_team_actor
+
+            await verify_team_actor(provider_config(connection), row.external_user_id)
         crud_chat.transition(db, row, "sending")
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(
+            trust_env=False, verify=ssl.create_default_context()
+        ) as client:
             message_id = await send_private_reply(
                 provider_config(connection),
                 row.external_user_id,
@@ -356,10 +391,48 @@ async def run() -> None:
     # fail-closed and connects NATS for Agent Control, but skips API workers.
     os.environ["PRELOOP_SERVICE_ROLE"] = "chat"
     app = create_app()
+    from preloop.services.mattermost_listener import listen_connection
+    import uuid
+
+    token = str(uuid.uuid4())
+    listeners: dict[UUID, asyncio.Task[None]] = {}
+    stop = asyncio.Event()
     async with app.router.lifespan_context(app):
         while True:
             try:
                 with get_session_factory()() as db:
+                    connections = crud_chat.connections.get_multi(
+                        db, enabled=True, limit=1000
+                    )
+                    for connection in connections:
+                        if (
+                            connection.provider == "mattermost"
+                            and not provider_config(connection).verification_secret
+                        ):
+                            if (
+                                connection.id not in listeners
+                                or listeners[connection.id].done()
+                            ):
+                                listeners[connection.id] = asyncio.create_task(
+                                    listen_connection(connection.id, stop)
+                                )
+                        elif crud_chat.claim_listener(db, connection.id, token):
+                            if connection.provider == "slack":
+                                from preloop.services.slack_oauth import (
+                                    refresh_slack_connection,
+                                )
+
+                                if not await refresh_slack_connection(
+                                    db, connection, token
+                                ):
+                                    continue
+                            crud_chat.listener_health(
+                                db,
+                                connection.id,
+                                token,
+                                "worker_ready",
+                                connected_at=datetime.utcnow(),
+                            )
                     worked = await process_one(db, app)
                 if not worked:
                     await asyncio.sleep(2)

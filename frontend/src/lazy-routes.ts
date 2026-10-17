@@ -43,6 +43,11 @@ export interface CapabilityRoute {
  */
 export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
   {
+    capability: 'cloud_support',
+    path: 'support/:conversationId',
+    component: 'support-conversation-view',
+  },
+  {
     capability: 'fleet_coverage',
     path: 'settings/device-fleet',
     component: 'device-fleet-view',

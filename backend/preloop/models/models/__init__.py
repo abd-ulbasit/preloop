@@ -184,6 +184,13 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "ChatSetupDraft",
+    "ChatListener",
+    "SupportConversation",
+    "SupportMessage",
+    "SupportOutbox",
+    "SupportQuota",
+    "ServiceCursor",
     "OwnerConsent",
     "MCPInventoryFinding",
     "MCPInventoryReview",
@@ -200,6 +207,13 @@ __all__ = [
     "AuditOutbox",
     "CallbackKeyBinding",
     "CallbackReceipt",
+    "ChatSetupDraft",
+    "ChatListener",
+    "SupportConversation",
+    "SupportMessage",
+    "SupportOutbox",
+    "SupportQuota",
+    "ServiceCursor",
     "ChatConnection",
     "ChatIdentity",
     "ChatLinkCode",
@@ -397,3 +411,13 @@ from .readiness import (
 from .person_auth_identity import PersonAuthIdentity, PersonPasswordCredential
 
 from .mcp_inventory import MCPInventoryFinding, MCPInventoryReview
+
+from .chat import ChatSetupDraft, ChatListener
+
+from .support import (
+    SupportConversation,
+    SupportMessage,
+    SupportOutbox,
+    SupportQuota,
+    ServiceCursor,
+)

@@ -1334,6 +1334,9 @@ def _register_control_plane_routes(
     from preloop.api.endpoints import chat
 
     app.include_router(chat.router, prefix="/api/v1")
+    from preloop.api.endpoints.chat_setup import router as chat_setup_router
+
+    app.include_router(chat_setup_router, prefix="/api/v1")
 
     # Operator notes: authored on the console/CLI half (session auth), and
     # pulled on the harness half (runtime bearer, authenticated in-route).

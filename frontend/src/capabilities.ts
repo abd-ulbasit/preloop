@@ -31,6 +31,7 @@ export const CAPABILITIES = [
   'resource_access',
   'abac_rules',
   'chat_connections',
+  'cloud_support',
   'anthropic_inference_hooks',
   'governance_review',
   'weekly_work_value',

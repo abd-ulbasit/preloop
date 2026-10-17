@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import time
+import ssl
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +34,8 @@ class ChatProviderConfig:
     bot_token: str
     bot_user_id: str = ""
     base_url: str = ""
+    slack_refresh_token: str = ""
+    slack_token_expires_at: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -218,7 +222,11 @@ def verify_ingress(
 
 def validate_mattermost_url(value: str) -> str:
     """Require a configured HTTPS origin; message payloads never supply URLs."""
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+        _ = parsed.port  # Validate malformed and out-of-range ports before network I/O.
+    except ValueError as exc:
+        raise ChatProviderError("Mattermost requires an HTTPS origin") from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -230,6 +238,44 @@ def validate_mattermost_url(value: str) -> str:
     ):
         raise ChatProviderError("Mattermost requires an HTTPS origin")
     return value.rstrip("/")
+
+
+async def discover_mattermost_bot_user_id(base_url: str, bot_token: str) -> str:
+    """Read the token owner's user ID without sending any chat messages."""
+    origin = validate_mattermost_url(base_url)
+    try:
+        from preloop.services.chat_network import pinned_mattermost_origin
+
+        numeric, authority, hostname = await pinned_mattermost_origin(origin)
+        async with (
+            asyncio.timeout(10),
+            httpx.AsyncClient(
+                trust_env=False, verify=ssl.create_default_context()
+            ) as client,
+        ):
+            async with client.stream(
+                "GET",
+                f"{numeric}/api/v4/users/me",
+                headers={"Authorization": f"Bearer {bot_token}", "Host": authority},
+                extensions={"sni_hostname": hostname},
+                timeout=10,
+                follow_redirects=False,
+            ) as response:
+                if response.status_code != 200:
+                    raise ChatProviderError("Mattermost refused identity lookup")
+                raw = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    raw.extend(chunk)
+                    if len(raw) > MAX_EVENT_BYTES:
+                        raise ChatProviderError(
+                            "Mattermost identity response is too large"
+                        )
+                return _string(_object(bytes(raw)).get("id"), "bot user ID")
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError, TimeoutError) as exc:
+        raise ChatProviderError(
+            "Could not identify the Mattermost bot. Check the server address "
+            "and bot access token, or enter the bot user ID manually."
+        ) from exc
 
 
 async def send_private_reply(
@@ -248,10 +294,16 @@ async def send_private_reply(
     _string(user_id, "user ID")
     text = _string(text, "reply", MAX_MESSAGE_CHARS)
     headers = {"Authorization": f"Bearer {config.bot_token}"}
+    extensions: dict[str, Any] = {}
 
     async def post(url: str, payload: Any) -> dict[str, Any]:
         response = await client.post(
-            url, json=payload, headers=headers, timeout=15, follow_redirects=False
+            url,
+            json=payload,
+            headers=headers,
+            timeout=15,
+            follow_redirects=False,
+            extensions=extensions,
         )
         if response.status_code >= 500:
             raise httpx.HTTPStatusError(
@@ -287,7 +339,12 @@ async def send_private_reply(
         )
         return _string(result.get("ts"), "message ID")
     if config.provider == "mattermost":
-        base = validate_mattermost_url(config.base_url) + "/api/v4"
+        from preloop.services.chat_network import pinned_mattermost_origin
+
+        numeric, authority, hostname = await pinned_mattermost_origin(config.base_url)
+        base = numeric + "/api/v4"
+        headers["Host"] = authority
+        extensions["sni_hostname"] = hostname
         dm = await post(base + "/channels/direct", [config.bot_user_id, user_id])
         channel = _string(dm.get("id"), "DM channel")
         result = await post(
@@ -313,9 +370,9 @@ async def send_private_reply(
     raise ChatProviderError("Unsupported provider")
 
 
-def external_command(provider: str, command: str) -> str:
+def external_command(provider: str, command: str, *, direct: bool = False) -> str:
     """Render an internal slash command in the provider's supported input UI."""
-    if provider == "slack":
+    if provider == "slack" or (provider == "mattermost" and direct):
         return command.lstrip("/")
     if provider == "mattermost":
         return "/preloop " + command

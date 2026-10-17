@@ -19504,6 +19504,299 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/chat/setup/options:
+    get:
+      tags:
+      - Chat
+      summary: Setup Options
+      operationId: setup_options_api_v1_chat_setup_options_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: boolean
+                type: object
+                title: Response Setup Options Api V1 Chat Setup Options Get
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/chat/setup:
+    post:
+      tags:
+      - Chat
+      summary: Start Setup
+      operationId: start_setup_api_v1_chat_setup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupStart'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Start Setup Api V1 Chat Setup Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/chat/setup/{draft_id}:
+    get:
+      tags:
+      - Chat
+      summary: Read Setup
+      operationId: read_setup_api_v1_chat_setup__draft_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Draft Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Read Setup Api V1 Chat Setup  Draft Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/chat/setup/{draft_id}/refresh:
+    post:
+      tags:
+      - Chat
+      summary: Refresh Setup
+      operationId: refresh_setup_api_v1_chat_setup__draft_id__refresh_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Draft Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Refresh Setup Api V1 Chat Setup  Draft Id  Refresh
+                  Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/chat/setup/{draft_id}/signing-secret:
+    put:
+      tags:
+      - Chat
+      summary: Signing Secret
+      operationId: signing_secret_api_v1_chat_setup__draft_id__signing_secret_put
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Draft Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SigningSecret'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Signing Secret Api V1 Chat Setup  Draft Id  Signing
+                  Secret Put
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/chat/setup/{draft_id}/finish:
+    post:
+      tags:
+      - Chat
+      summary: Finish Setup
+      operationId: finish_setup_api_v1_chat_setup__draft_id__finish_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: draft_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Draft Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupFinish'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Finish Setup Api V1 Chat Setup  Draft Id  Finish Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/chat/setup/slack/oauth:
+    post:
+      tags:
+      - Chat
+      summary: Slack Oauth
+      operationId: slack_oauth_api_v1_chat_setup_slack_oauth_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Slack Oauth Api V1 Chat Setup Slack Oauth Post
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/chat/setup/slack/callback:
+    get:
+      tags:
+      - Chat
+      summary: Slack Callback
+      operationId: slack_callback_api_v1_chat_setup_slack_callback_get
+      parameters:
+      - name: state
+        in: query
+        required: true
+        schema:
+          type: string
+          title: State
+      - name: code
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Code
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
   /api/v1/operator-notes:
     post:
       tags:
@@ -27648,8 +27941,8 @@ components:
         name:
           type: string
           maxLength: 120
-          minLength: 1
           title: Name
+          default: ''
         verification_secret:
           type: string
           maxLength: 1024
@@ -27674,7 +27967,6 @@ components:
       required:
       - provider
       - workspace_id
-      - name
       - verification_secret
       - bot_token
       title: ConnectionCreate
@@ -43930,6 +44222,59 @@ components:
         ``chunk_index`` names the piece of it, so a console or a CLI can open the
 
         session at that turn rather than at the top.'
+    SetupFinish:
+      properties:
+        workspace_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Workspace Id
+        name:
+          type: string
+          maxLength: 120
+          title: Name
+          default: ''
+        replace_callback:
+          type: boolean
+          title: Replace Callback
+          default: false
+      type: object
+      required:
+      - workspace_id
+      title: SetupFinish
+    SetupStart:
+      properties:
+        provider:
+          type: string
+          enum:
+          - slack
+          - mattermost
+          - discord
+          title: Provider
+        bot_token:
+          type: string
+          maxLength: 4096
+          title: Bot Token
+          default: ''
+        verification_secret:
+          type: string
+          maxLength: 1024
+          title: Verification Secret
+          default: ''
+        base_url:
+          type: string
+          maxLength: 2048
+          title: Base Url
+          default: ''
+        team_hint:
+          type: string
+          maxLength: 2048
+          title: Team Hint
+          default: ''
+      type: object
+      required:
+      - provider
+      title: SetupStart
     SharedResourceRead:
       properties:
         id:
@@ -44081,6 +44426,17 @@ components:
       - active
       title: SigningKeyRotateRead
       description: 'Result of a rotation: what was retired and what signs now.'
+    SigningSecret:
+      properties:
+        verification_secret:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Verification Secret
+      type: object
+      required:
+      - verification_secret
+      title: SigningSecret
     SimilarSessionMatch:
       properties:
         document_id:

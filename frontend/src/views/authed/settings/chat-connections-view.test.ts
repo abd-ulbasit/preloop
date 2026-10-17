@@ -2,7 +2,6 @@ import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 import './chat-connections-view';
 import type { ChatConnectionsView } from './chat-connections-view';
-import type SlInput from '@shoelace-style/shoelace/dist/components/input/input.js';
 const row = {
   id: 'c-1',
   provider: 'slack',
@@ -215,56 +214,39 @@ describe('Chat connections', () => {
     expect(el.shadowRoot!.textContent).to.include('failed');
     expect(el.shadowRoot!.textContent).to.include('Provider unavailable');
   });
-  async function fill(el: ChatConnectionsView) {
-    for (const input of el.shadowRoot!.querySelectorAll<SlInput>('sl-input')) {
-      input.value = 'secret-value';
-      input.dispatchEvent(new Event('sl-input', { bubbles: true }));
-    }
-    await el.updateComplete;
-  }
-  const inputsEmpty = (el: ChatConnectionsView) =>
-    [...el.shadowRoot!.querySelectorAll<SlInput>('sl-input')].every(
-      (input) => input.value === ''
+  it('uses the discovery wizard and accepts its completed connection', async () => {
+    manage = true;
+    const el = await view();
+    await click(el, 'create');
+    const wizard = el.shadowRoot!.querySelector('chat-setup-wizard')!;
+    expect(wizard).not.to.equal(null);
+    wizard.dispatchEvent(
+      new CustomEvent('chat-connection-created', {
+        detail: { ...row, id: 'new', name: 'Discovered team' },
+        bubbles: true,
+        composed: true,
+      })
     );
-  it('validates creation and clears credentials on success', async () => {
-    manage = true;
-    const el = await view();
-    await click(el, 'create');
-    const form = el.shadowRoot!.querySelector('form')!;
-    form.dispatchEvent(new Event('submit', { cancelable: true }));
     await el.updateComplete;
-    expect(
-      stub.getCalls().some((call) => call.args[1]?.method === 'POST')
-    ).to.equal(false);
-    await fill(el);
-    form.dispatchEvent(new Event('submit', { cancelable: true }));
-    await waitUntil(() => !el.shadowRoot!.querySelector('form'));
-    const post = stub
-      .getCalls()
-      .find((call) => call.args[1]?.method === 'POST')!;
-    expect(JSON.parse(post.args[1].body).bot_token).to.equal('secret-value');
-    await click(el, 'create');
-    expect(inputsEmpty(el)).to.equal(true);
+    expect(el.shadowRoot!.querySelector('chat-setup-wizard')).to.equal(null);
+    expect(el.shadowRoot!.textContent).to.include('Discovered team');
   });
-  it('clears credentials on cancel and disconnect', async () => {
+  it('removes the credential wizard on cancellation and disconnect', async () => {
     manage = true;
     const el = await view();
     await click(el, 'create');
-    await fill(el);
-    [...el.shadowRoot!.querySelectorAll('sl-button')]
-      .find((button) => button.textContent!.trim() === 'Cancel')!
-      .click();
+    const wizard = el.shadowRoot!.querySelector('chat-setup-wizard')!;
+    wizard.dispatchEvent(
+      new CustomEvent('chat-setup-cancel', { bubbles: true, composed: true })
+    );
     await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('chat-setup-wizard')).to.equal(null);
     await click(el, 'create');
-    expect(inputsEmpty(el)).to.equal(true);
-    await fill(el);
     el.remove();
     document.body.append(el);
-    await new Promise((resolve) => setTimeout(resolve, 30));
     await waitUntil(
       () => !!el.shadowRoot!.querySelector('[data-action="create"]')
     );
-    await click(el, 'create');
-    expect(inputsEmpty(el)).to.equal(true);
+    expect(el.shadowRoot!.querySelector('chat-setup-wizard')).to.equal(null);
   });
 });

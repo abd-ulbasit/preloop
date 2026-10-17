@@ -309,3 +309,10 @@ with `preloop runner models` and approve registration with `--register`.
 Private runners also support explicit native host profiles for Codex, OpenCode
 and DeepSeek CLI (`dsh`) on Windows, macOS and Linux using locally authenticated
 CLIs. See [native profile configuration and acceptance limits](docs/guide/runners/quickstart-linux.md#codex-opencode-and-deepseek-native-profiles).
+
+
+Chat setup discovers bot identities and named workspaces for Mattermost, Slack
+and Discord. Mattermost defaults to direct messages without a slash-command token.
+See [Chat connections](docs/chat-connections.md) for worker setup and linking.
+Optional Cloud documentation support and human handoff use a separate EE service
+behind a console capability; self-hosted public pages do not load it by default.

@@ -89,3 +89,37 @@ class ChatWork(Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_error: Mapped[str | None] = mapped_column(String(160), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
+class ChatSetupDraft(Base):
+    """Encrypted actor-bound setup; the ID reserves the final callback URL."""
+
+    __tablename__ = "chat_setup_draft"
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("account.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(20))
+    state_encrypted: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    oauth_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+
+
+class ChatListener(Base):
+    """Leased listener ownership and non-secret worker health."""
+
+    __tablename__ = "chat_listener"
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_connection.id", ondelete="CASCADE"), unique=True
+    )
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="waiting")
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(160), nullable=True)

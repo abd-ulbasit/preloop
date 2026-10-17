@@ -302,6 +302,7 @@ export class RegisterView extends LitElement {
 
       // Completed registration is the primary conversion goal.
       trackGoal('Signup');
+      window.dispatchEvent(new Event('preloop-support-conversion'));
 
       // No Stripe checkout here. A paid plan chosen on the pricing page goes
       // to Stripe first and never reaches this form; a signup that arrives
