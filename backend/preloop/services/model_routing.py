@@ -356,7 +356,7 @@ def validate_default_selection(
 ) -> None:
     """Validate defaults/pinned identity without widening rule or matrix targets.
 
-    A named private Cursor or Copilot CLI profile uses the runner's local
+    A named private host CLI profile uses the runner's local
     credentials and model map. The pool check matches ``resolve_runner_pool`` for the
     flow-level and account-default steps (not the "any online runner" auto
     fallback): ``flow.runner_pool``, then ``account.default_runner_pool``.
@@ -367,7 +367,11 @@ def validate_default_selection(
     from preloop.services.host_exec import is_host_exec_agent_type
 
     harness = (agent_type or "").strip().lower()
-    if not is_host_exec_agent_type(harness):
+    config = flow.agent_config if isinstance(flow.agent_config, dict) else {}
+    from preloop.services.host_exec import host_exec_harness, host_exec_profile_name
+
+    native_profile = host_exec_harness(harness) and host_exec_profile_name(config)
+    if not is_host_exec_agent_type(harness) and not native_profile:
         if ai_model_id is not None:
             load_usable_model(
                 db,
@@ -394,7 +398,9 @@ def validate_default_selection(
         or pool is None
         or _is_server_pool(pool)
     ):
-        label = "Cursor" if harness == "cursor" else "Copilot CLI"
+        from preloop.services.host_exec import HOST_EXEC_LABELS
+
+        label = HOST_EXEC_LABELS[harness]
         raise ModelRoutingError(
             f"{label} defaults require a named host profile and a private "
             "runner pool (flow.runner_pool or account.default_runner_pool)"
@@ -679,8 +685,13 @@ def resolve_routing_record(
     default_model_id = flow.ai_model_id
     from preloop.services.host_exec import is_host_exec_agent_type
 
-    if is_host_exec_agent_type(default_type) or (
-        ordered_rules and default_model_id is not None
+    if (
+        is_host_exec_agent_type(default_type)
+        or (
+            isinstance(flow.agent_config, dict)
+            and flow.agent_config.get("host_exec_profile")
+        )
+        or (ordered_rules and default_model_id is not None)
     ):
         validate_default_selection(
             db, flow, ai_model_id=default_model_id, agent_type=default_type or "codex"

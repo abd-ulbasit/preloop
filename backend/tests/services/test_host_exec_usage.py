@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from preloop.models import models
 from preloop.models.crud import (
     crud_api_usage,
@@ -22,13 +24,15 @@ SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 OCCURRED_AT = datetime(2026, 9, 27, 12, 0)
 
 
-def _host_execution(db_session, account_id, agent_type="copilot"):
+def _host_execution(
+    db_session, account_id, agent_type="copilot", *, host_profile="copilot-seat"
+):
     flow = models.Flow(
         account_id=account_id,
         name="PR Reviewer",
         prompt_template="Review",
         agent_type=agent_type,
-        agent_config={"host_exec_profile": "copilot-seat"},
+        agent_config={"host_exec_profile": host_profile} if host_profile else {},
     )
     db_session.add(flow)
     db_session.flush()
@@ -49,15 +53,15 @@ def _host_execution(db_session, account_id, agent_type="copilot"):
     return flow, execution, flow_session
 
 
-def _agent(db_session, account_id):
+def _agent(db_session, account_id, source="copilot_cli"):
     agent = crud_managed_agent.upsert_from_runtime_session(
         db_session,
         account_id=str(account_id),
         runtime_session_id=None,
         session_source_type="desktop_agent",
         session_source_id=f"copilot-{uuid4()}",
-        display_name="Copilot CLI",
-        agent_kind="copilot_cli",
+        display_name="Local CLI",
+        agent_kind=source,
     )
     db_session.flush()
     return agent
@@ -76,7 +80,7 @@ def _ingest(db_session, test_user, agent, **fields):
         user_id=str(test_user.id),
         agent=agent,
         records=[record],
-        source="copilot_cli",
+        source=agent.agent_kind,
     )
 
 
@@ -89,10 +93,23 @@ def _rows(db_session, conversation_id=SESSION_ID):
     )
 
 
-def test_hook_records_link_to_verified_host_execution(db_session, test_user):
+@pytest.mark.parametrize(
+    ("agent_type", "source"),
+    [
+        ("copilot", "copilot_cli"),
+        ("codex", "codex_cli"),
+        ("opencode", "opencode"),
+        ("deepseek", "deepseek"),
+    ],
+)
+def test_hook_records_link_to_verified_host_execution(
+    db_session, test_user, agent_type, source
+):
     account_id = test_user.account_id
-    flow, execution, flow_session = _host_execution(db_session, account_id)
-    agent = _agent(db_session, account_id)
+    flow, execution, flow_session = _host_execution(
+        db_session, account_id, agent_type, host_profile="local-profile"
+    )
+    agent = _agent(db_session, account_id, source)
 
     _ingest(
         db_session,
@@ -108,7 +125,7 @@ def test_hook_records_link_to_verified_host_execution(db_session, test_user):
     hook_session = crud_runtime_session.get_by_source(
         db_session,
         account_id=account_id,
-        session_source_type="copilot_cli",
+        session_source_type=source,
         session_source_id=SESSION_ID,
     )
     assert hook_session.parent_session_id == flow_session.id
@@ -116,10 +133,15 @@ def test_hook_records_link_to_verified_host_execution(db_session, test_user):
     assert crud_api_usage.count_by_execution_timeframe(db_session, execution) == 0
 
 
-def test_hook_records_ignore_foreign_or_non_host_executions(db_session, test_user):
+@pytest.mark.parametrize("agent_type", ["codex", "opencode", "deepseek"])
+def test_hook_records_ignore_foreign_or_non_host_executions(
+    db_session, test_user, agent_type
+):
     account_id = test_user.account_id
     agent = _agent(db_session, account_id)
-    _, docker_execution, _ = _host_execution(db_session, account_id, "codex")
+    _, docker_execution, _ = _host_execution(
+        db_session, account_id, agent_type, host_profile=None
+    )
 
     _ingest(
         db_session,

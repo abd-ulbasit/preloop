@@ -82,13 +82,20 @@ Set `agent_config.native_tool_approvals` to `true` to gate native tools as well 
 MCP tools. Flow permission checks require the execution's own active runtime
 credential. Native conversation checkpoint resume is not advertised.
 
-Tested runtime pins are Pi `0.85.1` (`@earendil-works/pi-coding-agent`) and
-DeepSeek Harness `0.1.5-rc.2`. DeepSeek is a developer preview; its main-branch
-headless flags differ from the published release. `stdin.mjs` supplies its
-headless startup service so even large prompts avoid command-line size limits.
+The container runtime pins are Pi `0.85.1` (`@earendil-works/pi-coding-agent`)
+and DeepSeek Harness `0.1.5-rc.2`. DeepSeek containers retain their existing
+`stdin.mjs` headless startup service so even large prompts avoid command-line
+size limits.
+
+Native host flows intentionally use a different DeepSeek protocol: the CLI
+installer pins `@deepseek-ai/dsh@0.2.0-rc.2`, whose published CLI supports
+`--json -` and stdin task delivery. The container pin remains `0.1.5-rc.2`
+because its bootstrap uses `stdin.mjs`, rather than the native adapter protocol.
+Changing the native installer pin does not upgrade the container runtime;
+validate each startup protocol before changing its version.
 
 Image builds install those versions with `npm ci` from `agents/pi` and
-`agents/deepseek`. Bump a pin in `backend/preloop/agents/harness.py` and in
+`agents/deepseek`. Bump a container pin in `backend/preloop/agents/harness.py` and in
 `agents/<name>/package.json` together, then regenerate that lockfile:
 
 ```sh

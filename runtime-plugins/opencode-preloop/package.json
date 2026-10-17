@@ -1,11 +1,11 @@
 {
   "name": "@preloop-ai/opencode-plugin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Approve or deny your OpenCode agent's tool calls from your phone, watch, Slack or the web, and steer a running session from anywhere.",
   "license": "Apache-2.0",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/plugin.js",
+  "types": "dist/plugin.d.ts",
   "files": [
     "dist",
     "README.md"

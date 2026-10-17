@@ -77,11 +77,11 @@ async def prepare_runner_delivery(
         if job.get("completion_protocol") == "host_exec":
             from preloop.services.host_exec import (
                 host_exec_profile_name,
-                is_host_exec_agent_type,
+                host_exec_harness,
             )
 
             if (
-                not is_host_exec_agent_type(job.get("agent_type"))
+                not host_exec_harness(job.get("agent_type"))
                 or not host_exec_profile_name(job)
                 or "launch_version" in job
             ):
