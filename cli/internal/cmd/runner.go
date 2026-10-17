@@ -1494,7 +1494,8 @@ func runRunnerEnable(cmd *cobra.Command, args []string) error {
 	if err := prepareRunnerConsent(cmd); err != nil {
 		return err
 	}
-	if err := updateRunnerConsentBeforeEnable(cmd); err != nil {
+	choice, _ := cmd.Flags().GetString("flow-execution-consent")
+	if err := updateRegisteredRunnerConsent(choice); err != nil {
 		return err
 	}
 	return setupInstallRunner(cmd.OutOrStdout())

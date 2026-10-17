@@ -131,11 +131,10 @@ func parseRunnerConsentAnswer(answer, fallback string) string {
 	return answer
 }
 
-// updateRunnerConsentBeforeEnable applies an explicit install choice before
+// updateRegisteredRunnerConsent applies an explicit install choice before
 // the new service can resume an existing runner. Saved personal choices are
 // intentionally omitted so an ordinary enable preserves later console edits.
-func updateRunnerConsentBeforeEnable(cmd *cobra.Command) error {
-	choice, _ := cmd.Flags().GetString("flow-execution-consent")
+func updateRegisteredRunnerConsent(choice string) error {
 	if choice == "" {
 		return nil
 	}

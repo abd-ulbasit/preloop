@@ -326,6 +326,13 @@ func installRunnerFromSetup(req runnerSetupRequest) error {
 	if err := chooseRunnerConsent(req.In, req.Out, req.tty(), req.Consent); err != nil {
 		return err
 	}
+	choice, _, err := config.RunnerFlowExecutionConsent()
+	if err != nil {
+		return err
+	}
+	if err := updateRegisteredRunnerConsent(choice); err != nil {
+		return err
+	}
 	if runnerHasDocker() {
 		fmt.Fprintln(req.Out, "Docker daemon reachable (docker ps succeeded). The runner can advertise the docker tag.")
 	} else {

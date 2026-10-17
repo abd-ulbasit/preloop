@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"github.com/preloop/preloop/cli/internal/api"
 	"github.com/preloop/preloop/cli/internal/config"
 	"github.com/preloop/preloop/cli/internal/testenv"
@@ -247,6 +248,85 @@ func TestRunnerEnableAppliesOnlyExplicitConsentBeforeInstall(t *testing.T) {
 			}
 			if tc.choice == "" && serverConsent != "ask_me" {
 				t.Fatal("saved personal consent overwrote console choice")
+			}
+		})
+	}
+}
+
+func TestRunnerSetupAppliesChosenConsentBeforeReinstall(t *testing.T) {
+	cases := []struct {
+		name     string
+		explicit string
+		answer   string
+		expected string
+		refused  bool
+	}{
+		{name: "explicit unattended choice", explicit: "never", expected: "never"},
+		{name: "interactive changed choice", answer: "1\n", expected: "ask_me"},
+		{name: "interactive accepted default", answer: "\n", expected: "always"},
+		{name: "refused update stops reinstall", explicit: "always", expected: "always", refused: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testenv.SetTempHome(t)
+			oldToken, oldURL := FlagToken, FlagURL
+			oldInstall, oldStart := setupInstallRunner, setupStartRunner
+			t.Cleanup(func() {
+				FlagToken, FlagURL = oldToken, oldURL
+				setupInstallRunner, setupStartRunner = oldInstall, oldStart
+			})
+			if err := config.SetRunnerFlowExecutionConsent("always"); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeRunnerState(&runnerState{ID: "runner-example", Token: "runner-token"}); err != nil {
+				t.Fatal(err)
+			}
+			patches, installed := 0, false
+			serverConsent := "ask_me"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				patches++
+				if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/runners/runner-example/consent" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				var body map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["flow_execution_consent"] != tc.expected {
+					t.Errorf("consent = %q, want %q", body["flow_execution_consent"], tc.expected)
+				}
+				if tc.refused {
+					http.Error(w, `{"detail":"Only the runner owner can change consent"}`, http.StatusForbidden)
+					return
+				}
+				serverConsent = body["flow_execution_consent"]
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "runner-example"})
+			}))
+			defer server.Close()
+			FlagToken, FlagURL = "example-owner-token", server.URL
+			setupInstallRunner = func(out io.Writer) error {
+				installed = true
+				if serverConsent != tc.expected || patches != 1 {
+					t.Error("service installed before chosen consent was applied")
+				}
+				return nil
+			}
+			// Avoid launching a service or polling a live runner during this test.
+			setupStartRunner = func() error { return fmt.Errorf("test service stays stopped") }
+			tty := tc.explicit == ""
+			var out bytes.Buffer
+			err := installRunnerFromSetup(runnerSetupRequest{
+				In: strings.NewReader(tc.answer), Out: &out, TTY: &tty, Consent: tc.explicit,
+			})
+			if tc.refused {
+				if err == nil || installed {
+					t.Fatalf("refused update: err %v, installed %v", err, installed)
+				}
+			} else if err != nil || !installed {
+				t.Fatalf("setup: err %v, installed %v", err, installed)
+			}
+			if patches != 1 {
+				t.Fatalf("patches = %d", patches)
 			}
 		})
 	}

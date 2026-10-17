@@ -351,6 +351,10 @@ func TestPerformRunnerSetupPrintsHarnessesWhenPresent(t *testing.T) {
 	stubRunnerInstall(t)
 	const runnerID = "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && r.URL.Path == "/api/v1/runners/"+runnerID+"/consent" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.URL.Path != "/api/v1/runners/"+runnerID {
 			http.NotFound(w, r)
 			return
@@ -564,6 +568,10 @@ func TestPerformRunnerSetupStartFailureSkipsOnlineWait(t *testing.T) {
 	})
 	probes := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/consent") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		probes++
 		http.NotFound(w, r)
 	}))
