@@ -9,6 +9,12 @@ import type { AIModelDetailView } from './ai-model-detail-view';
 
 describe('AIModelDetailView', () => {
   let fetchStub: sinon.SinonStub;
+  let usedByFail = false;
+  let usedByBody: {
+    agents: { id: string; name: string; agent_kind: string | null }[];
+    flows: { id: string; name: string }[];
+    truncated: boolean;
+  } = { agents: [], flows: [], truncated: false };
   let connectStub: sinon.SinonStub;
   let subscribeStub: sinon.SinonStub;
   let pricingResponse: any;
@@ -163,6 +169,14 @@ describe('AIModelDetailView', () => {
             return new Response(null, { status: 204 });
           }
           return new Response(JSON.stringify({ id: 'override-1' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (url.startsWith('/api/v1/ai-models/model-1/used-by')) {
+          if (usedByFail) return new Response('{}', { status: 500 });
+          return new Response(JSON.stringify(usedByBody), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
@@ -550,6 +564,111 @@ describe('AIModelDetailView', () => {
     expect((el as any).interactions.items).to.have.length(1);
     expect(el.shadowRoot!.querySelector('preloop-session-observer')).not.to
       .exist;
+  });
+
+  it('lists configured agents and flows apart from observed traffic', async () => {
+    usedByBody = {
+      agents: [
+        { id: 'agent-9', name: 'Configured agent', agent_kind: 'codex' },
+      ],
+      flows: [{ id: 'flow-9', name: 'Configured flow' }],
+      truncated: false,
+    };
+    try {
+      const element = (await fixture(
+        html`<ai-model-detail-view
+          .modelId=${'model-1'}
+        ></ai-model-detail-view>`
+      )) as AIModelDetailView;
+      const root = element.shadowRoot!;
+      await waitUntil(
+        () => root.querySelector('[data-testid="model-observed"]'),
+        'observed usage did not render',
+        { timeout: 5000 }
+      );
+      const card = root.querySelector('[data-testid="model-used-by"]')!;
+      expect(card.textContent).to.contain('1 agent');
+      expect(card.querySelector('a[href="/console/agents/agent-9"]')).to.exist;
+      expect(card.querySelector('a[href="/console/flows/flow-9"]')).to.exist;
+      const observed = root.querySelector('[data-testid="model-observed"]')!;
+      expect(observed.textContent).to.contain('Observed, not configured');
+      // The session's flow called the model but is not configured to.
+      expect(observed.querySelector('a[href*="/console/flows/flow-1"]')).to
+        .exist;
+      expect(observed.querySelector('a[href*="flow-9"]')).to.not.exist;
+    } finally {
+      usedByBody = { agents: [], flows: [], truncated: false };
+    }
+  });
+
+  it("drops the previous model's consumers when navigating to another model", async () => {
+    usedByBody = {
+      agents: [
+        { id: 'agent-9', name: 'Configured agent', agent_kind: 'codex' },
+      ],
+      flows: [],
+      truncated: false,
+    };
+    try {
+      const element = (await fixture(
+        html`<ai-model-detail-view
+          .modelId=${'model-1'}
+        ></ai-model-detail-view>`
+      )) as AIModelDetailView;
+      const root = element.shadowRoot!;
+      const card = () =>
+        root.querySelector('[data-testid="model-used-by"]')?.textContent || '';
+      await waitUntil(() => card().includes('Configured agent'), undefined, {
+        timeout: 5000,
+      });
+      await waitUntil(() => !(element as any).loading);
+      // The next model never answers, so whatever shows is left over.
+      fetchStub
+        .withArgs(
+          sinon.match((url: unknown) => String(url).includes('model-2'))
+        )
+        .returns(new Promise(() => {}));
+      element.onBeforeEnter({ params: { modelId: 'model-2' } });
+      await element.updateComplete;
+      expect(card()).to.not.contain('Configured agent');
+      expect(root.querySelector('[data-testid="model-observed"]')).to.not.exist;
+    } finally {
+      usedByBody = { agents: [], flows: [], truncated: false };
+    }
+  });
+
+  it('says how to configure a model nothing uses, and retries a failed read', async () => {
+    usedByFail = true;
+    try {
+      const element = (await fixture(
+        html`<ai-model-detail-view
+          .modelId=${'model-1'}
+        ></ai-model-detail-view>`
+      )) as AIModelDetailView;
+      const root = element.shadowRoot!;
+      await waitUntil(
+        () =>
+          root.querySelector('[data-testid="model-used-by"] [role="alert"]'),
+        'used-by error did not render',
+        { timeout: 5000 }
+      );
+      usedByFail = false;
+      (
+        root.querySelector(
+          '[data-testid="model-used-by"] [role="alert"] a'
+        ) as HTMLAnchorElement
+      ).click();
+      await waitUntil(
+        () =>
+          root
+            .querySelector('[data-testid="model-used-by"]')
+            ?.textContent?.includes('No agent or flow is configured'),
+        'empty used-by did not render',
+        { timeout: 5000 }
+      );
+    } finally {
+      usedByFail = false;
+    }
   });
 
   it('renders model observability summary, sessions, and interactions', async () => {

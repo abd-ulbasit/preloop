@@ -698,6 +698,15 @@ Fleet findings and audited alert settings persist in core; device projections ar
 computed by the plugin. None of this enables or advertises a fleet feature in the
 open-source edition.
 
+Agent detail obtains device links from the optional fleet service, using the same
+projection and fleet read permission as the device page. Standalone instances and
+older plugins return no device links. Model detail reads configured consumers
+through `/ai-models/{id}/used-by`: active explicit agent bindings, legacy enrollment
+configuration, and saved flow model selections (default, label routing and enabled
+retry). Gateway auto-registration and historical traffic remain observed usage,
+separate from configuration. Consumer reads stay in the current account and apply
+both resource visibility and the permission to view each consumer kind.
+
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
 ### Restricted external runtime authority

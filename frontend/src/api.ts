@@ -80,6 +80,7 @@ import type {
   AIModelsOverviewResponse,
   ApiKeyGatewayUsageSummaryResponse,
   AIModelRuntimeSessionListResponse,
+  AIModelUsedByResponse,
   AIModelGatewayUsageSearchResponse,
   AIModel,
   CostAnalyticsSummaryResponse,
@@ -4432,6 +4433,26 @@ export async function getAIModelRuntimeSessions(
     throw new Error('Failed to fetch AI model runtime sessions');
   }
   return response.json();
+}
+
+/** Agents and flows configured to use the model (configuration only). */
+export async function getAIModelUsedBy(
+  modelId: string,
+  signal?: AbortSignal
+): Promise<AIModelUsedByResponse> {
+  const response = await fetchWithAuth(
+    `/api/v1/ai-models/${encodeURIComponent(modelId)}/used-by`,
+    { signal }
+  );
+  if (!response.ok) {
+    throw new Error('Could not load what uses this model');
+  }
+  const body = (await response.json()) as Partial<AIModelUsedByResponse>;
+  return {
+    agents: Array.isArray(body.agents) ? body.agents : [],
+    flows: Array.isArray(body.flows) ? body.flows : [],
+    truncated: body.truncated === true,
+  };
 }
 
 export async function getAIModelGatewayUsageSearch(

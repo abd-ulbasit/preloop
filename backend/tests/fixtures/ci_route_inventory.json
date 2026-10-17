@@ -75,6 +75,7 @@
   "GET /api/v1/ai-models/{model_id}/pricing": "deny",
   "GET /api/v1/ai-models/{model_id}/runtime-sessions": "deny",
   "GET /api/v1/ai-models/{model_id}/summary": "deny",
+  "GET /api/v1/ai-models/{model_id}/used-by": "deny",
   "GET /api/v1/anthropic-usage": "deny",
   "GET /api/v1/anthropic-usage/mappings": "deny",
   "GET /api/v1/approval-bypasses": "deny",

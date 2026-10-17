@@ -1089,8 +1089,11 @@ def _build_managed_agent_detail_response(
             rows=sessions["items"],
             background_tasks=background_tasks,
         )
+    from preloop.services.agent_device_links import agent_device_links
+
     return ManagedAgentDetailResponse(
         agent=ManagedAgentSummary(**summary),
+        devices=agent_device_links(db, user=current_user, agent_id=agent_id),
         aggregate=ManagedAgentUsageAggregate(
             session_count=aggregate["session_count"] if aggregate else 0,
             total_requests=aggregate["total_requests"] if aggregate else 0,

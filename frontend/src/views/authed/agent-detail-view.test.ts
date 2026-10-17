@@ -742,6 +742,74 @@ describe('AgentDetailView', () => {
     expect(patched).to.deep.equal({ others_may_start_sessions: 'deny' });
   });
 
+  it('names every device the agent runs on, linked to its device page', async () => {
+    const devices = [
+      {
+        device_key: 'fp:' + 'a'.repeat(64),
+        hostname: 'example-workstation',
+        os: 'darwin',
+        runner_state: 'online',
+        last_seen_at: '2026-10-17T12:00:00Z',
+      },
+      {
+        device_key: 'runner:00000000-0000-4000-8000-000000000001',
+        hostname: null,
+        os: null,
+        runner_state: 'offline',
+        last_seen_at: null,
+      },
+    ];
+    fetchStub.callsFake(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await defaultFetch(input, init);
+        const url = input.toString();
+        if (
+          !url.startsWith('/api/v1/agents/agent-1?') &&
+          url !== '/api/v1/agents/agent-1'
+        )
+          return response;
+        const body = await response.json();
+        return new Response(JSON.stringify({ ...body, devices }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    );
+    const el = await fixture<AgentDetailView>(
+      html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+    );
+    await waitUntil(() => !!(el as any).agent && (el as any).devices.length);
+    await el.updateComplete;
+    const strip = el.shadowRoot!.querySelector(
+      '[data-testid="agent-devices"]'
+    )!;
+    const text = strip.textContent!.replace(/\s+/g, ' ');
+    expect(text).to.include('Devices');
+    expect(text).to.include('macOS');
+    expect(text).to.include('Runner online');
+    expect(text).to.include('Runner offline');
+    expect(text).to.include('Runner 00000000');
+    const links = [...strip.querySelectorAll('a')].map((a) =>
+      a.getAttribute('href')
+    );
+    expect(links).to.eql([
+      '/console/settings/device-fleet?device=' +
+        encodeURIComponent(devices[0].device_key),
+      '/console/settings/device-fleet?device=' +
+        encodeURIComponent(devices[1].device_key),
+    ]);
+  });
+
+  it('shows no device when none is known', async () => {
+    const el = await fixture<AgentDetailView>(
+      html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
+    );
+    await waitUntil(() => !(el as any).loading && !!(el as any).agent);
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-testid="agent-devices"]')).to.not
+      .exist;
+  });
+
   it('keeps agent identity when the governance request fails', async () => {
     fetchStub.callsFake(
       async (input: RequestInfo | URL, init?: RequestInit) => {

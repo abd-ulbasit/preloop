@@ -954,6 +954,20 @@ export interface ManagedAgentDetailResponse {
   sessions: RuntimeSessionSummary[];
   /** Sessions across pages; null or absent when not requested. */
   session_total?: number | null;
+  /**
+   * Machines the agent is explicitly reported on (runner harness inventory
+   * or discovery candidates). Empty without the fleet plugin or without
+   * fleet read access.
+   */
+  devices?: ManagedAgentDevice[];
+}
+
+export interface ManagedAgentDevice {
+  device_key: string;
+  hostname: string | null;
+  os: string | null;
+  runner_state: string;
+  last_seen_at: string | null;
 }
 
 export interface ManagedAgentUpdateRequest {
@@ -2037,6 +2051,13 @@ export interface ApiKeyGatewayUsageSummaryResponse {
   requests_by_day: GatewayUsageByDay[];
   usage_by_model: GatewayUsageByModel[];
   usage_by_session: GatewayUsageBySession[];
+}
+
+/** Agents and flows configured to use a model; not observed traffic. */
+export interface AIModelUsedByResponse {
+  agents: { id: string; name: string; agent_kind: string | null }[];
+  flows: { id: string; name: string }[];
+  truncated: boolean;
 }
 
 export type AIModelRuntimeSessionListResponse =
