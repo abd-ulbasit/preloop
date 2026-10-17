@@ -150,6 +150,8 @@ export const restoreGovernanceFinding = (
 
 /** Weekly report email switches: the account's and the signed-in user's. */
 export interface WeeklyReportPreferences {
+  /** Account email analytics, shown only with the enterprise capability. */
+  tracking_enabled?: boolean;
   /** The full report for owners and admins. */
   account_enabled: boolean;
   user_enabled: boolean;
