@@ -396,6 +396,7 @@ def engagement(
     event = models.Event
     week = event.event_data["week"].astext
     kind = event.event_data["report_kind"].astext
+    section = event.event_data["section"].astext
     # Bound event reads; retain the original delivery week for cohort attribution.
     query = db.query(
         event.account_id,
@@ -405,7 +406,7 @@ def engagement(
         func.max(event.timestamp).label("last_at"),
         func.count().label("total"),
         func.count(func.distinct(event.user_id)).label("unique"),
-        event.event_data["section"].astext.label("section"),
+        section.label("section"),
     ).filter(
         event.account_id.is_not(None),
         text(
@@ -423,7 +424,7 @@ def engagement(
         week,
         kind,
         event.event_type,
-        event.event_data["section"].astext,
+        section,
     ).all()
     names: dict[UUID, str | None] = (
         {
