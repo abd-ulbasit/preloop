@@ -21,6 +21,14 @@ const SWITCHES: {
   toastOff: string;
 }[] = [
   {
+    field: 'tracking_enabled',
+    label: 'Measure report opens and link clicks',
+    on: 'Count opens and link clicks for this account. Reports disclose tracking in the footer.',
+    off: 'Reports have no tracking pixel or tracked links. Links in previous emails stop recording activity.',
+    toastOn: 'Report engagement tracking is on.',
+    toastOff: 'Report engagement tracking is off.',
+  },
+  {
     field: 'account_enabled',
     label: 'Report for owners and admins',
     on: 'The full account report: usage, spend, approvals, policy findings and the change from last week. Sent each Monday.',
@@ -51,6 +59,7 @@ const SWITCHES: {
 export class WeeklyReportSettings extends LitElement {
   @state() private prefs: WeeklyReportPreferences | null = null;
   @state() private canManage = false;
+  @state() private trackingAvailable = false;
   @state() private switching = '';
   private generation = 0;
 
@@ -114,6 +123,8 @@ export class WeeklyReportSettings extends LitElement {
         getWeeklyReportPreferences(),
       ]);
       if (generation !== this.generation) return;
+      this.trackingAvailable =
+        features.features.report_engagement_tracking === true;
       this.canManage = hasPermission(user.permissions, 'manage_account');
       this.prefs = prefs;
     } catch {
@@ -144,7 +155,11 @@ export class WeeklyReportSettings extends LitElement {
     const prefs = this.prefs;
     if (!prefs) return nothing;
     // Older servers return only account_enabled; show what they support.
-    const shown = SWITCHES.filter((s) => prefs[s.field] !== undefined);
+    const shown = SWITCHES.filter(
+      (s) =>
+        prefs[s.field] !== undefined &&
+        (s.field !== 'tracking_enabled' || this.trackingAvailable)
+    );
     return html`<section aria-labelledby="weekly-report-title">
       <h2 id="weekly-report-title">Weekly report</h2>
       <p>

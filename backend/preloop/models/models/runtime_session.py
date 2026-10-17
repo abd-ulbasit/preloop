@@ -32,6 +32,11 @@ class RuntimeSession(Base):
 
     __tablename__ = "runtime_session"
     __table_args__ = (
+        Index(
+            "ix_runtime_session_admin_activity",
+            text("coalesce(last_activity_at, started_at)"),
+            "account_id",
+        ),
         UniqueConstraint(
             "account_id",
             "session_source_type",

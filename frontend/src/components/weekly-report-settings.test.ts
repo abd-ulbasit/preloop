@@ -14,6 +14,7 @@ function json(data: unknown, status = 200): Response {
 
 function stubApi(options: {
   capability?: boolean;
+  tracking?: boolean;
   putStatus?: number;
   permissions?: string[] | null;
   prefs?: Record<string, boolean>;
@@ -23,6 +24,7 @@ function stubApi(options: {
     user_enabled: true,
     members_enabled: true,
     member_policy_findings_enabled: false,
+    tracking_enabled: true,
   };
   const puts: Record<string, unknown>[] = [];
   const stub = sinon
@@ -32,7 +34,10 @@ function stubApi(options: {
       const path = new URL(url, window.location.origin).pathname;
       if (path === '/api/v1/features')
         return json({
-          features: { governance_review: options.capability ?? true },
+          features: {
+            governance_review: options.capability ?? true,
+            report_engagement_tracking: options.tracking ?? false,
+          },
         });
       if (path === '/api/v1/auth/users/me')
         return json({
@@ -88,6 +93,25 @@ describe('weekly-report-settings', () => {
     expect(switchFor(el, 'member_policy_findings_enabled')!.checked).to.be
       .false;
     expect(el.shadowRoot!.textContent).to.contain('costs no');
+  });
+
+  it('hides tracking without its enterprise capability', async () => {
+    stubApi({});
+    const el = await mount();
+    await waitUntil(() => switchFor(el, 'account_enabled'));
+    expect(switchFor(el, 'tracking_enabled')).to.equal(null);
+  });
+
+  it('lets an account admin turn tracking off', async () => {
+    const { puts } = stubApi({ tracking: true });
+    const el = await mount();
+    await waitUntil(() => switchFor(el, 'tracking_enabled'));
+    const sw = switchFor(el, 'tracking_enabled')!;
+    expect(sw.checked).to.be.true;
+    sw.checked = false;
+    sw.dispatchEvent(new Event('sl-change'));
+    await waitUntil(() => puts.length === 1);
+    expect(puts[0]).to.deep.equal({ tracking_enabled: false });
   });
 
   it('turns member reports off without touching admins', async () => {

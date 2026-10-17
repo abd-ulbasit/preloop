@@ -963,3 +963,14 @@ scoped diagnostics and the private Mattermost operator bridge are supplied by
 an EE plugin. The Lit widget/operator view are lazy capability-gated OSS code;
 public landing content remains in the existing light DOM. See chat-connections.md
 and the EE Cloud support operator guide for configuration and recovery policies.
+
+### Platform analytics extension primitives
+
+`models.crud.admin_analytics` provides windowed model-ledger and report-event
+aggregations for optional platform administration extensions. Platform-funded
+usage and legacy built-in model usage use separate partial indexes; explicit
+account funding never falls through to legacy classification. Gateway requests
+snapshot funding and purpose in usage metadata. Weekly email preferences include
+an audited account tracking switch, and the console renders it only when an
+extension advertises `report_engagement_tracking`. Core does not serve public
+tracking or cross-account analytics endpoints.

@@ -18,7 +18,9 @@ START = datetime(2026, 10, 5, tzinfo=UTC)
 END = START + timedelta(days=7)
 
 
-@pytest.mark.parametrize("field", ["members_enabled", "member_policy_findings_enabled"])
+@pytest.mark.parametrize(
+    "field", ["members_enabled", "member_policy_findings_enabled", "tracking_enabled"]
+)
 def test_member_cannot_change_account_report_controls(
     db_session: Session, test_user: models.User, field: str
 ) -> None:
@@ -49,6 +51,7 @@ def test_account_controls_are_independent_and_audited(
     )
     assert result == {
         "account_enabled": True,
+        "tracking_enabled": True,
         "user_enabled": True,
         "members_enabled": True,
         "member_policy_findings_enabled": True,

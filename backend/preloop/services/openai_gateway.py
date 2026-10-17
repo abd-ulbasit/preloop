@@ -10951,6 +10951,9 @@ class OpenAIGatewayService:
             runtime_principal_name=runtime_principal.get("name"),
             rate_limit_retry_after_ms=rate_limit_retry_after_ms,
             meta_data={
+                "funding": "platform"
+                if model_billing_is_hosted(ai_model)
+                else "account",
                 "billing_path": "allowance"
                 if model_billing_is_hosted(ai_model)
                 else "your_key",
