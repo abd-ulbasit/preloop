@@ -852,7 +852,7 @@ export class CostView extends AuthedElement {
   private async loadCopilotConnection() {
     const [copilot, billing] = await Promise.allSettled([
       getCopilotUsage({}),
-      getProviderBillingConnections(),
+      getProviderBillingConnections({ passive: true }),
     ]);
     const viaCopilot =
       copilot.status === 'fulfilled' && copilot.value?.connection != null;

@@ -958,6 +958,12 @@ export class PoliciesView extends LitElement {
       this._tools = tools;
       this._approvalPolicies = policies;
       this._features = featuresResponse.features || {};
+      if (
+        this._activeTab === 'governance' &&
+        !hasCapability(this._features, 'governance_review')
+      ) {
+        this._activeTab = 'rules';
+      }
       this._modelIORules = modelIORules;
       await this._refreshCurrentExport();
 
@@ -3663,14 +3669,16 @@ defaults:
       <view-header
         headerText="Policies"
         description=${
-          this._activeTab === 'governance'
+          this._activeTab === 'governance' &&
+          hasCapability(this._features, 'governance_review')
             ? 'The AI usage policy the weekly review checks sessions against. It reports and never blocks work.'
             : 'Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches.'
         }
         width="extra-wide"
       >
         ${
-          this._activeTab === 'governance'
+          this._activeTab === 'governance' &&
+          hasCapability(this._features, 'governance_review')
             ? nothing
             : html`<div slot="main-column" class="rule-actions">
                 <sl-button

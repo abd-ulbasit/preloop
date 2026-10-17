@@ -57,6 +57,18 @@ describe('policy notice attention items', () => {
     expect(first.evidence?.policyNotice?.lastUsername).to.equal('alex');
   });
 
+  for (const [target, label] of [
+    ['tool.args', 'tool inputs'],
+    ['tool.result', 'tool results'],
+    ['model.request', 'model requests'],
+    ['model.response', 'model responses'],
+  ]) {
+    it(`names ${target} activity accurately`, () => {
+      const [item] = policyNoticeItems([notice({ target })]);
+      expect(item.detail).to.contain(`matched ${label} 3 times`);
+    });
+  }
+
   it('drops rows with no hits', () => {
     expect(policyNoticeItems([notice({ count: 0 })])).to.eql([]);
   });

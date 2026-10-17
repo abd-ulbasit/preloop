@@ -2003,11 +2003,12 @@ export async function getRepriceJobStatus(
   return response.json();
 }
 
-export async function getProviderBillingConnections(): Promise<
-  ProviderBillingConnection[]
-> {
+export async function getProviderBillingConnections(options?: {
+  passive?: boolean;
+}): Promise<ProviderBillingConnection[]> {
   const response = await fetchWithAuth(
-    '/api/v1/billing/provider-billing/connections'
+    '/api/v1/billing/provider-billing/connections',
+    { passive: options?.passive === true }
   );
   if (!response.ok) {
     throw new Error('Failed to fetch provider billing connections');

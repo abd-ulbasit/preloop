@@ -284,6 +284,32 @@ describe('PoliciesView', () => {
     ).to.equal(null);
   });
 
+  it('normalizes an unavailable governance deep link before rendering copy', async () => {
+    const originalUrl = window.location.pathname + window.location.search;
+    try {
+      history.replaceState({}, '', '/console/policies?tab=governance');
+      const element = await mountWithProfile(['view_policies'], {
+        governance_review: false,
+      });
+      expect(
+        element.shadowRoot!.querySelector('sl-tab[panel="governance"]')
+      ).to.equal(null);
+      expect(
+        element
+          .shadowRoot!.querySelector('view-header')!
+          .getAttribute('description')
+      ).to.equal(
+        'Instance rules for tool calls and model input and output. Traffic is allowed when no rule matches.'
+      );
+      expect((element as any)._activeTab).to.equal('rules');
+      expect(element.shadowRoot!.querySelector('.rule-actions')).not.to.equal(
+        null
+      );
+    } finally {
+      history.replaceState({}, '', originalUrl);
+    }
+  });
+
   it('shows the governance tab, read only for view_policies members', async () => {
     const element = await mountWithProfile(['view_policies'], {
       governance_review: true,
