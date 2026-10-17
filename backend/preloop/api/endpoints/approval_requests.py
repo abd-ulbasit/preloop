@@ -181,7 +181,9 @@ def _reject_managed_publication_decision(
     legacy ``publish`` / ``isolated_publication`` tool or action names
     are in scope. Ordinary unrelated approvals are not.
     """
-    if not confers_publication_authority(approval_request):
+    if getattr(
+        approval_request, "tool_name", None
+    ) != "owner_consent" and not confers_publication_authority(approval_request):
         return
     if not _managed_execution_credential(current_user):
         return

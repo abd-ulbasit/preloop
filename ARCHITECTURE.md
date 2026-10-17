@@ -237,6 +237,10 @@ runner, and the runner adds `--resume=<session>` itself, checks the session is o
 the host, and pushes onto the existing pull request branch. A completion naming a
 different session fails `resume_identity_mismatch`.
 
+Private runner leases enforce `flow_execution_consent` before creating any assignment. `ask_me` (the default) binds a durable `OwnerConsent` to the execution and selected runner, with a standard approval addressed only to the runner owner. Retries keep the same owner; pending execution waits until the existing approval window expires. `always` permits assignment and `never` rejects it. Owner settings survive reconnects unless registration explicitly changes them.
+
+Managed agents default `others_may_start_sessions` to `ask_me`. Agent Control checks new-session intents before dispatch, while commands for existing sessions keep their existing behavior. An approved request is consumed once, scoped to its requester and exact intent. Owner consent uses the existing notification preferences and mobile push, and does not inherit tool approval bypasses or administrator decision exemptions.
+
 A personal runner can also host remote harness sessions (#1482): the server
 writes start, turn and stop requests to `runner_remote_sessions`
 (`services/runner_sessions.py`) and delivers them over the runner websocket on
