@@ -206,6 +206,7 @@ from preloop.services.azure_openai import (
 )
 from preloop.services.litellm_routing import (
     BEDROCK_PROVIDERS,
+    OPENAI_COMPATIBLE_PROVIDERS,
     apply_preloop_client_headers,
     is_openrouter_model,
     model_api_base,
@@ -8307,6 +8308,17 @@ class OpenAIGatewayService:
         ):
             if payload.get(source_key) is not None and target_key not in kwargs:
                 kwargs[target_key] = payload[source_key]
+        # Codex omits sampling controls. Compatible local servers otherwise
+        # receive LiteLLM's defaults instead of the operator's model settings.
+        # Request values retain precedence, and only portable sampling fields
+        # are read here: server-specific options must not leak onto the wire.
+        model_parameters = getattr(ai_model, "model_parameters", None)
+        if (ai_model.provider_name or "").strip().lower() in (
+            OPENAI_COMPATIBLE_PROVIDERS
+        ) and isinstance(model_parameters, dict):
+            for key in ("temperature", "top_p"):
+                if key not in kwargs and model_parameters.get(key) is not None:
+                    kwargs[key] = model_parameters[key]
         if payload.get("stop") is not None:
             kwargs["stop"] = payload["stop"]
         # Intentional global default, not zai-only. Matches aux generation.
