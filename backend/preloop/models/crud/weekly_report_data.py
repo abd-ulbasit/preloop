@@ -1,5 +1,6 @@
 """SQL-only report projections, scoped before grouping and percentile calculation."""
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -85,7 +86,7 @@ def usage_snapshot(
     # Every entity list is complete. Taking top five happens only in rendering,
     # so a ranking change is never mistaken for a newly active identity.
     dimensions = {
-        "models": (usage.ai_model_id, usage.model_alias),
+        "models": (usage.ai_model_id, usage.model_alias, usage.provider_name),
         "flows": (usage.flow_id, models.Flow.name),
     }
     for kind, keys in dimensions.items():
@@ -116,7 +117,14 @@ def usage_snapshot(
             identity = ":".join(str(part or "") for part in parts[:-1]) or str(
                 parts[-1] or ""
             )
-            name = parts[-1] or "Unknown"
+            if kind == "models":
+                identity = json.dumps(
+                    [str(part) if part is not None else None for part in parts],
+                    separators=(",", ":"),
+                )
+                name = parts[1] or "Unknown model"
+            else:
+                name = parts[-1] or "Unknown"
             value = {
                 "identity": identity,
                 "name": str(name),
@@ -125,7 +133,9 @@ def usage_snapshot(
             }
             if kind == "models":
                 value.update(
-                    model_alias=name, ai_model_id=str(parts[0]) if parts[0] else None
+                    model_alias=name,
+                    ai_model_id=str(parts[0]) if parts[0] else None,
+                    provider_name=parts[2],
                 )
             elif kind == "flows":
                 value.update(
@@ -177,7 +187,11 @@ def member_findings(
     end: datetime,
     include_policy: bool,
 ) -> list[dict[str, Any]]:
-    """Only explicitly attributed findings from the latest completed window."""
+    """Read attributed findings from the latest completed or partial review.
+
+    Partial runs have finalized stored findings; running, failed and skipped
+    runs must not hide the most recent usable review.
+    """
     if not include_policy:
         return []
     finding, run = models.GovernanceFinding, models.GovernanceReviewRun
@@ -185,6 +199,7 @@ def member_findings(
         select(run.id)
         .where(
             run.account_id == account_id,
+            run.status.in_(("completed", "partial")),
             run.window_start < end,
             run.window_end > start,
             run.window_end <= end,

@@ -924,7 +924,7 @@ The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrate
 portable server allowlists, write approvals and bulk-export checks.
 
 Weekly report settings live in core Account fields and the audited
-`models.crud.weekly_report` transaction. `/account/weekly-report/preferences`
+`models.crud.weekly_report` transaction. `/api/v1/weekly-report/preferences`
 keeps individual unsubscribe separate from independent account controls for
 owner/admin delivery, member delivery, and member policy findings. An unset
 member-delivery field uses an optional edition service for its effective plan

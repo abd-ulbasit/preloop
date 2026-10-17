@@ -171,8 +171,9 @@ def test_member_approvals_include_decisions_but_not_unrelated_requests(
     assert result["median_decision_seconds"] == 20
 
 
+@pytest.mark.parametrize("run_status", ["completed", "partial"])
 def test_member_findings_require_attribution_and_policy_switch(
-    db_session: Session, test_user: models.User
+    db_session: Session, test_user: models.User, run_status: str
 ) -> None:
     from preloop.models.crud.weekly_report_data import member_findings
 
@@ -181,7 +182,7 @@ def test_member_findings_require_attribution_and_policy_switch(
         window_start=START,
         window_end=END,
         started_at=END,
-        status="completed",
+        status=run_status,
         mode_before="on_platform",
         mode_after="on_platform",
     )
@@ -214,3 +215,184 @@ def test_member_findings_require_attribution_and_policy_switch(
     result = member_findings(db_session, **arguments, include_policy=True)
     assert {row["kind"] for row in result} == {"inefficiency", "violation"}
     assert "private data" not in str(result)
+
+
+@pytest.mark.parametrize("newer_status", ["running", "failed", "skipped"])
+def test_unfinished_review_does_not_shadow_stored_findings(
+    db_session: Session, test_user: models.User, newer_status: str
+) -> None:
+    from preloop.models.crud.weekly_report_data import member_findings
+
+    old = models.GovernanceReviewRun(
+        account_id=test_user.account_id,
+        window_start=START,
+        window_end=END - timedelta(hours=1),
+        started_at=END - timedelta(hours=1),
+        status="completed",
+    )
+    newer = models.GovernanceReviewRun(
+        account_id=test_user.account_id,
+        window_start=START + timedelta(hours=1),
+        window_end=END,
+        started_at=END,
+        status=newer_status,
+    )
+    db_session.add_all([old, newer])
+    db_session.flush()
+    db_session.add(
+        models.GovernanceFinding(
+            account_id=test_user.account_id,
+            run_id=old.id,
+            user_id=test_user.id,
+            kind="violation",
+            category="policy_notice",
+            severity="low",
+            title="Stored finding",
+            suggestion="Use the approved tool.",
+            fingerprint="completed-finding",
+        )
+    )
+    db_session.flush()
+    rows = member_findings(
+        db_session,
+        account_id=test_user.account_id,
+        user_id=test_user.id,
+        start=START,
+        end=END,
+        include_policy=True,
+    )
+    assert [row["title"] for row in rows] == ["Stored finding"]
+
+
+def test_models_under_distinct_aliases_and_providers_have_unique_identities(
+    db_session: Session, test_user: models.User
+) -> None:
+    model = models.AIModel(
+        account_id=test_user.account_id,
+        name="Example model",
+        provider_name="example",
+        model_identifier="example-model",
+    )
+    db_session.add(model)
+    db_session.flush()
+    for alias, provider in (
+        ("alias-one", "example"),
+        ("alias-two", "example"),
+        ("alias-one", "other"),
+    ):
+        db_session.add(
+            models.ApiUsage(
+                account_id=test_user.account_id,
+                user_id=test_user.id,
+                ai_model_id=model.id,
+                model_alias=alias,
+                provider_name=provider,
+                endpoint="/v1/messages",
+                method="POST",
+                status_code=200,
+                duration=0.2,
+                timestamp=START.replace(tzinfo=None),
+                action_type="model_gateway",
+            )
+        )
+    db_session.flush()
+    snapshot = usage_snapshot(
+        db_session,
+        account_id=test_user.account_id,
+        user_id=test_user.id,
+        start=START,
+        end=END,
+    )
+    assert len(snapshot["models"]) == 3
+    assert len({row["identity"] for row in snapshot["models"]}) == 3
+    assert {row["model_alias"] for row in snapshot["models"]} == {
+        "alias-one",
+        "alias-two",
+    }
+
+
+@pytest.mark.parametrize("kind", ["api_key", "managed_agent"])
+def test_approval_credentials_require_member_and_account_ownership(
+    db_session: Session, test_user: models.User, kind: str
+) -> None:
+    from preloop.models.crud import crud_account, crud_user
+    from preloop.models.crud.weekly_report_data import report_approvals
+
+    other_user = crud_user.create(
+        db_session,
+        obj_in={
+            "account_id": test_user.account_id,
+            "username": "other-member",
+            "email": "other@example.com",
+            "hashed_password": "example",
+            "is_active": True,
+            "user_source": "local",
+        },
+    )
+    foreign = crud_account.create(
+        db_session, obj_in={"organization_name": "Other account", "is_active": True}
+    )
+    workflow = models.ApprovalWorkflow(
+        account_id=test_user.account_id,
+        name="Credential approvals",
+        approval_type="manual",
+    )
+    db_session.add(workflow)
+    db_session.flush()
+    tool = models.ToolConfiguration(
+        tool_name="example_tool",
+        tool_source="builtin",
+        account_id=test_user.account_id,
+        approval_workflow_id=workflow.id,
+    )
+    db_session.add(tool)
+    db_session.flush()
+    for label, account_id, owner_id in (
+        ("own", test_user.account_id, test_user.id),
+        ("other", test_user.account_id, other_user.id),
+        ("foreign", foreign.id, test_user.id),
+    ):
+        if kind == "api_key":
+            resource = models.ApiKey(
+                account_id=account_id, user_id=owner_id, name=label, scopes=[]
+            )
+        else:
+            resource = models.ManagedAgent(
+                account_id=account_id,
+                owner_user_id=owner_id,
+                agent_kind="claude_code",
+                session_source_type="cli",
+                session_source_id=label,
+                display_name=label,
+                lifecycle_updated_at=START.replace(tzinfo=None),
+                last_seen_at=START.replace(tzinfo=None),
+            )
+        db_session.add(resource)
+        db_session.flush()
+        linkage = {
+            "api_key_id" if kind == "api_key" else "managed_agent_id": resource.id
+        }
+        db_session.add(
+            models.ApprovalRequest(
+                account_id=test_user.account_id,
+                tool_configuration_id=tool.id,
+                approval_workflow_id=workflow.id,
+                tool_name=tool.tool_name,
+                tool_args={},
+                status="approved",
+                requested_at=START.replace(tzinfo=None),
+                resolved_at=(START + timedelta(seconds=20)).replace(tzinfo=None),
+                approval_token=f"{kind}-{label}",
+                **linkage,
+            )
+        )
+    db_session.flush()
+    result = report_approvals(
+        db_session,
+        account_id=test_user.account_id,
+        user_id=test_user.id,
+        start=START,
+        end=END,
+    )
+    assert result["requested"] == 1
+    assert result["granted"] == 1

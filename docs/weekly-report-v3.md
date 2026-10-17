@@ -1,7 +1,7 @@
 # Weekly report settings
 
 Account settings expose three independent switches through
-`GET` and `PUT /api/v1/account/weekly-report/preferences`:
+`GET` and `PUT /api/v1/weekly-report/preferences`:
 
 - `account_enabled`: weekly reports for owners and admins, on by default.
 - `members_enabled`: personal reports for regular members. The stored nullable
