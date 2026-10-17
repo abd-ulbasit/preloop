@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 revision = "20261028_obs_verification"
-down_revision = "20261027_chat_support"
+down_revision = "20261028_chat_admin_merge"
 branch_labels = None
 depends_on = None
 
