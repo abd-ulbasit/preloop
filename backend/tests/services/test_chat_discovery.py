@@ -58,7 +58,7 @@ async def test_mattermost_named_teams(count: int) -> None:
     ],
 )
 def test_rejects_non_team_links(value: str) -> None:
-    with pytest.raises((ChatProviderError, ValueError)):
+    with pytest.raises(ChatProviderError):
         mattermost_team_name(value, config().base_url)
 
 
@@ -273,3 +273,30 @@ def synthetic_provider_dns(monkeypatch: pytest.MonkeyPatch) -> None:
         "preloop.services.ai_model_provider._resolve_endpoint_host",
         lambda _: [ipaddress.ip_address("93.184.216.34")],
     )
+
+
+@pytest.mark.asyncio
+async def test_discord_command_failure_restores_replaced_callback() -> None:
+    target, previous = (
+        "https://preloop.example.com/callback",
+        "https://other.example.com/callback",
+    )
+    current, patches = previous, []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal current
+        if request.method == "GET" and request.url.path.endswith("/applications/@me"):
+            return httpx.Response(200, json={"interactions_endpoint_url": current})
+        if request.method == "PATCH":
+            current = json.loads(request.content)["interactions_endpoint_url"]
+            patches.append(current)
+            return httpx.Response(200, json={})
+        return httpx.Response(500)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ChatProviderError):
+            await install_discord(
+                config("discord"), "app", target, replace_callback=True, client=client
+            )
+    assert patches == [target, previous]
+    assert current == previous

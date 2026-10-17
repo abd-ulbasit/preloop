@@ -19,12 +19,16 @@ describe('Cloud support widget', () => {
   }[];
   let owner: string;
   let status: string;
+  let historyStatus: number;
+  let messageBarrier: Promise<void> | undefined;
   beforeEach(() => {
     sessionStorage.clear();
     localStorage.removeItem('accessToken');
     messages = [];
     owner = 'Assistant';
     status = 'assistant';
+    historyStatus = 200;
+    messageBarrier = undefined;
     stub = sinon.stub(window, 'fetch').callsFake(async (input, init) => {
       const path = String(input);
       if (path.endsWith('/config'))
@@ -38,6 +42,7 @@ describe('Cloud support widget', () => {
         });
       if (path.endsWith('/events')) return new Response(null, { status: 204 });
       if (path.endsWith('/messages')) {
+        if (messageBarrier) await messageBarrier;
         const data = JSON.parse(init!.body as string);
         messages.push({
           id: data.event_id,
@@ -57,13 +62,16 @@ describe('Cloud support widget', () => {
           },
           201
         );
-      return json({
-        messages,
-        owner,
-        status,
-        operator_connected: true,
-        delivery_problem: false,
-      });
+      return json(
+        {
+          messages,
+          owner,
+          status,
+          operator_connected: true,
+          delivery_problem: false,
+        },
+        historyStatus
+      );
     });
   });
   afterEach(() => {
@@ -146,6 +154,45 @@ describe('Cloud support widget', () => {
       'A free text question'
     );
   });
+  for (const terminal of [404, 410]) {
+    it(`clears a ${terminal} conversation and starts anew on the next send`, async () => {
+      const el = await view();
+      await (el as any).send('First question');
+      historyStatus = terminal;
+      await (el as any).history();
+      expect(sessionStorage.getItem('preloop-support-conversation')).to.equal(
+        null
+      );
+      expect((el as any).credential).to.equal(undefined);
+      expect((el as any).pollTimer).to.equal(undefined);
+      historyStatus = 200;
+      await (el as any).send('New question');
+      expect(
+        stub
+          .getCalls()
+          .filter((call) => String(call.args[0]).endsWith('/conversations'))
+      ).to.have.length(2);
+      expect(messageCalls()).to.have.length(2);
+    });
+  }
+  it('preserves text typed while a message is in flight', async () => {
+    const el = await view();
+    let release!: () => void;
+    messageBarrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (el as any).text = 'Submitted question';
+    const sending = (el as any).send();
+    await waitUntil(() => messageCalls().length === 1);
+    (el as any).text = 'Next question being typed';
+    release();
+    await sending;
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('sl-textarea')!.value).to.equal(
+      'Next question being typed'
+    );
+  });
+
   it('requests human assistance without requiring contact information', async () => {
     const el = await view();
     button(el, 'Talk to Support').click();

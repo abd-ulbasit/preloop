@@ -140,7 +140,10 @@ def workspaces(data: Any) -> list[dict[str, str]]:
 def mattermost_team_name(value: str, origin: str) -> str:
     """Resolve a normal team URL/name; never treat invite/channel IDs as a team."""
     if "://" in value:
-        parsed, server = urlparse(value), urlparse(validate_mattermost_url(origin))
+        try:
+            parsed, server = urlparse(value), urlparse(validate_mattermost_url(origin))
+        except ValueError as exc:
+            raise ChatProviderError("Enter a valid Mattermost team URL") from exc
         if (
             parsed.scheme != server.scheme
             or parsed.netloc != server.netloc
@@ -293,36 +296,55 @@ async def install_discord(
         payload={"interactions_endpoint_url": callback_url},
         client=client,
     )
-    path = f"/applications/{identifier(application_id)}/guilds/{identifier(config.workspace_id)}/commands"
-    commands = await provider_request(config, "GET", path, client=client)
-    owned = next(
-        (
-            row
-            for row in commands
-            if row.get("name") == "preloop" and row.get("type", 1) == 1
-        ),
-        None,
-    )
-    payload = {
-        "name": "preloop",
-        "description": "Ask Preloop or send an explicit command",
-        "type": 1,
-        "options": [
-            {
-                "name": "message",
-                "description": "Question or command",
-                "type": 3,
-                "required": True,
-                "max_length": 2000,
-            }
-        ],
-    }
-    if owned:
-        payload.pop("type", None)
-    await provider_request(
-        config,
-        "PATCH" if owned else "POST",
-        path + ("/" + identifier(owned["id"]) if owned else ""),
-        payload=payload,
-        client=client,
-    )
+    try:
+        path = f"/applications/{identifier(application_id)}/guilds/{identifier(config.workspace_id)}/commands"
+        commands = await provider_request(config, "GET", path, client=client)
+        owned = next(
+            (
+                row
+                for row in commands
+                if row.get("name") == "preloop" and row.get("type", 1) == 1
+            ),
+            None,
+        )
+        payload = {
+            "name": "preloop",
+            "description": "Ask Preloop or send an explicit command",
+            "type": 1,
+            "options": [
+                {
+                    "name": "message",
+                    "description": "Question or command",
+                    "type": 3,
+                    "required": True,
+                    "max_length": 2000,
+                }
+            ],
+        }
+        if owned:
+            payload.pop("type", None)
+        await provider_request(
+            config,
+            "PATCH" if owned else "POST",
+            path + ("/" + identifier(owned["id"]) if owned else ""),
+            payload=payload,
+            client=client,
+        )
+    except ChatProviderError:
+        # The durable connection remains available if rollback itself is
+        # unavailable. Never overwrite a callback concurrently changed elsewhere.
+        try:
+            current = await provider_request(
+                config, "GET", "/applications/@me", client=client
+            )
+            if current.get("interactions_endpoint_url") == callback_url:
+                await provider_request(
+                    config,
+                    "PATCH",
+                    "/applications/@me",
+                    payload={"interactions_endpoint_url": existing or ""},
+                    client=client,
+                )
+        except ChatProviderError:
+            pass
+        raise

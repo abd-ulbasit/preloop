@@ -86,11 +86,17 @@ def get_connection(
 
 
 def public_connection(
-    db: Session, connection: models.ChatConnection, user: models.User
+    db: Session,
+    connection: models.ChatConnection,
+    user: models.User,
+    state: tuple[models.ChatIdentity | None, models.ChatListener | None] | None = None,
 ) -> dict[str, Any]:
-    identity = crud_chat.identity(db, connection.id, user_id=user.id)
-    health = crud_chat.listeners.get_multi(db, connection_id=connection.id, limit=1)
-    worker = health[0] if health else None
+    if state is None:
+        identity = crud_chat.identity(db, connection.id, user_id=user.id)
+        health = crud_chat.listeners.get_multi(db, connection_id=connection.id, limit=1)
+        worker = health[0] if health else None
+    else:
+        identity, worker = state
     fresh = bool(
         worker and worker.lease_until and worker.lease_until > datetime.utcnow()
     )
@@ -129,9 +135,13 @@ def list_connections(
     connections = crud_chat.connections.get_multi(
         db, account_id=str(current_user.account_id), limit=100
     )
+    states = crud_chat.connection_states(
+        db, [item.id for item in connections], current_user.id
+    )
     return {
         "connections": [
-            public_connection(db, item, current_user) for item in connections
+            public_connection(db, item, current_user, states[item.id])
+            for item in connections
         ],
         "can_manage": has_permission(current_user, MANAGE_PERMISSION, db),
     }

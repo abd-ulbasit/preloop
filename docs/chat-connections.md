@@ -185,3 +185,11 @@ operator thread replies return to the browser. Anonymous credentials authorize o
 conversation, and supplying contact information never authorizes account inspection.
 Self-hosted public sites do not load the Cloud widget by default. See your Cloud
 operator guide for service configuration, retention, budgets and delivery recovery.
+
+
+Discord installation persists its callback target before remote changes. If installation
+fails, retry **Finish** with the same workspace; the saved connection supports that
+retry. A command-installation failure restores the prior callback when it still
+points to this attempt. An interrupted rollback retains a durable callback target.
+Slack OAuth must complete in the browser that initiated setup; its short-lived
+secure HttpOnly SameSite=Lax proof is never returned in the authorization URL.

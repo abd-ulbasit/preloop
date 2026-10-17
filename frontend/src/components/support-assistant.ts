@@ -27,6 +27,15 @@ interface Credential {
   token: string;
   expires_at: string;
 }
+class SupportRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+  }
+}
+
 const SESSION = 'preloop-support-conversation';
 const DISMISSED = 'preloop-support-dismissed';
 const PROMPTED = 'preloop-support-prompted';
@@ -178,14 +187,15 @@ export class SupportAssistant extends LitElement {
       ? fetchWithAuth(`/api/v1/support${path}`, { ...options, passive: true })
       : fetch(`/api/v1/support${path}`, options));
     if (!response.ok)
-      throw new Error(
+      throw new SupportRequestError(
         response.status === 404
           ? 'Support is unavailable or this conversation expired.'
           : response.status === 403
             ? 'Sign in to the account that started this conversation.'
             : response.status === 429
               ? 'Support request limit reached. Please try later.'
-              : 'Support is unavailable. Your message can be retried.'
+              : 'Support is unavailable. Your message can be retried.',
+        response.status
       );
     return response.status === 204 ? undefined : response.json();
   }
@@ -248,6 +258,23 @@ export class SupportAssistant extends LitElement {
     this.save(DISMISSED, '1');
     void this.record('dismissal');
   }
+  private forgetConversation(): void {
+    this.generation++;
+    this.credential = this.pending = undefined;
+    this.messages = [];
+    this.owner = 'Assistant';
+    this.status = 'assistant';
+    this.busy = false;
+    clearTimeout(this.pollTimer);
+    this.pollTimer = undefined;
+    try {
+      sessionStorage.removeItem(SESSION);
+    } catch {
+      /* Optional storage. */
+    }
+    this.error =
+      'This conversation expired. Send a message to start a new one.';
+  }
   private async history(): Promise<void> {
     clearTimeout(this.pollTimer);
     if (!this.credential || !this.open || !this.isConnected) return;
@@ -262,10 +289,22 @@ export class SupportAssistant extends LitElement {
       this.operatorConnected = result.operator_connected;
       this.error = '';
     } catch (error) {
-      if (generation === this.generation)
-        this.error = error instanceof Error ? error.message : 'Reconnecting…';
+      if (generation === this.generation) {
+        if (
+          error instanceof SupportRequestError &&
+          [404, 410].includes(error.status)
+        )
+          this.forgetConversation();
+        else
+          this.error = error instanceof Error ? error.message : 'Reconnecting…';
+      }
     }
-    if (generation === this.generation && this.open && this.isConnected)
+    if (
+      generation === this.generation &&
+      this.credential &&
+      this.open &&
+      this.isConnected
+    )
       this.pollTimer = setTimeout(() => void this.history(), 3000);
   }
   private async ensureConversation(): Promise<void> {
@@ -311,15 +350,22 @@ export class SupportAssistant extends LitElement {
       );
       if (generation !== this.generation) return;
       this.pending = undefined;
-      this.text = '';
+      if (this.text === text) this.text = '';
       await this.record('engagement');
       await this.history();
     } catch (error) {
-      if (generation === this.generation)
-        this.error =
-          error instanceof Error
-            ? error.message
-            : 'Unable to send. Retry your message.';
+      if (generation === this.generation) {
+        if (
+          error instanceof SupportRequestError &&
+          [404, 410].includes(error.status)
+        )
+          this.forgetConversation();
+        else
+          this.error =
+            error instanceof Error
+              ? error.message
+              : 'Unable to send. Retry your message.';
+      }
     } finally {
       if (generation === this.generation) this.busy = false;
     }

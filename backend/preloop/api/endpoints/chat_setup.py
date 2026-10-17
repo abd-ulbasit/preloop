@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -13,7 +14,7 @@ from uuid import UUID
 
 import httpx
 from anyio import from_thread
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -242,16 +243,23 @@ def finish_setup(
     user: models.User = Depends(manager),
 ) -> dict[str, Any]:
     previous = crud_chat.drafts.get(db, draft_id, account_id=str(user.account_id))
+    existing = None
     if previous and previous.user_id == user.id and previous.consumed_at:
         existing = crud_chat.connections.get(
             db, draft_id, account_id=str(user.account_id)
         )
-        if existing:
+        if existing and existing.provider != "discord":
             return public_connection(db, existing, user)
-    draft = get_draft(db, draft_id, user)
-    state = json.loads(decrypt_value(draft.state_encrypted))
-    config = draft_config(draft.provider, state, payload.workspace_id)
-    # Revalidate the token and workspace immediately before persistence/installation.
+    if existing:
+        if existing.workspace_id != payload.workspace_id:
+            raise HTTPException(409, "Retry installation for the original workspace")
+        provider = existing.provider
+        state = json.loads(decrypt_value(existing.credentials_encrypted))
+    else:
+        draft = get_draft(db, draft_id, user)
+        provider = draft.provider
+        state = json.loads(decrypt_value(draft.state_encrypted))
+    config = draft_config(provider, state, payload.workspace_id)
     try:
         info = from_thread.run(discover, config)
         if info["bot_user_id"] != state.get("bot_user_id"):
@@ -260,25 +268,13 @@ def finish_setup(
             raise ChatProviderError(
                 "Add the bot to the selected workspace, then refresh"
             )
-        if draft.provider == "slack" and not state.get("verification_secret"):
+        if provider == "slack" and not state.get("verification_secret"):
             raise ChatProviderError(
                 "Enter the Signing Secret from Slack → Basic Information → App Credentials"
             )
-        if draft.provider == "discord":
+        if provider == "discord":
             state["verification_secret"] = info["verification_secret"]
-            draft = crud_chat.drafts.update(
-                db,
-                db_obj=draft,
-                obj_in={"state_encrypted": encrypt_value(json.dumps(state))},
-            )
-            config = draft_config(draft.provider, state, payload.workspace_id)
-            from_thread.run(
-                _install_discord,
-                config,
-                info["application_id"],
-                callback(draft.id),
-                payload.replace_callback,
-            )
+            config = draft_config(provider, state, payload.workspace_id)
     except ChatProviderError as exc:
         raise HTTPException(422, str(exc)) from exc
     credentials = {
@@ -294,22 +290,49 @@ def finish_setup(
         if key in state
     }
     try:
-        connection = crud_chat.complete_setup(
-            db,
-            draft.id,
-            user.account_id,
-            user.id,
-            {
-                "provider": draft.provider,
-                "workspace_id": payload.workspace_id,
-                "name": payload.name.strip()
-                or info["name"]
-                or f"Preloop {draft.provider.title()} bot",
-                "credentials_encrypted": encrypt_value(json.dumps(credentials)),
-            },
-        )
+        if existing:
+            connection = crud_chat.connections.update(
+                db,
+                db_obj=existing,
+                obj_in={
+                    "credentials_encrypted": encrypt_value(json.dumps(credentials))
+                },
+            )
+        else:
+            # The callback target is durable before ANY remote installation
+            # mutation. A failed/expired consume can never orphan a callback.
+            connection = crud_chat.complete_setup(
+                db,
+                draft_id,
+                user.account_id,
+                user.id,
+                {
+                    "provider": provider,
+                    "workspace_id": payload.workspace_id,
+                    "name": payload.name.strip()
+                    or info["name"]
+                    or f"Preloop {provider.title()} bot",
+                    "credentials_encrypted": encrypt_value(json.dumps(credentials)),
+                },
+            )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    if provider == "discord":
+        try:
+            from_thread.run(
+                _install_discord,
+                config,
+                info["application_id"],
+                callback(draft_id),
+                payload.replace_callback,
+            )
+        except ChatProviderError as exc:
+            # Retain the durable target; Finish retries the idempotent install
+            # even though the draft has already been consumed.
+            raise HTTPException(
+                422,
+                "Connection saved; retry Finish to complete installation. " + str(exc),
+            ) from exc
     return public_connection(db, connection, user)
 
 
@@ -321,11 +344,27 @@ async def _install_discord(
 
 @router.post("/slack/oauth")
 def slack_oauth(
-    db: Session = Depends(get_db_session), user: models.User = Depends(manager)
+    response: Response,
+    db: Session = Depends(get_db_session),
+    user: models.User = Depends(manager),
 ) -> dict[str, str]:
     if not oauth_configured():
         raise HTTPException(404, "Slack OAuth is not configured")
-    state = secrets.token_urlsafe(32)
+    browser_proof = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    signature = hmac.new(
+        browser_proof.encode(), nonce.encode(), hashlib.sha256
+    ).hexdigest()
+    state = nonce + "." + signature
+    response.set_cookie(
+        "__Host-preloop_slack_oauth",
+        browser_proof,
+        max_age=900,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
     draft = crud_chat.drafts.create(
         db,
         obj_in={
@@ -361,10 +400,15 @@ async def _exchange_slack(code: str) -> dict[str, Any]:
 
 @router.get("/slack/callback", response_class=HTMLResponse)
 def slack_callback(
-    state: str, code: str, db: Session = Depends(get_db_session)
+    request: Request, state: str, code: str, db: Session = Depends(get_db_session)
 ) -> HTMLResponse:
     if not oauth_configured() or len(state) > 256 or len(code) > 2048:
         raise HTTPException(400, "Invalid authorization")
+    proof = request.cookies.get("__Host-preloop_slack_oauth", "")
+    nonce, separator, signature = state.rpartition(".")
+    expected = hmac.new(proof.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+    if not proof or not separator or not hmac.compare_digest(signature, expected):
+        raise HTTPException(403, "Return to the browser that started Slack setup")
     draft = crud_chat.oauth_draft(db, hashlib.sha256(state.encode()).hexdigest())
     if draft is None:
         raise HTTPException(400, "Authorization expired or already used")
@@ -392,10 +436,18 @@ def slack_callback(
         )
     except (ChatProviderError, httpx.HTTPError, ValueError) as exc:
         raise HTTPException(422, "Slack authorization failed; restart setup") from exc
-    return HTMLResponse(
+    response = HTMLResponse(
         "<p>Slack authorized. Return to Chat connections and refresh setup to confirm the workspace.</p>",
         headers={
             "Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'",
         },
     )
+    response.delete_cookie(
+        "__Host-preloop_slack_oauth",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return response

@@ -40,6 +40,29 @@ class CRUDChat:
     drafts = CRUDBase(models.ChatSetupDraft)
     listeners = CRUDBase(models.ChatListener)
 
+    def connection_states(
+        self, db: Session, connection_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> dict[uuid.UUID, tuple[models.ChatIdentity | None, models.ChatListener | None]]:
+        """Batch the identity and listener reads for one account-scoped page."""
+        identities = {
+            row.connection_id: row
+            for row in db.query(models.ChatIdentity)
+            .filter(
+                models.ChatIdentity.connection_id.in_(connection_ids),
+                models.ChatIdentity.user_id == user_id,
+            )
+            .all()
+        }
+        listeners = {
+            row.connection_id: row
+            for row in db.query(models.ChatListener)
+            .filter(models.ChatListener.connection_id.in_(connection_ids))
+            .all()
+        }
+        return {
+            key: (identities.get(key), listeners.get(key)) for key in connection_ids
+        }
+
     def purge_expired_drafts(self, db: Session) -> None:
         db.query(models.ChatSetupDraft).filter(
             models.ChatSetupDraft.expires_at < datetime.utcnow()
