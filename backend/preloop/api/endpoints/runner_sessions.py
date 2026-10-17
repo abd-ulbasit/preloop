@@ -14,6 +14,8 @@ audited the request.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -134,6 +136,7 @@ SessionWorkspace = Annotated[
 
 
 class RunnerSessionStartRequest(BaseModel):
+    consent_request_id: Optional[UUID] = None
     harness: HarnessId
     model: Optional[str] = Field(None, max_length=128)
     workspace: SessionWorkspace
@@ -872,6 +875,8 @@ def _prepare_start(
             "This runner already has the maximum number of remote sessions.",
         )
 
+    _require_start_consent(db, current_user, runner, body, audit)
+
     remote_session_id = str(uuid4())
     credential: Optional[Dict[str, Any]] = None
     if isinstance(workspace, TrackerCheckoutWorkspace):
@@ -899,6 +904,11 @@ def _prepare_start(
         "runner_session.start_requested",
         resource_id=remote_session_id,
         remote_session_id=remote_session_id,
+        consent_decision=(
+            "owner"
+            if str(runner.registered_by_user_id) == str(current_user.id)
+            else "approved"
+        ),
     )
     plan = SessionStartPlan(
         runner=runner,
@@ -913,6 +923,97 @@ def _prepare_start(
         limits=limits,
     )
     return service, plan, audit
+
+
+def _require_start_consent(
+    db: Session,
+    current_user: Any,
+    runner: Any,
+    body: RunnerSessionStartRequest,
+    audit: _AuditContext,
+) -> None:
+    """Gate a new session before issuing credentials or contacting the runner."""
+    owner_id = getattr(runner, "registered_by_user_id", None)
+    if owner_id is not None and str(owner_id) == str(current_user.id):
+        return
+    if owner_id is None:
+        raise audit.reject(
+            403, "runner_owner_required", "A runner owner must approve new sessions."
+        )
+    if body.consent_request_id is None:
+        raise audit.reject(
+            422,
+            "consent_request_id_required",
+            "A consent_request_id is required to request runner owner approval.",
+        )
+    from preloop.models.crud.owner_consent import consume
+    from preloop.services.owner_consent import (
+        check_owner_consent,
+        notify_owner_consent,
+        require_owner_consent_result,
+    )
+
+    intent = {
+        "runner_id": str(runner.id),
+        "requester_id": str(current_user.id),
+        "account_id": str(current_user.account_id),
+        "request": body.model_dump(mode="json"),
+    }
+    request_key = hashlib.sha256(
+        json.dumps(intent, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    try:
+        # This route already owns a worker thread. A bridge to an async gate
+        # which offloads DB work would wait for a second worker token and
+        # deadlock when every token is occupied by a starting session.
+        try:
+            consent = check_owner_consent(
+                db,
+                account_id=runner.account_id,
+                owner_user_id=owner_id,
+                requester_user_id=current_user.id,
+                subject_id=str(runner.id),
+                action="runner_session_start",
+                request_key=request_key,
+                managed_agent_id=None,
+                details={
+                    "runner_name": runner.name,
+                    "harness": body.harness,
+                    "workspace_label": audit.workspace_label,
+                    "consent_request_id": str(body.consent_request_id),
+                },
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if consent.created:
+
+            async def notify() -> None:
+                try:
+                    with anyio.fail_after(25):
+                        await notify_owner_consent(consent.approval_id)
+                except Exception:
+                    logger.exception(
+                        "Runner owner notification pending retry for %s",
+                        consent.approval_id,
+                    )
+
+            from_thread.run(notify)
+        consumed = consent.status == "approved" and consume(
+            db, approval_id=consent.approval_id
+        )
+        approval_id = require_owner_consent_result(
+            consent, action="runner_session_start", consumed=consumed
+        )
+    except HTTPException as exc:
+        audit.log(
+            "runner_session.consent",
+            status_value="pending" if exc.status_code == 409 else "denied",
+            decision="waiting" if exc.status_code == 409 else "denied",
+        )
+        raise
+    audit.log(
+        "runner_session.consent", decision="approved", approval_id=str(approval_id)
+    )
 
 
 @router.post(

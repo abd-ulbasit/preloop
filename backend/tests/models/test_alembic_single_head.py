@@ -423,4 +423,11 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261023_weekly_value_cache",
         "20261024_weekly_report_merge",
     }
-    assert script.get_heads() == ["20261025_weekly_value_merge"]
+    owner_consent = script.get_revision("20261022_owner_consent")
+    assert owner_consent.down_revision == "20261024_weekly_report_merge"
+    consent_value_merge = script.get_revision("20261026_value_consent_merge")
+    assert set(consent_value_merge.down_revision) == {
+        "20261025_weekly_value_merge",
+        "20261022_owner_consent",
+    }
+    assert script.get_heads() == ["20261026_value_consent_merge"]

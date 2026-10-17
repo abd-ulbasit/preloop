@@ -543,8 +543,20 @@ def test_factory_keeps_hosted_executor_without_pool() -> None:
     assert isinstance(executor, CodexAgent)
 
 
+@pytest.mark.parametrize(
+    ("consent", "has_owner", "uses_runner"),
+    [
+        ("always", False, True),
+        ("ask_me", True, True),
+        ("ask_me", False, False),
+        ("never", True, False),
+    ],
+)
 def test_factory_uses_remote_runner_when_online_private_runner(
     monkeypatch: pytest.MonkeyPatch,
+    consent: str,
+    has_owner: bool,
+    uses_runner: bool,
 ) -> None:
     from preloop.services.runner_service import AUTO_RUNNER_POOL
 
@@ -562,6 +574,8 @@ def test_factory_uses_remote_runner_when_online_private_runner(
                 free_slots=2,
                 capabilities={"docker_available": True},
                 accept_untagged=True,
+                flow_execution_consent=consent,
+                registered_by_user_id=uuid4() if has_owner else None,
             )
         ],
     )
@@ -572,8 +586,11 @@ def test_factory_uses_remote_runner_when_online_private_runner(
         db=MagicMock(),
         execution_context={},
     )
-    assert isinstance(executor, RemoteRunnerExecutor)
-    assert executor.pool == AUTO_RUNNER_POOL
+    if uses_runner:
+        assert isinstance(executor, RemoteRunnerExecutor)
+        assert executor.pool == AUTO_RUNNER_POOL
+    else:
+        assert isinstance(executor, CodexAgent)
 
 
 def test_factory_keeps_hosted_for_server_sentinel() -> None:
