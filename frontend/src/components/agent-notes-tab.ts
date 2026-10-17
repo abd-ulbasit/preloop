@@ -22,15 +22,17 @@ import '@shoelace-style/shoelace/dist/components/select/select.js';
 import {
   cancelOperatorNote,
   getAccountRuntimeSessions,
+  listOperatorNoteSessionTargets,
   listOperatorNotesPage,
 } from '../api';
-import type { OperatorNote, RuntimeSessionSummary } from '../types';
+import type { OperatorNote, OperatorNoteSessionTarget } from '../types';
 import {
   noteAuthorIcon,
   noteAuthorKind,
   noteAuthorName,
 } from '../utils/note-author';
 import {
+  type NoteSessionRow,
   noteSessionLabel,
   sessionLogHref,
   sessionName,
@@ -73,9 +75,9 @@ export class AgentNotesTab extends LitElement {
   @state() private error: string | null = null;
   @state() private expanded = new Set<string>();
   /** Live sessions, the ones a note can be aimed at now. */
-  @state() private liveSessions: RuntimeSessionSummary[] = [];
+  @state() private liveSessions: OperatorNoteSessionTarget[] = [];
   /** Every session read, by id, to name the session on each note. */
-  @state() private sessionsById = new Map<string, RuntimeSessionSummary>();
+  @state() private sessionsById = new Map<string, NoteSessionRow>();
   /** `auto`, `next`, a live session id, or '' while the operator must pick. */
   @state() private target = TARGET_AUTO;
   /** `all`, or the session id the list is narrowed to. */
@@ -309,11 +311,7 @@ export class AgentNotesTab extends LitElement {
     const agentId = this.agentId;
     if (!agentId) return;
     const [live, recent] = await Promise.allSettled([
-      getAccountRuntimeSessions({
-        agent: agentId,
-        status: 'active',
-        limit: SESSIONS_FOR_LABELS,
-      }),
+      listOperatorNoteSessionTargets(agentId),
       getAccountRuntimeSessions({
         agent: agentId,
         status: 'all',
@@ -321,10 +319,11 @@ export class AgentNotesTab extends LitElement {
       }),
     ]);
     if (agentId !== this.agentId) return;
-    const liveRows = live.status === 'fulfilled' ? live.value.items || [] : [];
+    const liveRows =
+      live.status === 'fulfilled' ? live.value.sessions || [] : [];
     const recentRows =
       recent.status === 'fulfilled' ? recent.value.items || [] : [];
-    const byId = new Map<string, RuntimeSessionSummary>();
+    const byId = new Map<string, NoteSessionRow>();
     for (const row of [...recentRows, ...liveRows]) byId.set(row.id, row);
     this.sessionsById = byId;
     this.liveSessions = liveRows;

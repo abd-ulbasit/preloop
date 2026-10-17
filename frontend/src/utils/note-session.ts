@@ -10,10 +10,8 @@
 import type { OperatorNote, RuntimeSessionSummary } from '../types';
 
 /** The fields of a session row a label needs. */
-export type NoteSessionRow = Pick<
-  RuntimeSessionSummary,
-  'id' | 'alias' | 'title' | 'started_at'
-> &
+export type NoteSessionRow = Pick<RuntimeSessionSummary, 'id' | 'started_at'> &
+  Partial<Pick<RuntimeSessionSummary, 'alias' | 'title'>> &
   Partial<
     Pick<
       RuntimeSessionSummary,

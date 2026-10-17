@@ -37,6 +37,7 @@ import type {
   OperatorNote,
   OperatorNoteCreateRequest,
   OperatorNoteList,
+  OperatorNoteSessionTargets,
   AgentControlVoiceTranscriptRequest,
   ManagedAgentDetailResponse,
   ManagedAgentSummary,
@@ -2716,6 +2717,26 @@ export async function listOperatorNotesPage(params: {
   const payload: OperatorNoteList = await response.json();
   const notes = payload.notes || [];
   return { notes, total: payload.total ?? notes.length };
+}
+
+/**
+ * The agent's live conversations a note can be aimed at, without the
+ * enrollment placeholders the session list also carries.
+ */
+export async function listOperatorNoteSessionTargets(
+  agentId: string
+): Promise<OperatorNoteSessionTargets> {
+  const query = new URLSearchParams({ agent_id: agentId, limit: '100' });
+  const response = await fetchWithAuth(
+    `/api/v1/operator-notes/session-targets?${query.toString()}`
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(errorData, 'Failed to load the live sessions')
+    );
+  }
+  return response.json();
 }
 
 /** Withdraw a note that has not been delivered yet. */

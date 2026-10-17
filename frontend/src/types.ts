@@ -888,6 +888,20 @@ export interface OperatorNoteCreateRequest {
   expires_in_seconds?: number;
 }
 
+/** A live conversation a note can be aimed at. */
+export interface OperatorNoteSessionTarget {
+  id: string;
+  alias?: string | null;
+  session_source_type: string;
+  started_at: string;
+  session_reference?: string | null;
+}
+
+export interface OperatorNoteSessionTargets {
+  sessions: OperatorNoteSessionTarget[];
+  total: number;
+}
+
 export interface OperatorNoteList {
   notes: OperatorNote[];
   /** Every note matching the filter, across pages. */

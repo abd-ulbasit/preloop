@@ -26,7 +26,10 @@ function noteCalls(fetchStub: sinon.SinonStub): string[] {
   return fetchStub
     .getCalls()
     .map((call) => String(call.args[0]))
-    .filter((url) => url.includes('/operator-notes'));
+    .filter(
+      (url) =>
+        url.includes('/operator-notes') && !url.includes('/session-targets')
+    );
 }
 
 describe('agent-notes-tab', () => {
@@ -132,7 +135,6 @@ describe('agent-notes-tab', () => {
       id,
       alias,
       session_source_type: 'claude_code',
-      runtime_principal_name: 'Claude Code',
       started_at: '2026-10-18T08:00:00Z',
       ended_at: null,
     });
@@ -140,6 +142,8 @@ describe('agent-notes-tab', () => {
     function stubSessions(liveRows: unknown[], noteRows: unknown[]) {
       fetchStub.callsFake(async (input: RequestInfo | URL) => {
         const url = String(input);
+        if (url.includes('/operator-notes/session-targets'))
+          return jsonResponse({ sessions: liveRows, total: liveRows.length });
         if (url.includes('/runtime-sessions'))
           return jsonResponse({ items: liveRows });
         if (url.includes('/operator-notes')) {
@@ -163,7 +167,7 @@ describe('agent-notes-tab', () => {
       await waitUntil(() =>
         fetchStub
           .getCalls()
-          .some((call) => String(call.args[0]).includes('/runtime-sessions'))
+          .some((call) => String(call.args[0]).includes('/session-targets'))
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
       await el.updateComplete;
@@ -182,7 +186,7 @@ describe('agent-notes-tab', () => {
       );
       await settle(el);
       expect(String(fetchStub.getCalls().map((c) => c.args[0]))).to.contain(
-        'agent=agent-1'
+        'session-targets?agent_id=agent-1'
       );
       expect(target(el).value).to.equal('s-1');
       const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
@@ -204,7 +208,7 @@ describe('agent-notes-tab', () => {
       const options = [...target(el).querySelectorAll('sl-option')].map(
         (option) => option.textContent!.trim()
       );
-      expect(options[0]).to.contain('fixer · Claude Code · started');
+      expect(options[0]).to.contain('fixer · claude code · started');
       expect(options).to.include('Next session');
       // No session picked: the box cannot send yet.
       const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
