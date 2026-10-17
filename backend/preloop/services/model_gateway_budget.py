@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from preloop.config import settings
+from preloop.services.instance_service import is_hosted_instance
 from preloop.models.crud import (
     crud_account,
     crud_ai_model,
@@ -205,6 +206,7 @@ class ModelGatewayBudgetService:
         )
         if (
             not hard_limit_exceeded
+            and is_hosted_instance()
             and subscription
             and is_live_trial(subscription)
             and self._is_built_in_hosted_model(ai_model)
@@ -235,6 +237,7 @@ class ModelGatewayBudgetService:
         elif (
             not hard_limit_exceeded
             and subscription is None
+            and is_hosted_instance()
             and settings.billing_enforce_entitlements
             and self._is_built_in_hosted_model(ai_model)
         ):

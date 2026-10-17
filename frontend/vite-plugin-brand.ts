@@ -994,6 +994,11 @@ async function generateSlottedContentForRoute(
   contentBasePath: string,
   blogPosts: BlogPost[] = []
 ): Promise<string> {
+  // Login-first editions must not flash prerendered marketing before routing.
+  if (config.edition === 'selfhosted' && (route === '/' || route === '/pricing')) {
+    return '';
+  }
+
   // Safe accessors with defaults
   const hero = config.landing?.hero || {};
   const meta = config.landing?.meta || {};
