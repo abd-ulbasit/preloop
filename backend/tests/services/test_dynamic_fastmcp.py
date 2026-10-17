@@ -2160,8 +2160,10 @@ class TestCreateProxiedToolWrapper:
         assert "safe_param" in parameters
         assert "class" not in parameters
 
-    async def test_wrapper_skips_reserved_local_params(self, dynamic_mcp, user_context):
-        """Reserved generated-body names, including duplicate ctx, are omitted."""
+    async def test_wrapper_aliases_reserved_local_params(
+        self, dynamic_mcp, user_context
+    ):
+        """Reserved generated-body names use aliases without shadowing context."""
         wrapper = dynamic_mcp._create_proxied_tool_wrapper(
             tool_name="safe_tool",
             account_id=user_context.account_id,
@@ -2192,7 +2194,7 @@ class TestCreateProxiedToolWrapper:
         assert "param_names" not in parameter_names
         assert parameter_names.count("ctx") == 1
 
-    async def test_wrapper_skips_exec_namespace_tool_name_and_param_names(
+    async def test_wrapper_aliases_exec_namespace_tool_name_and_param_names(
         self, dynamic_mcp, user_context, monkeypatch
     ):
         """A tool_name or param_names property must not shadow exec globals.
@@ -2360,10 +2362,13 @@ class TestCreateProxiedToolWrapper:
         assert original_first == {"type_": "real"}
         assert alias_first == {"type_": "real"}
 
-    async def test_call_tool_forwards_original_type_key(
-        self, dynamic_mcp, user_context, monkeypatch
+    @pytest.mark.parametrize(
+        "property_name", ["type", "value", "arguments", "ctx", "tool_name"]
+    )
+    async def test_call_tool_forwards_original_property_key(
+        self, dynamic_mcp, user_context, monkeypatch, property_name
     ):
-        """Client key ``type`` reaches upstream as ``type`` via call_tool."""
+        """Advertised property keys reach upstream unchanged via call_tool."""
         from fastmcp.tools.tool import ToolResult
 
         dynamic_mcp.set_user_context_provider(lambda: user_context)
@@ -2403,13 +2408,6 @@ class TestCreateProxiedToolWrapper:
             AsyncMock(return_value=("allow", None, None)),
         )
         monkeypatch.setattr(
-            dynamic_mcp,
-            "list_tools",
-            AsyncMock(
-                return_value=[Tool(name="safe_tool", description="Safe", parameters={})]
-            ),
-        )
-        monkeypatch.setattr(
             "preloop.services.approval_helper.require_approval",
             AsyncMock(return_value=(True, None)),
         )
@@ -2435,16 +2433,38 @@ class TestCreateProxiedToolWrapper:
             AsyncMock(return_value=None),
         )
 
-        # Bind the wrapper after get_db / pool patches so exec namespace sees them.
-        wrapper, internal_name = self._aliased_type_wrapper(dynamic_mcp, user_context)
-        dynamic_mcp.tool()(wrapper)
-        dynamic_mcp._registered_proxied_tools.add(internal_name)
-        dynamic_mcp._proxied_tool_servers["safe_tool"] = "server-123"
+        # Discover and register the real wrapper, then invoke its advertised schema.
+        schema = {
+            "type": "object",
+            "properties": {
+                property_name: {"type": "string"},
+                "record_id": {"type": "string"},
+            },
+            "required": [property_name, "record_id"],
+        }
+        server = MagicMock(id="server-123", name="upstream", tool_prefix=None)
+        discovered = MagicMock(name="placeholder")
+        discovered.name = "safe_tool"
+        discovered.description = "Update a record"
+        discovered.input_schema = schema
+        monkeypatch.setattr(
+            "preloop.services.mcp_tool_discovery._get_proxied_tools_sync",
+            lambda *args: [(server, discovered)],
+        )
+        tools = await dynamic_mcp.list_tools()
+        advertised = next(tool for tool in tools if tool.name == "safe_tool")
+        assert advertised.parameters == schema
+        assert set(advertised.parameters["required"]) == {property_name, "record_id"}
 
-        result = await dynamic_mcp.call_tool("safe_tool", {"type": "issue"})
+        result = await dynamic_mcp.call_tool(
+            "safe_tool", {property_name: "issue", "record_id": "record-1"}
+        )
 
         assert captured_upstream["name"] == "safe_tool"
-        assert captured_upstream["arguments"] == {"type": "issue"}
+        assert captured_upstream["arguments"] == {
+            property_name: "issue",
+            "record_id": "record-1",
+        }
         assert isinstance(result, ToolResult)
         assert "ok" in result.content[0].text
         assert "missing" not in result.content[0].text.lower()

@@ -1182,8 +1182,6 @@ _RESERVED_WRAPPER_LOCALS = (
     | frozenset(_WRAPPER_BODY_BUILTINS)
 )
 
-_WRAPPER_BODY_BUILTIN_SET = frozenset(_WRAPPER_BODY_BUILTINS)
-
 
 def _is_safe_tool_identifier(name: str) -> bool:
     """Return whether *name* is safe as a proxied tool name in ``internal_name``.
@@ -1223,7 +1221,7 @@ def _unused_wrapper_alias(base: str, taken: set[str]) -> str:
     """Return a unique identifier derived from *base* that is safe to interpolate.
 
     Args:
-        base: Original upstream parameter name (a wrapper-body builtin).
+        base: Original upstream parameter name (a reserved wrapper identifier).
         taken: Names already used by the schema or earlier aliases.
 
     Returns:
@@ -1844,7 +1842,7 @@ class DynamicFastMCP(FastMCP):
         required_params = set(input_schema.get("required", []))
 
         # Build parameter list dynamically. ``param_names`` stores
-        # ``(alias, original)`` so builtins can be interpolated as aliases
+        # ``(alias, original)`` so reserved names can be interpolated as aliases
         # while ``arguments[original]`` still forwards the upstream key.
         req_params = []
         opt_params = []
@@ -1859,11 +1857,11 @@ class DynamicFastMCP(FastMCP):
                     tool_name,
                 )
                 continue
-            if param_name in _WRAPPER_BODY_BUILTIN_SET:
+            if param_name in _RESERVED_WRAPPER_LOCALS:
                 alias = _unused_wrapper_alias(param_name, taken_names)
                 taken_names.add(alias)
                 logger.info(
-                    "Aliasing builtin-colliding parameter %r to %r on tool %r",
+                    "Aliasing wrapper-colliding parameter %r to %r on tool %r",
                     param_name,
                     alias,
                     tool_name,
