@@ -94,6 +94,16 @@ def test_legacy_enrollment_config_is_used_without_observed_alias_fallback() -> N
             == []
         )
 
+        # Historical model ownership is not proof of the current selection.
+        model.meta_data["managed_agent_id"] = agent.id
+        crud.crud_managed_agent_enrollment._to_summary.return_value = {
+            "managed_config": {"model": "different-model"}
+        }
+        assert (
+            configured_model_consumers(MagicMock(), user=user, model_id=model_id).agents
+            == []
+        )
+
 
 def test_hidden_resources_are_omitted_and_truncation_is_reported() -> None:
     user = models.User(account_id=uuid4(), is_superuser=True)

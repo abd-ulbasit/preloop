@@ -44,8 +44,10 @@ def configured_model_consumers(
     """
     # Reuse the agent API's compatibility parser for older CLI enrollments.
     from preloop.api.endpoints.account import (
+        _ai_model_meta_lookup,
         _managed_agent_configured_model_alias,
         _managed_agent_configured_models_from_cache,
+        _normalize_gateway_model_alias,
     )
 
     account_id = str(user.account_id)
@@ -99,11 +101,21 @@ def configured_model_consumers(
                 and not row.config_key.startswith("gateway.autoregister.")
             }
             if not rows and agent_id in legacy_config:
+                configured_alias = _managed_agent_configured_model_alias(
+                    legacy_config[agent_id]
+                )
                 legacy_rows = _managed_agent_configured_models_from_cache(
                     agent_id=agent_id,
                     binding_rows=[],
                     latest_enrollment=legacy_config[agent_id],
-                    account_models=account_models,
+                    account_models=[
+                        model
+                        for model in account_models
+                        if _normalize_gateway_model_alias(
+                            _ai_model_meta_lookup(model, "gateway", "model_alias")
+                        )
+                        == configured_alias
+                    ],
                 )
                 configured_ids = {
                     str(row.ai_model_id) for row in legacy_rows if row.ai_model_id
