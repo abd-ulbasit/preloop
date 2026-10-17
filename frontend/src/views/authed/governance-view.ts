@@ -15,8 +15,10 @@ import {
 import type { ResourceAction } from '../../components/resource-actions';
 import {
   getFeatures,
+  getGovernanceReviewSettings,
   getUserProfile,
   hasPermission,
+  updateGovernanceReviewSettings,
   type UserPermissions,
 } from '../../api';
 import { hasCapability } from '../../capabilities';
@@ -32,10 +34,14 @@ import {
   getGovernanceFindings,
   getGovernanceRuns,
   restoreGovernanceFinding,
+  updateWeeklyReportPreferences,
   type DismissReason,
   type GovernanceFinding,
   type GovernanceRun,
+  type SpendEvidence,
+  type ToolEvidence,
 } from '../../governance-api';
+import { LAST_ON_MODE_KEY } from '../../components/governance-policy-panel';
 
 const REASONS: Record<DismissReason, string> = {
   expected: 'Expected',
@@ -75,6 +81,39 @@ const EVIDENCE_SOURCES: Record<string, string> = {
   policy_notice_hit: 'Policy rule match',
   spend_outlier_finding: 'Spend outlier',
 };
+/** `section` deep links from the weekly email, by finding category. */
+export const SECTIONS: Record<string, string> = {
+  spend_outlier: 'Spend spikes',
+  tool_hygiene: 'Tool hygiene',
+  first_seen: 'First seen this week',
+};
+const money = (value: number) => formatUsdExact(value);
+const tokens = (value: number) =>
+  value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `${(value / 1_000).toFixed(1)}K`
+      : String(Math.round(value));
+const weekday = (value: string) =>
+  new Date(value).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
+/** A session named by its title, else its agent and start time. */
+export function sessionName(row: {
+  title?: string | null;
+  agent_name?: string | null;
+  started_at?: string | null;
+  runtime_session_id: string;
+}): string {
+  if (row.title) return row.title;
+  const when = row.started_at ? formatLocalDateTime(row.started_at) : '';
+  if (row.agent_name)
+    return when ? `${row.agent_name}, ${when}` : row.agent_name;
+  return `Session ${row.runtime_session_id.slice(0, 8)}`;
+}
 const evidenceSource = (value: string) =>
   EVIDENCE_SOURCES[value] ?? humanize(value);
 const day = (value: string) =>
@@ -230,6 +269,47 @@ export class GovernanceView extends LitElement {
         padding: var(--sl-spacing-medium) 0;
         border-bottom: 1px solid var(--console-hairline);
       }
+      .notice {
+        padding: var(--sl-spacing-medium) var(--sl-spacing-large);
+        margin: var(--sl-spacing-medium) 0;
+        background: var(--console-surface);
+        border-radius: var(--sl-border-radius-large);
+      }
+      .notice p {
+        margin: 0 0 var(--sl-spacing-small);
+      }
+      .section-filter {
+        color: var(--console-meta-color);
+        font-size: var(--console-text-meta);
+      }
+      .spend-chart {
+        width: 100%;
+        max-width: 640px;
+        height: auto;
+        display: block;
+      }
+      .spend-chart .bar {
+        fill: color-mix(in srgb, var(--sl-color-neutral-500) 45%, transparent);
+      }
+      .spend-chart .bar.outlier {
+        fill: var(--sl-color-warning-500);
+      }
+      .spend-chart .baseline {
+        stroke: var(--console-meta-color);
+        stroke-dasharray: 4 4;
+      }
+      .spend-chart text {
+        fill: var(--console-meta-color);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .spend-chart text.value {
+        fill: var(--sl-color-neutral-900);
+      }
+      .lead {
+        font-size: var(--console-text-card-title);
+        margin: var(--sl-spacing-small) 0 var(--sl-spacing-medium);
+      }
       .detail-actions {
         display: flex;
         gap: var(--sl-spacing-small);
@@ -273,10 +353,69 @@ export class GovernanceView extends LitElement {
   @state() private dismissedBudgetBanner = false;
   private generation = 0;
   @state() private dismissedOpen = false;
+  /** A finding category from a `section` deep link, or '' for all. */
+  @state() private section = '';
+  /** The review mode, null when unreadable (no view_policies, old server). */
+  @state() private reviewMode: string | null = null;
+  @state() private unsubscribe: '' | 'ask' | 'done' = '';
+  private scrollToSection = false;
 
   connectedCallback(): void {
     super.connectedCallback();
+    this.readQuery();
     void this.load();
+  }
+  /** Email links carry the run, the section and the unsubscribe intent. */
+  private readQuery(): void {
+    const params = new URLSearchParams(window.location.search);
+    this.runId = params.get('run_id') ?? this.runId;
+    const section = params.get('section') ?? '';
+    this.section = section in SECTIONS ? section : '';
+    this.scrollToSection = !!section;
+    if (params.get('unsubscribe') === 'weekly-report') this.unsubscribe = 'ask';
+  }
+  protected updated(): void {
+    if (!this.scrollToSection || this.loading) return;
+    this.scrollToSection = false;
+    this.renderRoot
+      .querySelector('[aria-label="Findings"]')
+      ?.scrollIntoView({ block: 'start' });
+  }
+  private async stopEmails(): Promise<void> {
+    this.busy = true;
+    try {
+      await updateWeeklyReportPreferences({ user_enabled: false });
+      this.unsubscribe = 'done';
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Could not stop the emails.',
+        'danger'
+      );
+    } finally {
+      this.busy = false;
+    }
+  }
+  private async turnReviewOn(): Promise<void> {
+    this.busy = true;
+    try {
+      const settings = await updateGovernanceReviewSettings({
+        mode:
+          localStorage.getItem(LAST_ON_MODE_KEY) === 'on_own_model'
+            ? 'on_own_model'
+            : 'on_platform',
+      });
+      this.reviewMode = settings.mode;
+      showToast('The AI usage policy review is on.', 'success');
+    } catch (error) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not turn the review on.',
+        'danger'
+      );
+    } finally {
+      this.busy = false;
+    }
   }
   disconnectedCallback(): void {
     this.generation++;
@@ -309,6 +448,12 @@ export class GovernanceView extends LitElement {
       this.enabled = hasCapability(features.features, 'governance_review');
       this.permissions = profile.permissions;
       if (!this.enabled) return;
+      if (hasPermission(this.permissions, 'view_policies'))
+        getGovernanceReviewSettings()
+          .then((settings) => {
+            if (generation === this.generation) this.reviewMode = settings.mode;
+          })
+          .catch(() => undefined);
       if (!hasPermission(this.permissions, 'view_policies') && !this.canCost)
         throw new Error(
           'Governance review requires View policies or View cost permission.'
@@ -352,6 +497,7 @@ export class GovernanceView extends LitElement {
       severity: this.severity,
       user_id: this.userId,
       run_id: this.runId,
+      category: this.section || undefined,
       dismissed,
       offset: dismissed ? this.dismissedOffset : this.offset,
     };
@@ -428,6 +574,60 @@ export class GovernanceView extends LitElement {
       })
     );
   }
+  /** Unsubscribe confirmation and the review-off state, above everything. */
+  private notices() {
+    const unsubscribe =
+      this.unsubscribe === 'ask'
+        ? html`<div class="notice" data-unsubscribe>
+            <p>
+              <strong>Stop the weekly report email?</strong> You can turn it
+              back on in Policies, AI usage policy.
+            </p>
+            <div class="detail-actions">
+              <sl-button
+                variant="primary"
+                size="small"
+                ?loading=${this.busy}
+                @click=${() => void this.stopEmails()}
+                >Stop my weekly emails</sl-button
+              ><sl-button size="small" @click=${() => (this.unsubscribe = '')}
+                >Keep them</sl-button
+              >
+            </div>
+          </div>`
+        : this.unsubscribe === 'done'
+          ? html`<div class="notice" data-unsubscribed role="status">
+              <p>
+                You will no longer get the weekly report email. The review
+                itself keeps running and stays here.
+              </p>
+            </div>`
+          : nothing;
+    const off =
+      this.reviewMode === 'off'
+        ? html`<div class="notice" data-review-off>
+            <p>
+              <strong>The AI usage policy review is off.</strong> No sessions
+              are read, no review runs and nothing is spent. Findings below are
+              from earlier weeks.
+            </p>
+            ${
+              this.canManage
+                ? html`<sl-button
+                    variant="primary"
+                    size="small"
+                    ?loading=${this.busy}
+                    @click=${() => void this.turnReviewOn()}
+                    >Turn it on</sl-button
+                  >`
+                : html`<p class="muted">
+                    Ask someone who manages policies to turn it on.
+                  </p>`
+            }
+          </div>`
+        : nothing;
+    return html`${unsubscribe}${off}`;
+  }
   private coverage(run?: GovernanceRun) {
     if (!run)
       return html`<p class="empty">
@@ -487,10 +687,12 @@ export class GovernanceView extends LitElement {
     </th>`;
   }
   private findingList(rows: GovernanceFinding[], dismissed = false) {
-    const filtered = rows.filter((row) =>
-      `${row.title} ${row.rule_ref ?? ''} ${row.suggestion}`
-        .toLowerCase()
-        .includes(this.search.toLowerCase())
+    const filtered = rows.filter(
+      (row) =>
+        (!this.section || row.category === this.section) &&
+        `${row.title} ${row.rule_ref ?? ''} ${row.suggestion}`
+          .toLowerCase()
+          .includes(this.search.toLowerCase())
     );
     const rank = { high: 0, medium: 1, low: 2 };
     filtered.sort(
@@ -673,6 +875,151 @@ export class GovernanceView extends LitElement {
       </div>
     </details>`;
   }
+  /** The outlier day against the rest of the window, then who spent it. */
+  private spendEvidence(spend: SpendEvidence) {
+    const series = spend.daily_series ?? [];
+    const sessions = spend.contributing_sessions ?? [];
+    const sentence =
+      spend.ratio != null && spend.baseline != null
+        ? `${weekday(spend.day)} cost ${money(spend.cost)}, ${spend.ratio.toFixed(1)}x your usual ${money(spend.baseline)} a day.`
+        : `${weekday(spend.day)} cost ${money(spend.cost)}.`;
+    const width = 640;
+    const height = 200;
+    const top = 20;
+    const bottom = 24;
+    const max = Math.max(
+      spend.cost,
+      spend.baseline ?? 0,
+      ...series.map((d) => d.cost),
+      0.01
+    );
+    const step = series.length ? width / series.length : width;
+    const y = (value: number) =>
+      top + (height - top - bottom) * (1 - value / max);
+    return html`<p class="lead" data-spend-sentence>${sentence}</p>
+      ${
+        series.length
+          ? html`<svg
+              class="spend-chart"
+              data-spend-chart
+              viewBox="0 0 ${width} ${height}"
+              role="img"
+              aria-label=${`Daily spend: ${series.map((d) => `${weekday(d.day)} ${money(d.cost)}`).join(', ')}`}
+            >
+              ${series.map(
+                (d, index) =>
+                  html`<rect
+                      class=${d.is_outlier ? 'bar outlier' : 'bar'}
+                      x=${index * step + step * 0.2}
+                      y=${y(d.cost)}
+                      width=${step * 0.6}
+                      height=${Math.max(0, height - bottom - y(d.cost))}
+                      rx="2"
+                    ></rect>
+                    ${d.is_outlier ? html`<text class="value" x=${index * step + step / 2} y=${y(d.cost) - 6} text-anchor="middle">${money(d.cost)}</text>` : nothing}
+                    <text
+                      x=${index * step + step / 2}
+                      y=${height - 6}
+                      text-anchor="middle"
+                      >${weekday(d.day)}</text
+                    >`
+              )}
+              ${
+                spend.baseline != null
+                  ? html`<line
+                        class="baseline"
+                        x1="0"
+                        x2=${width}
+                        y1=${y(spend.baseline)}
+                        y2=${y(spend.baseline)}
+                      ></line>
+                      <text
+                        x=${width}
+                        y=${y(spend.baseline) - 4}
+                        text-anchor="end"
+                        >usual ${money(spend.baseline)}</text
+                      >`
+                  : nothing
+              }
+            </svg>`
+          : nothing
+      }
+      <h3>Sessions that drove it</h3>
+      ${
+        sessions.length
+          ? html`<div class="table-scroll">
+              <table
+                data-contributing-sessions
+                aria-label="Sessions that drove the spend"
+              >
+                <thead>
+                  <tr>
+                    <th>Session</th>
+                    <th>Agent or flow</th>
+                    <th>Started</th>
+                    ${this.canCost ? html`<th class="number">Spend est.</th>` : nothing}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sessions.map(
+                    (session) =>
+                      html`<tr>
+                        <td>
+                          <a
+                            href=${session.href ?? `/console/runtime-sessions?sessionId=${encodeURIComponent(session.runtime_session_id)}`}
+                            >${sessionName(session)}</a
+                          >
+                        </td>
+                        <td>
+                          ${
+                            session.flow_href || session.agent_href
+                              ? html`<a
+                                  href=${(session.flow_href ?? session.agent_href)!}
+                                  >${session.agent_name ?? 'Open'}</a
+                                >`
+                              : (session.agent_name ??
+                                html`<span class="muted">Unattributed</span>`)
+                          }
+                        </td>
+                        <td>
+                          ${session.started_at ? html`<time title=${formatLocalDateTime(session.started_at)}>${formatRelativeTime(session.started_at)}</time>` : ''}
+                        </td>
+                        ${this.canCost ? html`<td class="number">${session.cost != null ? money(session.cost) : ''}</td>` : nothing}
+                      </tr>`
+                  )}
+                </tbody>
+              </table>
+            </div>`
+          : html`<p class="muted">
+              No session-level spend was recorded for that day.
+            </p>`
+      }`;
+  }
+  /** What keeping a tool costs against what detaching it takes away. */
+  private toolEvidence(tool: ToolEvidence) {
+    const unused = tool.sessions_used === 0;
+    return html`<p class="lead" data-tool-sentence>
+        ${tool.name} was used in ${tool.sessions_used} of
+        ${tool.sessions_attached} sessions it was attached to.
+      </p>
+      <dl data-tool-tradeoff>
+        <dt>Schema cost</dt>
+        <dd>
+          ${tool.schema_tokens_per_request != null ? `About ${tokens(tool.schema_tokens_per_request)} tokens on every request` : 'Not measured'}
+        </dd>
+        <dt>Saving if detached</dt>
+        <dd>
+          ${tool.estimated_weekly_tokens != null ? `About ${tokens(tool.estimated_weekly_tokens)} tokens a week` : 'Not measured'}${this.canCost && tool.estimated_weekly_savings != null ? `, about ${money(tool.estimated_weekly_savings)} est.` : ''}
+        </dd>
+        <dt>What the agent loses</dt>
+        <dd>
+          ${tool.capability ? tool.capability.replace(/^./, (c) => c.toUpperCase()) : 'Not described'}
+        </dd>
+      </dl>
+      <p class="muted">
+        ${unused ? 'Unused this week, so detaching it costs nothing observed. Keep it if the capability matters for rare work.' : 'Rarely used but used: this is a trade-off, not a fix. Detach it only if the saving is worth more than the capability.'}
+      </p>`;
+  }
   private detailView(row: GovernanceFinding) {
     const week = this.runs.find((run) => run.id === row.run_id);
     return html`<a href="/console/governance">All findings</a>
@@ -716,15 +1063,18 @@ export class GovernanceView extends LitElement {
       <h3>Evidence</h3>
       ${
         row.evidence.length
-          ? row.evidence.map(
-              (evidence) =>
-                html`<blockquote class="evidence">
-                    ${evidence.excerpt}
-                  </blockquote>
-                  <p class="muted">
-                    ${evidenceSource(evidence.source)}
-                    ${evidence.audit_event_id ? html`<a href=${`/console/audit?event=${encodeURIComponent(evidence.audit_event_id)}`}>Open in audit</a>` : nothing}
-                  </p>`
+          ? row.evidence.map((evidence) =>
+              evidence.spend
+                ? this.spendEvidence(evidence.spend)
+                : evidence.tool
+                  ? this.toolEvidence(evidence.tool)
+                  : html`<blockquote class="evidence">
+                        ${evidence.excerpt}
+                      </blockquote>
+                      <p class="muted">
+                        ${evidenceSource(evidence.source)}
+                        ${evidence.audit_event_id ? html`<a href=${`/console/audit?event=${encodeURIComponent(evidence.audit_event_id)}`}>Open in audit</a>` : nothing}
+                      </p>`
             )
           : html`<p>No excerpts recorded.</p>`
       }
@@ -762,7 +1112,7 @@ export class GovernanceView extends LitElement {
               ? this.detail
                 ? this.detailView(this.detail)
                 : nothing
-              : html` ${this.coverage(this.selectedRun)}
+              : html` ${this.notices()} ${this.coverage(this.selectedRun)}
                   <dl class="kinds" data-kind-legend>
                     ${Object.entries(KIND_HELP).map(
                       ([kind, help]) =>
@@ -848,6 +1198,27 @@ export class GovernanceView extends LitElement {
                         >${!this.findings.length && (!this.selectedRun || this.selectedRun.sessions_summarized === 0) ? 'Not yet reviewed' : `${this.findings.filter((row) => `${row.title} ${row.rule_ref ?? ''} ${row.suggestion}`.toLowerCase().includes(this.search.toLowerCase())).length} of ${this.findings.length} findings on this page`}${this.offset ? ` · starting at ${this.offset + 1}` : ''}</span
                       >
                     </list-toolbar>
+                    ${
+                      this.section
+                        ? html`<p class="section-filter" data-section>
+                            Showing ${SECTIONS[this.section]}.
+                            <a
+                              href="/console/governance"
+                              @click=${(event: Event) => {
+                                event.preventDefault();
+                                this.section = '';
+                                history.replaceState(
+                                  null,
+                                  '',
+                                  `/console/governance${this.runId ? `?run_id=${encodeURIComponent(this.runId)}` : ''}`
+                                );
+                                void this.load();
+                              }}
+                              >Show all findings</a
+                            >
+                          </p>`
+                        : nothing
+                    }
                     ${this.findingList(this.findings)}
                     <div class="pager">
                       <sl-button

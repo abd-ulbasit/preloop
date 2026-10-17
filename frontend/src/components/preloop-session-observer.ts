@@ -2756,6 +2756,23 @@ export class PreloopSessionObserver extends LitElement {
                   `
                 : nothing
             }
+            ${
+              session && (session.agentHref || session.flowHref)
+                ? html`<span class="meta" data-session-owner>
+                    ${
+                      session.flowHref
+                        ? html`Flow
+                            <a href=${session.flowHref}
+                              >${session.flowName || 'Open flow'}</a
+                            >`
+                        : html`Agent
+                            <a href=${session.agentHref!}
+                              >${session.agentName || 'Open agent'}</a
+                            >`
+                    }
+                  </span>`
+                : nothing
+            }
           </div>
         </div>
         <div class="mode-row">

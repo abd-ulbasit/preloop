@@ -572,6 +572,11 @@ export interface RuntimeSessionSummary {
   flow_id: string | null;
   flow_name: string | null;
   flow_execution_id: string | null;
+  /** The managed agent and flow behind the session, when known. */
+  agent_id?: string | null;
+  agent_name?: string | null;
+  agent_href?: string | null;
+  flow_href?: string | null;
   latest_model_alias: string | null;
   latest_provider_name: string | null;
   is_active_now: boolean;

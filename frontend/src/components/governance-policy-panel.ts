@@ -23,6 +23,11 @@ import {
   type GovernanceThresholds,
 } from '../api';
 import type { AIModel } from '../types';
+import {
+  getWeeklyReportPreferences,
+  updateWeeklyReportPreferences,
+  type WeeklyReportPreferences,
+} from '../governance-api';
 import { confirmDialog, showToast } from './confirm-dialog';
 import { formatLocalDateTime, formatRelativeTime } from '../utils/date';
 import { renderMarkdown, markdownBodyCss } from '../utils/markdown';
@@ -38,6 +43,10 @@ import '@shoelace-style/shoelace/dist/components/radio-group/radio-group.js';
 import '@shoelace-style/shoelace/dist/components/radio-button/radio-button.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
+import '@shoelace-style/shoelace/dist/components/switch/switch.js';
+
+/** The last "on" mode chosen here, so turning the review back on restores it. */
+export const LAST_ON_MODE_KEY = 'preloop.governance.last_on_mode';
 
 /** The three choices an operator makes. `off_over_budget` is the server's. */
 type ChosenMode = Exclude<GovernanceReviewMode, 'off_over_budget'>;
@@ -124,6 +133,9 @@ export class GovernancePolicyPanel extends LitElement {
   @state() private _thresholdDraft: ThresholdDraft = {};
   @state() private _savingThresholds = false;
   @state() private _converting = false;
+  /** Null when the server predates weekly report preferences. */
+  @state() private _email: WeeklyReportPreferences | null = null;
+  @state() private _switching = '';
 
   static styles = [
     unsafeCSS(consoleStyles),
@@ -251,6 +263,13 @@ export class GovernancePolicyPanel extends LitElement {
       td.actions {
         text-align: right;
       }
+      .switches {
+        display: grid;
+        gap: var(--sl-spacing-medium);
+      }
+      .switch-row .meta {
+        margin-top: 2px;
+      }
       .settings-grid {
         display: grid;
         gap: var(--sl-spacing-medium);
@@ -286,7 +305,11 @@ export class GovernancePolicyPanel extends LitElement {
     } finally {
       this._loading = false;
     }
-    // Names and models are conveniences: the tab works without them.
+    // Names, models and email switches are conveniences: the tab works
+    // without them, and an older server has no email preferences at all.
+    getWeeklyReportPreferences()
+      .then((prefs) => (this._email = prefs))
+      .catch(() => (this._email = null));
     if (this.canManage) {
       getAIModels()
         .then((models) => (this._models = models.filter(isOwnGatewayModel)))
@@ -455,6 +478,139 @@ export class GovernancePolicyPanel extends LitElement {
     this._modeDraft =
       settings.mode === 'off_over_budget' ? 'off' : settings.mode;
     this._modelDraft = settings.analysis_model_id ?? '';
+    if (settings.mode === 'on_platform' || settings.mode === 'on_own_model')
+      localStorage.setItem(LAST_ON_MODE_KEY, settings.mode);
+  }
+
+  /** On restores the last on mode; own model only when one is still set. */
+  private async _toggleReview(on: boolean): Promise<void> {
+    if (this._switching) return;
+    this._switching = 'review';
+    try {
+      const last = localStorage.getItem(LAST_ON_MODE_KEY);
+      const mode: ChosenMode = !on
+        ? 'off'
+        : last === 'on_own_model' && this._settings?.analysis_model_id
+          ? 'on_own_model'
+          : 'on_platform';
+      const body: { mode: ChosenMode; analysis_model_id?: string | null } = {
+        mode,
+      };
+      if (mode === 'on_own_model')
+        body.analysis_model_id = this._settings?.analysis_model_id ?? null;
+      this._applySettings(await updateGovernanceReviewSettings(body));
+      showToast(
+        on
+          ? 'The AI usage policy review is on.'
+          : 'The AI usage policy review is off. No sessions are read and nothing is spent.',
+        'success'
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Could not change the review',
+        'danger'
+      );
+    } finally {
+      this._switching = '';
+    }
+  }
+
+  private async _toggleEmail(
+    field: keyof WeeklyReportPreferences,
+    on: boolean
+  ): Promise<void> {
+    if (this._switching) return;
+    this._switching = field;
+    try {
+      this._email = await updateWeeklyReportPreferences({ [field]: on });
+      showToast(
+        field === 'account_enabled'
+          ? on
+            ? 'Weekly report emails are on for the account.'
+            : 'Weekly report emails are off for everyone in the account.'
+          : on
+            ? 'You will get the weekly report email.'
+            : 'You will no longer get the weekly report email.',
+        'success'
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Could not change the email',
+        'danger'
+      );
+    } finally {
+      this._switching = '';
+    }
+  }
+
+  private _renderSwitches() {
+    const settings = this._settings;
+    if (!settings && !this._email) return nothing;
+    const on = !!settings && !settings.mode.startsWith('off');
+    return html`<section
+      class="switches"
+      aria-label="Review and email switches"
+    >
+      ${
+        settings
+          ? html`<div class="switch-row">
+              <sl-switch
+                class="review-switch"
+                ?checked=${on}
+                ?disabled=${!this.canManage || !!this._switching}
+                @sl-change=${(event: Event) =>
+                  void this._toggleReview(
+                    (event.target as HTMLInputElement).checked
+                  )}
+                >AI usage policy review</sl-switch
+              >
+              <div class="meta">
+                ${
+                  on
+                    ? 'On. Each hour new sessions are summarised and each Monday last week is checked against this policy.'
+                    : settings.mode === 'off_over_budget'
+                      ? 'Off: the last review used up its analysis allowance.'
+                      : 'Off. No sessions are read, no review runs and nothing is spent.'
+                }
+              </div>
+            </div>`
+          : nothing
+      }
+      ${
+        this._email
+          ? html`<div class="switch-row">
+                <sl-switch
+                  class="email-account-switch"
+                  ?checked=${this._email.account_enabled}
+                  ?disabled=${!this.canManage || !!this._switching}
+                  @sl-change=${(event: Event) =>
+                    void this._toggleEmail(
+                      'account_enabled',
+                      (event.target as HTMLInputElement).checked
+                    )}
+                  >Weekly report email for the account</sl-switch
+                >
+                <div class="meta">
+                  ${this._email.account_enabled ? 'Sent each Monday to members who have not opted out.' : 'Nobody in the account gets the weekly report email.'}
+                  ${this.canManage ? '' : ' Owners and admins can change this.'}
+                </div>
+              </div>
+              <div class="switch-row">
+                <sl-switch
+                  class="email-user-switch"
+                  ?checked=${this._email.user_enabled}
+                  ?disabled=${!this._email.account_enabled || !!this._switching}
+                  @sl-change=${(event: Event) =>
+                    void this._toggleEmail(
+                      'user_enabled',
+                      (event.target as HTMLInputElement).checked
+                    )}
+                  >Send it to me</sl-switch
+                >
+              </div>`
+          : nothing
+      }
+    </section>`;
   }
 
   private async _reloadVersions(): Promise<void> {
@@ -951,7 +1107,7 @@ export class GovernancePolicyPanel extends LitElement {
       </sl-alert>`;
     }
     return html`
-      ${this._renderBanner()} ${this._renderEditor()}
+      ${this._renderBanner()} ${this._renderSwitches()} ${this._renderEditor()}
       ${this._renderThresholds()} ${this._renderSettings()}
       ${this._renderHistory()}
     `;

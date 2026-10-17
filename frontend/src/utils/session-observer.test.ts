@@ -168,3 +168,27 @@ describe('spawn aliases', () => {
     expect(session.title).to.equal('brief-api');
   });
 });
+
+describe('session owner links', () => {
+  it('links a session to its agent, and a flow session to its flow', () => {
+    const agent = normalizeObservedSession({
+      id: 'session-1',
+      agent_name: 'Codex CLI',
+      agent_href: '/console/agents/agent-1',
+    });
+    expect(agent.agentHref).to.equal('/console/agents/agent-1');
+    expect(agent.agentName).to.equal('Codex CLI');
+    const flow = normalizeObservedSession({
+      id: 'session-2',
+      flow_id: 'flow-1',
+      flow_name: 'Pull Request Reviewer',
+    });
+    expect(flow.flowHref).to.equal('/console/flows/flow-1');
+    const legacy = normalizeObservedSession({
+      id: 'session-3',
+      managed_agent_id: 'agent-2',
+      managed_agent_name: 'Claude Code',
+    });
+    expect(legacy.agentHref).to.equal('/console/agents/agent-2');
+  });
+});
