@@ -866,12 +866,15 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
         account_id: str,
         runtime_session_id: str,
         limit: int = 100,
+        operator_note_id: Optional[str] = None,
     ) -> list[Any]:
         """Return recent activity for the timeline, newest first.
 
         Same rows as ``list_for_runtime_session``, but a model gateway call
         comes back without its history keys, removed in SQL so Postgres never
         ships them. Every other activity type keeps its full metadata.
+        A focused operator note adds at most one row from the same account
+        and session, so older note links do not need an unbounded history read.
         """
         slim = self.model.metadata_
         for key in self.GATEWAY_HISTORY_KEYS:
@@ -880,26 +883,32 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             (self.model.activity_type == "model_gateway_call", slim),
             else_=self.model.metadata_,
         ).label("metadata_")
-        return (
-            db.query(
-                self.model.id,
-                self.model.activity_type,
-                self.model.timestamp,
-                self.model.tool_name,
-                self.model.server_name,
-                self.model.summary,
-                self.model.status,
-                self.model.api_key_id,
-                metadata_column,
-            )
-            .filter(
-                self.model.account_id == account_id,
-                self.model.runtime_session_id == runtime_session_id,
-            )
-            .order_by(self.model.timestamp.desc())
-            .limit(limit)
-            .all()
+        query = db.query(
+            self.model.id,
+            self.model.activity_type,
+            self.model.timestamp,
+            self.model.tool_name,
+            self.model.server_name,
+            self.model.summary,
+            self.model.status,
+            self.model.api_key_id,
+            metadata_column,
+        ).filter(
+            self.model.account_id == account_id,
+            self.model.runtime_session_id == runtime_session_id,
         )
+        rows = query.order_by(self.model.timestamp.desc()).limit(limit).all()
+        if operator_note_id and not any(
+            (row.metadata_ or {}).get("note_id") == operator_note_id for row in rows
+        ):
+            focused = query.filter(
+                self.model.activity_type == "agent_control_message",
+                self.model.metadata_["kind"].astext == "operator_note",
+                self.model.metadata_["note_id"].astext == operator_note_id,
+            ).first()
+            if focused is not None:
+                rows.append(focused)
+        return rows
 
     def list_tool_calls_page(
         self,

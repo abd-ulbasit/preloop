@@ -1680,3 +1680,77 @@ def test_note_targets_unknown_and_foreign_agents_are_404(client, db_session) -> 
             f"{NOTES_URL}/session-targets", params={"agent_id": str(agent_id)}
         )
         assert response.status_code == 404
+
+
+def test_focused_note_is_included_beyond_recent_activity_page(
+    client, db_session, test_user, agent, runtime_session
+) -> None:
+    """An older note link can retrieve its inline row without unbounded history."""
+    from preloop.models import models
+
+    created = client.post(
+        NOTES_URL,
+        json={
+            "runtime_session_id": str(runtime_session.id),
+            "text": "Earlier instruction.",
+        },
+    ).json()
+    operator_notes.claim_pending_notes(
+        db_session,
+        account_id=str(test_user.account_id),
+        managed_agent_id=str(agent.id),
+        runtime_session_id=str(runtime_session.id),
+        channel="hook",
+    )
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            models.RuntimeSessionActivity(
+                account_id=test_user.account_id,
+                runtime_session_id=runtime_session.id,
+                activity_type="tool_call",
+                summary=f"Later tool {index}",
+                status="success",
+                timestamp=now + timedelta(seconds=index + 1),
+                metadata_={},
+            )
+            for index in range(100)
+        ]
+    )
+    db_session.commit()
+    activity_url = f"/api/v1/runtime-sessions/{runtime_session.id}/activity"
+    recent = client.get(activity_url)
+    assert recent.status_code == 200, recent.text
+    assert not [
+        item
+        for item in recent.json()["items"]
+        if item["metadata"].get("note_id") == created["note_id"]
+    ]
+    focused = client.get(activity_url, params={"operator_note_id": created["note_id"]})
+    assert focused.status_code == 200, focused.text
+    notes = [
+        item
+        for item in focused.json()["items"]
+        if item["metadata"].get("note_id") == created["note_id"]
+    ]
+    assert len(notes) == 1
+    assert notes[0]["summary"] == "Earlier instruction."
+    assert len(focused.json()["items"]) == len(recent.json()["items"]) + 1
+    other_session = RuntimeSession(
+        account_id=test_user.account_id,
+        session_source_type="claude_code",
+        session_source_id="unrelated-focus-session",
+        started_at=now,
+    )
+    db_session.add(other_session)
+    db_session.commit()
+    unrelated = client.get(
+        f"/api/v1/runtime-sessions/{other_session.id}/activity",
+        params={"operator_note_id": created["note_id"]},
+    )
+    assert unrelated.status_code == 200, unrelated.text
+    assert not [
+        item
+        for item in unrelated.json()["items"]
+        if item["metadata"].get("note_id") == created["note_id"]
+    ]

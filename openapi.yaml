@@ -3752,6 +3752,19 @@ paths:
           title: Limit
         description: Most recent model interactions merged into the timeline. The
           console asks for the latest 50 when a session opens.
+      - name: operator_note_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 64
+          - type: 'null'
+          description: Include this delivered note even beyond the recent activity
+            page.
+          title: Operator Note Id
+        description: Include this delivered note even beyond the recent activity page.
       responses:
         '200':
           description: Successful Response
