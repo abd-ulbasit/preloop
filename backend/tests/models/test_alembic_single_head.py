@@ -430,4 +430,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261025_weekly_value_merge",
         "20261022_owner_consent",
     }
-    assert script.get_heads() == ["20261026_value_consent_merge"]
+    admin_analytics = script.get_revision("20261027_admin_analytics")
+    assert admin_analytics.down_revision == "20261026_value_consent_merge"
+    assert script.get_heads() == ["20261027_admin_analytics"]
