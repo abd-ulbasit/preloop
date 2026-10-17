@@ -1564,7 +1564,9 @@ export class AgentDetailView extends LitElement {
           return html`<span class="strip-device">
             <a href=${fleetHref(device.device_key)}>${deviceLabel(device)}</a>
             <span class="meta">${osLabel(device.os)}</span>
-            <sl-badge variant=${chip.variant} pill>${chip.label}</sl-badge>
+            <sl-badge class="chip" variant=${chip.variant} pill
+              >${chip.label}</sl-badge
+            >
           </span>`;
         })}
       </span>`;

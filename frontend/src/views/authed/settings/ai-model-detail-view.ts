@@ -1249,7 +1249,7 @@ export class AIModelDetailView extends LitElement {
                     ${consumers.map(
                       (item) =>
                         html`<li>
-                          <sl-badge variant="neutral" pill
+                          <sl-badge class="chip" variant="neutral" pill
                             >${item.kind}</sl-badge
                           >
                           <a href=${item.href}>${item.name}</a>
@@ -1284,7 +1284,9 @@ export class AIModelDetailView extends LitElement {
                   ${observed.map(
                     (item) =>
                       html`<li>
-                        <sl-badge variant="neutral" pill>${item.kind}</sl-badge>
+                        <sl-badge class="chip" variant="neutral" pill
+                          >${item.kind}</sl-badge
+                        >
                         <a href=${item.href}>${item.name}</a>
                       </li>`
                   )}
@@ -3149,6 +3151,8 @@ export class AIModelDetailView extends LitElement {
               }
             </sl-card>
 
+            ${this.renderUsedBy()}
+
             <sl-card>
               <div slot="header" class="model-title">Budget Management</div>
               <budget-policy-editor
@@ -3158,8 +3162,7 @@ export class AIModelDetailView extends LitElement {
               ></budget-policy-editor>
             </sl-card>
 
-            ${this.renderUsedBy()} ${this.renderPricingCard()}
-            ${this.renderGatewayValidation()}
+            ${this.renderPricingCard()} ${this.renderGatewayValidation()}
 
             <div class="toolbar">
               <time-range-select

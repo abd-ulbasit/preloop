@@ -17,7 +17,11 @@ const device = {
   last_seen_at: '2026-10-16T12:00:00Z',
   agents_onboarded: 1,
   agents_not_onboarded: 1,
-  users: [{ id: 'user-1', label: 'Jane Doe', source: 'runner_registrant' }],
+  users: [
+    { id: 'user-1', label: 'Jane Doe', source: 'runner_registrant' },
+    { id: 'user-1', label: 'Jane Doe', source: 'agent_owner' },
+    { id: null, label: 'roster-person@example.com', source: 'roster' },
+  ],
   runners: [{ id: 'runner-1', name: 'Example runner', state: 'online' }],
   agents: [
     {
@@ -261,7 +265,14 @@ describe('Device fleet', () => {
       root.querySelector('[data-testid="device-people"] a[href*="user=user-1"]')
         .textContent
     ).to.include('Jane Doe');
-    expect(root.textContent).to.include('Registered the runner');
+    const people = root.querySelector('[data-testid="device-people"]');
+    expect(people.querySelectorAll('a[href*="user=user-1"]')).to.have.length(1);
+    expect(people.textContent.replace(/\s+/g, ' ')).to.include(
+      'Registered the runner · Owns an agent here'
+    );
+    // A roster entry with no account user is named, not linked.
+    expect(people.textContent).to.include('roster-person@example.com');
+    expect(people.querySelectorAll('a')).to.have.length(1);
     const governed = root.querySelectorAll(
       '[data-testid="device-governed"] a[href="/console/agents/agent-1"]'
     );

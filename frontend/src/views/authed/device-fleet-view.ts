@@ -56,6 +56,28 @@ export const onboardCommand = (agent: FleetAgent): string =>
 
 const isOpen = (finding: FleetFinding): boolean => finding.state === 'open';
 
+type DeviceUser = DeviceFleetDevice['users'][number];
+
+/**
+ * One row per person. The same person is often both the runner's
+ * registrant and an agent's owner; they are listed once, with every way
+ * they relate to the machine.
+ */
+export function devicePeople(
+  device: DeviceFleetDevice
+): { user: DeviceUser; relations: string[] }[] {
+  const people = new Map<string, { user: DeviceUser; relations: string[] }>();
+  for (const user of device.users) {
+    const key = user.id ? `id:${user.id}` : `label:${user.label}`;
+    const entry = people.get(key) || { user, relations: [] };
+    const relation = USER_SOURCE[user.source || ''];
+    if (relation && !entry.relations.includes(relation))
+      entry.relations.push(relation);
+    people.set(key, entry);
+  }
+  return [...people.values()];
+}
+
 /**
  * Hosted agents, governed first. A managed agent reported by both a runner
  * and a discovery candidate is one agent; ungoverned entries stay apart,
@@ -482,11 +504,11 @@ export class DeviceFleetView extends LitElement {
   }
   private runnerChip(state: string) {
     const chip = runnerStateChip(state);
-    return html`<sl-badge variant=${chip.variant} pill
+    return html`<sl-badge class="chip" variant=${chip.variant} pill
       >${chip.label}</sl-badge
     >`;
   }
-  private person(user: DeviceFleetDevice['users'][number]) {
+  private person(user: DeviceUser) {
     return user.id
       ? html`<a href=${personHref(user.id)}>${user.label}</a>`
       : html`<span>${user.label}</span>`;
@@ -567,7 +589,7 @@ export class DeviceFleetView extends LitElement {
       <span>${device.agents_onboarded} governed</span>
       ${
         device.agents_not_onboarded
-          ? html`<sl-badge variant="warning" pill
+          ? html`<sl-badge class="chip" variant="warning" pill
               >${device.agents_not_onboarded} not onboarded</sl-badge
             >`
           : nothing
@@ -590,7 +612,7 @@ export class DeviceFleetView extends LitElement {
         ${
           device.users.length
             ? html`<div class="stack">
-                ${device.users.map((user) => this.person(user))}
+                ${devicePeople(device).map(({ user }) => this.person(user))}
               </div>`
             : html`<span class="meta">Unknown</span>`
         }
@@ -610,7 +632,9 @@ export class DeviceFleetView extends LitElement {
       <td data-label="Findings" class="num">
         ${
           open
-            ? html`<sl-badge variant="warning" pill>${open} open</sl-badge>`
+            ? html`<sl-badge class="chip" variant="warning" pill
+                >${open} open</sl-badge
+              >`
             : html`<span class="meta">None</span>`
         }
       </td>
@@ -710,7 +734,9 @@ export class DeviceFleetView extends LitElement {
     return html`<sl-card>
       <div slot="header" class="card-title">
         Agents not tied to a device
-        <sl-badge variant="neutral" pill>${agents.length}</sl-badge>
+        <sl-badge class="chip" variant="neutral" pill
+          >${agents.length}</sl-badge
+        >
       </div>
       <p class="meta">
         Seen in traffic or onboarded, but no runner or collector has placed them
@@ -738,9 +764,13 @@ export class DeviceFleetView extends LitElement {
       </div>
       ${
         agent.managed_agent_id
-          ? html`<sl-badge variant="success" pill>Governed</sl-badge>`
+          ? html`<sl-badge class="chip" variant="success" pill
+              >Governed</sl-badge
+            >`
           : html`<span class="inline">
-              <sl-badge variant="warning" pill>Not onboarded</sl-badge>
+              <sl-badge class="chip" variant="warning" pill
+                >Not onboarded</sl-badge
+              >
               <sl-tooltip
                 content="Run this on the machine to put the agent under Preloop"
               >
@@ -784,7 +814,7 @@ export class DeviceFleetView extends LitElement {
         <sl-tooltip
           content="Everything here is self-reported by software on the machine."
         >
-          <sl-badge variant="neutral" pill>Unverified</sl-badge>
+          <sl-badge class="chip" variant="neutral" pill>Unverified</sl-badge>
         </sl-tooltip>
       </div>
       <div class="detail-grid">
@@ -793,14 +823,12 @@ export class DeviceFleetView extends LitElement {
           ${
             device.users.length
               ? html`<ul class="rows">
-                  ${device.users.map(
-                    (user) =>
+                  ${devicePeople(device).map(
+                    ({ user, relations }) =>
                       html`<li>
                         <div class="row-main">
                           ${this.person(user)}
-                          <span class="meta"
-                            >${USER_SOURCE[user.source || ''] || ''}</span
-                          >
+                          <span class="meta">${relations.join(' · ')}</span>
                         </div>
                       </li>`
                   )}
@@ -846,7 +874,7 @@ export class DeviceFleetView extends LitElement {
       <sl-card data-testid="device-agents">
         <div slot="header" class="card-title">
           Hosted agents
-          <sl-badge variant="neutral" pill
+          <sl-badge class="chip" variant="neutral" pill
             >${governed.length + ungoverned.length}</sl-badge
           >
         </div>
@@ -879,7 +907,7 @@ export class DeviceFleetView extends LitElement {
           Findings
           ${
             findings.filter(isOpen).length
-              ? html`<sl-badge variant="warning" pill
+              ? html`<sl-badge class="chip" variant="warning" pill
                   >${findings.filter(isOpen).length} open</sl-badge
                 >`
               : nothing
@@ -908,6 +936,7 @@ ${JSON.stringify(finding.evidence, null, 2)}</pre>
                         </details>
                       </div>
                       <sl-badge
+                        class="chip"
                         variant=${isOpen(finding) ? 'warning' : 'neutral'}
                         pill
                         >${finding.state}</sl-badge
