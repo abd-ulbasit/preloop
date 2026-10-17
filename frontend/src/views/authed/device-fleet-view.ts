@@ -645,19 +645,23 @@ export class DeviceFleetView extends LitElement {
   private renderDevices() {
     const page = this.page;
     if (!page) return nothing;
-    if (!page.items.length && !page.unassigned_agents.length)
+    const firstDevice = html`<span
+        >No devices yet. A device appears when a runner registers on it or a
+        collector reports from it.</span
+      >
+      <span class="empty-command">
+        <code>preloop runner fg</code>
+        <sl-copy-button value="preloop runner fg"></sl-copy-button>
+      </span>`;
+    // No devices: say how to get the first one, even when agents have
+    // already been seen in traffic. Filters over nothing would only mislead.
+    if (!page.items.length)
       return html`<sl-card class="table-card">
-        <div class="empty-state" data-testid="fleet-empty">
-          <span
-            >No devices yet. A device appears when a runner registers on it or a
-            collector reports from it.</span
-          >
-          <span class="empty-command">
-            <code>preloop runner fg</code>
-            <sl-copy-button value="preloop runner fg"></sl-copy-button>
-          </span>
-        </div>
-      </sl-card>`;
+          <div class="empty-state" data-testid="fleet-empty">
+            ${firstDevice}
+          </div>
+        </sl-card>
+        ${this.renderUnassigned(page.unassigned_agents)}`;
     const devices = this.filteredDevices(page);
     const filtered = Boolean(this.search || this.runnerState);
     return html`${this.renderStrip(page)}

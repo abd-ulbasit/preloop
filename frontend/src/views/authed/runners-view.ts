@@ -877,10 +877,19 @@ export class RunnersView extends LitElement {
     `;
   }
 
-  /** `?runner=<id>` from a link elsewhere (a device page, say). */
-  private readonly linkedRunnerId =
-    new URLSearchParams(location.search).get('runner') || '';
+  /**
+   * `?runner=<id>` from a link elsewhere (a device page, say). The router constructs
+   * the view before it writes the destination URL and reuses it between
+   * queries, so the id comes from the route, not from construction time.
+   */
+  @state() private linkedRunnerId = '';
   private linkedRunnerShown = false;
+
+  onBeforeEnter(context: { search: string }): void {
+    this.linkedRunnerId =
+      new URLSearchParams(context.search).get('runner') || '';
+    this.linkedRunnerShown = false;
+  }
 
   updated(): void {
     if (!this.linkedRunnerId || this.linkedRunnerShown) return;

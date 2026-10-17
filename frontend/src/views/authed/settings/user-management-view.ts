@@ -427,10 +427,18 @@ export class UserManagementView extends LitElement {
     await dialog?.show(subject);
   }
 
-  /** `?user=<id>` from a link elsewhere (a device's people, say). */
-  private readonly linkedUserId =
-    new URLSearchParams(location.search).get('user') || '';
+  /**
+   * `?user=<id>` from a link elsewhere (a device's people, say). The router constructs
+   * the view before it writes the destination URL and reuses it between
+   * queries, so the id comes from the route, not from construction time.
+   */
+  @state() private linkedUserId = '';
   private linkedUserShown = false;
+
+  onBeforeEnter(context: { search: string }): void {
+    this.linkedUserId = new URLSearchParams(context.search).get('user') || '';
+    this.linkedUserShown = false;
+  }
 
   updated(): void {
     if (!this.linkedUserId || this.linkedUserShown) return;

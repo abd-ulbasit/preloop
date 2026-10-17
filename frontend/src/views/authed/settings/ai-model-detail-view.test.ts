@@ -601,6 +601,42 @@ describe('AIModelDetailView', () => {
     }
   });
 
+  it("drops the previous model's consumers when navigating to another model", async () => {
+    usedByBody = {
+      agents: [
+        { id: 'agent-9', name: 'Configured agent', agent_kind: 'codex' },
+      ],
+      flows: [],
+      truncated: false,
+    };
+    try {
+      const element = (await fixture(
+        html`<ai-model-detail-view
+          .modelId=${'model-1'}
+        ></ai-model-detail-view>`
+      )) as AIModelDetailView;
+      const root = element.shadowRoot!;
+      const card = () =>
+        root.querySelector('[data-testid="model-used-by"]')?.textContent || '';
+      await waitUntil(() => card().includes('Configured agent'), undefined, {
+        timeout: 5000,
+      });
+      await waitUntil(() => !(element as any).loading);
+      // The next model never answers, so whatever shows is left over.
+      fetchStub
+        .withArgs(
+          sinon.match((url: unknown) => String(url).includes('model-2'))
+        )
+        .returns(new Promise(() => {}));
+      element.onBeforeEnter({ params: { modelId: 'model-2' } });
+      await element.updateComplete;
+      expect(card()).to.not.contain('Configured agent');
+      expect(root.querySelector('[data-testid="model-observed"]')).to.not.exist;
+    } finally {
+      usedByBody = { agents: [], flows: [], truncated: false };
+    }
+  });
+
   it('says how to configure a model nothing uses, and retries a failed read', async () => {
     usedByFail = true;
     try {

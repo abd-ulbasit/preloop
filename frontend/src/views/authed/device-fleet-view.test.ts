@@ -238,6 +238,49 @@ describe('Device fleet', () => {
     expect(empty.textContent).to.include('preloop runner fg');
   });
 
+  it('gives first-device guidance, not a filter miss, when only unassigned agents exist', async () => {
+    api = mockApi({
+      capabilities: ['fleet_coverage'],
+      profile: { permissions: ['view_device_fleet'] },
+      routes: [
+        {
+          path: '/api/v1/fleet/device-fleet',
+          body: {
+            schema_version: 1,
+            items: [],
+            total: 0,
+            truncated: false,
+            summary: {
+              devices: 0,
+              with_runner_online: 0,
+              with_ungoverned_agents: 0,
+              expected_missing: 0,
+              has_roster: false,
+            },
+            unassigned_agents: [
+              {
+                id: 'managed-9',
+                kind: 'codex',
+                name: 'Example agent',
+                status: 'onboarded',
+                managed_agent_id: 'agent-9',
+                first_seen_at: null,
+                last_seen_at: null,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const view = await mount();
+    const root = view.shadowRoot;
+    expect(
+      root.querySelector('[data-testid="fleet-empty"]').textContent
+    ).to.include('preloop runner fg');
+    expect(root.textContent).not.to.include('No devices match');
+    expect(root.querySelector('a[href="/console/agents/agent-9"]')).to.exist;
+  });
+
   it('shows a retry when the fleet fails to load', async () => {
     api = mockApi({
       capabilities: ['fleet_coverage'],

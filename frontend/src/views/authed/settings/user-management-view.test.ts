@@ -120,13 +120,15 @@ describe('UserManagementView', () => {
     );
   });
 
-  it('marks the person a device page linked to', async () => {
-    history.replaceState({}, '', `?user=${sampleUser.id}`);
+  it('marks the person a device page linked to, from the route', async () => {
+    fetchStub = createFetchStub({ users: [sampleUser] });
+    // Built before the router writes the destination URL.
+    const element = document.createElement(
+      'user-management-view'
+    ) as UserManagementView;
+    element.onBeforeEnter({ search: `?user=${sampleUser.id}` });
+    document.body.append(element);
     try {
-      fetchStub = createFetchStub({ users: [sampleUser] });
-      const element = (await fixture(
-        html`<user-management-view></user-management-view>`
-      )) as UserManagementView;
       await waitUntil(() => (element as any).users?.length === 1);
       await element.updateComplete;
       const card = element.shadowRoot!.querySelector(
@@ -134,7 +136,7 @@ describe('UserManagementView', () => {
       )!;
       expect(card.getAttribute('aria-current')).to.equal('true');
     } finally {
-      history.replaceState({}, '', '/');
+      element.remove();
     }
   });
 

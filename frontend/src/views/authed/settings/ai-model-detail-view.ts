@@ -838,6 +838,10 @@ export class AIModelDetailView extends LitElement {
       this.summary = null;
       this.sessions = null;
       this.interactions = null;
+      // Another model's consumers must not show here, nor be subtracted
+      // from this model's traffic as "configured".
+      this.usedBy = null;
+      this.usedByError = null;
     }
     if (!options.preserveLoadingState) {
       this.loading = true;
