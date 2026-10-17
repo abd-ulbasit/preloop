@@ -4381,6 +4381,7 @@ def put_weekly_report_preferences(
             payload.account_enabled,
             payload.members_enabled,
             payload.member_policy_findings_enabled,
+            payload.tracking_enabled,
         )
     ) and not (
         current_user.is_superuser
@@ -4399,5 +4400,6 @@ def put_weekly_report_preferences(
             user_enabled=payload.user_enabled,
             members_enabled=payload.members_enabled,
             member_policy_findings_enabled=payload.member_policy_findings_enabled,
+            tracking_enabled=payload.tracking_enabled,
         )
     )

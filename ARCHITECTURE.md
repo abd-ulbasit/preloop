@@ -945,3 +945,14 @@ default. The capability-gated Lit settings card lives in OSS. Report queries in
 `models.crud.weekly_report_data` apply account and user attribution before
 aggregation; report orchestration and delivery remain in the commercial plugin.
 See [the settings contract](docs/weekly-report-v3.md).
+
+### Platform analytics extension primitives
+
+`models.crud.admin_analytics` provides windowed model-ledger and report-event
+aggregations for optional platform administration extensions. Platform-funded
+usage and legacy built-in model usage use separate partial indexes; explicit
+account funding never falls through to legacy classification. Gateway requests
+snapshot funding and purpose in usage metadata. Weekly email preferences include
+an audited account tracking switch, and the console renders it only when an
+extension advertises `report_engagement_tracking`. Core does not serve public
+tracking or cross-account analytics endpoints.
