@@ -4331,6 +4331,63 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/weekly-report/preferences:
+    get:
+      tags:
+      - Account
+      summary: Get Weekly Report Preferences
+      description: Read effective weekly email delivery preferences.
+      operationId: get_weekly_report_preferences_api_v1_weekly_report_preferences_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyReportPreferences'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+    put:
+      tags:
+      - Account
+      summary: Put Weekly Report Preferences
+      description: Opt out personally or change account delivery with admin permission.
+      operationId: put_weekly_report_preferences_api_v1_weekly_report_preferences_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WeeklyReportPreferencesUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyReportPreferences'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
   /api/v1/account/deletion-request:
     post:
       tags:
@@ -41480,6 +41537,26 @@ components:
             format: date-time
           - type: 'null'
           title: Ended At
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        agent_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Name
+        agent_href:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Href
+        flow_href:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Flow Href
         flow_id:
           anyOf:
           - type: string
@@ -46867,6 +46944,36 @@ components:
       type: object
       title: WebhookTestSendResult
       description: Result of queueing a test event.
+    WeeklyReportPreferences:
+      properties:
+        account_enabled:
+          type: boolean
+          title: Account Enabled
+        user_enabled:
+          type: boolean
+          title: User Enabled
+      type: object
+      required:
+      - account_enabled
+      - user_enabled
+      title: WeeklyReportPreferences
+      description: Effective account and personal delivery switches.
+    WeeklyReportPreferencesUpdate:
+      properties:
+        account_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Account Enabled
+        user_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: User Enabled
+      additionalProperties: false
+      type: object
+      title: WeeklyReportPreferencesUpdate
+      description: Omitted fields preserve the current setting.
     WeeklySchedule:
       properties:
         timezone:

@@ -840,3 +840,51 @@ def test_finding_member_names_exclude_other_accounts(
         )
         == {}
     )
+
+
+def test_category_filter_precedes_paging_and_keeps_scope(
+    db_session: Session, test_user: User
+) -> None:
+    start, end = _window()
+    run = crud_governance_review_run.create_run(
+        db_session,
+        account_id=test_user.account_id,
+        window_start=start,
+        window_end=end,
+        commit=False,
+    )
+    crud_governance_finding.insert_findings(
+        db_session,
+        account_id=test_user.account_id,
+        findings=[
+            {**_finding(run.id, f"category-{i}"), "category": category}
+            for i, category in enumerate(
+                ["first_seen", "unused_tools", "spend_outlier"]
+            )
+        ],
+        commit=False,
+    )
+    page = crud_governance_finding.list_findings(
+        db_session,
+        account_id=test_user.account_id,
+        category="tool_hygiene",
+        allowed_kinds=["inefficiency"],
+        limit=1,
+    )
+    assert len(page) == 1 and page[0].category == "unused_tools"
+    assert (
+        crud_governance_finding.list_findings(
+            db_session,
+            account_id=test_user.account_id,
+            category="tool_hygiene",
+            allowed_kinds=["anomaly"],
+            limit=1,
+        )
+        == []
+    )
+    assert (
+        crud_governance_finding.list_findings(
+            db_session, account_id=uuid4(), category="tool_hygiene"
+        )
+        == []
+    )

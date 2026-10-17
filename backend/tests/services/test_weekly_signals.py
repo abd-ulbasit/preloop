@@ -198,6 +198,16 @@ def _event(
     detail: str,
     at: datetime,
 ) -> None:
+    if event_type == "approval_requested":
+        request.requested_at = _naive(at)
+    elif event_type == "approval_complete":
+        request.resolved_at = _naive(at)
+        request.status = "declined" if "declined" in detail else "approved"
+        if detail.startswith("Auto-approved"):
+            request.auto_approved_reason = "bypass"
+    elif event_type == "expired":
+        request.status = "expired"
+        request.resolved_at = _naive(at)
     db.add(
         models.ApprovalEvent(
             approval_request_id=request.id,
@@ -515,11 +525,13 @@ def test_approval_counts_and_median(db_session: Session, test_user: User) -> Non
         db_session, account_id=test_user.account_id, start=START, end=END
     )
     assert signals.approvals == ApprovalSignals(
-        requested=4,
+        requested=3,
         granted=2,
         denied=1,
         expired=1,
         median_decision_seconds=30.0,
+        auto_approved=1,
+        auto_approved_reasons=({"reason": "bypass", "count": 1, "agent_count": 0},),
     )
 
 
@@ -1017,3 +1029,70 @@ def test_group_by_user_orders_developers_and_keeps_unattributed() -> None:
     grouped = group_by_user(signals)
     assert [row.user_id for row in grouped] == [low, high, None]
     assert [row.sessions[0].request_count for row in grouped] == [3, 2, 1]
+
+
+def test_native_automatic_approvals_do_not_inflate_human_requests(
+    db_session: Session, test_user: User
+) -> None:
+    """Repeated audit events cannot multiply real requests or human latency."""
+    for index in range(3):
+        request = _approval_request(db_session, test_user, f"native-{index}")
+        request.status = "approved"
+        request.auto_approved_reason = "native_tool_approvals_off"
+        request.managed_agent_id = uuid.UUID(int=1 if index < 2 else 2)
+        request.resolved_at = _naive(START + timedelta(seconds=2))
+        for _ in range(2):
+            _event(
+                db_session, request, "approval_requested", "Approval requested", START
+            )
+    pending = _approval_request(db_session, test_user, "waiting-for-human")
+    _event(db_session, pending, "approval_requested", "Approval requested", START)
+    signals = collect_weekly_signals(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    assert signals.approvals.requested == 1
+    assert signals.approvals.pending == 1
+    assert signals.approvals.granted == 0
+    assert signals.approvals.median_decision_seconds == 0
+    assert signals.approvals.auto_approved == 3
+    assert signals.approvals.auto_approved_reasons == (
+        {"reason": "native_tool_approvals_off", "count": 3, "agent_count": 2},
+    )
+
+
+def test_first_seen_tool_usage_counts_calls_instead_of_schema_exposures(
+    db_session: Session, test_user: User
+) -> None:
+    session = models.RuntimeSession(
+        account_id=test_user.account_id,
+        session_source_type="test",
+        session_source_id="new-tool-usage",
+        started_at=_naive(START),
+    )
+    db_session.add(session)
+    db_session.flush()
+    _usage(
+        db_session,
+        test_user,
+        at=START + timedelta(hours=1),
+        duration=0.1,
+        session_id=session.id,
+        tools=["mcp__tracker__search"],
+    )
+    for moment in [START, START + timedelta(hours=1), END]:
+        db_session.add(
+            models.RuntimeSessionActivity(
+                account_id=test_user.account_id,
+                runtime_session_id=session.id,
+                activity_type="tool_call",
+                tool_name="search",
+                server_name="tracker",
+                timestamp=moment,
+            )
+        )
+    db_session.flush()
+    signals = collect_weekly_signals(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    tool = next(item for item in signals.first_seen if item.kind == "mcp_tool")
+    assert tool.usage_count == 2

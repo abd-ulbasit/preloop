@@ -405,4 +405,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261021_mcp_inventory",
         "20261021_fleet_models_merge",
     }
-    assert script.get_heads() == ["20261021_mcp_fleet_merge"]
+    weekly_email = script.get_revision("20261022_weekly_report_email")
+    assert weekly_email.down_revision == "20261021_mcp_fleet_merge"
+    assert script.get_heads() == ["20261022_weekly_report_email"]

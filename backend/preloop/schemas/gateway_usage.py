@@ -379,6 +379,10 @@ class RuntimeSessionSummary(BaseModel):
     started_at: datetime
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_href: Optional[str] = None
+    flow_href: Optional[str] = None
     flow_id: Optional[str] = None
     flow_name: Optional[str] = None
     flow_execution_id: Optional[str] = None

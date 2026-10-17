@@ -219,6 +219,20 @@ def registered_imported_spend_sources() -> List[ImportedSpendSource]:
     return [entry.source for entry in _imported_spend_sources]
 
 
+def imported_spend_for_report(
+    db: Session, *, account_id: UUID, start_day: date, end_day: date
+) -> tuple[List[ImportedSpendRow], bool]:
+    """Read registered imported spend with the evaluator's completeness rules."""
+    rows, complete = _imported_rows(db, account_id, start_day, end_day)
+    return [
+        row
+        for row in rows
+        if start_day <= row.day <= end_day
+        and math.isfinite(float(row.cost_usd))
+        and float(row.cost_usd) > 0
+    ], complete
+
+
 def _source_name(source: ImportedSpendSource) -> str:
     return getattr(source, "__qualname__", None) or type(source).__name__
 

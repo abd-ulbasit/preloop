@@ -62,6 +62,11 @@ from preloop.schemas.attention import (
     AttentionDismissalUpsertRequest,
 )
 from preloop.schemas.resource_share import SharedResourceRead
+from preloop.schemas.weekly_report import (
+    WeeklyReportPreferences,
+    WeeklyReportPreferencesUpdate,
+)
+
 from preloop.schemas.gateway_usage import (
     AccountManagedAgentListResponse,
     AccountGatewayUsageSearchResponse,
@@ -4330,3 +4335,47 @@ async def delete_attention_dismissal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dismissal not found",
         )
+
+
+@router.get("/weekly-report/preferences")
+def get_weekly_report_preferences(
+    account: Annotated[Account, Depends(get_account_for_user)],
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> WeeklyReportPreferences:
+    """Read effective weekly email delivery preferences."""
+    from preloop.models.crud.weekly_report import preferences
+
+    return WeeklyReportPreferences(
+        **preferences(db, account=account, user=current_user)
+    )
+
+
+@router.put("/weekly-report/preferences")
+def put_weekly_report_preferences(
+    payload: WeeklyReportPreferencesUpdate,
+    account: Annotated[Account, Depends(get_account_for_user)],
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> WeeklyReportPreferences:
+    """Opt out personally or change account delivery with admin permission."""
+    from preloop.models.crud.weekly_report import update_preferences
+    from preloop.utils.permissions import user_permission_names
+
+    if payload.account_enabled is not None and not (
+        current_user.is_superuser
+        or account.primary_user_id == current_user.id
+        or "manage_account" in user_permission_names(db, current_user)
+    ):
+        raise HTTPException(
+            status_code=403, detail="Account administrator access required"
+        )
+    return WeeklyReportPreferences(
+        **update_preferences(
+            db,
+            account_id=account.id,
+            user=current_user,
+            account_enabled=payload.account_enabled,
+            user_enabled=payload.user_enabled,
+        )
+    )

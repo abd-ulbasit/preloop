@@ -126,6 +126,7 @@ function fakeServer(
     own_model_exempt: false,
     privacy_line: 'server line',
   };
+  const email = { account_enabled: true, user_enabled: true };
   const calls: { method: string; url: string; body: unknown }[] = [];
   const active = () => versions.find((v) => v.is_active)!;
   const document = () => ({
@@ -213,6 +214,10 @@ function fakeServer(
         settings.mode = 'on_own_model';
         return json(settings);
       }
+      if (path === '/api/v1/weekly-report/preferences') {
+        if (method === 'PUT') Object.assign(email, body);
+        return json(email);
+      }
       if (path === '/api/v1/users') {
         return json({
           users: [{ id: 'user-1', full_name: 'Jane Doe' }],
@@ -234,13 +239,17 @@ function fakeServer(
       }
       return json({ detail: 'not found' }, 404);
     });
-  return { stub, calls, versions, settings };
+  return { stub, calls, versions, settings, email };
 }
 
-async function mount(canManage: boolean): Promise<GovernancePolicyPanel> {
+async function mount(
+  canManage: boolean,
+  canManageAccount = canManage
+): Promise<GovernancePolicyPanel> {
   const element = await fixture<GovernancePolicyPanel>(
     html`<governance-policy-panel
       .canManage=${canManage}
+      .canManageAccount=${canManageAccount}
     ></governance-policy-panel>`
   );
   await waitUntil(
@@ -631,5 +640,100 @@ describe('governance-policy-panel', () => {
         (c) => c.method === 'POST' && c.url.endsWith('/keep-on')
       )
     ).to.equal(true);
+  });
+
+  it('turns the review off and back on with one switch, restoring the mode', async () => {
+    server = fakeServer('on_platform');
+    const element = await mount(true);
+    const review = () =>
+      element.shadowRoot!.querySelector('.review-switch') as HTMLInputElement;
+    expect(review().checked).to.equal(true);
+    review().click();
+    await waitUntil(() => server.settings.mode === 'off');
+    await waitUntil(() =>
+      element.shadowRoot!.textContent!.includes('No sessions are read')
+    );
+    review().click();
+    await waitUntil(() => server.settings.mode === 'on_platform');
+  });
+
+  it('switches the weekly email for the account and for me', async () => {
+    server = fakeServer('on_platform');
+    const element = await mount(true);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('.email-user-switch')
+    );
+    (
+      element.shadowRoot!.querySelector('.email-user-switch') as HTMLElement
+    ).click();
+    await waitUntil(() => server.email.user_enabled === false);
+    await waitUntil(
+      () =>
+        !element
+          .shadowRoot!.querySelector('.email-account-switch')!
+          .hasAttribute('disabled')
+    );
+    (
+      element.shadowRoot!.querySelector('.email-account-switch') as HTMLElement
+    ).click();
+    await waitUntil(() => server.email.account_enabled === false);
+    const puts = server.calls.filter(
+      (call) =>
+        call.method === 'PUT' && call.url.includes('weekly-report/preferences')
+    );
+    expect(puts.map((call) => call.body)).to.eql([
+      { user_enabled: false },
+      { account_enabled: false },
+    ]);
+  });
+
+  it('keeps read-only members from flipping account switches', async () => {
+    server = fakeServer('on_platform');
+    const element = await mount(false);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('.email-account-switch')
+    );
+    expect(
+      element
+        .shadowRoot!.querySelector('.review-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(true);
+    expect(
+      element
+        .shadowRoot!.querySelector('.email-account-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(true);
+    expect(
+      element
+        .shadowRoot!.querySelector('.email-user-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
+  });
+
+  it('gates the account email switch on manage_account, not manage_policies', async () => {
+    server = fakeServer('on_platform');
+    const element = await mount(true, false);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('.email-account-switch')
+    );
+    expect(
+      element
+        .shadowRoot!.querySelector('.email-account-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(true);
+    expect(
+      element
+        .shadowRoot!.querySelector('.review-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
+    const accountOnly = await mount(false, true);
+    await waitUntil(() =>
+      accountOnly.shadowRoot!.querySelector('.email-account-switch')
+    );
+    expect(
+      accountOnly
+        .shadowRoot!.querySelector('.email-account-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
   });
 });

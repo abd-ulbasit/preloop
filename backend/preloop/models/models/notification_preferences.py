@@ -39,6 +39,10 @@ class NotificationPreferences(Base):
 
     __tablename__ = "notification_preferences"
 
+    weekly_report_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("user.id", ondelete="CASCADE"),

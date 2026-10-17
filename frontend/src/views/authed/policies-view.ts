@@ -256,6 +256,7 @@ export class PoliciesView extends LitElement {
   @state() private _permissionDenied = false;
   /** Read-only governance editor for members without `manage_policies`. */
   @state() private _canManagePolicies = true;
+  @state() private _canManageAccount = false;
   @state() private _features: { [key: string]: boolean | string[] } = {};
 
   // Access policies state
@@ -935,6 +936,10 @@ export class PoliciesView extends LitElement {
       this._canManagePolicies = hasPermission(
         profile?.permissions,
         'manage_policies'
+      );
+      this._canManageAccount = hasPermission(
+        profile?.permissions,
+        'manage_account'
       );
     } catch {
       // Profile unavailable: fall through and let the API answer.
@@ -3846,6 +3851,7 @@ defaults:
                               this._activeTab === 'governance'
                                 ? html`<governance-policy-panel
                                     .canManage=${this._canManagePolicies}
+                                    .canManageAccount=${this._canManageAccount}
                                   ></governance-policy-panel>`
                                 : ''
                             }

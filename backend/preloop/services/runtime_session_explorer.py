@@ -28,7 +28,6 @@ from preloop.models.crud import (
 from preloop.models.models.account import Account
 from preloop.models.models.api_usage import ApiUsage
 from preloop.models.models.approval_request import ApprovalRequest
-from preloop.models.models.managed_agent import ManagedAgent
 from preloop.models.models.runtime_session import RuntimeSession
 from preloop.models.models.runtime_session_activity import RuntimeSessionActivity
 from preloop.services.analytics_history import (
@@ -270,16 +269,10 @@ class RuntimeSessionExplorerService:
         cheaper than a per-row lookup and simpler than a join into the
         aggregate session query.
         """
-        return (
-            self.db.query(
-                ManagedAgent.id,
-                ManagedAgent.display_name,
-                ManagedAgent.agent_kind,
-                ManagedAgent.session_source_type,
-                ManagedAgent.session_source_id,
-            )
-            .filter(ManagedAgent.account_id == account.id)
-            .all()
+        from preloop.models.crud import crud_managed_agent
+
+        return crud_managed_agent.get_multi(
+            self.db, account_id=str(account.id), limit=None
         )
 
     def _attach_session_labels(
@@ -324,21 +317,30 @@ class RuntimeSessionExplorerService:
     ) -> None:
         """Name the managed agent behind each session's runtime principal."""
         agents = self._account_managed_agents(account)
+        by_id = {str(row.id): row for row in agents}
+        by_session = {
+            str(row.runtime_session_id): row for row in agents if row.runtime_session_id
+        }
         by_principal = {
             (row.session_source_type, row.session_source_id): row for row in agents
         }
         for item in items:
             principal_type = item.runtime_principal_type
             principal_id = item.runtime_principal_id
-            if not principal_type or not principal_id:
-                continue
-            row = by_principal.get((principal_type, principal_id))
-            if row is None and ":" in principal_id:
+            row = by_id.get(principal_id) if principal_type == "managed_agent" else None
+            if row is None:
+                row = by_session.get(str(item.id))
+            if row is None:
+                row = by_principal.get((principal_type, principal_id))
+            if row is None and principal_id and ":" in principal_id:
                 # Per-run sessions key off ``<base>:<run-id>``.
                 row = by_principal.get((principal_type, principal_id.split(":", 1)[0]))
             if row is None:
                 continue
             item.managed_agent_id = str(row.id)
+            item.agent_id = str(row.id)
+            item.agent_name = row.display_name
+            item.agent_href = f"/console/agents/{row.id}"
             item.managed_agent_name = row.display_name
             item.agent_kind = row.agent_kind
 
@@ -656,10 +658,14 @@ class RuntimeSessionExplorerService:
             limit=20,
         )
 
+        session = self._summary_row_to_schema(summary_row)
+        self._attach_managed_agents(
+            account=account, items=[session], session_ids=[runtime_session_id]
+        )
         return AccountRuntimeSessionDetailResponse(
             period_start=start_date,
             period_end=end_date,
-            session=self._summary_row_to_schema(summary_row),
+            session=session,
             usage_by_model=[
                 ModelGatewayUsageService._model_row_to_schema(row)
                 for row in usage_by_model
@@ -1190,6 +1196,7 @@ class RuntimeSessionExplorerService:
             started_at=row["started_at"],
             last_activity_at=row["last_activity_at"],
             ended_at=row["ended_at"],
+            flow_href=f"/console/flows/{row['flow_id']}" if row["flow_id"] else None,
             flow_id=row["flow_id"],
             flow_name=row["flow_name"],
             flow_execution_id=row["flow_execution_id"],

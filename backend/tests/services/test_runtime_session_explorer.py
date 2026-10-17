@@ -991,3 +991,57 @@ def test_history_policy_is_resolved_once_per_request_and_not_cached(
     assert provider.call_count == 2
     next_cutoff = lookup.call_args.kwargs["start_date"]
     assert abs((next_cutoff - (now - timedelta(days=730))).total_seconds()) < 2
+
+
+def test_session_detail_links_its_managed_principal_and_flow(
+    service: RuntimeSessionExplorerService,
+) -> None:
+    """A managed principal id resolves even without a source-key match."""
+    from types import SimpleNamespace
+
+    agent_id = str(uuid.uuid4())
+    row = _make_summary_row(
+        runtime_principal_type="managed_agent",
+        runtime_principal_id=agent_id,
+        flow_id=str(uuid.uuid4()),
+        flow_name="Review flow",
+    )
+    agent = SimpleNamespace(
+        id=agent_id,
+        display_name="Review agent",
+        agent_kind="codex",
+        runtime_session_id=None,
+        session_source_type="codex",
+        session_source_id="another-source",
+    )
+    with (
+        patch.object(
+            rse_mod.crud_runtime_session,
+            "get_account_session_summary",
+            return_value=row,
+        ),
+        patch.object(
+            rse_mod.crud_api_usage, "get_gateway_usage_by_model", return_value=[]
+        ),
+        patch.object(
+            service,
+            "_account_managed_agents",
+            return_value=[
+                SimpleNamespace(
+                    id=str(uuid.uuid4()),
+                    display_name="Legacy agent",
+                    agent_kind="codex",
+                    runtime_session_id=row["id"],
+                    session_source_type="codex",
+                    session_source_id="legacy",
+                ),
+                agent,
+            ],
+        ),
+    ):
+        detail = service.get_account_session_detail(
+            account=_make_account(), runtime_session_id=row["id"]
+        )
+    assert detail.session.agent_id == agent_id
+    assert detail.session.agent_href == f"/console/agents/{agent_id}"
+    assert detail.session.flow_href == f"/console/flows/{row['flow_id']}"

@@ -10,7 +10,7 @@ timezone-aware. Naive ``timestamp`` columns are read as UTC.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, NamedTuple, Optional
 from uuid import UUID
 
@@ -40,6 +40,9 @@ class ApprovalProjection(NamedTuple):
     denied: int
     expired: int
     median_decision_seconds: float
+    pending: int = 0
+    auto_approved: int = 0
+    auto_approved_reasons: tuple[dict[str, Any], ...] = ()
 
 
 class FirstSeenProjection(NamedTuple):
@@ -50,6 +53,7 @@ class FirstSeenProjection(NamedTuple):
     label: str
     first_seen_at: datetime
     user_id: Optional[UUID]
+    usage_count: int = 0
 
 
 class LatencyProjection(NamedTuple):
@@ -139,112 +143,72 @@ _NOT_REPLAY = """
 def approval_signals(
     db: Session, *, account_id: UUID, start: datetime, end: datetime
 ) -> ApprovalProjection:
-    """Count approval audit events and the median time to a human decision.
+    """Count real requests, separating policy/AI decisions from human work.
 
-    Granted and denied come from ``approval_complete`` details written by the
-    approval service (``Approval request approved%`` and
-    ``Approval request declined%``). Auto-approved completions are not
-    grants: no person decided them. Expired events are counted on their own
-    and do not enter the median. The median pairs each in-window human
-    decision with the earliest ``approval_requested`` event for that request,
-    which may fall before the window.
-
-    Args:
-        db: Database session.
-        account_id: Account whose events are counted.
-        start: Inclusive window start, timezone-aware.
-        end: Exclusive window end, timezone-aware.
-
-    Returns:
-        Counts and the median lag in seconds. The median is ``0.0`` when no
-        human decision in the window has a matching request event.
+    Requests/pending use the requested-in-window cohort. Completed decisions
+    use resolved-in-window rows, including requests from the prior window.
+    Automated decisions never enter the human decision latency.
     """
-    row = (
+    rows = (
         db.execute(
-            text(
-                """
-                WITH window_events AS (
-                    SELECT approval_request_id, event_type, detail, timestamp
-                    FROM approval_event
-                    WHERE account_id = CAST(:account_id AS uuid)
-                      AND (timestamp AT TIME ZONE 'UTC') >= :start
-                      AND (timestamp AT TIME ZONE 'UTC') < :end
-                ),
-                counts AS (
-                    SELECT
-                        COUNT(*) FILTER (
-                            WHERE event_type = 'approval_requested'
-                        )::int AS requested,
-                        COUNT(*) FILTER (
-                            WHERE event_type = 'approval_complete'
-                              AND detail LIKE 'Approval request approved%'
-                        )::int AS granted,
-                        COUNT(*) FILTER (
-                            WHERE event_type = 'approval_complete'
-                              AND detail LIKE 'Approval request declined%'
-                        )::int AS denied,
-                        COUNT(*) FILTER (
-                            WHERE event_type = 'expired'
-                        )::int AS expired
-                    FROM window_events
-                ),
-                decisions AS (
-                    SELECT approval_request_id, MIN(timestamp) AS decided_at
-                    FROM window_events
-                    WHERE event_type = 'approval_complete'
-                      AND (
-                          detail LIKE 'Approval request approved%'
-                          OR detail LIKE 'Approval request declined%'
-                      )
-                    GROUP BY approval_request_id
-                ),
-                requested_at AS (
-                    SELECT approval_request_id, MIN(timestamp) AS requested_at
-                    FROM approval_event
-                    WHERE account_id = CAST(:account_id AS uuid)
-                      AND event_type = 'approval_requested'
-                      AND approval_request_id IN (
-                          SELECT approval_request_id FROM decisions
-                      )
-                    GROUP BY approval_request_id
-                ),
-                lags AS (
-                    SELECT EXTRACT(
-                        EPOCH FROM (d.decided_at - r.requested_at)
-                    ) AS seconds
-                    FROM decisions d
-                    JOIN requested_at r
-                      ON r.approval_request_id = d.approval_request_id
-                    WHERE d.decided_at >= r.requested_at
-                )
-                SELECT
-                    c.requested,
-                    c.granted,
-                    c.denied,
-                    c.expired,
-                    COALESCE(
-                        (
-                            SELECT percentile_cont(0.5) WITHIN GROUP (
-                                ORDER BY seconds
-                            )
-                            FROM lags
-                        ),
-                        0
-                    )::float8 AS median_decision_seconds
-                FROM counts c
-                """
+            text("""
+        WITH requests AS (
+            SELECT *, COALESCE(auto_approved_reason,
+                CASE WHEN decided_by_ai THEN 'ai_decision' END) AS automatic_reason
+            FROM approval_request
+            WHERE account_id = CAST(:account_id AS uuid)
+        ), counts AS (
+            SELECT
+                COUNT(*) FILTER (WHERE automatic_reason IS NULL
+                    AND requested_at >= :start AND requested_at < :end)::int AS requested,
+                COUNT(*) FILTER (WHERE automatic_reason IS NULL AND status = 'approved'
+                    AND resolved_at >= :start AND resolved_at < :end)::int AS granted,
+                COUNT(*) FILTER (WHERE automatic_reason IS NULL AND status = 'declined'
+                    AND resolved_at >= :start AND resolved_at < :end)::int AS denied,
+                COUNT(*) FILTER (WHERE automatic_reason IS NULL AND status = 'expired'
+                    AND COALESCE(resolved_at, expires_at) >= :start
+                    AND COALESCE(resolved_at, expires_at) < :end)::int AS expired,
+                COUNT(*) FILTER (WHERE automatic_reason IS NULL AND status = 'pending'
+                    AND requested_at >= :start AND requested_at < :end)::int AS pending,
+                COALESCE(percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM resolved_at - requested_at)
+                ) FILTER (WHERE automatic_reason IS NULL
+                    AND status IN ('approved', 'declined')
+                    AND resolved_at >= :start AND resolved_at < :end
+                    AND resolved_at >= requested_at), 0)::float8 AS median_decision_seconds
+            FROM requests
+        ), reasons AS (
+            SELECT automatic_reason AS reason, COUNT(*)::int AS count,
+                COUNT(DISTINCT managed_agent_id)::int AS agent_count
+            FROM requests
+            WHERE automatic_reason IS NOT NULL AND status = 'approved'
+                AND COALESCE(resolved_at, requested_at) >= :start
+                AND COALESCE(resolved_at, requested_at) < :end
+            GROUP BY automatic_reason
+        )
+        SELECT counts.*, COALESCE((SELECT SUM(count) FROM reasons), 0)::int AS auto_approved,
+            COALESCE((SELECT jsonb_agg(to_jsonb(reasons) ORDER BY count DESC, reason)
+                FROM reasons), '[]'::jsonb) AS auto_approved_reasons
+        FROM counts
+    """),
+            _params(
+                account_id,
+                start.astimezone(timezone.utc).replace(tzinfo=None),
+                end.astimezone(timezone.utc).replace(tzinfo=None),
             ),
-            _params(account_id, start, end),
         )
         .mappings()
         .one()
     )
     return ApprovalProjection(
-        requested=_int(row["requested"]),
-        granted=_int(row["granted"]),
-        denied=_int(row["denied"]),
-        expired=_int(row["expired"]),
-        median_decision_seconds=_float(row["median_decision_seconds"]),
+        requested=_int(rows["requested"]),
+        granted=_int(rows["granted"]),
+        denied=_int(rows["denied"]),
+        expired=_int(rows["expired"]),
+        median_decision_seconds=_float(rows["median_decision_seconds"]),
+        pending=_int(rows["pending"]),
+        auto_approved=_int(rows["auto_approved"]),
+        auto_approved_reasons=tuple(rows["auto_approved_reasons"]),
     )
 
 
@@ -271,7 +235,7 @@ def first_seen_signals(
         db.execute(
             text(
                 f"""
-                SELECT kind, item_key, label, first_seen_at, user_id
+                SELECT kind, item_key, label, first_seen_at, user_id, usage_count
                 FROM (
                     SELECT
                         'gateway_subject'::text AS kind,
@@ -280,7 +244,8 @@ def first_seen_signals(
                             NULLIF(email, ''), external_subject
                         ) AS label,
                         first_seen_at,
-                        linked_user_id AS user_id
+                        linked_user_id AS user_id,
+                        (SELECT COUNT(*) FROM api_usage u WHERE u.account_id = gateway_subject.account_id AND u.meta_data ->> 'gateway_subject_id' = gateway_subject.id::text AND u.timestamp >= :start AND u.timestamp < :end AND u.action_type = 'model_gateway')::int AS usage_count
                     FROM gateway_subject
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND first_seen_at >= :start
@@ -293,7 +258,15 @@ def first_seen_signals(
                         id::text,
                         agent_kind,
                         (first_seen_at AT TIME ZONE 'UTC'),
-                        NULL::uuid
+                        NULL::uuid,
+                        (SELECT COUNT(*) FROM api_usage u
+                         JOIN managed_agent m ON m.id = discovered_agent_candidate.managed_agent_id
+                         AND m.account_id = discovered_agent_candidate.account_id
+                         WHERE u.account_id = discovered_agent_candidate.account_id
+                         AND (u.runtime_session_id = m.runtime_session_id OR
+                              (u.runtime_principal_type = 'managed_agent' AND u.runtime_principal_id = m.id::text))
+                         AND u.action_type = 'model_gateway'
+                         AND u.timestamp >= :start AND u.timestamp < :end)::int
                     FROM discovered_agent_candidate
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND (first_seen_at AT TIME ZONE 'UTC') >= :start
@@ -306,7 +279,8 @@ def first_seen_signals(
                         client_id::text,
                         cli_version,
                         first_seen,
-                        NULL::uuid
+                        NULL::uuid,
+                        check_count::int
                     FROM cli_clients
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND first_seen >= :start
@@ -319,11 +293,18 @@ def first_seen_signals(
                         tool_name,
                         tool_name,
                         (first_seen AT TIME ZONE 'UTC'),
-                        NULL::uuid
+                        NULL::uuid,
+                        (SELECT COUNT(*) FROM runtime_session_activity a
+                         WHERE a.account_id = CAST(:account_id AS uuid)
+                         AND a.activity_type = 'tool_call'
+                         AND a.timestamp >= :start AND a.timestamp < :end
+                         AND (a.tool_name = tools.tool_name OR
+                            ('mcp__' || a.server_name || '__' || a.tool_name) = tools.tool_name))::int
                     FROM (
                         SELECT
                             elem ->> 'name' AS tool_name,
-                            MIN(timestamp) AS first_seen
+                            MIN(timestamp) AS first_seen,
+                            COUNT(*) FILTER (WHERE (timestamp AT TIME ZONE 'UTC') >= :start)::int AS usage_count
                         FROM api_usage
                         CROSS JOIN LATERAL jsonb_array_elements(
                             CASE
@@ -358,6 +339,7 @@ def first_seen_signals(
             label=str(row["label"] or ""),
             first_seen_at=row["first_seen_at"],
             user_id=_uuid(row["user_id"]),
+            usage_count=_int(row["usage_count"]),
         )
         for row in rows
     ]

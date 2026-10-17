@@ -42,6 +42,10 @@ export interface ObservedSession {
   runtimePrincipalName: string | null;
   flowName: string | null;
   flowExecutionId: string | null;
+  /** The agent or flow the session belongs to, linked in the console. */
+  agentName?: string | null;
+  agentHref?: string | null;
+  flowHref?: string | null;
   status: string;
   startedAt: string | null;
   lastActivityAt: string | null;
@@ -284,6 +288,17 @@ export function normalizeObservedSession(
     runtimePrincipalName: asString(row.runtime_principal_name),
     flowName: asString(row.flow_name),
     flowExecutionId: asString(row.flow_execution_id),
+    agentName: asString(row.agent_name) || asString(row.managed_agent_name),
+    agentHref:
+      asString(row.agent_href) ||
+      (asString(row.managed_agent_id)
+        ? `/console/agents/${encodeURIComponent(asString(row.managed_agent_id)!)}`
+        : null),
+    flowHref:
+      asString(row.flow_href) ||
+      (asString(row.flow_id)
+        ? `/console/flows/${encodeURIComponent(asString(row.flow_id)!)}`
+        : null),
     status: getStatus(row),
     startedAt: asString(row.started_at),
     lastActivityAt:

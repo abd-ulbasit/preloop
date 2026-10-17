@@ -864,6 +864,16 @@ apply the identity schema/backfill and authentication changes first.
 
 ### Governance findings console
 
+Weekly report signals count human requests and decisions separately from automatic
+policy approvals. Report evidence projects account-scoped gateway metadata through
+CRUD, retaining daily spend (including registered imports), linked contributing
+sessions, and per-tool schema costs with unknown tariffs represented as null.
+`GET/PUT /api/v1/weekly-report/preferences` controls independent account and member
+email delivery, defaults on, and audits changes in the same transaction. Account
+changes require account administration; members can unsubscribe themselves without
+changing approval notifications. The Enterprise digest enforces both switches.
+
+
 The `governance_review` capability registers lazy `/console/governance` and
 `/console/governance/findings/:findingId` views. They read the Enterprise plugin's
 account-scoped runs and findings, with kind, severity, developer and week filters.

@@ -59,10 +59,10 @@ class ApprovalSignals:
     """Approval audit-event counts for one account and window.
 
     Attributes:
-        requested: ``approval_requested`` events in the window.
-        granted: Human approvals (``Approval request approved%``).
-        denied: Human declines (``Approval request declined%``).
-        expired: ``expired`` events.
+        requested: Human requests created in the window, excluding automation.
+        granted: Human approvals resolved in the window.
+        denied: Human declines resolved in the window.
+        expired: Human requests that expired in the window.
         median_decision_seconds: Median seconds from request to human
             decision. ``0.0`` when there is nothing to measure.
     """
@@ -72,6 +72,9 @@ class ApprovalSignals:
     denied: int
     expired: int
     median_decision_seconds: float
+    pending: int = 0
+    auto_approved: int = 0
+    auto_approved_reasons: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,7 @@ class FirstSeenItem:
     label: str
     first_seen_at: datetime
     user_id: Optional[UUID] = None
+    usage_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,7 @@ class SessionEfficiency:
     tools_attached: tuple[str, ...]
     tools_used: tuple[str, ...]
     unused_tools: tuple[str, ...]
+    raw_tools_attached: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -288,6 +293,9 @@ def collect_weekly_signals(
             denied=approvals.denied,
             expired=approvals.expired,
             median_decision_seconds=approvals.median_decision_seconds,
+            pending=approvals.pending,
+            auto_approved=approvals.auto_approved,
+            auto_approved_reasons=approvals.auto_approved_reasons,
         ),
         first_seen=tuple(
             FirstSeenItem(
@@ -296,6 +304,7 @@ def collect_weekly_signals(
                 label=item.label,
                 first_seen_at=item.first_seen_at,
                 user_id=item.user_id,
+                usage_count=item.usage_count,
             )
             for item in first_seen
         ),
@@ -501,6 +510,7 @@ def _session(row: SessionProjection) -> SessionEfficiency:
         failed_tool_counts=_tool_counts(row.failed_tools),
         max_tool_loop=max(row.max_tool_call_count, row.activity_tool_loop),
         max_context_tokens=row.max_context_tokens,
+        raw_tools_attached=tuple(sorted(set(row.tools_attached))),
         tools_attached=attached,
         tools_used=used_names,
         unused_tools=tuple(name for name in attached if name not in used),
