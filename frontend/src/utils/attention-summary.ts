@@ -23,7 +23,7 @@ export interface AttentionSummary {
   /** How many items the strip would show. */
   total: number;
   /** Per kind, in the console's kind order; kinds with no item are absent. */
-  counts: Array<{ kind: AttentionKind; count: number }>;
+  counts: Array<{ kind: AttentionKind | 'fleet'; count: number }>;
   /**
    * True when every item is low severity (a model priced at $0): those are a
    * question, not a problem, and the strip words them "worth a look".
@@ -41,20 +41,35 @@ const STORAGE_KEY = ATTENTION_SUMMARY_STORAGE_KEY;
 
 /** The same slice the Overview strip shows: loud items, or the low ones alone. */
 export function summariseAttentionItems(
-  items: AttentionItem[]
+  items: AttentionItem[],
+  fleetFindingCount = 0
 ): AttentionSummary {
   const loud = items.filter((item) => item.severity !== 'low');
-  const lowOnly = loud.length === 0;
+  const lowOnly = loud.length === 0 && fleetFindingCount === 0;
   const shown = lowOnly ? items : loud;
-  const counts = ATTENTION_KIND_ORDER.map((kind) => ({
-    kind,
-    count: shown.filter((item) => item.kind === kind).length,
-  })).filter((entry) => entry.count > 0);
-  return { total: shown.length, counts, lowOnly };
+  const counts: AttentionSummary['counts'] = ATTENTION_KIND_ORDER.map(
+    (kind) => ({
+      kind,
+      count: shown.filter((item) => item.kind === kind).length,
+    })
+  ).filter((entry) => entry.count > 0);
+  if (fleetFindingCount > 0)
+    counts.push({ kind: 'fleet', count: fleetFindingCount });
+  return { total: shown.length + fleetFindingCount, counts, lowOnly };
 }
 
-export function publishAttentionSummary(items: AttentionItem[]): void {
-  const summary = summariseAttentionItems(items);
+export function publishAttentionSummary(
+  items: AttentionItem[],
+  fleetFindingCount?: number
+): void {
+  // Overview cannot derive fleet findings. Keep the last known count until
+  // Attention refreshes it explicitly; auth changes clear the stored summary.
+  const fleetCount =
+    fleetFindingCount ??
+    readAttentionSummary()?.counts.find((entry) => entry.kind === 'fleet')
+      ?.count ??
+    0;
+  const summary = summariseAttentionItems(items, fleetCount);
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(summary));
   } catch {
@@ -97,7 +112,9 @@ export function formatAttentionSummary(
       ? 'needs attention'
       : 'need attention';
   const parts = summary.counts.map((entry) =>
-    attentionKindChipLabel(entry.kind, entry.count)
+    entry.kind === 'fleet'
+      ? `${entry.count} fleet ${entry.count === 1 ? 'finding' : 'findings'}`
+      : attentionKindChipLabel(entry.kind, entry.count)
   );
   const detail = parts.length ? `: ${parts.join(', ')}` : '';
   return `${summary.total} ${noun} ${verb}${detail}`;

@@ -38,6 +38,7 @@ import '../../components/capability-extension';
 import '../../components/new-runner-session-dialog';
 import type { RunnerSessionStarted } from '../../api';
 import { Router } from '../../router';
+import { fleetAccess, fleetHref } from '../../device-fleet-api';
 import consoleStyles from '../../styles/console-styles.css?inline';
 
 @customElement('runners-view')
@@ -45,6 +46,7 @@ export class RunnersView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
   @state()
   private runners: RunnerRecord[] = [];
+  @state() private fleetEnabled = false;
 
   @state()
   private loading = true;
@@ -275,6 +277,13 @@ export class RunnersView extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     void this.load();
+    void fleetAccess()
+      .then((access) => {
+        if (this.isConnected) this.fleetEnabled = access.view;
+      })
+      .catch(() => {
+        this.fleetEnabled = false;
+      });
     this.unsubscribe = unifiedWebSocketManager.subscribe(
       'runners',
       (message: { type?: string; payload?: Partial<RunnerRecord> }) =>
@@ -867,7 +876,8 @@ export class RunnersView extends LitElement {
       <view-header
         headerText="Runners"
         description="Self-hosted CLI runners for this account."
-      ></view-header>
+        >${this.fleetEnabled ? html`<a slot="main-column" href=${fleetHref()}>Device fleet</a>` : nothing}</view-header
+      >
       <runner-compliance></runner-compliance>
       ${this.loading ? nothing : this.renderDefaultPoolControl()}
       ${
@@ -920,6 +930,7 @@ export class RunnersView extends LitElement {
                           <th>Labels</th>
                           <th>Registered by</th>
                           <th>Host</th>
+                          ${this.fleetEnabled ? html`<th>Device</th>` : nothing}
                           <th>Harnesses</th>
                           <th>Status</th>
                           <th>Last heartbeat</th>
@@ -952,6 +963,7 @@ export class RunnersView extends LitElement {
                                   ${[row.os, row.arch].filter(Boolean).join('/')}
                                 </div>
                               </td>
+                              ${this.fleetEnabled ? html`<td>${row.ephemeral ? 'Ephemeral' : html`<a href=${fleetHref(row.workstation_fingerprint ? `fp:${row.workstation_fingerprint}` : `runner:${row.id}`)}>Device</a>`}</td>` : nothing}
                               <td>${this.renderHarnesses(row)}</td>
                               <td>
                                 <sl-badge

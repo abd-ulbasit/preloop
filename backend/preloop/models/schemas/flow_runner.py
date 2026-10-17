@@ -156,6 +156,11 @@ class RunnerRegisterRequest(BaseModel):
     """Register or resume a runner for the logged-in account."""
 
     name: Optional[str] = Field(None, max_length=200)
+    workstation_fingerprint: Optional[str] = Field(
+        None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="Self-reported tenant-salted correlation key, not attested device identity.",
+    )
     hostname: Optional[str] = Field(None, max_length=255)
     os: Optional[str] = Field(None, max_length=30)
     arch: Optional[str] = Field(None, max_length=30)
@@ -233,6 +238,10 @@ class RunnerResponse(BaseModel):
     registered_by_user_id: Optional[UUID] = None
     instance_id: Optional[UUID] = None
     name: str
+    workstation_fingerprint: Optional[str] = Field(
+        None,
+        description="Self-reported correlation key; only the registrant and manage_agents holders can read it.",
+    )
     hostname: Optional[str] = None
     os: Optional[str] = None
     arch: Optional[str] = None

@@ -678,9 +678,16 @@ Latest collection windows remain independent per authenticated reporting source;
 commercial import policy and coverage endpoints are provided by the optional
 fleet service.
 
-The OSS console ships no fleet coverage view. The Agents page shows managed
-and discovered agents only; device fleet views are not part of the open-source
-console.
+The Agents page shows managed and discovered agents only. Shared fleet lifecycle
+models, CRUD and lazy console components live in this repository, but fleet routes,
+evaluation and delivery belong to the optional service plugin. The `fleet_coverage`
+capability and owner/admin permissions gate Settings > People & access > Device
+fleet, its runner links and Attention items. Without the capability these surfaces
+are hidden and direct navigation redirects. Device identity is an exact tenant-salted
+fingerprint match; legacy runners remain separate and hostnames are hints only.
+Fleet findings and audited alert settings persist in core; device projections are
+computed by the plugin. None of this enables or advertises a fleet feature in the
+open-source edition.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 

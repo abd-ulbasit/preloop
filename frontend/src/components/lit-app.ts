@@ -465,6 +465,7 @@ export class LitApp extends LitElement {
           { path: 'settings/ci-identities', component: 'ci-identities-view' },
           { path: 'settings/api-keys', component: 'api-keys-view' },
           { path: 'settings/runners', component: 'runners-view' },
+          { path: 'settings/device-fleet', redirect: '/console' },
           { path: 'settings/webhooks', component: 'webhooks-view' },
           {
             path: 'settings/api-keys/:keyId',

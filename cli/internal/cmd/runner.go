@@ -135,6 +135,7 @@ func init() {
 	)
 	runnerFgCmd.Flags().StringSlice("labels", nil, "labels used to match runner pools")
 	runnerFgCmd.Flags().String("name", "", "runner display name (default: hostname)")
+	runnerFgCmd.Flags().String("device-ref", "", "stable device reference shared with discovery (hashed before reporting)")
 	runnerFgCmd.Flags().Bool("once", false, "exit after the first leased execution finishes")
 	runnerFgCmd.Flags().Bool(
 		"ephemeral", false,
@@ -283,10 +284,13 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	state, err := loadOrRegisterRunner(client, name, hostname, labels, concurrency)
+	deviceRef, _ := cmd.Flags().GetString("device-ref")
+	state, err := loadOrRegisterRunner(client, name, hostname, labels, concurrency, deviceRef)
 	if err != nil {
 		return err
 	}
+	stopFingerprintRefresh := startRunnerFingerprintRefresh(client, deviceRef)
+	defer stopFingerprintRefresh()
 	// Checkouts of sessions that did not survive the restart are garbage;
 	// a session restored from disk keeps its clone.
 	_ = cleanupSessionWorkspaces(liveSessionCheckouts())
@@ -342,11 +346,12 @@ func resolveRunnerConcurrency(flagValue int) int {
 }
 
 func loadOrRegisterRunner(
-	client *api.Client, name, hostname string, labels []string, concurrency int,
+	client *api.Client, name, hostname string, labels []string, concurrency int, deviceRefs ...string,
 ) (*runnerState, error) {
 	if concurrency < 1 {
 		concurrency = config.DefaultRunnerConcurrency
 	}
+	runnerFingerprint.Store("")
 	req := map[string]any{
 		"harness_inventory":      runnerInventory.current(true),
 		"host_exec_profiles":     hostExecAdvertisements(),
@@ -361,6 +366,10 @@ func loadOrRegisterRunner(
 	}
 	if runnerOnce.registersEphemeral() {
 		return registerEphemeralRunner(client, req)
+	}
+	if fingerprint := runnerWorkstationFingerprint(client, deviceRefs...); fingerprint != "" {
+		req["workstation_fingerprint"] = fingerprint
+		runnerFingerprint.Store(fingerprint)
 	}
 	if existing, err := readRunnerState(); err == nil && existing.ID != "" && existing.Token != "" {
 		req["runner_id"] = existing.ID

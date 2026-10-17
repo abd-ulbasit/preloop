@@ -3863,6 +3863,7 @@ export async function commitIssueDependencies(
 }
 
 export interface UserProfile {
+  is_account_owner?: boolean;
   /** The caller's user id. Matches an approval workflow's approver_user_ids. */
   id: string;
   /** Canonical person; id remains the account membership identifier. */
@@ -5244,6 +5245,7 @@ export async function getRunner(runnerId: string): Promise<RunnerRecord> {
 }
 
 export interface RunnerRecord {
+  workstation_fingerprint?: string | null;
   paused?: boolean;
   accept_untagged?: boolean;
   id: string;

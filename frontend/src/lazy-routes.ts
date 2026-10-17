@@ -43,6 +43,11 @@ export interface CapabilityRoute {
  */
 export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
   {
+    capability: 'fleet_coverage',
+    path: 'settings/device-fleet',
+    component: 'device-fleet-view',
+  },
+  {
     capability: 'governance_review',
     path: 'governance/findings/:findingId',
     component: 'governance-view',
@@ -80,6 +85,7 @@ export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
 ];
 
 export const capabilityRouteLoaders: ComponentLoaders = {
+  'device-fleet-view': () => import('./views/authed/device-fleet-view'),
   'governance-view': () => import('./views/authed/governance-view'),
   'inference-hooks-view': () =>
     import('./views/authed/settings/inference-hooks-view'),
