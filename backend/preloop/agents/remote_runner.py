@@ -130,7 +130,7 @@ class RemoteRunnerExecutor(AgentExecutor):
                 )
         status = outcome.get("consent_status")
         if status in {"declined", "expired", "cancelled", "consumed"}:
-            raise ValueError("Runner owner did not authorize this flow execution")
+            raise ValueError("The runner owner declined this run, or the approval request timed out.")
         if status == "pending":
             execution = crud_flow_execution.get(self.db, id=execution_id)
             if execution is not None:
@@ -458,7 +458,7 @@ class RemoteRunnerExecutor(AgentExecutor):
             obj_in=FlowExecutionUpdate(
                 status="FAILED",
                 end_time=datetime.now(timezone.utc),
-                error_message="Runner owner did not authorize this flow execution",
+                error_message="The runner owner declined this run, or the approval request timed out.",
             ),
         )
 

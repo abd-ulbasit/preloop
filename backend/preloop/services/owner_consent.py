@@ -146,9 +146,9 @@ async def require_owner_consent(
         detail={
             "status": result.status,
             "approval_id": str(result.approval_id),
-            "message": "Waiting for agent owner"
+            "message": "Waiting for the agent owner to approve this session."
             if result.status == "pending"
-            else "Owner consent does not authorize this session",
+            else "The agent owner declined this session, or the request timed out.",
         },
     )
 

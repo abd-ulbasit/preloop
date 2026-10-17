@@ -5270,6 +5270,8 @@ export interface RunnerRecord {
   running_execution_ids?: string[] | null;
   registered_by_email?: string | null;
   registered_by_user_id?: string | null;
+  /** Whether the owner approves each flow before it runs here. */
+  flow_execution_consent?: 'ask_me' | 'always' | 'never';
   capabilities?: {
     host_exec_profiles?: Array<{
       name?: string;
@@ -5368,6 +5370,25 @@ export async function updateRunnerScheduling(
     const errorData = await response.json().catch(() => ({}));
     throw new Error(
       extractErrorMessage(errorData, 'Failed to update runner scheduling')
+    );
+  }
+  return response.json();
+}
+
+/** Owner only: decide whether flows on this runner need their approval. */
+export async function updateRunnerConsent(
+  runnerId: string,
+  flowExecutionConsent: 'ask_me' | 'always' | 'never'
+): Promise<RunnerRecord> {
+  const response = await fetchWithAuth(`/api/v1/runners/${runnerId}/consent`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ flow_execution_consent: flowExecutionConsent }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      extractErrorMessage(errorData, 'Could not change the flow run setting')
     );
   }
   return response.json();
