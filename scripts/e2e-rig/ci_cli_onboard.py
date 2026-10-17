@@ -118,6 +118,7 @@ def plant_claude_code_install() -> None:
     """
     (HOME / ".claude").mkdir(parents=True, exist_ok=True)
     (HOME / ".claude.json").write_text("{}\n")
+    (HOME / ".claude" / "settings.json").write_text("{}\n")
     os.environ["ANTHROPIC_API_KEY"] = PLACEHOLDER_UPSTREAM_KEY
 
 

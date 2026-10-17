@@ -260,3 +260,16 @@ class TestGatewayEnvFromSettings:
 
     def test_non_dict_input(self):
         assert cli_onboard.gateway_env_from_settings(None) == ("", "")
+
+
+def test_ci_claude_install_has_required_settings_in_empty_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CI twin plants a discoverable, configurable Claude installation."""
+    import ci_cli_onboard
+
+    monkeypatch.setattr(ci_cli_onboard, "HOME", tmp_path)
+    monkeypatch.setenv("PRELOOP_DISABLE_TELEMETRY", "true")
+    ci_cli_onboard.plant_claude_code_install()
+    assert json.loads((tmp_path / ".claude.json").read_text()) == {}
+    assert json.loads((tmp_path / ".claude/settings.json").read_text()) == {}
