@@ -1528,6 +1528,37 @@ describe('console header branded help', () => {
     localStorage.removeItem('accessToken');
     (window as any).BRAND_CONFIG = original;
   });
+  it('uses the backend release for the blog link and inherits menu typography', async () => {
+    (window as any).BRAND_CONFIG.changelog_url =
+      'https://preloop.ai/blog/preloop-{version}';
+    const el = await fixture<ConsoleHeader>(
+      html`<console-header></console-header>`
+    );
+    await waitUntil(() => el.shadowRoot!.textContent!.includes('v1.2.3'));
+    const links = el.shadowRoot!.querySelectorAll('.help-menu sl-menu-item a');
+    expect(links[1].getAttribute('href')).to.equal(
+      'https://preloop.ai/blog/preloop-1-2-3'
+    );
+    const styles = getComputedStyle(links[1]);
+    expect(styles.textDecorationLine).to.equal('none');
+    expect(styles.color).to.equal(
+      getComputedStyle(
+        links[1].parentElement!.shadowRoot!.querySelector('[part=base]')!
+      ).color
+    );
+    const open = sinon.stub(window, 'open');
+    try {
+      (links[1].parentElement as HTMLElement).click();
+      expect(open).to.have.been.calledOnceWith(
+        'https://preloop.ai/blog/preloop-1-2-3',
+        '_blank',
+        'noopener'
+      );
+    } finally {
+      open.restore();
+    }
+  });
+
   it('opens an accessible menu with branded links and the backend version', async () => {
     const el = await fixture<ConsoleHeader>(
       html`<console-header></console-header>`

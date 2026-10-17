@@ -1,3 +1,4 @@
+import '../../../components/chat-setup-wizard';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
@@ -11,7 +12,6 @@ import '@shoelace-style/shoelace/dist/components/copy-button/copy-button.js';
 import '../../../components/view-header';
 import consoleStyles from '../../../styles/console-styles.css?inline';
 import {
-  createChatConnection,
   createChatLinkCode,
   listChatConnections,
   listChatDeliveries,
@@ -20,21 +20,9 @@ import {
 } from '../../../services/chat-api';
 import type {
   ChatConnection,
-  ChatConnectionCreate,
   ChatDelivery,
   ChatLinkCode,
-  ChatProvider,
 } from '../../../services/chat-api';
-
-const emptyForm = (): ChatConnectionCreate => ({
-  provider: 'slack',
-  workspace_id: '',
-  name: '',
-  verification_secret: '',
-  bot_token: '',
-  bot_user_id: '',
-  base_url: '',
-});
 
 @customElement('chat-connections-view')
 export class ChatConnectionsView extends LitElement {
@@ -45,7 +33,6 @@ export class ChatConnectionsView extends LitElement {
   @state() private busy = false;
   @state() private error = '';
   @state() private showForm = false;
-  @state() private form = emptyForm();
   @state() private linkCode: (ChatLinkCode & { connectionId: string }) | null =
     null;
   @state() private deliveries: ChatDelivery[] = [];
@@ -67,7 +54,6 @@ export class ChatConnectionsView extends LitElement {
     this.error = '';
     this.deliveryConnectionId = '';
     this.clearCode();
-    this.form = emptyForm();
     this.connections = [];
     this.deliveries = [];
   }
@@ -88,7 +74,6 @@ export class ChatConnectionsView extends LitElement {
       this.canManage = result.can_manage;
       if (!this.canManage) {
         this.showForm = false;
-        this.form = emptyForm();
       }
     } catch (error) {
       if (this.isConnected && generation === this.generation)
@@ -117,20 +102,6 @@ export class ChatConnectionsView extends LitElement {
     } finally {
       if (generation === this.generation) this.busy = false;
     }
-  }
-
-  private async create(event: Event) {
-    const generation = this.generation;
-    event.preventDefault();
-    const inputs = this.renderRoot.querySelectorAll('sl-input');
-    if ([...inputs].some((input) => !input.reportValidity())) return;
-    await this.act(async () => {
-      const created = await createChatConnection(this.form);
-      if (!this.isConnected || generation !== this.generation) return;
-      this.form = emptyForm();
-      this.connections = [...this.connections, created];
-      this.showForm = false;
-    });
   }
 
   private async link(connection: ChatConnection) {
@@ -185,85 +156,16 @@ export class ChatConnectionsView extends LitElement {
     });
   }
 
-  private field(key: keyof ChatConnectionCreate, event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    this.form = { ...this.form, [key]: value };
-  }
-
   private renderForm() {
-    const provider = this.form.provider;
-    return html`<form
-      @submit=${this.create}
-      aria-label="Connect a chat service"
-    >
-      <h2>Connect a chat service</h2>
-      <p>
-        Use a bot created for your team. Credentials are saved securely and
-        aren't shown again.
-      </p>
-      <sl-select
-        label="Service"
-        .value=${provider}
-        @sl-change=${(event: Event) => {
-          this.form = {
-            ...emptyForm(),
-            provider: (event.target as HTMLSelectElement).value as ChatProvider,
-          };
-        }}
-      >
-        <sl-option value="slack">Slack</sl-option>
-        <sl-option value="mattermost">Mattermost</sl-option>
-        <sl-option value="discord">Discord</sl-option>
-      </sl-select>
-      <sl-input
-        label="Connection name"
-        required
-        .value=${this.form.name}
-        @sl-input=${(e: Event) => this.field('name', e)}
-      ></sl-input>
-      <sl-input
-        label=${provider === 'discord' ? 'Server ID' : 'Workspace or team ID'}
-        required
-        .value=${this.form.workspace_id}
-        @sl-input=${(e: Event) => this.field('workspace_id', e)}
-      ></sl-input>
-      <sl-input
-        label="Bot token"
-        type="password"
-        autocomplete="new-password"
-        required
-        .value=${this.form.bot_token}
-        @sl-input=${(e: Event) => this.field('bot_token', e)}
-      ></sl-input>
-      <sl-input
-        label=${provider === 'discord' ? 'Application public key' : provider === 'slack' ? 'Signing secret' : 'Command verification token'}
-        type=${provider === 'discord' ? 'text' : 'password'}
-        autocomplete="off"
-        required
-        .value=${this.form.verification_secret}
-        @sl-input=${(e: Event) => this.field('verification_secret', e)}
-      ></sl-input>
-      <sl-input
-        label="Bot user ID"
-        ?required=${provider === 'mattermost'}
-        .value=${this.form.bot_user_id}
-        @sl-input=${(e: Event) => this.field('bot_user_id', e)}
-      ></sl-input>
-      ${provider === 'mattermost' ? html`<sl-input label="Mattermost address" placeholder="https://chat.example.com" type="url" required .value=${this.form.base_url} @sl-input=${(e: Event) => this.field('base_url', e)}></sl-input>` : nothing}
-      <div class="actions">
-        <sl-button type="submit" variant="primary" ?loading=${this.busy}
-          >Save connection</sl-button
-        >
-        <sl-button
-          ?disabled=${this.busy}
-          @click=${() => {
-            this.showForm = false;
-            this.form = emptyForm();
-          }}
-          >Cancel</sl-button
-        >
-      </div>
-    </form>`;
+    return html`<chat-setup-wizard
+      @chat-connection-created=${(event: CustomEvent<ChatConnection>) => {
+        this.connections = [...this.connections, event.detail];
+        this.showForm = false;
+      }}
+      @chat-setup-cancel=${() => {
+        this.showForm = false;
+      }}
+    ></chat-setup-wizard>`;
   }
 
   private renderConnection(connection: ChatConnection) {
@@ -272,7 +174,7 @@ export class ChatConnectionsView extends LitElement {
     const code =
       this.linkCode?.connectionId === connection.id ? this.linkCode : null;
     const linkingCommand = code
-      ? `${connection.provider === 'mattermost' ? '/preloop /link' : connection.provider === 'discord' ? '/preloop message:/link' : 'link'} ${code.code}`
+      ? `${connection.provider === 'mattermost' ? (connection.transport === 'direct_message' ? 'link' : '/preloop /link') : connection.provider === 'discord' ? '/preloop message:/link' : 'link'} ${code.code}`
       : '';
     return html`<article aria-label=${connection.name}>
       <div class="heading">
@@ -282,6 +184,12 @@ export class ChatConnectionsView extends LitElement {
         >
       </div>
       <p>${connection.provider} · ${connection.workspace_id}</p>
+      <p role="status">
+        Configured ·
+        ${connection.worker_ready ? 'Worker ready' : connection.worker_status === 'reconnecting' ? 'Worker reconnecting' : 'Waiting for worker'}
+        ·
+        ${connection.callback_seen ? 'Provider event received' : connection.transport === 'direct_message' ? 'Direct messages' : 'Awaiting provider callback'}
+      </p>
       <p>
         ${connection.linked ? `Your account is linked (${connection.external_user_id}).` : 'Your account is not linked yet.'}
       </p>
@@ -422,6 +330,9 @@ export class ChatConnectionsView extends LitElement {
       sl-input,
       sl-select {
         margin-bottom: var(--sl-spacing-medium);
+      }
+      a {
+        color: var(--sl-color-primary-600);
       }
       .link-code {
         margin-top: var(--sl-spacing-medium);

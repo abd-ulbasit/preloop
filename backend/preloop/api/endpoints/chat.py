@@ -10,7 +10,7 @@ from uuid import UUID
 
 from anyio import from_thread
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import get_current_active_user
@@ -23,6 +23,7 @@ from preloop.services.chat_providers import (
     ChatProviderError,
     MAX_EVENT_BYTES,
     validate_mattermost_url,
+    discover_mattermost_bot_user_id,
     verify_ingress,
 )
 from preloop.utils.encryption import encrypt_value, decrypt_value
@@ -35,11 +36,22 @@ MANAGE_PERMISSION = "manage_policies"
 class ConnectionCreate(BaseModel):
     provider: Literal["slack", "mattermost", "discord"]
     workspace_id: str = Field(min_length=1, max_length=256)
-    name: str = Field(min_length=1, max_length=120)
+    name: str = Field(default="", max_length=120)
     verification_secret: str = Field(min_length=1, max_length=1024)
     bot_token: str = Field(min_length=1, max_length=4096)
     bot_user_id: str = Field(default="", max_length=256)
     base_url: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def default_connection_name(self) -> ConnectionCreate:
+        """Allow clients to omit the display name or submit a blank input."""
+        provider_name = {
+            "slack": "Slack",
+            "mattermost": "Mattermost",
+            "discord": "Discord",
+        }
+        self.name = self.name.strip() or f"Preloop {provider_name[self.provider]} bot"
+        return self
 
 
 class ConnectionUpdate(BaseModel):
@@ -74,15 +86,40 @@ def get_connection(
 
 
 def public_connection(
-    db: Session, connection: models.ChatConnection, user: models.User
+    db: Session,
+    connection: models.ChatConnection,
+    user: models.User,
+    state: tuple[models.ChatIdentity | None, models.ChatListener | None] | None = None,
 ) -> dict[str, Any]:
-    identity = crud_chat.identity(db, connection.id, user_id=user.id)
+    if state is None:
+        identity = crud_chat.identity(db, connection.id, user_id=user.id)
+        health = crud_chat.listeners.get_multi(db, connection_id=connection.id, limit=1)
+        worker = health[0] if health else None
+    else:
+        identity, worker = state
+    fresh = bool(
+        worker and worker.lease_until and worker.lease_until > datetime.utcnow()
+    )
+    ready = bool(
+        worker
+        and worker.lease_until
+        and worker.lease_until > datetime.utcnow()
+        and worker.status in {"connected", "worker_ready"}
+    )
     return {
         "id": str(connection.id),
         "provider": connection.provider,
         "workspace_id": connection.workspace_id,
         "name": connection.name,
         "enabled": connection.enabled,
+        "configured": True,
+        "worker_ready": ready and connection.enabled,
+        "worker_status": worker.status if fresh else "waiting",
+        "callback_seen": bool(worker and worker.last_event_at),
+        "transport": "direct_message"
+        if connection.provider == "mattermost"
+        and not provider_config(connection).verification_secret
+        else "events",
         "linked": identity is not None,
         "external_user_id": identity.external_user_id if identity else None,
         "ingress_url": f"/api/v1/chat/ingress/{connection.id}",
@@ -98,9 +135,13 @@ def list_connections(
     connections = crud_chat.connections.get_multi(
         db, account_id=str(current_user.account_id), limit=100
     )
+    states = crud_chat.connection_states(
+        db, [item.id for item in connections], current_user.id
+    )
     return {
         "connections": [
-            public_connection(db, item, current_user) for item in connections
+            public_connection(db, item, current_user, states[item.id])
+            for item in connections
         ],
         "can_manage": has_permission(current_user, MANAGE_PERMISSION, db),
     }
@@ -121,7 +162,9 @@ def create_connection(
         try:
             validate_mattermost_url(payload.base_url)
             if not payload.bot_user_id:
-                raise ChatProviderError("Mattermost requires the bot user ID")
+                payload.bot_user_id = from_thread.run(
+                    discover_mattermost_bot_user_id, payload.base_url, payload.bot_token
+                )
         except ChatProviderError as exc:
             raise HTTPException(422, str(exc)) from exc
     if payload.provider == "discord":
@@ -195,7 +238,9 @@ def create_link_code(
         "expires_at": expires_at.isoformat() + "Z",
         "instruction": {
             "slack": "Send a plain direct message: link CODE",
-            "mattermost": "Run /preloop /link CODE; the command response is private.",
+            "mattermost": "Send a private direct message to the bot: link CODE"
+            if not provider_config(connection).verification_secret
+            else "Run /preloop /link CODE; the command response is private.",
             "discord": "Run /preloop with message: /link CODE; the command response is private.",
         }[connection.provider],
     }
@@ -262,7 +307,32 @@ def ingest(
     threadpool. The request stream is read on the event loop.
     """
     connection = crud_chat.connections.get(db, connection_id)
-    if connection is None or not connection.enabled:
+    if connection is None:
+        draft = crud_chat.drafts.get(db, connection_id)
+        if draft and not draft.consumed_at and draft.expires_at > datetime.utcnow():
+            account = crud_account.get(db, id=draft.account_id)
+            if not account or not account.is_active:
+                raise HTTPException(404, "Connection not found")
+            state = json.loads(decrypt_value(draft.state_encrypted))
+            from preloop.api.endpoints.chat_setup import draft_config
+
+            raw = from_thread.run(_read_ingress_body, request)
+            try:
+                ingress = verify_ingress(
+                    draft_config(draft.provider, state), raw, request.headers
+                )
+                # A draft accepts provider verification challenges only.
+                if (
+                    draft.provider == "slack" and "challenge" in ingress.acknowledgement
+                ) or (
+                    draft.provider == "discord"
+                    and ingress.acknowledgement == {"type": 1}
+                ):
+                    return ingress.acknowledgement
+            except (ChatProviderError, ValueError):
+                pass
+        raise HTTPException(404, "Connection not found")
+    if not connection.enabled:
         raise HTTPException(404, "Connection not found")
     account = crud_account.get(db, id=connection.account_id)
     if account is None or not account.is_active:
@@ -275,6 +345,7 @@ def ingest(
         )
     except (ChatProviderError, ValueError) as exc:
         raise HTTPException(401, "Invalid provider request") from exc
+    crud_chat.record_ingress(db, connection.id)
     if ingress.event:
         event = ingress.event
         text = event.text

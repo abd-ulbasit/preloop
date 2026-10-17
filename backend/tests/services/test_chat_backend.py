@@ -20,7 +20,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -963,3 +963,46 @@ async def test_real_foreign_tenant_connection_is_hidden(fixture_db, real_app):
     finally:
         f.db.delete(account)
         f.db.commit()
+
+
+def test_connection_list_batches_listener_and_identity_reads(fixture_db) -> None:
+    from preloop.api.endpoints.chat import list_connections
+
+    rig = fixture_db
+    for index in range(4):
+        crud_chat.connections.create(
+            rig.db,
+            obj_in={
+                "account_id": rig.account.id,
+                "provider": "slack",
+                "workspace_id": "team-test",
+                "name": f"Extra {index}",
+                "credentials_encrypted": rig.connection.credentials_encrypted,
+            },
+        )
+    crud_chat.listeners.create(
+        rig.db,
+        obj_in={
+            "connection_id": rig.connection.id,
+            "status": "worker_ready",
+            "lease_until": datetime.utcnow() + timedelta(seconds=45),
+        },
+    )
+    selects = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(rig.engine, "before_cursor_execute", capture)
+    try:
+        result = list_connections(rig.db, rig.user)
+    finally:
+        event.remove(rig.engine, "before_cursor_execute", capture)
+    assert len(result["connections"]) == 5
+    assert sum("FROM chat_listener" in sql for sql in selects) == 1
+    assert sum("FROM chat_identity" in sql for sql in selects) == 1
+    original = next(
+        row for row in result["connections"] if row["id"] == str(rig.connection.id)
+    )
+    assert original["linked"] and original["worker_ready"]

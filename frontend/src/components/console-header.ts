@@ -1,4 +1,5 @@
 import { getBrandConfig } from '../brand-config';
+import { releaseBlogUrl } from '../release-blog';
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/dropdown/dropdown.js';
@@ -343,6 +344,12 @@ export class ConsoleHeader extends LitElement {
       bottom: 0;
       background: var(--console-surface-raised);
     }
+    .help-menu sl-menu-item a {
+      color: inherit;
+      font: inherit;
+      text-decoration: none;
+    }
+
     .dropdown-footer a {
       color: var(--console-link-color);
       font-size: var(--sl-font-size-small);
@@ -503,6 +510,7 @@ export class ConsoleHeader extends LitElement {
       .getFeatures()
       .then((features) => {
         this.serverVersion = features.server_version || '';
+        this.cloudSupport = features.features.cloud_support === true;
       })
       .catch(() => {});
     this.connectToFlowUpdates();
@@ -1405,6 +1413,8 @@ export class ConsoleHeader extends LitElement {
     `;
   }
 
+  @state() private cloudSupport = false;
+
   private renderHelpMenu() {
     let brand;
     try {
@@ -1414,7 +1424,7 @@ export class ConsoleHeader extends LitElement {
     }
     const links = [
       ['Documentation', brand.docs_url],
-      ["What's new", brand.changelog_url],
+      ["What's new", releaseBlogUrl(brand.changelog_url, this.serverVersion)],
       ['Report an issue', brand.report_issue_url],
     ];
     return html`<sl-dropdown
@@ -1430,9 +1440,14 @@ export class ConsoleHeader extends LitElement {
       <sl-menu
         aria-label="Help"
         @sl-select=${(event: CustomEvent<{ item: { value: string } }>) => {
+          if (event.detail.item.value === 'cloud-support') {
+            window.dispatchEvent(new Event('preloop-open-support'));
+            return;
+          }
           window.open(event.detail.item.value, '_blank', 'noopener');
         }}
       >
+        ${this.cloudSupport ? html`<sl-menu-item value="cloud-support">Ask Preloop support</sl-menu-item>` : nothing}
         ${links
           .filter(([, url]) => url)
           .map(

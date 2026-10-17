@@ -267,7 +267,10 @@ export interface BrandRuntimeConfig {
   docs_url?: string;
   support_url?: string;
   report_issue_url?: string;
+  /** Optional {version} placeholder expands to the server release as X-Y-Z. */
   changelog_url?: string;
+  /** Published release posts, injected by the SaaS build for missing-post fallback. */
+  blog_release_slugs?: string[];
   name: string;
   domain: string;
   edition: BrandEdition; // 'saas' = full marketing site, 'selfhosted' = minimal login-focused

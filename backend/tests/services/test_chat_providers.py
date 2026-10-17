@@ -245,3 +245,14 @@ async def test_provider_rejection_and_ambiguous_server_failure_are_distinct(
                 client=client,
             )
     assert calls == 2
+
+
+@pytest.fixture(autouse=True)
+def synthetic_provider_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synthetic providers never resolve or contact real hosts."""
+    import ipaddress
+
+    monkeypatch.setattr(
+        "preloop.services.ai_model_provider._resolve_endpoint_host",
+        lambda _: [ipaddress.ip_address("93.184.216.34")],
+    )

@@ -37,6 +37,192 @@ class CRUDChat:
     identities = CRUDBase(models.ChatIdentity)
     codes = CRUDBase(models.ChatLinkCode)
     work = CRUDBase(models.ChatWork)
+    drafts = CRUDBase(models.ChatSetupDraft)
+    listeners = CRUDBase(models.ChatListener)
+
+    def connection_states(
+        self, db: Session, connection_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> dict[uuid.UUID, tuple[models.ChatIdentity | None, models.ChatListener | None]]:
+        """Batch the identity and listener reads for one account-scoped page."""
+        identities = {
+            row.connection_id: row
+            for row in db.query(models.ChatIdentity)
+            .filter(
+                models.ChatIdentity.connection_id.in_(connection_ids),
+                models.ChatIdentity.user_id == user_id,
+            )
+            .all()
+        }
+        listeners = {
+            row.connection_id: row
+            for row in db.query(models.ChatListener)
+            .filter(models.ChatListener.connection_id.in_(connection_ids))
+            .all()
+        }
+        return {
+            key: (identities.get(key), listeners.get(key)) for key in connection_ids
+        }
+
+    def purge_expired_drafts(self, db: Session) -> None:
+        db.query(models.ChatSetupDraft).filter(
+            models.ChatSetupDraft.expires_at < datetime.utcnow()
+        ).delete(synchronize_session=False)
+        db.commit()
+
+    def setup_draft(
+        self,
+        db: Session,
+        draft_id: uuid.UUID,
+        account_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> models.ChatSetupDraft | None:
+        return (
+            db.query(models.ChatSetupDraft)
+            .filter_by(
+                id=draft_id, account_id=account_id, user_id=user_id, consumed_at=None
+            )
+            .filter(models.ChatSetupDraft.expires_at > datetime.utcnow())
+            .first()
+        )
+
+    def complete_setup(
+        self,
+        db: Session,
+        draft_id: uuid.UUID,
+        account_id: uuid.UUID,
+        user_id: uuid.UUID,
+        values: dict[str, Any],
+    ) -> models.ChatConnection:
+        draft = (
+            db.query(models.ChatSetupDraft)
+            .filter_by(id=draft_id, account_id=account_id, user_id=user_id)
+            .with_for_update()
+            .first()
+        )
+        if draft is None or draft.expires_at <= datetime.utcnow():
+            raise ValueError("Setup expired; start again")
+        if draft.consumed_at:
+            existing = self.connections.get(db, draft_id, account_id=str(account_id))
+            if existing:
+                return existing
+            raise ValueError("Setup already consumed")
+        row = models.ChatConnection(id=draft_id, account_id=account_id, **values)
+        db.add(row)
+        draft.consumed_at = datetime.utcnow()
+        draft.state_encrypted = ""
+        draft.oauth_digest = None
+        db.commit()
+        return row
+
+    def oauth_draft(self, db: Session, digest: str) -> models.ChatSetupDraft | None:
+        row = (
+            db.query(models.ChatSetupDraft)
+            .filter_by(oauth_digest=digest, consumed_at=None)
+            .filter(models.ChatSetupDraft.expires_at > datetime.utcnow())
+            .with_for_update()
+            .first()
+        )
+        if row:
+            row.oauth_digest = None
+        db.commit()
+        return row
+
+    def claim_listener(self, db: Session, connection_id: uuid.UUID, token: str) -> bool:
+        now = datetime.utcnow()
+        row = (
+            db.query(models.ChatListener)
+            .filter_by(connection_id=connection_id)
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            try:
+                with db.begin_nested():
+                    row = models.ChatListener(
+                        connection_id=connection_id, status="waiting"
+                    )
+                    db.add(row)
+                    db.flush()
+            except IntegrityError:
+                db.rollback()
+                return False
+        if row.lease_until and row.lease_until > now and row.lease_token != token:
+            db.commit()
+            return False
+        row.lease_token = token
+        row.lease_until = now + timedelta(seconds=45)
+        db.commit()
+        return True
+
+    def listener_health(
+        self,
+        db: Session,
+        connection_id: uuid.UUID,
+        token: str,
+        status: str,
+        **values: Any,
+    ) -> bool:
+        count = (
+            db.query(models.ChatListener)
+            .filter_by(connection_id=connection_id, lease_token=token)
+            .filter(models.ChatListener.lease_until > datetime.utcnow())
+            .update({"status": status, **values}, synchronize_session=False)
+        )
+        db.commit()
+        return bool(count)
+
+    def rotate_credentials(
+        self,
+        db: Session,
+        connection_id: uuid.UUID,
+        token: str,
+        old_ciphertext: str,
+        new_ciphertext: str,
+    ) -> bool:
+        lease = (
+            db.query(models.ChatListener)
+            .filter_by(connection_id=connection_id, lease_token=token)
+            .filter(models.ChatListener.lease_until > datetime.utcnow())
+            .with_for_update()
+            .first()
+        )
+        if lease is None:
+            db.rollback()
+            return False
+        count = (
+            db.query(models.ChatConnection)
+            .filter_by(
+                id=connection_id, enabled=True, credentials_encrypted=old_ciphertext
+            )
+            .update(
+                {"credentials_encrypted": new_ciphertext}, synchronize_session=False
+            )
+        )
+        db.commit()
+        return bool(count)
+
+    def record_ingress(self, db: Session, connection_id: uuid.UUID) -> None:
+        row = (
+            db.query(models.ChatListener).filter_by(connection_id=connection_id).first()
+        )
+        if row:
+            row.last_event_at = datetime.utcnow()
+            db.commit()
+        else:
+            try:
+                with db.begin_nested():
+                    db.add(
+                        models.ChatListener(
+                            connection_id=connection_id,
+                            status="waiting",
+                            last_event_at=datetime.utcnow(),
+                        )
+                    )
+                    db.flush()
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                self.record_ingress(db, connection_id)
 
     def recent_deliveries(
         self,

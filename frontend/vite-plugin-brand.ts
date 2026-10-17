@@ -915,6 +915,11 @@ export function brandPlugin(
         support_url: brandConfig.support_url,
         report_issue_url: brandConfig.report_issue_url,
         changelog_url: brandConfig.changelog_url,
+        blog_release_slugs: blogPosts
+          .filter(
+            (post) => !post.draft && /^preloop-\d+-\d+-\d+$/.test(post.slug)
+          )
+          .map((post) => post.slug),
         name: brandConfig.name,
         domain: brandConfig.domain,
         edition: (brandConfig as any).edition || 'saas', // Default to 'saas' for backwards compatibility

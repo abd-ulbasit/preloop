@@ -11,12 +11,17 @@ export interface ChatConnection {
   linked: boolean;
   external_user_id: string | null;
   ingress_url: string;
+  configured?: boolean;
+  worker_ready?: boolean;
+  worker_status?: string;
+  callback_seen?: boolean;
+  transport?: string;
 }
 
 export interface ChatConnectionCreate {
   provider: ChatProvider;
   workspace_id: string;
-  name: string;
+  name?: string;
   verification_secret: string;
   bot_token: string;
   bot_user_id: string;

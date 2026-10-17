@@ -945,3 +945,21 @@ default. The capability-gated Lit settings card lives in OSS. Report queries in
 `models.crud.weekly_report_data` apply account and user attribution before
 aggregation; report orchestration and delivery remain in the commercial plugin.
 See [the settings contract](docs/weekly-report-v3.md).
+
+
+### Chat setup and optional Cloud support
+
+Chat provider discovery uses encrypted actor/account-bound expiring drafts. IDs
+reserve stable callback URLs before installation; completion rechecks management
+permission and provider identity/workspace. Mattermost DM listeners use database
+leases and canonical post/channel/member lookups. HTTP and sockets pin approved
+DNS addresses and share the instance outbound CIDR policy. Disconnected commands
+are not replayed. Accepted events use the existing durable ChatWork queue.
+
+Core SupportConversation/Message/Outbox/Quota models and CRUD provide generic
+ordered support persistence. Ownership generations fence both staged browser
+answers and outbox delivery. Cloud-only retrieval, independent gateway funding,
+scoped diagnostics and the private Mattermost operator bridge are supplied by
+an EE plugin. The Lit widget/operator view are lazy capability-gated OSS code;
+public landing content remains in the existing light DOM. See chat-connections.md
+and the EE Cloud support operator guide for configuration and recovery policies.

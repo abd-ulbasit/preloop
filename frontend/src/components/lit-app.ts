@@ -1,4 +1,6 @@
+import { installSupportAssistant } from '../support-loader';
 import { consumeLoginReturn } from '../utils/login-return';
+import { releaseBlogFallback } from '../release-blog';
 import { LitElement, html, css } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { router, Router, LOCATION_CHANGED, type Route } from '../router';
@@ -51,6 +53,7 @@ export class LitApp extends LitElement {
   private readonly publicTitle = document.title;
 
   private restorePublicTitle = () => {
+    void installSupportAssistant();
     const path = window.location.pathname;
     const inConsole = path === '/console' || path.startsWith('/console/');
     if (!inConsole) {
@@ -60,6 +63,7 @@ export class LitApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    void installSupportAssistant();
     window.addEventListener(LOCATION_CHANGED, this.restorePublicTitle);
     if (this.syncInConsole) {
       window.addEventListener(LOCATION_CHANGED, this.syncInConsole);
@@ -286,6 +290,12 @@ export class LitApp extends LitElement {
           if (existing) {
             return existing;
           }
+
+          const fallback = releaseBlogFallback(
+            slug,
+            getBrandConfig().blog_release_slugs || []
+          );
+          if (fallback) return commands.redirect(fallback);
 
           const view = commands.component('static-view') as HTMLElement & {
             src: string;

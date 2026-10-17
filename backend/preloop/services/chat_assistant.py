@@ -17,6 +17,7 @@ from preloop.api.auth.jwt import create_access_token
 from preloop.api.auth.permissions import has_permission
 from preloop.models import models
 from preloop.services.chat_providers import external_command
+from preloop.utils.encryption import decrypt_value
 from preloop.models.crud import (
     crud_chat,
     crud_runtime_session,
@@ -355,7 +356,14 @@ class ChatBroker:
     async def answer(self, text: str) -> str:
         model = await self.default_model()
         command_help = "; ".join(
-            external_command(self.connection.provider, command)
+            external_command(
+                self.connection.provider,
+                command,
+                direct=self.connection.provider == "mattermost"
+                and not json.loads(
+                    decrypt_value(self.connection.credentials_encrypted)
+                ).get("verification_secret"),
+            )
             for command in (
                 "/note SESSION_ID TEXT",
                 "/message AGENT_ID SESSION_ID TEXT",
@@ -471,7 +479,14 @@ class ChatBroker:
             )
             return "Message submitted to the selected session."
         return "Commands: " + "; ".join(
-            external_command(self.connection.provider, command)
+            external_command(
+                self.connection.provider,
+                command,
+                direct=self.connection.provider == "mattermost"
+                and not json.loads(
+                    decrypt_value(self.connection.credentials_encrypted)
+                ).get("verification_secret"),
+            )
             for command in (
                 "/note SESSION_ID TEXT",
                 "/message AGENT_ID SESSION_ID TEXT",
