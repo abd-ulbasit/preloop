@@ -6443,6 +6443,13 @@ func syncManagedGatewayAIModel(
 	}
 
 	target := findReusableManagedGatewayAIModel(existing, upstream)
+	// An existing model may already own a collision-suffixed alias. Keep it
+	// stable on re-enrollment instead of requesting the occupied alias again.
+	if target != nil {
+		if alias := strings.TrimSpace(gatewayAliasForAIModel(*target)); alias != "" {
+			upstream.ManagedModelAlias = alias
+		}
+	}
 	if !hasLocalCredential && (target == nil || !target.HasAPIKey) {
 		// Server-credential reuse needs an existing account model that
 		// already holds a credential; never create a credential-less model.
@@ -6585,6 +6592,9 @@ func syncManagedGatewayAIModel(
 				),
 			)
 		}
+		if alias := strings.TrimSpace(gatewayAliasForAIModel(*target)); alias != "" {
+			upstream.ManagedModelAlias = alias
+		}
 		return target, notes, nil
 	}
 
@@ -6629,6 +6639,11 @@ func syncManagedGatewayAIModel(
 			upstream.ManagedModelAlias,
 			err,
 		)
+	}
+	// The server can assign a suffix when the requested alias is occupied.
+	// Config, bindings, and validation must all use the persisted alias.
+	if alias := strings.TrimSpace(gatewayAliasForAIModel(created)); alias != "" {
+		upstream.ManagedModelAlias = alias
 	}
 	notes = append(
 		notes,

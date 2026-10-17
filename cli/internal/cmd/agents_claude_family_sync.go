@@ -161,11 +161,11 @@ func syncClaudeSiblingFamilyAIModels(
 			AIModelID:    model.ID,
 			BindingType:  "configured",
 			ConfigKey:    claudeFamilyBindingConfigKey(target.family),
-			GatewayAlias: target.alias,
+			GatewayAlias: gatewayAliasForAIModel(*model),
 			IsPrimary:    false,
 			Status:       "gateway_ready",
 		})
-		aliases = append(aliases, target.alias)
+		aliases = append(aliases, gatewayAliasForAIModel(*model))
 	}
 	if len(aliases) > 0 {
 		notes = append(notes, fmt.Sprintf(
@@ -200,6 +200,9 @@ func ensureClaudeFamilyAIModel(
 	metaData["source_agent"] = siblingUpstream.SourceAgent
 
 	if target := findReusableManagedGatewayAIModel(existing, siblingUpstream); target != nil {
+		if alias := strings.TrimSpace(gatewayAliasForAIModel(*target)); alias != "" {
+			siblingUpstream.ManagedModelAlias = alias
+		}
 		metaData = mergeGatewayMetaForAIModel(
 			target,
 			managedAgent,
