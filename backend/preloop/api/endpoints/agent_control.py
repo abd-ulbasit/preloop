@@ -1121,7 +1121,10 @@ async def _emit_agent_message(
     connection: AgentControlConnectionContext,
     inbound: AgentControlInboundEnvelope,
 ) -> None:
-    if inbound.type == "heartbeat":
+    # Progress is delivered through the consuming execution/session's stored
+    # activity stream. The generic topic belongs to the agent owner, which can
+    # be a different account for a shared agent, and must not receive its text.
+    if inbound.type == "heartbeat" or inbound.name == "command_progress":
         return
     event_type = f"agent_control_{inbound.type}"
     emit_account_event(

@@ -1900,9 +1900,18 @@ async def get_flow_execution_logs(
             account_id=current_user.account_id,
             execution=execution,
         )
-        lines = await agent.get_logs(session_reference, tail=tail)
+        lines = await agent.get_logs(session_reference)
         timestamp = (execution.start_time or execution.created_at).isoformat()
-        selected = lines[skip:] if limit is None else lines[skip : skip + limit]
+        page_size = limit if limit is not None else (tail if tail is not None else 5000)
+        if tail is not None:
+            end = max(0, len(lines) - max(0, skip))
+            start = max(0, end - max(0, page_size))
+            selected = lines[start:end]
+            has_more = start > 0
+        else:
+            start = max(0, skip)
+            selected = lines[start : start + max(0, page_size)]
+            has_more = len(lines) > start + len(selected)
         return {
             "logs": [
                 {
@@ -1914,7 +1923,7 @@ async def get_flow_execution_logs(
                 for line in selected
             ],
             "source": "agent_control",
-            "has_more": limit is not None and len(lines) > skip + limit,
+            "has_more": has_more,
         }
 
     if is_running and session_reference and not runner_backed:

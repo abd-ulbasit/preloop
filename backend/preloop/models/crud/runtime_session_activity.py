@@ -679,6 +679,9 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             db.query(self.model)
             .filter(
                 self.model.account_id == account_id,
+                self.model.runtime_session_id == original.runtime_session_id,
+                self.model.activity_type
+                == ("tool_call" if kind == "tool" else "agent_control_message"),
                 self.model.metadata_["command_id"].astext == command_id,
                 self.model.metadata_["progress_id"].astext == identity,
             )

@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 from preloop.api.endpoints.agent_control import _persist_agent_control_progress
 from preloop.models.crud import crud_runtime_session_activity
 
@@ -206,3 +208,49 @@ def test_progress_proves_receipt_before_terminal_command_result() -> None:
         commands.mark_acked.call_args.kwargs["managed_agent_id"]
         == context.managed_agent_id
     )
+
+
+@pytest.mark.asyncio
+async def test_raw_progress_is_never_broadcast_to_agent_owner() -> None:
+    from preloop.api.endpoints.agent_control import _emit_agent_message
+
+    context = SimpleNamespace(account_id=uuid4(), managed_agent_id=uuid4())
+    inbound = SimpleNamespace(
+        type="event",
+        name="command_progress",
+        message_id="event-example",
+        payload={
+            "command_id": "command-example",
+            "kind": "assistant",
+            "summary": "Authorization: Bearer example-secret-token" * 1000,
+        },
+    )
+    with patch("preloop.api.endpoints.agent_control.emit_account_event") as emit:
+        await _emit_agent_message(context, inbound)
+    emit.assert_not_called()
+
+
+def test_progress_dedupe_query_is_scoped_to_session_and_activity_type() -> None:
+    db = MagicMock()
+    query = db.query.return_value
+    query.filter.return_value = query
+    query.order_by.return_value = query
+    original = SimpleNamespace(runtime_session_id=uuid4())
+    query.first.side_effect = [original, MagicMock()]
+    crud_runtime_session_activity.log_agent_control_progress(
+        db,
+        account_id=uuid4(),
+        command_id="command-example",
+        event_id="event-example",
+        kind="tool",
+        summary="Tool: Read",
+        call_id="call-example",
+        tool_name="Read",
+    )
+    predicates = query.filter.call_args_list[1].args
+    rendered = " ".join(
+        str(value.compile(compile_kwargs={"literal_binds": True}))
+        for value in predicates
+    )
+    assert "runtime_session_activity.runtime_session_id =" in rendered
+    assert "runtime_session_activity.activity_type = 'tool_call'" in rendered

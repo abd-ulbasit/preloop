@@ -3783,3 +3783,34 @@ async def test_control_execution_logs_use_bound_executor(mock_account, mocker) -
     assert executor_class.call_args.kwargs["db"] is db
     assert executor_class.call_args.kwargs["execution"] is execution
     container_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_control_execution_log_tail_pagination_has_no_overlap(
+    mock_account, mocker
+) -> None:
+    execution_id = uuid.uuid4()
+    execution = MagicMock()
+    execution.status = "RUNNING"
+    execution.agent_session_reference = f"control:{uuid.uuid4()}:example-command"
+    mocker.patch.object(flows.crud_flow_execution, "get", return_value=execution)
+    executor_class = mocker.patch("preloop.agents.agent_control.AgentControlExecutor")
+    lines = [f"line-{index}" for index in range(450)]
+    executor_class.return_value.get_logs = AsyncMock(return_value=lines)
+    common = {
+        "db": MagicMock(),
+        "execution_id": execution_id,
+        "current_user": mock_account,
+    }
+    recent = await maybe_await(flows.get_flow_execution_logs(**common, tail=200))
+    older = await maybe_await(
+        flows.get_flow_execution_logs(**common, tail=500, skip=200)
+    )
+    assert recent["has_more"] is True
+    assert older["has_more"] is False
+    combined = older["logs"] + recent["logs"]
+    assert [row["payload"]["line"] for row in combined] == lines
+    assert len({row["payload"]["line"] for row in combined}) == len(lines)
+    executor_class.return_value.get_logs.assert_called_with(
+        execution.agent_session_reference
+    )
