@@ -37,6 +37,7 @@ HarnessId = Literal[
     "claude_code",
     "codex_cli",
     "opencode",
+    "deepseek",
     "gemini_cli",
     "claude_desktop",
     "vscode_copilot",

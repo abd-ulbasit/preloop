@@ -108,6 +108,51 @@ describe('PreloopFlowForm host execution submit', () => {
     return element;
   };
 
+  it('lets a Codex Docker flow opt into a native profile', async () => {
+    const element = await mount({
+      name: 'Local task',
+      prompt_template: 'summarize',
+      agent_type: 'codex',
+      runner_pool: 'private',
+      agent_config: {},
+    });
+    const input = element.shadowRoot?.querySelector(
+      'sl-input[label="Host execution profile"]'
+    ) as SlInput;
+    expect(input).to.exist;
+    input.value = 'local-codex';
+    input.dispatchEvent(new CustomEvent('sl-input'));
+    await element.updateComplete;
+    const submitted = oneEvent(element, 'flow-submit');
+    void (element as any).handleFormSubmit(new Event('submit'));
+    const event = await submitted;
+    expect(event.detail.flow.agent_config.host_exec_profile).to.equal(
+      'local-codex'
+    );
+  });
+
+  for (const kind of ['codex', 'opencode', 'deepseek']) {
+    it(`preserves an explicit ${kind} native profile and model alias`, async () => {
+      const element = await mount({
+        name: 'Native task',
+        prompt_template: 'summarize',
+        agent_type: kind,
+        runner_pool: 'private',
+        agent_config: {
+          host_exec_profile: 'local-native',
+          [`${kind}_model`]: 'team-fast',
+        },
+      });
+      const submitted = oneEvent(element, 'flow-submit');
+      void (element as any).handleFormSubmit(new Event('submit'));
+      const event = await submitted;
+      expect(event.detail.flow.agent_config).to.deep.include({
+        host_exec_profile: 'local-native',
+        [`${kind}_model`]: 'team-fast',
+      });
+    });
+  }
+
   it('merges host_exec_profile into agent_config for Cursor', async () => {
     const element = await mount({
       name: 'Ask locally',
@@ -237,7 +282,7 @@ describe('PreloopFlowForm host execution submit', () => {
     const element = await mount({
       name: 'Review',
       prompt_template: 'review',
-      agent_type: 'codex',
+      agent_type: 'openhands',
       agent_config: {
         image: 'registry.example.com/team/project:release',
         host_exec_profile: 'stale-profile',
@@ -354,7 +399,7 @@ describe('PreloopFlowForm host execution submit', () => {
     const element = await mount({
       name: 'Review',
       prompt_template: 'review',
-      agent_type: 'codex',
+      agent_type: 'openhands',
       agent_config: {
         host_exec_profile: 'copilot-review',
         copilot_model: 'team-default',

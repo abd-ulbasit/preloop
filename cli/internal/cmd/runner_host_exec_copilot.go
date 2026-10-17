@@ -72,6 +72,12 @@ func hostExecIsCopilotBinary(executable string) bool {
 // runner must use. Unknown types return "" and fail closed.
 func hostExecHarnessForAgentType(agentType string) string {
 	switch agentType {
+	case "codex":
+		return hostExecHarnessCodex
+	case "opencode":
+		return hostExecHarnessOpenCode
+	case "deepseek":
+		return hostExecHarnessDeepSeek
 	case "devin":
 		return hostExecHarnessDevin
 	case "cursor":

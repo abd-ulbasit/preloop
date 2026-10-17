@@ -192,12 +192,22 @@ export function splitApprovalWindow(seconds: number | null | undefined): {
   return { amount: Math.round(total / 60), unit: 'minutes' };
 }
 
-type HostExecAgentType = 'cursor' | 'copilot' | 'devin' | 'claude_code';
+type HostExecAgentType =
+  | 'cursor'
+  | 'copilot'
+  | 'devin'
+  | 'claude_code'
+  | 'codex'
+  | 'opencode'
+  | 'deepseek';
 const HOST_EXEC_LABELS: Record<HostExecAgentType, string> = {
   cursor: 'Cursor',
   copilot: 'Copilot CLI',
   devin: 'Devin CLI',
   claude_code: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  deepseek: 'DeepSeek CLI (dsh)',
 };
 
 /** Agent config key holding each host CLI's per-flow model alias. */
@@ -206,6 +216,9 @@ const HOST_EXEC_MODEL_KEYS: Record<HostExecAgentType, string> = {
   copilot: 'copilot_model',
   devin: 'devin_model',
   claude_code: 'claude_code_model',
+  codex: 'codex_model',
+  opencode: 'opencode_model',
+  deepseek: 'deepseek_model',
 };
 
 /** Runner capability a host profile advertises for each host CLI. */
@@ -214,6 +227,9 @@ const HOST_EXEC_HARNESSES: Record<HostExecAgentType, string> = {
   copilot: 'copilot_cli',
   devin: 'devin_cli',
   claude_code: 'claude_code',
+  codex: 'codex_cli',
+  opencode: 'opencode',
+  deepseek: 'deepseek',
 };
 
 /** agent_config keys of harness routing (#1481), dropped when unused. */
@@ -2858,7 +2874,7 @@ export class PreloopFlowForm extends LitElement {
   /** Harness + model picker fed by the runners' harness inventory. */
   private renderHarnessPicker() {
     const hostType = this.hostExecAgentType();
-    if (!hostType) {
+    if (!hostType || ['codex', 'opencode', 'deepseek'].includes(hostType)) {
       return nothing;
     }
     const harness = HOST_EXEC_HARNESSES[hostType];
@@ -3022,6 +3038,12 @@ export class PreloopFlowForm extends LitElement {
   /** The host CLI this flow runs as, or null for container harnesses. */
   private hostExecAgentType(): HostExecAgentType | null {
     const kind = (this.flow.agent_type || '') as HostExecAgentType;
+    if (
+      ['codex', 'opencode', 'deepseek'].includes(kind) &&
+      !this.hostExecProfileName()
+    ) {
+      return null;
+    }
     return Object.prototype.hasOwnProperty.call(HOST_EXEC_MODEL_KEYS, kind)
       ? kind
       : null;
@@ -3203,7 +3225,10 @@ export class PreloopFlowForm extends LitElement {
   }
 
   private renderHostExecProfileField() {
-    const hostType = this.hostExecAgentType();
+    const kind = (this.flow.agent_type || '') as HostExecAgentType;
+    const hostType =
+      this.hostExecAgentType() ||
+      (['codex', 'opencode', 'deepseek'].includes(kind) ? kind : null);
     if (!hostType) {
       return nothing;
     }

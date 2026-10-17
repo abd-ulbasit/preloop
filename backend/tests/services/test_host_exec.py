@@ -88,7 +88,7 @@ def test_flow_errors_for_hosted_and_harness_mismatch() -> None:
         runner_pool="server",
     )
     assert host_exec_flow_error(
-        agent_type="codex",
+        agent_type="openhands",
         agent_config={"host_exec_profile": "cursor-ask"},
         runner_pool="office-mac",
     )
@@ -492,7 +492,7 @@ def test_completion_harness_must_match_leased_agent_type(pending_type, harness):
 def test_unknown_host_exec_lease_agent_type_fails() -> None:
     status, error, _ = finalize_runner_completion(
         _copilot_completion({"status": "success", "harness": "codex"}),
-        pending_job={**_COPILOT_LEASE, "agent_type": "codex"},
+        pending_job={**_COPILOT_LEASE, "agent_type": "openhands"},
     )
     assert (status, error) == ("FAILED", "Invalid durable host execution lease")
 
@@ -565,4 +565,111 @@ def test_devin_harness_selection_survives_registration() -> None:
             runner_pool="devin_cli",
         )
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "capability"),
+    [("codex", "codex_cli"), ("opencode", "opencode"), ("deepseek", "deepseek")],
+)
+def test_dual_runtime_native_profiles(kind: str, capability: str) -> None:
+    """A native profile is explicit while existing Docker defaults stay valid."""
+    assert not is_host_exec_agent_type(kind)
+    assert host_exec_harness(kind) == capability
+    assert host_exec_flow_error(agent_type=kind, runner_pool="server") is None
+    config = {"host_exec_profile": "local", f"{kind}_model": "team-fast"}
+    assert host_exec_model_identifier(kind, config) == "team-fast"
+    assert (
+        host_exec_flow_error(
+            agent_type=kind, agent_config=config, runner_pool="private"
+        )
+        is None
+    )
+    assert "hosted" in host_exec_flow_error(
+        agent_type=kind, agent_config=config, runner_pool="server"
+    )
+    advertisement = normalize_host_exec_advertisements(
+        [
+            {
+                "name": "local",
+                "capabilities": ["host_exec", capability],
+                "models": ["team-fast"],
+            }
+        ]
+    )
+    assert capability in advertisement["host_exec_profiles"][0]["capabilities"]
+    runner = SimpleNamespace(capabilities=advertisement)
+    assert runner_has_host_exec_profile(runner, "local", agent_type=kind)
+    assert not runner_has_host_exec_profile(runner, "local", agent_type="cursor")
+
+
+@pytest.mark.parametrize("kind", ["codex", "opencode", "deepseek"])
+def test_native_profile_default_needs_no_gateway_model(kind: str) -> None:
+    from preloop.services.model_routing import (
+        ModelRoutingError,
+        validate_default_selection,
+    )
+
+    flow = SimpleNamespace(
+        agent_config={"host_exec_profile": "local"},
+        runner_pool="private",
+    )
+    validate_default_selection(None, flow, agent_type=kind, ai_model_id=None)
+    flow.runner_pool = "server"
+    with pytest.raises(ModelRoutingError, match="private"):
+        validate_default_selection(None, flow, agent_type=kind, ai_model_id=None)
+
+
+@pytest.mark.parametrize("kind", ["codex", "opencode", "deepseek"])
+@pytest.mark.parametrize("native", [True, False])
+def test_usage_link_requires_native_profile_for_dual_runtime(
+    monkeypatch: pytest.MonkeyPatch, kind: str, native: bool
+) -> None:
+    from uuid import uuid4
+
+    from preloop.services import usage_import
+
+    execution = SimpleNamespace(id=uuid4(), flow_id=uuid4(), trigger_event_details={})
+    flow = SimpleNamespace(
+        id=execution.flow_id,
+        agent_type=kind,
+        ai_model_id=None,
+        agent_config={"host_exec_profile": "local"} if native else {},
+    )
+    monkeypatch.setattr(
+        usage_import.crud_flow_execution, "get", lambda *a, **kw: execution
+    )
+    monkeypatch.setattr(usage_import.crud_flow, "get", lambda *a, **kw: flow)
+    monkeypatch.setattr(
+        usage_import.crud_runtime_session, "get_by_source", lambda *a, **kw: None
+    )
+    link = usage_import.resolve_host_flow_link(
+        None, account_id=str(uuid4()), flow_execution_id=execution.id
+    )
+    assert (link is not None) is native
+
+
+@pytest.mark.parametrize(
+    ("kind", "label"),
+    [("codex", "Codex"), ("opencode", "OpenCode"), ("deepseek", "DeepSeek CLI (dsh)")],
+)
+@pytest.mark.parametrize("pool", ["server", None])
+def test_native_default_pool_error_names_selected_harness(
+    monkeypatch: pytest.MonkeyPatch, kind: str, label: str, pool: str | None
+) -> None:
+    from preloop.services import model_routing
+
+    monkeypatch.setattr(
+        model_routing, "_account_default_runner_pool", lambda *args: None
+    )
+    flow = SimpleNamespace(
+        agent_config={"host_exec_profile": "local"}, runner_pool=pool
+    )
+    with pytest.raises(model_routing.ModelRoutingError) as error:
+        model_routing.validate_default_selection(
+            None, flow, agent_type=kind, ai_model_id=None
+        )
+    assert str(error.value) == (
+        f"{label} defaults require a named host profile and a private "
+        "runner pool (flow.runner_pool or account.default_runner_pool)"
     )

@@ -867,6 +867,17 @@ required to browse fixture or existing findings.
 
 The capability-gated runner policy console consumes the Enterprise provider’s `/account/runner-policy`, paginated `/account/runner-compliance`, and member-only `/account/runner-compliance/me` APIs. Policy editing lives in Account settings, the roster in Runners, and the member warning in the console shell. OSS without `runner_requirement_policy` makes no requests to these routes; server permissions remain authoritative.
 
+Native host execution additionally supports explicit private profiles for
+Codex (`codex_cli`), OpenCode (`opencode`) and DeepSeek CLI (`deepseek`, using
+the `dsh` executable). These remain dual-runtime agent types: without a host
+profile they retain Docker routing. Capability matching, local `model_map`
+selection and the `host_exec` completion protocol keep native leases separate
+from Docker launch payloads. Credentials remain local; no implicit hosted
+fallback is introduced. These new native adapters support fresh flows only,
+with no initial native resume or publication. See the
+[native profile guide](docs/guide/runners/quickstart-linux.md#codex-opencode-and-deepseek-native-profiles)
+for governance requirements and acceptance limits.
+
 Tool data policies also support CEL predicates on `tool.args` using `args`,
 `tool.name` and `tool.server`. These reuse the sensitive-data policy store,
 notice delivery and approval dispatch. Evaluation errors skip notify rules;

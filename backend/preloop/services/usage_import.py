@@ -663,7 +663,11 @@ def resolve_host_flow_link(
     from preloop.models.models.flow_execution import (
         resolve_execution_agent_selection,
     )
-    from preloop.services.host_exec import is_host_exec_agent_type
+    from preloop.services.host_exec import (
+        host_exec_effective_profile,
+        host_exec_harness,
+        is_host_exec_agent_type,
+    )
 
     if flow_execution_id is None:
         return None
@@ -680,7 +684,10 @@ def resolve_host_flow_link(
         flow_agent_type=flow.agent_type,
         flow_ai_model_id=flow.ai_model_id,
     )
-    if not is_host_exec_agent_type(agent_type):
+    if not is_host_exec_agent_type(agent_type) and not (
+        host_exec_harness(agent_type)
+        and host_exec_effective_profile(agent_type, flow.agent_config)
+    ):
         return None
     session = crud_runtime_session.get_by_source(
         db,
