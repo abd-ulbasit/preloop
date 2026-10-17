@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from preloop.api.loop_safety import run_db_off_loop
 from preloop.models.crud import owner_consent as crud
 from preloop.models.db.session import get_async_db_session
 
@@ -72,17 +73,7 @@ async def notify_owner_consent(approval_id: UUID) -> None:
         consent = await crud.get_by_approval_async(db, approval_id)
         if consent is None or consent.notification_sent_at is not None:
             return
-        workflow = approval.approval_workflow
-        # Always bind recipients to the durable owner, even if someone edited
-        # the workflow after creation. No team, escalation, AI or quorum path.
-        workflow.approver_user_ids = [consent.owner_user_id]
-        workflow.approver_team_ids = []
-        workflow.approval_mode = "standard"
-        workflow.approval_type = "standard"
-        workflow.channel_configs = None
-        workflow.escalation_user_ids = []
-        workflow.escalation_team_ids = []
-        workflow.approvals_required = 1
+        workflow = crud.notification_workflow(consent, approval)
         results = await service.send_notifications(approval, workflow)
         if any(
             isinstance(channel, dict)
@@ -116,19 +107,25 @@ async def require_owner_consent(
     action: str,
     request_key: str,
     details: dict[str, Any],
+    managed_agent_id: UUID | None = None,
 ) -> UUID:
     """Require and consume an owner decision before dispatching a new session."""
     try:
-        result = check_owner_consent(
-            db,
-            account_id=account_id,
-            owner_user_id=owner_user_id,
-            requester_user_id=requester_user_id,
-            subject_id=subject_id,
-            action=action,
-            request_key=request_key,
-            details=details,
-            managed_agent_id=UUID(subject_id),
+        result = await run_db_off_loop(
+            lambda: check_owner_consent(
+                db,
+                account_id=account_id,
+                owner_user_id=owner_user_id,
+                requester_user_id=requester_user_id,
+                subject_id=subject_id,
+                action=action,
+                request_key=request_key,
+                details=details,
+                managed_agent_id=(
+                    managed_agent_id
+                    or (UUID(subject_id) if action == "agent_session_start" else None)
+                ),
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -139,14 +136,20 @@ async def require_owner_consent(
             logger.exception(
                 "Owner notification pending retry for %s", result.approval_id
             )
-    if result.status == "approved" and crud.consume(db, approval_id=result.approval_id):
+    if result.status == "approved" and await run_db_off_loop(
+        lambda: crud.consume(db, approval_id=result.approval_id)
+    ):
         return result.approval_id
     raise HTTPException(
         status_code=409 if result.status == "pending" else 403,
         detail={
             "status": result.status,
             "approval_id": str(result.approval_id),
-            "message": "Waiting for agent owner"
+            "message": (
+                "Waiting for runner owner"
+                if action.startswith("runner_")
+                else "Waiting for agent owner"
+            )
             if result.status == "pending"
             else "Owner consent does not authorize this session",
         },

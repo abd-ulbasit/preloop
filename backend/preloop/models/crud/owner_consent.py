@@ -141,6 +141,8 @@ def get_or_create(
         summary=(
             "Allow this flow to run on your runner?"
             if action == "runner_flow"
+            else "Allow this account member to start a session on your runner?"
+            if action == "runner_session_start"
             else "Allow this account member to start a session on your agent?"
         ),
     )
@@ -255,3 +257,35 @@ def poll_runner_execution(
     status = row.status
     db.commit()
     return status
+
+
+def belongs_to_owner(
+    db: Session, *, approval_id: UUID, account_id: UUID, owner_user_id: UUID
+) -> bool:
+    """Authorize one consent without granting access to the approval queue."""
+    return (
+        db.query(models.OwnerConsent.id)
+        .filter_by(
+            approval_request_id=approval_id,
+            account_id=account_id,
+            owner_user_id=owner_user_id,
+        )
+        .first()
+        is not None
+    )
+
+
+def notification_workflow(
+    consent: models.OwnerConsent, approval: models.ApprovalRequest
+) -> models.ApprovalWorkflow:
+    """Constrain notification delivery to the durable resource owner."""
+    workflow = approval.approval_workflow
+    workflow.approver_user_ids = [consent.owner_user_id]
+    workflow.approver_team_ids = []
+    workflow.approval_mode = "standard"
+    workflow.approval_type = "standard"
+    workflow.channel_configs = None
+    workflow.escalation_user_ids = []
+    workflow.escalation_team_ids = []
+    workflow.approvals_required = 1
+    return workflow

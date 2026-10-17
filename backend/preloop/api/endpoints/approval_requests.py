@@ -1,9 +1,11 @@
 """API endpoints for approval requests."""
 
+import functools
+import inspect
 import logging
 import os
 import uuid
-from typing import Annotated, Any, AsyncGenerator, Dict, Optional, Union
+from typing import Annotated, Any, AsyncGenerator, Callable, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -225,6 +227,92 @@ def _require_decide_approvals(
     return db
 
 
+def _check_approval_permission(
+    permission: str,
+    *,
+    request_id: uuid.UUID,
+    current_user: User,
+    db: Session,
+    request: Request | None = None,
+) -> None:
+    """Allow a bound human owner to decide only their private consent."""
+
+    @require_permission(permission)
+    def global_check(
+        *,
+        current_user: User,
+        db: Session,
+        request: Request | None,
+    ) -> None:
+        pass
+
+    try:
+        global_check(current_user=current_user, db=db, request=request)
+        return
+    except HTTPException as denied:
+        if denied.status_code != 403:
+            raise
+        if not isinstance(current_user, User) or _managed_execution_credential(
+            current_user
+        ):
+            raise
+        from preloop.models.crud.owner_consent import belongs_to_owner
+        from preloop.utils.permissions import _check_authorizer
+
+        if not belongs_to_owner(
+            db,
+            approval_id=request_id,
+            account_id=current_user.account_id,
+            owner_user_id=current_user.id,
+        ):
+            raise
+        # The account authorizer retains a separate veto over this private
+        # resource operation. Global tool-approval permission is not granted.
+        action = (
+            "view_owner_consent"
+            if permission == "view_approvals"
+            else "decide_owner_consent"
+        )
+        _check_authorizer(action, {"current_user": current_user, "db": db})
+
+
+def _require_approval_permission(permission: str) -> Callable:
+    """Preserve endpoint dispatch shape while checking one private consent."""
+
+    def decorate(func: Callable) -> Callable:
+        signature = inspect.signature(func)
+
+        def check(args: tuple, kwargs: dict) -> None:
+            bound = signature.bind_partial(*args, **kwargs).arguments
+            _check_approval_permission(
+                permission,
+                request_id=bound["request_id"],
+                current_user=bound["current_user"],
+                db=bound["db"],
+                request=bound.get("request"),
+            )
+
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_checked(*args: Any, **kwargs: Any) -> Any:
+                from preloop.api.loop_safety import run_db_off_loop
+
+                await run_db_off_loop(lambda: check(args, kwargs))
+                return await func(*args, **kwargs)
+
+            return async_checked
+
+        @functools.wraps(func)
+        def sync_checked(*args: Any, **kwargs: Any) -> Any:
+            check(args, kwargs)
+            return func(*args, **kwargs)
+
+        return sync_checked
+
+    return decorate
+
+
 def _record_viewed_event(
     db: Session, approval_request: ApprovalRequest, actor_id: Union[uuid.UUID, None]
 ) -> None:
@@ -302,7 +390,7 @@ def get_approval_request_stats(
 
 
 @router.get("/{request_id}", response_model=ApprovalRequestResponse)
-@require_permission("view_approvals")
+@_require_approval_permission("view_approvals")
 def get_approval_request(
     request_id: uuid.UUID,
     current_user: User = Depends(get_current_active_user),
@@ -380,7 +468,7 @@ def get_approval_original_args(
 
 
 @router.get("/{request_id}/history", response_model=list[ApprovalEventResponse])
-@require_permission("view_approvals")
+@_require_approval_permission("view_approvals")
 def get_approval_request_history(
     request_id: uuid.UUID,
     current_user: User = Depends(get_current_active_user),
@@ -549,7 +637,7 @@ def list_approval_requests(
 
 
 @router.post("/{request_id}/approve", response_model=ApprovalRequestResponse)
-@require_permission("decide_approvals")
+@_require_approval_permission("decide_approvals")
 async def approve_request(
     request_id: uuid.UUID,
     request: Request,
@@ -632,7 +720,7 @@ async def approve_request(
 
 
 @router.post("/{request_id}/decline", response_model=ApprovalRequestResponse)
-@require_permission("decide_approvals")
+@_require_approval_permission("decide_approvals")
 async def decline_request(
     request_id: uuid.UUID,
     request: Request,
@@ -707,7 +795,7 @@ async def decline_request(
 
 
 @router.post("/{request_id}/decide", response_model=ApprovalRequestResponse)
-@require_permission("decide_approvals")
+@_require_approval_permission("decide_approvals")
 async def decide_request(
     request_id: uuid.UUID,
     decision: ApprovalDecision,

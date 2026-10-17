@@ -40363,6 +40363,12 @@ components:
       title: RunnerSessionOptions
     RunnerSessionStartRequest:
       properties:
+        consent_request_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Consent Request Id
         harness:
           type: string
           enum:

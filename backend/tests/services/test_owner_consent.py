@@ -316,3 +316,142 @@ async def test_retry_sweep_recovers_durable_requests_despite_one_failure() -> No
             await retry_owner_notifications()
     assert notify.await_count == 2
     assert [call.args[0] for call in notify.await_args_list] == [first, second]
+
+
+@pytest.mark.parametrize("permission", ["view_approvals", "decide_approvals"])
+@pytest.mark.parametrize(
+    "is_owner,managed", [(True, False), (False, False), (True, True)]
+)
+def test_private_consent_permission_is_bound_to_human_owner(
+    permission: str, is_owner: bool, managed: bool
+) -> None:
+    from preloop.api.endpoints import approval_requests as endpoint
+    from preloop.models import models
+
+    actor = models.User(id=uuid4(), account_id=uuid4())
+
+    def deny_global(permission: str):
+        def decorate(func):
+            def denied(**kwargs):
+                raise HTTPException(status_code=403, detail="Missing global permission")
+
+            return denied
+
+        return decorate
+
+    with (
+        patch.object(endpoint, "require_permission", deny_global),
+        patch.object(endpoint, "_managed_execution_credential", return_value=managed),
+        patch(
+            "preloop.models.crud.owner_consent.belongs_to_owner", return_value=is_owner
+        ) as belongs,
+        patch("preloop.utils.permissions._check_authorizer") as authorize,
+    ):
+        if is_owner and not managed:
+            endpoint._check_approval_permission(
+                permission, request_id=uuid4(), current_user=actor, db=MagicMock()
+            )
+            assert authorize.call_args.args[0] == (
+                "view_owner_consent"
+                if permission == "view_approvals"
+                else "decide_owner_consent"
+            )
+            assert belongs.call_args.kwargs["owner_user_id"] == actor.id
+        else:
+            with pytest.raises(HTTPException) as exc:
+                endpoint._check_approval_permission(
+                    permission, request_id=uuid4(), current_user=actor, db=MagicMock()
+                )
+            assert exc.value.status_code == 403
+            authorize.assert_not_called()
+
+
+def test_private_consent_account_authorizer_still_has_veto() -> None:
+    from preloop.api.endpoints import approval_requests as endpoint
+    from preloop.models import models
+
+    actor = models.User(id=uuid4(), account_id=uuid4())
+
+    def deny_global(permission: str):
+        def decorate(func):
+            def denied(**kwargs):
+                raise HTTPException(status_code=403)
+
+            return denied
+
+        return decorate
+
+    with (
+        patch.object(endpoint, "require_permission", deny_global),
+        patch.object(endpoint, "_managed_execution_credential", return_value=False),
+        patch("preloop.models.crud.owner_consent.belongs_to_owner", return_value=True),
+        patch(
+            "preloop.utils.permissions._check_authorizer",
+            side_effect=HTTPException(status_code=403, detail="Account policy denied"),
+        ),
+    ):
+        with pytest.raises(HTTPException, match="Account policy denied"):
+            endpoint._check_approval_permission(
+                "decide_approvals",
+                request_id=uuid4(),
+                current_user=actor,
+                db=MagicMock(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_runner_session_consent_has_no_agent_link() -> None:
+    approval_id = uuid4()
+    with patch(
+        "preloop.services.owner_consent.check_owner_consent",
+        return_value=OwnerConsentResult("pending", approval_id, False),
+    ) as check:
+        with pytest.raises(HTTPException) as exc:
+            await require_owner_consent(
+                MagicMock(),
+                account_id=uuid4(),
+                owner_user_id=uuid4(),
+                requester_user_id=uuid4(),
+                subject_id="example-runner",
+                action="runner_session_start",
+                request_key="intent",
+                details={},
+                managed_agent_id=None,
+            )
+    assert check.call_args.kwargs["managed_agent_id"] is None
+    assert exc.value.detail["message"] == "Waiting for runner owner"
+
+
+@pytest.mark.asyncio
+async def test_session_gate_performs_sync_database_work_off_event_loop() -> None:
+    import threading
+
+    loop_thread = threading.get_ident()
+    observed: list[int] = []
+    approval_id = uuid4()
+
+    def check(*args, **kwargs):
+        observed.append(threading.get_ident())
+        return OwnerConsentResult("approved", approval_id, False)
+
+    def consume(*args, **kwargs):
+        observed.append(threading.get_ident())
+        return True
+
+    with (
+        patch("preloop.services.owner_consent.check_owner_consent", side_effect=check),
+        patch("preloop.services.owner_consent.crud.consume", side_effect=consume),
+    ):
+        result = await require_owner_consent(
+            MagicMock(),
+            account_id=uuid4(),
+            owner_user_id=uuid4(),
+            requester_user_id=uuid4(),
+            subject_id=str(uuid4()),
+            action="agent_session_start",
+            request_key="intent",
+            details={},
+        )
+    assert result == approval_id
+    assert len(observed) == 2
+    assert all(thread != loop_thread for thread in observed)

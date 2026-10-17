@@ -80,3 +80,84 @@ def test_owner_consent_lifecycle() -> None:
             db.delete(account)
             db.commit()
     engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.getenv("DATABASE_URL"), reason="Requires isolated PostgreSQL"
+)
+async def test_notification_completion_survives_delivery_commit() -> None:
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from preloop.services.owner_consent import notify_owner_consent
+
+    engine = create_engine(os.environ["DATABASE_URL"])
+    async_engine = create_async_engine(
+        os.environ["DATABASE_URL"].replace(
+            "postgresql+psycopg://", "postgresql+asyncpg://"
+        )
+    )
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    account_id, owner_id = uuid4(), uuid4()
+
+    @asynccontextmanager
+    async def async_session():
+        async with factory() as db:
+            yield db
+
+    async def delivered(service, approval, workflow):
+        # send_notifications records its timeline with an internal commit.
+        # The owner binding must remain usable by mark_notified afterwards.
+        await service.db.commit()
+        return {"mobile_push": {"success": True}}
+
+    with Session(engine) as db:
+        db.add(models.Account(id=account_id, organization_name="Example Organization"))
+        db.flush()
+        db.add(
+            models.User(
+                id=owner_id,
+                account_id=account_id,
+                username=f"owner-{owner_id}",
+                email=f"{owner_id}@example.com",
+                hashed_password="unused",
+                is_active=True,
+            )
+        )
+        db.commit()
+        try:
+            result = check_owner_consent(
+                db,
+                account_id=account_id,
+                owner_user_id=owner_id,
+                action="runner_flow",
+                subject_id="example-runner",
+                request_key="notification-intent",
+                details={},
+            )
+            with (
+                patch(
+                    "preloop.services.owner_consent.get_async_db_session", async_session
+                ),
+                patch(
+                    "preloop.services.approval_service.ApprovalService.send_notifications",
+                    delivered,
+                ),
+                patch(
+                    "preloop.services.approval_service._log_approval_lifecycle_async"
+                ),
+            ):
+                await notify_owner_consent(result.approval_id)
+            binding = (
+                db.query(models.OwnerConsent)
+                .filter_by(approval_request_id=result.approval_id)
+                .one()
+            )
+            assert binding.notification_sent_at is not None
+        finally:
+            db.rollback()
+            db.delete(db.get(models.Account, account_id))
+            db.commit()
+    await async_engine.dispose()
+    engine.dispose()

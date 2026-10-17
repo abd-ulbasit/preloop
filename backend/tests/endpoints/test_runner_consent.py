@@ -56,3 +56,34 @@ def test_only_owner_can_change_runner_consent(monkeypatch, mode) -> None:
     )
     assert update.call_args.kwargs["obj_in"] == {"flow_execution_consent": mode}
     audit.assert_called_once()
+
+
+def test_registration_defaults_and_resume_preserves_owner_setting(
+    db_session, test_user, monkeypatch
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from preloop.api.auth import get_current_active_user
+    from preloop.models.db.session import get_db_session
+
+    monkeypatch.setattr(runners, "emit_runner_updated", lambda *a: None)
+    monkeypatch.setattr(runners, "evaluate_fleet_findings", lambda *a, **k: None)
+    app = FastAPI()
+    app.include_router(runners.router, prefix="/api/v1")
+    app.dependency_overrides[get_db_session] = lambda: db_session
+    app.dependency_overrides[get_current_active_user] = lambda: test_user
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/runners/register", json={"name": "Example runner"}
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["flow_execution_consent"] == "ask_me"
+        runner_id = created.json()["id"]
+        updated = client.patch(
+            f"/api/v1/runners/{runner_id}/consent",
+            json={"flow_execution_consent": "never"},
+        )
+        assert updated.status_code == 200, updated.text
+        resumed = client.post("/api/v1/runners/register", json={"runner_id": runner_id})
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["flow_execution_consent"] == "never"
