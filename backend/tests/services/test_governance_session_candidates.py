@@ -13,6 +13,7 @@ from preloop.models.crud import (
 )
 from preloop.models.crud.governance_session_candidates import (
     list_session_digest_candidates,
+    list_session_digest_retries,
 )
 
 
@@ -136,3 +137,74 @@ def test_session_traffic_uses_the_same_internal_purpose_vocabulary() -> None:
     from preloop.models.crud.runtime_session import INTERNAL_USAGE_PURPOSES
 
     assert set(INTERNAL_USAGE_PURPOSES) == GATEWAY_USAGE_PURPOSES
+
+
+def test_retry_reader_limits_orders_and_excludes_completed_or_live_claims(
+    db_session: Session,
+    test_user: models.User,
+) -> None:
+    owner = test_user.account_id
+    now = datetime.now(timezone.utc)
+    runtime = crud_runtime_session.upsert_by_source(
+        db_session,
+        account_id=owner,
+        session_source_type="test",
+        session_source_id="retry-candidates",
+        started_at=now - timedelta(days=2),
+    )
+    sid = runtime.id
+    expected = []
+    for index, status in enumerate(
+        [
+            "complete",
+            "budget_limited",
+            "provider_failed",
+            "summarizing",
+            "summarizing",
+            "retry_exhausted",
+            "parse_failed",
+        ]
+    ):
+        row = crud_governance_session_digest.upsert(
+            db_session,
+            account_id=owner,
+            runtime_session_id=sid,
+            segment_index=index,
+            window_start=now - timedelta(days=2),
+            window_end=now - timedelta(hours=index),
+            digest={"summary_status": status},
+        )
+        if index == 4:
+            crud_governance_session_digest.update(
+                db_session, db_obj=row, obj_in={"updated_at": now - timedelta(hours=1)}
+            )
+        if index in (1, 2, 4):
+            expected.insert(0, row.id)
+    assert (
+        list_session_digest_retries(
+            db_session, account_id=owner, stale_before=now - timedelta(minutes=10)
+        )
+        == expected
+    )
+    assert (
+        list_session_digest_retries(
+            db_session,
+            account_id=owner,
+            stale_before=now - timedelta(minutes=10),
+            limit=2,
+        )
+        == expected[:2]
+    )
+    assert (
+        list_session_digest_retries(
+            db_session,
+            account_id=owner,
+            stale_before=now - timedelta(minutes=10),
+            runtime_session_id=uuid4(),
+        )
+        == []
+    )
+    assert (
+        list_session_digest_retries(db_session, account_id=uuid4(), stale_before=now)
+        == []
+    )
