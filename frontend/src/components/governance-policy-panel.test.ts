@@ -242,10 +242,14 @@ function fakeServer(
   return { stub, calls, versions, settings, email };
 }
 
-async function mount(canManage: boolean): Promise<GovernancePolicyPanel> {
+async function mount(
+  canManage: boolean,
+  canManageAccount = canManage
+): Promise<GovernancePolicyPanel> {
   const element = await fixture<GovernancePolicyPanel>(
     html`<governance-policy-panel
       .canManage=${canManage}
+      .canManageAccount=${canManageAccount}
     ></governance-policy-panel>`
   );
   await waitUntil(
@@ -702,6 +706,33 @@ describe('governance-policy-panel', () => {
     expect(
       element
         .shadowRoot!.querySelector('.email-user-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
+  });
+
+  it('gates the account email switch on manage_account, not manage_policies', async () => {
+    server = fakeServer('on_platform');
+    const element = await mount(true, false);
+    await waitUntil(() =>
+      element.shadowRoot!.querySelector('.email-account-switch')
+    );
+    expect(
+      element
+        .shadowRoot!.querySelector('.email-account-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(true);
+    expect(
+      element
+        .shadowRoot!.querySelector('.review-switch')!
+        .hasAttribute('disabled')
+    ).to.equal(false);
+    const accountOnly = await mount(false, true);
+    await waitUntil(() =>
+      accountOnly.shadowRoot!.querySelector('.email-account-switch')
+    );
+    expect(
+      accountOnly
+        .shadowRoot!.querySelector('.email-account-switch')!
         .hasAttribute('disabled')
     ).to.equal(false);
   });

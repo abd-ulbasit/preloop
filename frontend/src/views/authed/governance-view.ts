@@ -687,12 +687,10 @@ export class GovernanceView extends LitElement {
     </th>`;
   }
   private findingList(rows: GovernanceFinding[], dismissed = false) {
-    const filtered = rows.filter(
-      (row) =>
-        (!this.section || row.category === this.section) &&
-        `${row.title} ${row.rule_ref ?? ''} ${row.suggestion}`
-          .toLowerCase()
-          .includes(this.search.toLowerCase())
+    const filtered = rows.filter((row) =>
+      `${row.title} ${row.rule_ref ?? ''} ${row.suggestion}`
+        .toLowerCase()
+        .includes(this.search.toLowerCase())
     );
     const rank = { high: 0, medium: 1, low: 2 };
     filtered.sort(
@@ -972,13 +970,17 @@ export class GovernanceView extends LitElement {
                         </td>
                         <td>
                           ${
-                            session.flow_href || session.agent_href
-                              ? html`<a
-                                  href=${(session.flow_href ?? session.agent_href)!}
-                                  >${session.agent_name ?? 'Open'}</a
-                                >`
-                              : (session.agent_name ??
-                                html`<span class="muted">Unattributed</span>`)
+                            session.flow_href
+                              ? html`Flow
+                                  <a href=${session.flow_href}
+                                    >${session.flow_name ?? 'Open flow'}</a
+                                  >`
+                              : session.agent_href
+                                ? html`<a href=${session.agent_href}
+                                    >${session.agent_name ?? 'Open agent'}</a
+                                  >`
+                                : (session.agent_name ??
+                                  html`<span class="muted">Unattributed</span>`)
                           }
                         </td>
                         <td>

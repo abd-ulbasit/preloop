@@ -41,6 +41,7 @@ export interface ContributingSession {
   href?: string | null;
   agent_href?: string | null;
   flow_href?: string | null;
+  flow_name?: string | null;
 }
 export interface SpendEvidence {
   day: string;

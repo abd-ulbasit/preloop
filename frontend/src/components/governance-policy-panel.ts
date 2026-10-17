@@ -109,6 +109,8 @@ function isOwnGatewayModel(model: AIModel): boolean {
 @customElement('governance-policy-panel')
 export class GovernancePolicyPanel extends LitElement {
   @property({ type: Boolean }) canManage = false;
+  /** The account-wide email switch needs `manage_account`, not policies. */
+  @property({ type: Boolean }) canManageAccount = false;
 
   /** Seam for tests; the console's confirm dialog by default. */
   confirm: typeof confirmDialog = confirmDialog;
@@ -582,7 +584,7 @@ export class GovernancePolicyPanel extends LitElement {
                 <sl-switch
                   class="email-account-switch"
                   ?checked=${this._email.account_enabled}
-                  ?disabled=${!this.canManage || !!this._switching}
+                  ?disabled=${!this.canManageAccount || !!this._switching}
                   @sl-change=${(event: Event) =>
                     void this._toggleEmail(
                       'account_enabled',
@@ -592,7 +594,7 @@ export class GovernancePolicyPanel extends LitElement {
                 >
                 <div class="meta">
                   ${this._email.account_enabled ? 'Sent each Monday to members who have not opted out.' : 'Nobody in the account gets the weekly report email.'}
-                  ${this.canManage ? '' : ' Owners and admins can change this.'}
+                  ${this.canManageAccount ? '' : ' Owners and admins can change this.'}
                 </div>
               </div>
               <div class="switch-row">

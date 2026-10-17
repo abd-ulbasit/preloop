@@ -63,6 +63,7 @@ const spend: GovernanceFinding = {
             started_at: '2026-10-13T11:40:00Z',
             cost: 6.15,
             flow_href: '/console/flows/flow-1',
+            flow_name: 'Nightly triage',
           },
         ],
       },
@@ -73,7 +74,7 @@ const tool: GovernanceFinding = {
   ...base,
   id: 'tool-1',
   kind: 'inefficiency',
-  category: 'tool_hygiene',
+  category: 'unused_tools',
   title: 'browser-07 attached in 14 sessions and used in 1.',
   evidence: [
     {
@@ -102,7 +103,13 @@ describe('Weekly review deep links and report evidence', () => {
       capabilities: ['governance_review'],
       routes: [
         { path: `${BASE}/runs`, body: () => [run] },
-        { path: `${BASE}/findings`, body: () => [spend, tool] },
+        {
+          path: `${BASE}/findings`,
+          body: (call) =>
+            new URLSearchParams(call.search).get('category') === 'tool_hygiene'
+              ? [tool]
+              : [spend, tool],
+        },
         { path: `${BASE}/findings/spend-1`, body: () => spend },
         { path: `${BASE}/findings/tool-1`, body: () => tool },
         {
@@ -194,8 +201,10 @@ describe('Weekly review deep links and report evidence', () => {
     expect(titled.textContent).to.equal('Refactor billing digest');
     expect(el.shadowRoot!.querySelector('a[href="/console/agents/agent-1"]')).to
       .exist;
-    expect(el.shadowRoot!.querySelector('a[href="/console/flows/flow-1"]')).to
-      .exist;
+    expect(
+      el.shadowRoot!.querySelector('a[href="/console/flows/flow-1"]')!
+        .textContent
+    ).to.equal('Nightly triage');
     expect(text(el)).not.to.contain('{"');
   });
 
