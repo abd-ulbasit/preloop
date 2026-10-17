@@ -767,6 +767,7 @@ def test_ai_models_credential_health_and_secret_redaction(mock_account, mocker):
     )
 
     model_error = AIModel(
+        endpoint_type="direct",
         id=uuid.uuid4(),
         account_id=mock_account.account_id,
         name="Codex Model Error",
@@ -794,6 +795,7 @@ def test_ai_models_credential_health_and_secret_redaction(mock_account, mocker):
     )
 
     model_active = AIModel(
+        endpoint_type="direct",
         id=uuid.uuid4(),
         account_id=mock_account.account_id,
         name="Claude Model Active",
@@ -1155,6 +1157,7 @@ def built_in_model() -> models.AIModel:
     from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
 
     return models.AIModel(
+        endpoint_type="direct",
         id=uuid.uuid4(),
         name="DeepSeek V4.1 Flash",
         description="Preloop hosted model",

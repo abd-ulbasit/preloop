@@ -82,6 +82,9 @@ class GatewayModelSnapshot:
     is_default: bool
     created_at: datetime | None
 
+    endpoint_type: str = "direct"
+    runner_id: UUID | None = None
+
     @property
     def model_parameters(self) -> dict[str, Any] | None:
         """Return independent provider settings."""
@@ -109,6 +112,8 @@ class GatewayModelSnapshot:
             provider_name=model.provider_name,
             model_identifier=model.model_identifier,
             api_endpoint=model.api_endpoint,
+            endpoint_type=model.endpoint_type,
+            runner_id=model.runner_id,
             parameters_json=json.dumps(model.model_parameters),
             metadata_json=json.dumps(model.meta_data),
             credential_type=model.credential_type,

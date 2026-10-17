@@ -143,6 +143,8 @@ class AIModelBase(BaseModel):
         "llm",
         description="Service kind for this model configuration: inference, STT, or TTS",
     )
+    endpoint_type: Literal["direct", "runner"] = "direct"
+    runner_id: Optional[uuid.UUID] = None
     api_endpoint: Optional[str] = Field(
         None, description="URL for the model's API, if not standard"
     )
@@ -246,6 +248,8 @@ class AIModelUpdate(BaseModel):
     provider_name: Optional[str] = None
     model_identifier: Optional[str] = None
     model_kind: Optional[Literal["llm", "stt", "tts"]] = None
+    endpoint_type: Optional[Literal["direct", "runner"]] = None
+    runner_id: Optional[uuid.UUID] = None
     api_endpoint: Optional[str] = None
     api_key: Optional[str] = None
     credential_type: Optional[str] = None
@@ -336,6 +340,8 @@ class AIModelInDBBase(BaseModel):
     provider_name: str
     model_identifier: str
     model_kind: Literal["llm", "stt", "tts"] = "llm"
+    endpoint_type: Literal["direct", "runner"] = "direct"
+    runner_id: Optional[uuid.UUID] = None
     api_endpoint: Optional[str] = None
     is_default: bool = False
     model_parameters: Optional[Dict] = None
@@ -494,6 +500,8 @@ class AvailableModelsRequest(BaseModel):
             "plaintext key is never returned in the response."
         ),
     )
+    endpoint_type: Literal["direct", "runner"] = "direct"
+    runner_id: Optional[uuid.UUID] = None
     api_endpoint: Optional[str] = Field(
         None,
         description=(

@@ -874,6 +874,12 @@ required to browse fixture or existing findings.
 
 The capability-gated runner policy console consumes the Enterprise provider’s `/account/runner-policy`, paginated `/account/runner-compliance`, and member-only `/account/runner-compliance/me` APIs. Policy editing lives in Account settings, the roster in Runners, and the member warning in the console shell. OSS without `runner_requirement_policy` makes no requests to these routes; server permissions remain authoritative.
 
+Runner-bound local model endpoints use the existing authenticated runner websocket
+and internal Core NATS routing between API and gateway workers. Provider I/O stays
+inside gateway authorization, policy and audit processing. See
+[the transport design](docs/architecture/runner-local-models.md) and
+[the operator guide](docs/guide/runner-local-models.md).
+
 Native host execution additionally supports explicit private profiles for
 Codex (`codex_cli`), OpenCode (`opencode`) and DeepSeek CLI (`deepseek`, using
 the `dsh` executable). These remain dual-runtime agent types: without a host

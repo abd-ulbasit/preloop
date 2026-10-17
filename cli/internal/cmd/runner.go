@@ -153,9 +153,10 @@ func init() {
 }
 
 type runnerState struct {
-	ID    string `json:"id"`
-	Token string `json:"token"`
-	Name  string `json:"name"`
+	LocalModels []runnerLocalModel `json:"local_models,omitempty"`
+	ID          string             `json:"id"`
+	Token       string             `json:"token"`
+	Name        string             `json:"name"`
 	// AuthorizedDirectories is the operator's list of directories remote
 	// sessions may open (preloop runner dirs). Kept here so a token
 	// rotation or re-registration never drops it.
@@ -181,6 +182,7 @@ type runnerAPIRecord struct {
 }
 
 type runnerWSMessage struct {
+	runnerModelRequest
 	LogAcknowledgements bool   `json:"log_acknowledgements,omitempty"`
 	BatchID             string `json:"batch_id,omitempty"`
 
@@ -353,6 +355,7 @@ func loadOrRegisterRunner(
 	}
 	runnerFingerprint.Store("")
 	req := map[string]any{
+		"model_proxy_version":    1,
 		"harness_inventory":      runnerInventory.current(true),
 		"host_exec_profiles":     hostExecAdvertisements(),
 		"authorized_directories": authorizedDirectoryAdvertisements(),
@@ -729,6 +732,13 @@ func runRunnerSession(
 			outcome.logBuffer.resetDelivery()
 		}
 	}
+	modelState, _ := readRunnerState()
+	var localModels []runnerLocalModel
+	if modelState != nil {
+		localModels = modelState.LocalModels
+	}
+	modelProxy := newRunnerModelProxy(localModels)
+	defer modelProxy.cancel()
 	logAcknowledgements := false
 
 	logTicker := time.NewTicker(100 * time.Millisecond)
@@ -800,7 +810,15 @@ func runRunnerSession(
 			if err := applyJobOutcome(conn, outcome, jobs); err != nil {
 				return err
 			}
+		case frame := <-modelProxy.frames:
+			if err := writeRunnerJSON(conn, frame); err != nil {
+				return err
+			}
 		case msg := <-incoming:
+			if msg.Type == "model_request" {
+				modelProxy.handle(msg.runnerModelRequest)
+				continue
+			}
 			if jobs.sessions.handle(msg) {
 				continue
 			}
@@ -1326,6 +1344,9 @@ func runnerWebsocketURL(runnerID string) (string, error) {
 }
 
 func runnerStatePath() (string, error) {
+	if dir := os.Getenv("PRELOOP_RUNNER_STATE_DIR"); dir != "" {
+		return filepath.Join(dir, runnerStateFile), nil
+	}
 	dir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err

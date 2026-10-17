@@ -155,6 +155,8 @@ def harness_inventory_hash(entries: List[HarnessInventoryEntry]) -> str:
 class RunnerRegisterRequest(BaseModel):
     """Register or resume a runner for the logged-in account."""
 
+    model_proxy_version: Optional[Literal[1]] = None
+
     name: Optional[str] = Field(None, max_length=200)
     workstation_fingerprint: Optional[str] = Field(
         None,
