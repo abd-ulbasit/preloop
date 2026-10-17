@@ -7,7 +7,6 @@ from datetime import timedelta
 import os
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
-import secrets
 from sqlalchemy.orm import Session
 
 from preloop.utils.tracker_scope import project_scope_identifiers
@@ -626,9 +625,10 @@ async def _process_organization(
                 f"/api/v1/private/webhooks/{client.tracker_type}/{org.id}"
             )
             webhook_target_url = urljoin(preloop_url_str, webhook_target_path)
-            current_secret_to_use = org.webhook_secret
-            if not org.webhook_secret:
-                current_secret_to_use = secrets.token_hex(32)
+            current_secret_to_use = (
+                org.webhook_secret
+                or crud_organization.ensure_webhook_secret(db, organization_id=org.id)
+            )
 
             if (
                 client.tracker_type == "jira"
@@ -823,15 +823,6 @@ async def _process_organization(
             else:
                 # Handle other tracker types here if necessary
                 pass
-
-            if not org.webhook_secret:
-                crud_organization.update(
-                    db,
-                    db_obj=org,
-                    obj_in={
-                        "webhook_secret": current_secret_to_use,
-                    },
-                )
 
         except Exception as e:
             logger.error(

@@ -299,3 +299,11 @@ are future work. This experimental server/resource boundary does not attest the
 runner's executable, host or network origin.
 
 Native runner flows and remote sessions support Devin CLI with managed MCP and native approval hooks. See [remote sessions](docs/guide/runners/remote-sessions.md) for setup and per-harness limits.
+
+Run host Ollama and other loopback OpenAI-compatible servers through the gateway
+with [runner-proxied local models](docs/guide/runner-local-models.md). Discover them
+with `preloop runner models` and approve registration with `--register`.
+
+Private runners also support explicit native host profiles for Codex, OpenCode
+and DeepSeek CLI (`dsh`) on Windows, macOS and Linux using locally authenticated
+CLIs. See [native profile configuration and acceptance limits](docs/guide/runners/quickstart-linux.md#codex-opencode-and-deepseek-native-profiles).

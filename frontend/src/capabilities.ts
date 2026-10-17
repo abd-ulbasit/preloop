@@ -24,6 +24,7 @@ export function editionOf(
 }
 
 export const CAPABILITIES = [
+  'fleet_coverage',
   'multi_account',
   'account_hierarchy',
   'resource_sharing',

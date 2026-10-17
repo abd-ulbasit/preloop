@@ -206,6 +206,7 @@ from preloop.services.azure_openai import (
 )
 from preloop.services.litellm_routing import (
     BEDROCK_PROVIDERS,
+    OPENAI_COMPATIBLE_PROVIDERS,
     apply_preloop_client_headers,
     is_openrouter_model,
     model_api_base,
@@ -1029,6 +1030,12 @@ def checked_model_api_base(ai_model: Any, *, provider: str) -> Optional[str]:
             link-local. Status 400 so the call is not retried or paged as an
             upstream 502.
     """
+    if getattr(ai_model, "endpoint_type", "direct") == "runner":
+        raise ModelGatewayAPIError(
+            provider=provider,
+            status_code=400,
+            message="Runner models support chat completions only",
+        )
     api_base = model_api_base(ai_model)
     if not api_base:
         return None
@@ -2176,6 +2183,12 @@ class OpenAIGatewayService:
             )
 
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        if getattr(model, "endpoint_type", "direct") == "runner":
+            raise ModelGatewayAPIError(
+                provider="openai",
+                status_code=400,
+                message="Runner models support chat completions only",
+            )
         payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses"
@@ -3608,6 +3621,12 @@ class OpenAIGatewayService:
         self._begin_request_accounting()
         self._adopt_openai_native_session_id(payload)
         model = self._resolve_requested_model(payload.get("model"), provider="openai")
+        if getattr(model, "endpoint_type", "direct") == "runner":
+            raise ModelGatewayAPIError(
+                provider="openai",
+                status_code=400,
+                message="Runner models support chat completions only",
+            )
         payload = self._responses_output_budget(model, payload)
         messages = self._normalize_responses_input_recorded(
             payload, ai_model=model, endpoint_kind="responses_stream"
@@ -6092,6 +6111,27 @@ class OpenAIGatewayService:
                 message=str(message),
             )
 
+        # Never promote an unfinished tool call to response.completed. Codex
+        # persists these items and replays them on resume; an empty or partial
+        # arguments string can then make every subsequent request fail.
+        # Inspect both sources: a statusless streamed item must not hide an
+        # explicitly unfinished item in the terminal response.
+        candidate_items = list(items_by_id.values())
+        terminal_output = (completed_response or {}).get("output")
+        if isinstance(terminal_output, list):
+            candidate_items.extend(terminal_output)
+        for item in candidate_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"function_call", "custom_tool_call"} and item.get(
+                "status"
+            ) in {"in_progress", "incomplete"}:
+                raise ModelGatewayAPIError(
+                    provider="openai",
+                    status_code=502,
+                    message="Codex upstream returned an unfinished tool call",
+                )
+
         # Materialise final ``output`` items from the per-item buffers.
         output: List[Dict[str, Any]] = []
         aggregate_text_parts: List[str] = []
@@ -8286,6 +8326,17 @@ class OpenAIGatewayService:
         ):
             if payload.get(source_key) is not None and target_key not in kwargs:
                 kwargs[target_key] = payload[source_key]
+        # Codex omits sampling controls. Compatible local servers otherwise
+        # receive LiteLLM's defaults instead of the operator's model settings.
+        # Request values retain precedence, and only portable sampling fields
+        # are read here: server-specific options must not leak onto the wire.
+        model_parameters = getattr(ai_model, "model_parameters", None)
+        if (ai_model.provider_name or "").strip().lower() in (
+            OPENAI_COMPATIBLE_PROVIDERS
+        ) and isinstance(model_parameters, dict):
+            for key in ("temperature", "top_p"):
+                if key not in kwargs and model_parameters.get(key) is not None:
+                    kwargs[key] = model_parameters[key]
         if payload.get("stop") is not None:
             kwargs["stop"] = payload["stop"]
         # Intentional global default, not zai-only. Matches aux generation.
@@ -8417,6 +8468,50 @@ class OpenAIGatewayService:
         # MCP-token traffic must still get attribution). Failures fail-open but
         # are logged so attribution holes stay visible.
         self._capture_tools_meta(original_tools)
+        if getattr(ai_model, "endpoint_type", "direct") == "runner":
+            from preloop.services.runner_model_proxy import runner_completion
+
+            if provider != "openai":
+                raise ModelGatewayAPIError(
+                    provider=provider,
+                    status_code=400,
+                    message="Runner models support OpenAI chat completions only",
+                )
+            if not ai_model.runner_id:
+                raise ModelGatewayAPIError(
+                    provider=provider,
+                    status_code=503,
+                    code="runner_offline",
+                    message="Runner is offline or was deleted",
+                )
+            parameters = dict(getattr(ai_model, "model_parameters", None) or {})
+            parameters.update(payload)
+            body = {
+                key: value
+                for key, value in parameters.items()
+                if key
+                in {
+                    "temperature",
+                    "top_p",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "stop",
+                    "tools",
+                    "tool_choice",
+                    "parallel_tool_calls",
+                    "response_format",
+                    "seed",
+                    "frequency_penalty",
+                    "presence_penalty",
+                }
+            }
+            body.update(
+                model=ai_model.model_identifier, messages=messages, stream=stream
+            )
+            if stream:
+                body["stream_options"] = {"include_usage": True}
+            self.release_db_for_wait(ai_model)
+            return runner_completion(ai_model, body, stream=stream)
         kwargs = self._build_completion_kwargs(
             ai_model,
             messages=messages,

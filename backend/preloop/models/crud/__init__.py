@@ -50,6 +50,7 @@ from .access_rule import crud_access_rule
 from .account import CRUDAccount
 from .account_halt import CRUDAccountHalt, crud_account_halt
 from .expected_device import crud_expected_device
+from .fleet import crud_fleet_finding, crud_fleet_alert_settings
 from .account_milestone import CRUDAccountMilestone, crud_account_milestone
 from .agent_control_command import CRUDAgentControlCommand
 from .ai_model import CRUDAIModel
@@ -306,6 +307,8 @@ crud_tool_access_rule = CRUDToolAccessRule()  # Instantiate CRUDToolAccessRule
 
 __all__ = [
     "crud_mcp_inventory",
+    "crud_fleet_finding",
+    "crud_fleet_alert_settings",
     "identity_directory",
     "CRUDPerson",
     "IdentityConflictError",

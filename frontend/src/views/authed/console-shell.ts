@@ -1,3 +1,4 @@
+import { hasFleetPermission } from '../../device-fleet-api';
 import '../../components/runner-policy-banner';
 import {
   LitElement,
@@ -49,6 +50,7 @@ const NAV_PERMISSIONS: Record<string, string[]> = {
   '/console/agents': ['view_agents'],
   '/console/flows': ['view_flows'],
   '/console/settings/runners': ['view_flows'],
+  '/console/settings/device-fleet': ['view_device_fleet'],
   '/console/settings/webhooks': ['view_policies'],
   '/console/settings/inference-hooks': ['manage_policies'],
   '/console/tools': ['view_tools', 'view_policies'],
@@ -139,6 +141,7 @@ export class ConsoleShell extends LitElement {
 
   @state()
   private _featuresLoaded = false;
+  @state() private _fleetAllowed = false;
 
   @state()
   private _ciSetupAvailable = false;
@@ -673,6 +676,8 @@ export class ConsoleShell extends LitElement {
         }),
       ]);
       this.features = featuresResponse.features;
+      this._fleetAllowed =
+        !!profile && hasFleetPermission(profile, 'view_device_fleet');
       this._permissions = profile?.permissions ?? null;
       this._isSuperuser = profile?.is_superuser === true;
       this._startPlanChoiceCheck(profile);
@@ -736,6 +741,7 @@ export class ConsoleShell extends LitElement {
   };
 
   private _canAccess(href: string): boolean {
+    if (href === '/console/settings/device-fleet') return this._fleetAllowed;
     const required = NAV_PERMISSIONS[href];
     if (!required) {
       return true;
@@ -1422,6 +1428,14 @@ export class ConsoleShell extends LitElement {
                               : nothing,
                           ])}
                           ${this._renderNavGroup('People & access', [
+                            hasCapability(this.features, 'fleet_coverage')
+                              ? this._renderNavLink(
+                                  '/console/settings/device-fleet',
+                                  html`<span class="nav-row"
+                                    >Device fleet</span
+                                  >`
+                                )
+                              : nothing,
                             this.features.user_management
                               ? this._renderNavLink(
                                   '/console/settings/users',

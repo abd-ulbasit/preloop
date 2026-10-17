@@ -30,26 +30,48 @@ type runnerLogBuffer struct {
 	logAcknowledgements bool
 	inflight            []*runnerLogBatch
 
+	governance    *hostExecGovernanceGate
+	secrets       []string // Runner-delivered scoped credentials, redacted before parsing/logging.
 	native        bool
 	nativeCapture cursorCapture
 	nativeResults int
 	// harness selects the native stream parser. Empty means Cursor
 	// stream-json, which keeps older call sites unchanged.
-	harness        string
-	copilotCapture copilotCapture
-	claudeCapture  claudeCapture
-	mu             sync.Mutex
-	partial        []byte
-	discarding     bool
-	pending        []string
-	pendingBytes   int
-	results        []string
-	overflow       bool
+	harness          string
+	copilotCapture   copilotCapture
+	claudeCapture    claudeCapture
+	codexCapture     codexCapture
+	openCodeCapture  openCodeCapture
+	deepSeekCapture  deepSeekCapture
+	mu               sync.Mutex
+	partial          []byte
+	stderrPartial    []byte
+	stderrDiscarding bool
+	discarding       bool
+	pending          []string
+	pendingBytes     int
+	results          []string
+	overflow         bool
+}
+
+// runnerDiagnosticWriter frames stderr independently of stdout JSON. It shares
+// the log queue and redaction policy, but diagnostics cannot forge completion.
+type runnerDiagnosticWriter struct{ buffer *runnerLogBuffer }
+
+func (w runnerDiagnosticWriter) Write(data []byte) (int, error) {
+	b := w.buffer
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.writeFramedLocked(data, &b.stderrPartial, &b.stderrDiscarding, true), nil
 }
 
 func (b *runnerLogBuffer) Write(data []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.writeFramedLocked(data, &b.partial, &b.discarding, false), nil
+}
+
+func (b *runnerLogBuffer) writeFramedLocked(data []byte, partial *[]byte, discarding *bool, diagnostic bool) int {
 	original := len(data)
 	for len(data) > 0 {
 		end := bytes.IndexByte(data, '\n')
@@ -57,35 +79,66 @@ func (b *runnerLogBuffer) Write(data []byte) (int, error) {
 		if end >= 0 {
 			segment = data[:end]
 		}
-		if !b.discarding {
-			if len(b.partial)+len(segment) > runnerLogPartialLimit {
-				b.partial = nil
-				b.discarding = true
+		if !*discarding {
+			if len(*partial)+len(segment) > runnerLogPartialLimit {
+				*partial = nil
+				*discarding = true
 				b.overflow = true
 			} else {
-				b.partial = append(b.partial, segment...)
+				*partial = append(*partial, segment...)
 			}
 		}
 		if end < 0 {
 			break
 		}
-		if !b.discarding {
-			b.appendLineLocked(strings.TrimSuffix(string(b.partial), "\r"))
+		if !*discarding {
+			line := strings.TrimSuffix(string(*partial), "\r")
+			if diagnostic {
+				b.appendDiagnosticLineLocked(line)
+			} else {
+				b.appendLineLocked(line)
+			}
 		}
-		b.partial = nil
-		b.discarding = false
+		*partial = nil
+		*discarding = false
 		data = data[end+1:]
 	}
-	return original, nil
+	return original
+}
+
+func (b *runnerLogBuffer) appendDiagnosticLineLocked(line string) {
+	if b.governance != nil && b.governance.observe(line) {
+		return
+	}
+	for _, secret := range b.secrets {
+		if secret != "" {
+			line = strings.ReplaceAll(line, secret, "[REDACTED]")
+		}
+	}
+	b.queueLineLocked(line)
 }
 
 func (b *runnerLogBuffer) appendLineLocked(line string) {
+	if b.governance != nil && b.governance.observe(line) {
+		return
+	}
+	for _, secret := range b.secrets {
+		if secret != "" {
+			line = strings.ReplaceAll(line, secret, "[REDACTED]")
+		}
+	}
 	if b.native && b.harness == hostExecHarnessCopilot {
 		if !applyCopilotLine(&b.copilotCapture, line) {
 			return
 		}
 	} else if b.native && b.harness == hostExecHarnessClaude {
 		applyClaudeLine(&b.claudeCapture, line)
+	} else if b.native && b.harness == hostExecHarnessCodex {
+		applyCodexLine(&b.codexCapture, line)
+	} else if b.native && b.harness == hostExecHarnessOpenCode {
+		applyOpenCodeLine(&b.openCodeCapture, line)
+	} else if b.native && b.harness == hostExecHarnessDeepSeek {
+		applyDeepSeekLine(&b.deepSeekCapture, line)
 	} else if b.native {
 		var event cursorStreamEvent
 		if json.Unmarshal([]byte(line), &event) == nil {
@@ -105,6 +158,10 @@ func (b *runnerLogBuffer) appendLineLocked(line string) {
 		}
 		return
 	}
+	b.queueLineLocked(line)
+}
+
+func (b *runnerLogBuffer) queueLineLocked(line string) {
 	if line == "" {
 		return
 	}
@@ -144,6 +201,11 @@ func (b *runnerLogBuffer) note(line string) {
 func (b *runnerLogBuffer) finish() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(b.stderrPartial) > 0 {
+		b.appendDiagnosticLineLocked(string(b.stderrPartial))
+		b.stderrPartial = nil
+	}
+
 	if len(b.partial) > 0 {
 		b.appendLineLocked(string(b.partial))
 		b.partial = nil
@@ -286,6 +348,15 @@ func nativeRunnerResult(b *runnerLogBuffer, waitErr error) (map[string]any, erro
 	}
 	if b.harness == hostExecHarnessClaude {
 		return claudeRunnerResult(b.claudeCapture)
+	}
+	if b.harness == hostExecHarnessCodex {
+		return codexRunnerResult(b.codexCapture)
+	}
+	if b.harness == hostExecHarnessOpenCode {
+		return openCodeRunnerResult(b.openCodeCapture)
+	}
+	if b.harness == hostExecHarnessDeepSeek {
+		return deepSeekRunnerResult(b.deepSeekCapture)
 	}
 	if b.nativeResults != 1 || !b.nativeCapture.HasResult {
 		return nil, fmt.Errorf("host execution exited without a valid structured completion result")

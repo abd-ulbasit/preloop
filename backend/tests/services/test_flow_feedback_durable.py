@@ -274,6 +274,7 @@ def database() -> Generator[Engine, None, None]:
             "secret_reference",
             "ci_principal",
             "api_key",
+            "flow_runner",
         ):
             conn.execute(text(f'CREATE TABLE "{name}" (id UUID PRIMARY KEY)'))
         # Flow deletion also cleans resource access in the same transaction.

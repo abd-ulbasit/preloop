@@ -8734,6 +8734,8 @@ class FlowExecutionOrchestrator:
         mapping = extract_product_provenance_payload(
             getattr(self, "trigger_event_data", None)
         )
+        if mapping is None:
+            return None
         facts = self._product_runtime_facts()
         try:
             return validate_product_provenance(

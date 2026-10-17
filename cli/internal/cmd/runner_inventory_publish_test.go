@@ -140,6 +140,10 @@ func TestRegisterSendsInventoryAndKeepsHarnessSwitches(t *testing.T) {
 	}
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/runners/register" {
+			http.NotFound(w, r)
+			return
+		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "11111111-1111-4111-8111-111111111111", "name": "box", "token": "runner-token"})
 	}))

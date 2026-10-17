@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import socket
 import secrets
 import weakref
@@ -32,8 +33,10 @@ from preloop.agents.runner_launch import (
     prepare_runner_delivery,
 )
 from preloop.api.auth import get_current_active_user
+from preloop.services.fleet_findings import evaluate_fleet_findings
 from preloop.models import models, schemas
 from preloop.models.crud import (
+    crud_account,
     crud_api_key,
     crud_audit_log,
     crud_flow,
@@ -87,6 +90,9 @@ from preloop.cra.persist import (
     resolve_persist_authority,
 )
 from preloop.utils.permissions import require_permission
+from preloop.schemas.ai_model import AIModelCreate, AIModelRead
+from preloop.models.crud import crud_ai_model
+from preloop.services.runner_model_proxy import RunnerModelConnection
 
 FlowRunner = models.FlowRunner
 User = models.User
@@ -96,6 +102,7 @@ logger = logging.getLogger(__name__)
 
 # runner_id -> live websocket (this process only)
 _live: Dict[str, WebSocket] = {}
+_model_connections: Dict[str, RunnerModelConnection] = {}
 # Sockets closed because their credential was revoked. The session loop
 # stops reading them instead of answering on a closed channel.
 _evicted: "weakref.WeakSet[WebSocket]" = weakref.WeakSet()
@@ -156,6 +163,9 @@ async def _evict_live_runner(
     connection = _live.pop(runner_key, None)
     if connection is None:
         return False
+    model_connection = _model_connections.pop(runner_key, None)
+    if model_connection is not None:
+        await model_connection.close()
     _evicted.add(connection)
     try:
         if halted_execution_ids:
@@ -235,15 +245,57 @@ def _refresh_presence(db: Session, runner: FlowRunner) -> bool:
     )
 
 
+def _can_manage_runner_fingerprints(db: Session, viewer: models.User) -> bool:
+    """Fingerprint access follows manage_agents, including the implicit owner."""
+    from preloop.utils.permissions import user_holds_permission
+
+    account = crud_account.get(db, id=viewer.account_id)
+    return (
+        account is not None and str(account.primary_user_id) == str(viewer.id)
+    ) or user_holds_permission(db, viewer, "manage_agents")
+
+
+def _record_runner_fingerprint(
+    db: Session, runner: models.FlowRunner, value: Any
+) -> None:
+    """Ignore malformed optional heartbeat metadata without dropping liveness."""
+    if (
+        not runner.ephemeral
+        and isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value)
+        and value != runner.workstation_fingerprint
+    ):
+        crud_flow_runner.update(
+            db, db_obj=runner, obj_in={"workstation_fingerprint": value}
+        )
+
+
 def _to_response(
     row: FlowRunner,
     db: Optional[Session] = None,
     viewer: Optional[User] = None,
     viewer_is_admin: Optional[bool] = None,
+    viewer_can_manage_agents: Optional[bool] = None,
 ) -> schemas.RunnerResponse:
     from preloop.models.crud.flow_runner import runner_labels
 
     data = schemas.RunnerResponse.model_validate(row)
+    if data.workstation_fingerprint:
+        same_account = viewer is not None and str(viewer.account_id) == str(
+            row.account_id
+        )
+        registrant = viewer is not None and str(viewer.id) == str(
+            row.registered_by_user_id
+        )
+        allowed = False
+        if viewer is not None and same_account and db is not None:
+            allowed = registrant or (
+                viewer_can_manage_agents
+                if viewer_can_manage_agents is not None
+                else _can_manage_runner_fingerprints(db, viewer)
+            )
+        if not allowed:
+            data.workstation_fingerprint = None
     data.labels = runner_labels(row)
     presence = derive_presence(row)
     data.presence = presence.state
@@ -278,6 +330,8 @@ def register_runner(
         [profile.model_dump() for profile in advertised]
     )
     capabilities["docker_available"] = body.docker_available
+    if body.model_proxy_version == 1:
+        capabilities["model_proxy_version"] = 1
     # Registration is the connecting process's full advertisement and
     # replaces the stored capabilities wholesale (no merge with the resumed
     # row): a CLI that omits the field (it predates remote sessions, or the
@@ -305,7 +359,15 @@ def register_runner(
             "last_heartbeat": datetime.now(timezone.utc),
             "ephemeral": body.ephemeral or existing.ephemeral,
         }
-        for field in ("name", "hostname", "os", "arch", "labels", "instance_id"):
+        for field in (
+            "name",
+            "hostname",
+            "os",
+            "arch",
+            "labels",
+            "instance_id",
+            "workstation_fingerprint",
+        ):
             if value := getattr(body, field):
                 updates[field] = value
         existing = crud_flow_runner.update(db, db_obj=existing, obj_in=updates)
@@ -317,6 +379,7 @@ def register_runner(
         )
         if body.harness_inventory is not None:
             record_harness_inventory(db, existing, body.harness_inventory)
+        evaluate_fleet_findings(db, account_id=existing.account_id)
         emit_runner_updated(existing, db)
         return schemas.RunnerRegisterResponse(
             **_to_response(existing, db, current_user).model_dump(by_alias=True),
@@ -333,6 +396,7 @@ def register_runner(
             "instance_id": body.instance_id,
             "name": name,
             "hostname": body.hostname,
+            "workstation_fingerprint": body.workstation_fingerprint,
             "os": body.os,
             "arch": body.arch,
             "labels": body.labels or [],
@@ -349,10 +413,39 @@ def register_runner(
         )
     if body.harness_inventory is not None:
         record_harness_inventory(db, row, body.harness_inventory)
+    evaluate_fleet_findings(db, account_id=row.account_id)
     emit_runner_updated(row, db)
     return schemas.RunnerRegisterResponse(
         **_to_response(row, db, current_user).model_dump(by_alias=True), token=token
     )
+
+
+@router.post("/runners/{runner_id}/models", response_model=AIModelRead)
+@require_permission("create_ai_models")
+def register_runner_model(
+    runner_id: UUID,
+    body: AIModelCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> models.AIModel:
+    """Register an explicitly approved local model for an account-owned runner."""
+    if not crud_flow_runner.get(
+        db, id=runner_id, account_id=str(current_user.account_id)
+    ):
+        raise HTTPException(status_code=404, detail="Runner not found")
+    data = body.model_dump()
+    data.update(endpoint_type="runner", runner_id=runner_id, provider_name="openai")
+    metadata = dict(data.get("meta_data") or {})
+    gateway = dict(metadata.get("gateway") or {})
+    gateway["enabled"] = True
+    metadata["gateway"] = gateway
+    data["meta_data"] = metadata
+    try:
+        return crud_ai_model.register_runner_model(
+            db, obj_in=data, account_id=current_user.account_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/runners", response_model=List[schemas.RunnerResponse])
@@ -378,12 +471,18 @@ def list_runners(
         if any(row.harness_inventory is not None for row in rows)
         else False
     )
+    can_manage_fingerprints = (
+        _can_manage_runner_fingerprints(db, current_user)
+        if any(row.workstation_fingerprint for row in rows)
+        else False
+    )
     return [
         _to_response(
             row,
             db if row.account_id == current_user.account_id else None,
             current_user,
             viewer_is_admin=is_admin,
+            viewer_can_manage_agents=can_manage_fingerprints,
         )
         for row in rows
     ]
@@ -785,11 +884,27 @@ async def runner_ws(
     authenticated_hash = getattr(runner, "token_hash", None)
     if not isinstance(authenticated_hash, str):
         authenticated_hash = None
-    _live[runner_key] = websocket
+    previous_models = _model_connections.pop(runner_key, None)
+    if previous_models is not None:
+        await previous_models.close()
     connection_id = secrets.token_hex(32)
     crud_flow_runner.set_publication_capabilities(
         db, runner_id=runner.id, capabilities={"connection_id": connection_id}
     )
+    model_connection = RunnerModelConnection(
+        websocket,
+        str(runner.account_id),
+        runner_key,
+        credential_hash=authenticated_hash,
+        connection_id=connection_id,
+    )
+    if (getattr(runner, "capabilities", None) or {}).get("model_proxy_version") == 1:
+        try:
+            await asyncio.wait_for(model_connection.start(), timeout=3)
+        except Exception:
+            logger.warning("Runner model transport unavailable")
+    _model_connections[runner_key] = model_connection
+    _live[runner_key] = websocket
     # One controller per job, not per socket: a runner may hold several
     # executions at once and each publication has its own nonce, writer
     # credential and expiry task.
@@ -888,6 +1003,14 @@ async def runner_ws(
                 # Closed by a delete or a token rotation while waiting.
                 break
             msg_type = str(raw.get("type") or "")
+            if msg_type == "model_response":
+                # Starts revalidate the credential and connection in CRUD;
+                # revocation/replacement closes pending calls, and heartbeats
+                # retain the cross-worker credential check. Token frames must
+                # not each acquire a database connection.
+                if _live.get(runner_key) is websocket:
+                    model_connection.response(raw)
+                continue
             runner = crud_flow_runner.get(db, id=runner_id)
             if not runner:
                 await websocket.send_json({"type": "error", "error": "gone"})
@@ -988,6 +1111,9 @@ async def runner_ws(
                     crud_flow_runner.update(
                         db, db_obj=runner, obj_in={"capabilities": merged}
                     )
+                _record_runner_fingerprint(
+                    db, runner, raw.get("workstation_fingerprint")
+                )
                 # Harness inventory (#1480): every heartbeat names its hash,
                 # the body comes only when it changed or we asked for it.
                 inventory_wanted = False
@@ -1015,6 +1141,7 @@ async def runner_ws(
                     )
                 crud_flow_runner.set_presence_signals(db, runner, **presence_signals)
                 presence_changed = _refresh_presence(db, runner)
+                evaluate_fleet_findings(db, account_id=runner.account_id)
                 reply: Dict[str, Any] = {"type": "ack", "concurrency": runner.capacity}
                 if inventory_wanted:
                     reply["inventory_wanted"] = True
@@ -1317,6 +1444,9 @@ async def runner_ws(
                 "Private publication credential cleanup failed for runner %s", runner_id
             )
         finally:
+            if _model_connections.get(runner_key) is model_connection:
+                _model_connections.pop(runner_key, None)
+            await model_connection.close()
             _release_live_runner(runner_key, websocket)
             if crud_flow_runner.set_publication_capabilities(
                 db,

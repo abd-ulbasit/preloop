@@ -23,6 +23,7 @@ def _hosted(verified: bool) -> models.AIModel:
         name="Hosted Flash",
         account_id=None,
         provider_name="google",
+        endpoint_type="direct",
         model_identifier="flash",
         is_default=False,
         updated_at=datetime.now(timezone.utc),

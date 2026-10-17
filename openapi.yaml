@@ -16585,6 +16585,50 @@ paths:
       security:
       - bearerAuth: []
       x-restricted-ci: deny
+  /api/v1/runners/{runner_id}/models:
+    post:
+      tags:
+      - Runners
+      summary: Register Runner Model
+      description: Register an explicitly approved local model for an account-owned
+        runner.
+      operationId: register_runner_model_api_v1_runners__runner_id__models_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: runner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Runner Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIModelCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/runners:
     get:
       tags:
@@ -20747,6 +20791,19 @@ components:
           description: 'Service kind for this model configuration: inference, STT,
             or TTS'
           default: llm
+        endpoint_type:
+          type: string
+          enum:
+          - direct
+          - runner
+          title: Endpoint Type
+          default: direct
+        runner_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runner Id
         api_endpoint:
           anyOf:
           - type: string
@@ -21307,6 +21364,19 @@ components:
           - tts
           title: Model Kind
           default: llm
+        endpoint_type:
+          type: string
+          enum:
+          - direct
+          - runner
+          title: Endpoint Type
+          default: direct
+        runner_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runner Id
         api_endpoint:
           anyOf:
           - type: string
@@ -21461,6 +21531,20 @@ components:
             - tts
           - type: 'null'
           title: Model Kind
+        endpoint_type:
+          anyOf:
+          - type: string
+            enum:
+            - direct
+            - runner
+          - type: 'null'
+          title: Endpoint Type
+        runner_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runner Id
         api_endpoint:
           anyOf:
           - type: string
@@ -25026,6 +25110,10 @@ components:
           type: boolean
           title: Is Superuser
           default: false
+        is_account_owner:
+          type: boolean
+          title: Is Account Owner
+          default: false
         permissions:
           anyOf:
           - items:
@@ -25180,6 +25268,19 @@ components:
           description: Existing AI model id. When no typed api_key is sent, the server
             decrypts the stored credentials via CRUD and lists live. The plaintext
             key is never returned in the response.
+        endpoint_type:
+          type: string
+          enum:
+          - direct
+          - runner
+          title: Endpoint Type
+          default: direct
+        runner_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Runner Id
         api_endpoint:
           anyOf:
           - type: string
@@ -32935,6 +33036,7 @@ components:
           - claude_code
           - codex_cli
           - opencode
+          - deepseek
           - gemini_cli
           - claude_desktop
           - vscode_copilot
@@ -39572,12 +39674,26 @@ components:
         machine.
     RunnerRegisterRequest:
       properties:
+        model_proxy_version:
+          anyOf:
+          - type: integer
+            const: 1
+          - type: 'null'
+          title: Model Proxy Version
         name:
           anyOf:
           - type: string
             maxLength: 200
           - type: 'null'
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Workstation Fingerprint
+          description: Self-reported tenant-salted correlation key, not attested device
+            identity.
         hostname:
           anyOf:
           - type: string
@@ -39677,6 +39793,13 @@ components:
         name:
           type: string
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workstation Fingerprint
+          description: Self-reported correlation key; only the registrant and manage_agents
+            holders can read it.
         hostname:
           anyOf:
           - type: string
@@ -39829,6 +39952,13 @@ components:
         name:
           type: string
           title: Name
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workstation Fingerprint
+          description: Self-reported correlation key; only the registrant and manage_agents
+            holders can read it.
         hostname:
           anyOf:
           - type: string
@@ -40062,6 +40192,7 @@ components:
           - claude_code
           - codex_cli
           - opencode
+          - deepseek
           - gemini_cli
           - claude_desktop
           - vscode_copilot

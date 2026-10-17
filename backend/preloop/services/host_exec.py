@@ -20,13 +20,21 @@ HOST_EXEC_HARNESSES: Mapping[str, str] = {
     "copilot": "copilot_cli",
     "devin": "devin_cli",
     "claude_code": "claude_code",
+    "codex": "codex_cli",
+    "opencode": "opencode",
+    "deepseek": "deepseek",
 }
-HOST_EXEC_AGENT_TYPES = frozenset(HOST_EXEC_HARNESSES)
-_HOST_EXEC_LABELS = {
+HOST_EXEC_AGENT_TYPES = frozenset({"cursor", "copilot", "devin", "claude_code"})
+# These harnesses also support Docker; native execution requires an explicit profile.
+HOST_EXEC_PROFILE_AGENT_TYPES = frozenset(HOST_EXEC_HARNESSES)
+HOST_EXEC_LABELS = {
     "cursor": "Cursor",
     "copilot": "Copilot CLI",
     "devin": "Devin CLI",
     "claude_code": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+    "deepseek": "DeepSeek CLI (dsh)",
 }
 #: Agent config key holding the per-flow model alias for each host harness.
 HOST_EXEC_MODEL_KEYS: Mapping[str, str] = {
@@ -34,6 +42,9 @@ HOST_EXEC_MODEL_KEYS: Mapping[str, str] = {
     "copilot": "copilot_model",
     "devin": "devin_model",
     "claude_code": "claude_code_model",
+    "codex": "codex_model",
+    "opencode": "opencode_model",
+    "deepseek": "deepseek_model",
 }
 HOST_EXEC_COMPLETION_PROTOCOL = "host_exec"
 #: Inverse of ``HOST_EXEC_HARNESSES``: harness inventory id -> agent type.
@@ -92,6 +103,9 @@ HOST_EXEC_CAPABILITIES = frozenset(
         "copilot_cli",
         "devin_cli",
         "claude_code",
+        "codex_cli",
+        "opencode",
+        "deepseek",
         "stdout",
         "cancel",
         "host_publication",
@@ -202,7 +216,11 @@ def host_exec_harness_selector(agent_type: Any, agent_config: Any) -> Optional[s
     config = _unwrapped_config(agent_config)
     raw = config.get("harness")
     harness = raw.strip() if isinstance(raw, str) else ""
-    if not harness or host_exec_profile_name(config):
+    if (
+        not harness
+        or host_exec_profile_name(config)
+        or _normalized_agent_type(agent_type) not in HOST_EXEC_AGENT_TYPES
+    ):
         return None
     if HOST_EXEC_HARNESSES.get(_normalized_agent_type(agent_type)) != harness:
         return None
@@ -583,12 +601,18 @@ def host_exec_flow_error(
             f"agent type {kind} requires agent_config.host_exec_profile or "
             "agent_config.harness on a private runner"
         )
+    if (
+        kind in HOST_EXEC_PROFILE_AGENT_TYPES - HOST_EXEC_AGENT_TYPES
+        and isinstance(agent_config, Mapping)
+        and agent_config.get("harness")
+        and not profile
+    ):
+        return "this native harness requires an explicit host_exec_profile"
     if harness and pool == "server":
         return "harness routing cannot run on hosted compute"
-    if profile and kind and kind not in HOST_EXEC_AGENT_TYPES:
+    if profile and kind and kind not in HOST_EXEC_PROFILE_AGENT_TYPES:
         return (
-            "host_exec_profile requires agent_type cursor, copilot, devin or "
-            "claude_code; Docker "
+            "host_exec_profile requires a supported native host agent type; "
             f"harnesses cannot use a host execution profile (got {kind})"
         )
     if profile and pool == "server":
@@ -613,7 +637,7 @@ def host_exec_flow_error(
                 )
             if uses_mcp and kind in _WORKSPACE_MCP_IN_CWD:
                 return (
-                    f"{_HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
+                    f"{HOST_EXEC_LABELS[kind]} reads MCP configuration from its "
                     "working directory, so a flow with Preloop tools cannot run "
                     "it in an authorized directory; remove the tools or "
                     "agent_config.workspace"
@@ -799,7 +823,7 @@ def finalize_runner_completion(
         if (
             not profile
             or harness is None
-            or agent_type not in HOST_EXEC_AGENT_TYPES
+            or agent_type not in HOST_EXEC_PROFILE_AGENT_TYPES
             or pending.get("launch_version") is not None
         ):
             return "FAILED", "Invalid durable host execution lease", None
@@ -818,7 +842,7 @@ def finalize_runner_completion(
             return (
                 "FAILED",
                 "Completion does not identify the leased "
-                f"{_HOST_EXEC_LABELS[agent_type]} harness",
+                f"{HOST_EXEC_LABELS[agent_type]} harness",
                 result,
             )
         from preloop.services.host_exec_publication import (

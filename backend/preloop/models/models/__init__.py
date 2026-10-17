@@ -29,6 +29,7 @@ from .flow_artifact import FlowArtifact
 from .flow import Flow
 from .flow_feedback import FlowFeedback, FlowThread
 from .flow_execution import FlowExecution
+from .fleet import FleetFinding, FleetAlertSettings
 from .flow_runner import (
     DEFAULT_RUNNER_CONCURRENCY,
     MAX_RUNNER_CONCURRENCY,
@@ -184,6 +185,8 @@ from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 __all__ = [
     "MCPInventoryFinding",
     "MCPInventoryReview",
+    "FleetFinding",
+    "FleetAlertSettings",
     "DESKTOP_VIEW_OPEN_STATES",
     "DesktopEndpoint",
     "DesktopView",

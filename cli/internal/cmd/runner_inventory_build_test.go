@@ -531,3 +531,49 @@ func TestProbeCopilotLoginSDKProcess(t *testing.T) {
 		t.Fatalf("failed command got %s", got)
 	}
 }
+
+func TestCopilotModernStoredConfig(t *testing.T) {
+	for _, tc := range []struct{ name, config, verdict, want, host, wantModel string }{
+		{"commented modern identity", "// Copilot configuration\n" + `{"model":"custom-model","authTokens":{},"lastLoggedInUser":{"host":"https://example.ghe.com","login":"example"},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedIn, harnessLoginSignedIn, "example.ghe.com", "custom-model"},
+		{"identity only unknown", `{"lastLoggedInUser":{"host":"https://example.ghe.com"}}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"token presence unknown", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"signed out overrides credentials", `{"authTokens":{"https://example.ghe.com:example":{"token":"synthetic-token"}},"loggedInUsers":[{"host":"https://example.ghe.com"}]}`, harnessLoginSignedOut, harnessLoginSignedOut, "", ""},
+		{"modern overrides stale legacy identity", `{"logged_in_users":[{"host":"https://old.example.com"}],"loggedInUsers":[]}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"null modern aliases override stale legacy", `{"logged_in_users":[{"host":"https://old.example.com"}],"lastLoggedInUser":null,"loggedInUsers":null}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"legacy JSONC fallback", "// legacy configuration\n" + `{"logged_in_users":[{"host":"https://example.ghe.com"}]}`, harnessLoginUnknown, harnessLoginSignedIn, "example.ghe.com", ""},
+		{"malformed config fails closed", `{"logged_in_users":[{"host":"https://example.ghe.com"}],`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+		{"malformed identity fails closed", `{"lastLoggedInUser":"invalid"}`, harnessLoginUnknown, harnessLoginUnknown, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCopilotConfig(t, filepath.Join(home, ".copilot"), tc.config)
+			deps := (fakeHost{home: home, env: map[string]string{}, executables: map[string]bool{"copilot": true}}).deps("windows")
+			deps.CopilotLogin = func(string) string { return tc.verdict }
+			entry := entryFor(t, buildHarnessInventory(deps), hostExecHarnessCopilot)
+			if entry.LoginState != tc.want || entry.AccountHost != tc.host {
+				t.Fatalf("state/host = %s/%q, want %s/%q", entry.LoginState, entry.AccountHost, tc.want, tc.host)
+			}
+			if tc.wantModel != "" {
+				found := false
+				for _, model := range entry.Models {
+					found = found || model.ID == tc.wantModel
+				}
+				if !found {
+					t.Fatal("configured model missing from inventory")
+				}
+			}
+			encoded, err := json.Marshal(entry)
+			if err != nil || strings.Contains(string(encoded), "synthetic-token") || strings.Contains(string(encoded), "authTokens") {
+				t.Fatal("inventory must not contain stored credentials")
+			}
+		})
+	}
+}
+
+func TestReadCopilotStoredConfigRejectsOversizedDocument(t *testing.T) {
+	dir := t.TempDir()
+	writeCopilotConfig(t, dir, `{"logged_in_users":[{"host":"https://github.com"}]}`+strings.Repeat(" ", 256*1024))
+	if cfg := readCopilotStoredConfig(dir); cfg.legacyLogin || cfg.LastLoggedInUser != nil || len(cfg.LoggedInUsers) != 0 {
+		t.Fatal("oversized config must not establish login")
+	}
+}

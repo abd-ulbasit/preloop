@@ -11,6 +11,7 @@ from fastmcp.tools import Tool
 from fastmcp.tools.tool import ToolResult
 from mcp.types import TextContent
 from pydantic import ValidationError
+from pytest_mock import MockerFixture
 
 from preloop.services import policy_evaluator
 from preloop.services.dynamic_fastmcp import (
@@ -881,3 +882,43 @@ def test_load_sensitive_data_policy_returns_none_without_tool_rules(mocker) -> N
     config, detectors = dynamic_fastmcp._load_sensitive_data_policy("acc")
     assert config.rules[0].id == "block-cards"
     assert isinstance(detectors, DetectorConfig)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["deny", "require_approval", "notify"])
+async def test_tool_predicate_uses_live_dispatch(
+    proxied: tuple, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, action: str
+) -> None:
+    """Metadata predicates use the same refusal, approval and notice path."""
+    mcp, client, _evaluate, approval = proxied
+    mocker.patch.object(policy_evaluator, "_log_policy_decision_async")
+    notice = mocker.patch.object(tool_policy, "schedule_policy_notice")
+    detect = mocker.spy(tool_policy, "detect")
+    _install_policy(
+        monkeypatch,
+        _config(
+            {
+                "id": "review-data-change",
+                "on": ["tool.args"],
+                "action": action,
+                "condition": "tool.server == 'crm' && tool.name == 'save_note'",
+                "description": "Ask an administrator before changing data.",
+                "approval_workflow": "humans",
+            }
+        ),
+    )
+    result = await mcp.call_tool("save_note", {"note": "synthetic record"})
+    detect.assert_not_called()
+    if action == "deny":
+        assert result.is_error
+        assert "Ask an administrator" in result.content[0].text
+        client.call_tool.assert_not_called()
+        approval.assert_not_awaited()
+    else:
+        client.call_tool.assert_awaited_once()
+        if action == "require_approval":
+            approval.assert_awaited_once()
+            assert approval.call_args.kwargs["workflow_id"] == "wf-1"
+        else:
+            notice.assert_called_once()
+            assert approval.call_args.kwargs.get("workflow_id") is None

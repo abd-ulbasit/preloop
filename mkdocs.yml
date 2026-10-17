@@ -167,6 +167,7 @@ nav:
       - Gateway overhead: guide/concepts/gateway-overhead.md
       - Subject-scoped governance: guide/concepts/subject-scoped-governance.md
       - Policy-as-code: guide/concepts/policy-as-code.md
+      - Governing back-office AI use: guide/policies/back-office-ai.md
       - Runtime sessions: guide/concepts/runtime-sessions.md
       - Subagent session identity: guide/subagent-session-identity.md
 
@@ -217,7 +218,9 @@ nav:
           - "2026-09-19 Alibaba": pricing/reviews/2026-09-19-alibaba.md
 
   - Models and providers:
+      - Overview: guide/providers/index.md
       - Which gateway URL an agent calls: operations/model-gateway-url.md
+      - Local and OpenAI-compatible models: guide/providers/local-models.md
       - Amazon Bedrock: guide/providers/bedrock.md
       - Azure OpenAI: guide/providers/azure-openai.md
       - Alibaba Cloud Model Studio: guide/alibaba-model-studio.md
@@ -258,6 +261,7 @@ nav:
       - GitHub Actions: guide/flows/github-actions.md
       - Restricted CI setup: guide/flows/restricted-ci.md
       - Trackers:
+          - GitLab self-hosted: guide/gitlab-self-hosted.md
           - Bitbucket Cloud: guide/bitbucket-tracker.md
           - Jira Cloud: guide/jira-tracker.md
           - Moving a GitHub repository: guide/github-repository-transfer.md
@@ -265,6 +269,7 @@ nav:
           - Jira repository binding: guide/flows/jira-repository-binding.md
 
   - Runners:
+      - Local models through a runner: guide/runner-local-models.md
       - Account runner requirements: guide/runners/policy.md
       - Linux quickstart: guide/runners/quickstart-linux.md
       - macOS quickstart: guide/runners/quickstart-macos.md

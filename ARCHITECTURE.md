@@ -683,14 +683,16 @@ Latest collection windows remain independent per authenticated reporting source;
 commercial import policy and coverage endpoints are provided by the optional
 fleet service.
 
-The OSS Lit Agents page exposes a read-only fleet coverage panel only when
-`/features` advertises `fleet_coverage`. Coverage requests use an explicit
-freshness window; per-device application drilldown uses the existing evidence
-reader filtered by fingerprint within the authenticated account. Both readers
-preserve independent source windows, partial and capped results, and unknown
-verification. Account changes abort reads and discard pending results. CSV
-exports preserve scope and truncation, with formula-safe cells. Local inventory
-control and MCP route counts are not uploaded and are not inferred by this view.
+The Agents page shows managed and discovered agents only. Shared fleet lifecycle
+models, CRUD and lazy console components live in this repository, but fleet routes,
+evaluation and delivery belong to the optional service plugin. The `fleet_coverage`
+capability and owner/admin permissions gate Settings > People & access > Device
+fleet, its runner links and Attention items. Without the capability these surfaces
+are hidden and direct navigation redirects. Device identity is an exact tenant-salted
+fingerprint match; legacy runners remain separate and hostnames are hints only.
+Fleet findings and audited alert settings persist in core; device projections are
+computed by the plugin. None of this enables or advertises a fleet feature in the
+open-source edition.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
@@ -876,3 +878,28 @@ session counts and stop reasons come from the persisted run. No analyser is
 required to browse fixture or existing findings.
 
 The capability-gated runner policy console consumes the Enterprise provider’s `/account/runner-policy`, paginated `/account/runner-compliance`, and member-only `/account/runner-compliance/me` APIs. Policy editing lives in Account settings, the roster in Runners, and the member warning in the console shell. OSS without `runner_requirement_policy` makes no requests to these routes; server permissions remain authoritative.
+
+Runner-bound local model endpoints use the existing authenticated runner websocket
+and internal Core NATS routing between API and gateway workers. Provider I/O stays
+inside gateway authorization, policy and audit processing. See
+[the transport design](docs/architecture/runner-local-models.md) and
+[the operator guide](docs/guide/runner-local-models.md).
+
+Native host execution additionally supports explicit private profiles for
+Codex (`codex_cli`), OpenCode (`opencode`) and DeepSeek CLI (`deepseek`, using
+the `dsh` executable). These remain dual-runtime agent types: without a host
+profile they retain Docker routing. Capability matching, local `model_map`
+selection and the `host_exec` completion protocol keep native leases separate
+from Docker launch payloads. Credentials remain local; no implicit hosted
+fallback is introduced. These new native adapters support fresh flows only,
+with no initial native resume or publication. See the
+[native profile guide](docs/guide/runners/quickstart-linux.md#codex-opencode-and-deepseek-native-profiles)
+for governance requirements and acceptance limits.
+
+Tool data policies also support CEL predicates on `tool.args` using `args`,
+`tool.name` and `tool.server`. These reuse the sensitive-data policy store,
+notice delivery and approval dispatch. Evaluation errors skip notify rules;
+deny and approval rules fail closed. A bounded CEL program cache shares compiled
+expressions between validation and evaluation without retaining request bindings.
+The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrates
+portable server allowlists, write approvals and bulk-export checks.

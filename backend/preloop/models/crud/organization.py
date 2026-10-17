@@ -1,11 +1,12 @@
 """CRUD operations for Organization model."""
 
 from datetime import datetime
+import secrets
 from uuid import UUID
 from typing import Any, List, Optional
 
 from sqlalchemy.orm import Query, Session, joinedload
-from sqlalchemy import func  # Import func for lower()
+from sqlalchemy import func, or_  # Import func for lower()
 
 from ..models.organization import Organization
 from ..models.tracker import Tracker
@@ -14,6 +15,29 @@ from .base import CRUDBase
 
 class CRUDOrganization(CRUDBase[Organization]):
     """CRUD operations for Organization model."""
+
+    def ensure_webhook_secret(self, db: Session, *, organization_id: UUID) -> str:
+        """Persist and return one secret across concurrent first scans.
+
+        The conditional update serializes competing initializers in PostgreSQL.
+        Commit before registering a remote hook so every scanner uses the same
+        durable value, including sessions holding an older organization row.
+        """
+        db.query(self.model).filter(
+            self.model.id == organization_id,
+            or_(self.model.webhook_secret.is_(None), self.model.webhook_secret == ""),
+        ).update(
+            {self.model.webhook_secret: secrets.token_hex(32)},
+            synchronize_session=False,
+        )
+        db.commit()
+        organization = self.get(db, id=organization_id)
+        if organization is None:
+            raise ValueError("Organization not found during webhook initialization")
+        db.refresh(organization, attribute_names=["webhook_secret"])
+        if not organization.webhook_secret:
+            raise ValueError("Organization webhook secret was not initialized")
+        return organization.webhook_secret
 
     def _scope_to_account(self, query: Query, account_id: Any) -> Query:
         """Scope through the owning tracker (``tracker_id`` is NOT NULL)."""
