@@ -126,4 +126,170 @@ describe('agent-notes-tab', () => {
     // Only the tab read notes; the box did not fetch its own history.
     expect(noteCalls(fetchStub)).to.have.length(1);
   });
+
+  describe('sessions', () => {
+    const live = (id: string, alias: string) => ({
+      id,
+      alias,
+      session_source_type: 'claude_code',
+      runtime_principal_name: 'Claude Code',
+      started_at: '2026-10-18T08:00:00Z',
+      ended_at: null,
+    });
+
+    function stubSessions(liveRows: unknown[], noteRows: unknown[]) {
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/runtime-sessions'))
+          return jsonResponse({ items: liveRows });
+        if (url.includes('/operator-notes')) {
+          const sessionId = new URL(url, location.origin).searchParams.get(
+            'runtime_session_id'
+          );
+          const rows = sessionId
+            ? noteRows.filter(
+                (row) =>
+                  (row as { runtime_session_id?: string })
+                    .runtime_session_id === sessionId
+              )
+            : noteRows;
+          return jsonResponse({ notes: rows, total: rows.length });
+        }
+        return jsonResponse({});
+      });
+    }
+
+    async function settle(el: AgentNotesTab) {
+      await waitUntil(() =>
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('/runtime-sessions'))
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await el.updateComplete;
+    }
+
+    function target(el: AgentNotesTab): HTMLSelectElement {
+      return el.shadowRoot!.querySelector(
+        '[data-testid="note-target"]'
+      ) as HTMLSelectElement;
+    }
+
+    it('aims the box at the only live session', async () => {
+      stubSessions([live('s-1', 'fixer')], []);
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      expect(String(fetchStub.getCalls().map((c) => c.args[0]))).to.contain(
+        'agent=agent-1'
+      );
+      expect(target(el).value).to.equal('s-1');
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      expect(composer.sessionId).to.equal('s-1');
+      expect(composer.nextSession).to.equal(false);
+    });
+
+    it('makes the operator choose between several live sessions', async () => {
+      stubSessions([live('s-1', 'fixer'), live('s-2', 'reviewer')], []);
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      expect(target(el).value).to.equal('');
+      expect(
+        el.shadowRoot!.querySelector('[data-testid="note-target-hint"]')!
+          .textContent
+      ).to.contain('2 sessions are live');
+      const options = [...target(el).querySelectorAll('sl-option')].map(
+        (option) => option.textContent!.trim()
+      );
+      expect(options[0]).to.contain('fixer · Claude Code · started');
+      expect(options).to.include('Next session');
+      // No session picked: the box cannot send yet.
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      expect(composer.agentId).to.equal('');
+    });
+
+    it('offers the next session as a target of its own', async () => {
+      stubSessions([live('s-1', 'fixer')], []);
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      target(el).value = 'next';
+      target(el).dispatchEvent(new CustomEvent('sl-change'));
+      await el.updateComplete;
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      expect(composer.nextSession).to.equal(true);
+      expect(composer.sessionId).to.equal('');
+      expect(composer.agentId).to.equal('agent-1');
+    });
+
+    it('names and links the session each note went to', async () => {
+      stubSessions(
+        [live('s-1', 'fixer')],
+        [
+          { ...note(1), runtime_session_id: 's-1', delivered_turn_index: 3 },
+          {
+            ...note(2),
+            state: 'pending',
+            delivered_at: null,
+            runtime_session_id: null,
+            next_session: true,
+          },
+          {
+            ...note(3),
+            runtime_session_id: 'abcdef12-0000-0000-0000-000000000000',
+          },
+        ]
+      );
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      const sessions = [
+        ...el.shadowRoot!.querySelectorAll('[data-testid="note-session"]'),
+      ];
+      expect(sessions.map((node) => node.textContent!.trim())).to.deep.equal([
+        'fixer',
+        'Next session',
+        'Session abcdef12',
+      ]);
+      expect(sessions[0].getAttribute('href')).to.equal(
+        '/console/runtime-sessions?sessionId=s-1&turn=note-1'
+      );
+      expect(sessions[1].tagName).to.equal('SPAN');
+      (el.shadowRoot!.querySelector('button.row') as HTMLElement).click();
+      await el.updateComplete;
+      expect(
+        el.shadowRoot!.querySelector('[data-testid="agent-note-full"]')!
+          .textContent
+      ).to.contain('at turn 3');
+    });
+
+    it('narrows the list to one session', async () => {
+      stubSessions(
+        [live('s-1', 'fixer'), live('s-2', 'reviewer')],
+        [
+          { ...note(1), runtime_session_id: 's-1' },
+          { ...note(2), runtime_session_id: 's-2' },
+        ]
+      );
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      await waitUntil(() => el.shadowRoot!.querySelectorAll('li').length === 2);
+      const filter = el.shadowRoot!.querySelector(
+        '[data-testid="notes-session-filter"]'
+      ) as HTMLSelectElement;
+      filter.value = 's-2';
+      filter.dispatchEvent(new CustomEvent('sl-change'));
+      await waitUntil(() => el.shadowRoot!.querySelectorAll('li').length === 1);
+      expect(String(noteCalls(fetchStub).at(-1))).to.contain(
+        'runtime_session_id=s-2'
+      );
+    });
+  });
 });
