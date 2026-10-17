@@ -975,6 +975,55 @@ describe('CostView', () => {
     expect(element.shadowRoot!.activeElement?.id).to.equal('panel-budgets');
   });
 
+  it('keeps paid connection discovery passive when opening Spend', async () => {
+    const upgrade = sinon.spy();
+    window.addEventListener('show-upgrade-modal', upgrade);
+    const defaultFetch = fetchStub;
+    defaultFetch
+      .withArgs(
+        sinon.match((input: unknown) =>
+          String(input).includes('/api/v1/billing/provider-billing/connections')
+        )
+      )
+      .resolves(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: 'upgrade_required',
+              feature: 'provider_billing_reconciliation',
+            },
+          }),
+          { status: 402 }
+        )
+      );
+    try {
+      const element = await loadedView();
+      await waitUntil(() =>
+        fetchStub
+          .getCalls()
+          .some((call) =>
+            String(call.args[0]).includes(
+              '/api/v1/billing/provider-billing/connections'
+            )
+          )
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(upgrade.called).to.equal(false);
+      await element['handleTabShow'](
+        new CustomEvent('sl-tab-show', { detail: { name: 'users' } })
+      );
+      await element.updateComplete;
+      expect(element['activeTab']).to.equal('users');
+      expect(upgrade.called).to.equal(false);
+      await element['handleTabShow'](
+        new CustomEvent('sl-tab-show', { detail: { name: 'reconciliation' } })
+      );
+      await waitUntil(() => upgrade.called);
+    } finally {
+      window.removeEventListener('show-upgrade-modal', upgrade);
+    }
+  });
+
   it('shows the Copilot tab once a Copilot connection exists', async () => {
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
