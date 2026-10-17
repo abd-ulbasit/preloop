@@ -364,6 +364,7 @@ export class GovernanceView extends LitElement {
   private valueStart = '';
   private valueEnd = '';
   private valueDeepLink = false;
+  private valueSectionLink = false;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -375,11 +376,13 @@ export class GovernanceView extends LitElement {
     const params = new URLSearchParams(window.location.search);
     this.runId = params.get('run_id') ?? this.runId;
     const section = params.get('section') ?? '';
+    this.valueSectionLink = section === 'valuable_work';
     this.section = section in SECTIONS ? section : '';
     this.scrollToSection = !!section;
-    this.valueDeepLink = section === 'valuable_work';
     this.valueStart = params.get('start') ?? '';
     this.valueEnd = params.get('end') ?? '';
+    this.valueDeepLink =
+      section === 'valuable_work' && !!this.valueStart && !!this.valueEnd;
     if (params.get('unsubscribe') === 'weekly-report') this.unsubscribe = 'ask';
   }
   protected updated(): void {
@@ -387,7 +390,9 @@ export class GovernanceView extends LitElement {
     this.scrollToSection = false;
     this.renderRoot
       .querySelector(
-        this.valueDeepLink ? 'weekly-value-section' : '[aria-label="Findings"]'
+        this.valueSectionLink
+          ? 'weekly-value-section'
+          : '[aria-label="Findings"]'
       )
       ?.scrollIntoView({ block: 'start' });
   }
@@ -518,7 +523,10 @@ export class GovernanceView extends LitElement {
     if (target.name === 'kind') this.kind = target.value;
     if (target.name === 'severity') this.severity = target.value;
     if (target.name === 'user_id') this.userId = target.value.trim();
-    if (target.name === 'run_id') this.runId = target.value;
+    if (target.name === 'run_id') {
+      this.runId = target.value;
+      this.valueDeepLink = false;
+    }
     this.offset = 0;
     this.dismissedOffset = 0;
     this.dismissed = [];

@@ -94,4 +94,39 @@ describe('weekly value evidence', () => {
     (el.shadowRoot!.querySelector('button') as HTMLButtonElement).click();
     await waitUntil(() => api.callsTo(path).length > count);
   });
+  it('uses the addressed flag when the reason is unavailable', async () => {
+    api = mockApi({
+      routes: [
+        {
+          path,
+          body: {
+            ...result,
+            items: [
+              {
+                ...result.items[0],
+                reviews: [
+                  {
+                    url: 'https://github.com/acme/repo/pull/1',
+                    comment_ids: ['1'],
+                    addressed: true,
+                    reason: null,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const el = await fixture<WeeklyValueSection>(
+      html`<weekly-value-section></weekly-value-section>`
+    );
+    await waitUntil(() => !!el.shadowRoot!.querySelector('tbody'));
+    expect(el.shadowRoot!.querySelector('details li')!.textContent).to.include(
+      'Addressed'
+    );
+    expect(
+      el.shadowRoot!.querySelector('details li')!.textContent
+    ).not.to.include('No evidence');
+  });
 });

@@ -21,3 +21,23 @@ before aggregation. Personal approvals count requests triggered through that
 user's keys or managed agents and requests on which they recorded a vote. Raw
 finding evidence is excluded from personal projections. Adjacent report windows
 are half-open, and replay-validation traffic is excluded from usage totals.
+
+## Most valuable work: recorded outcomes
+
+The weekly review can show sessions and flow executions ranked by recorded
+repository outcomes per estimated dollar. This section appears when the server
+advertises `weekly_work_value` and the reader has View cost permission. The digest
+shows five entries; **View all recorded outcomes** opens the console for the same
+reporting window. Changing the Week selector switches the outcomes window too.
+
+Each entry states its PRs/MRs, changed lines, linked issues closed or referenced,
+review comments addressed, and estimated cost. The method explains the score and
+shared credit. Unknown or partially priced work is **Unranked**, rather than
+counted as free. This measures observed repository activity, not business value.
+Review resolution, a later edit of the commented line, or an accepting author
+reply establishes addressed evidence; missing evidence stays unaddressed.
+
+The console reads cached forge evidence. The feature makes no model calls and
+incurs no LLM spend. Forge observations refresh after seven days when available;
+failed refreshes can retain older observations. Missing attribution or incomplete
+forge coverage can leave work out of the ranking.

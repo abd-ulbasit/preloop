@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+from preloop.models.crud.runtime_session import _exclude_internal_usage_condition
 
 
 def candidates(
@@ -70,6 +71,8 @@ def candidates(
             )
             .where(
                 u.account_id == account_id,
+                u.action_type == "model_gateway",
+                _exclude_internal_usage_condition(),
                 u.flow_execution_id.in_([execution.id for execution in rows]),
             )
             .group_by(u.flow_execution_id)
@@ -168,6 +171,8 @@ def candidates(
             )
             .where(
                 u.account_id == account_id,
+                u.action_type == "model_gateway",
+                _exclude_internal_usage_condition(),
                 u.runtime_session_id.in_([sid for sid, _, _ in session_rows]),
             )
             .group_by(u.runtime_session_id)

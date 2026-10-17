@@ -187,7 +187,7 @@ export class WeeklyValueSection extends LitElement {
                                             review comments addressed
                                           </summary>
                                           <ul>
-                                            ${(row.reviews ?? []).map((review) => html`<li><a href=${review.href ?? review.url} target="_blank" rel="noopener noreferrer">Comment ${review.comment_ids[0]} ↗</a>: ${review.reason ?? 'No evidence of being addressed'}</li>`)}
+                                            ${(row.reviews ?? []).map((review) => html`<li><a href=${review.href ?? review.url} target="_blank" rel="noopener noreferrer">Comment ${review.comment_ids[0]} ↗</a>: ${review.reason ?? (review.addressed ? 'Addressed' : 'No evidence of being addressed')}</li>`)}
                                           </ul>
                                         </details>`
                                       : nothing
