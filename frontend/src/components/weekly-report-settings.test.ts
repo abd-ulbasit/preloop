@@ -21,7 +21,7 @@ function stubApi(options: {
     account_enabled: true,
     user_enabled: true,
     members_enabled: true,
-    member_policy_findings: false,
+    member_policy_findings_enabled: false,
   };
   const puts: Record<string, unknown>[] = [];
   const stub = sinon
@@ -82,7 +82,8 @@ describe('weekly-report-settings', () => {
     await waitUntil(() => switchFor(el, 'account_enabled'));
     expect(switchFor(el, 'account_enabled')!.checked).to.be.true;
     expect(switchFor(el, 'members_enabled')!.checked).to.be.true;
-    expect(switchFor(el, 'member_policy_findings')!.checked).to.be.false;
+    expect(switchFor(el, 'member_policy_findings_enabled')!.checked).to.be
+      .false;
     expect(el.shadowRoot!.textContent).to.contain('costs no');
   });
 
@@ -100,7 +101,8 @@ describe('weekly-report-settings', () => {
         'Turn on personal reports for members first.'
       )
     );
-    expect(switchFor(el, 'member_policy_findings')!.disabled).to.be.true;
+    expect(switchFor(el, 'member_policy_findings_enabled')!.disabled).to.be
+      .true;
     expect(switchFor(el, 'account_enabled')!.checked).to.be.true;
     expect(switchFor(el, 'account_enabled')!.disabled).to.be.false;
   });

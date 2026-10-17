@@ -156,7 +156,7 @@ export interface WeeklyReportPreferences {
   /** Personal reports for regular members; absent on older servers. */
   members_enabled?: boolean;
   /** Members see policy findings attributed to them. */
-  member_policy_findings?: boolean;
+  member_policy_findings_enabled?: boolean;
 }
 async function preferences<T>(options?: RequestInit): Promise<T> {
   const response = await fetchWithAuth('/api/v1/weekly-report/preferences', {

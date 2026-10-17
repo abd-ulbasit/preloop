@@ -37,7 +37,7 @@ const SWITCHES: {
     toastOff: 'Members no longer get a weekly report.',
   },
   {
-    field: 'member_policy_findings',
+    field: 'member_policy_findings_enabled',
     label: 'Include policy findings in member reports',
     on: 'A member sees the AI usage policy findings about their own sessions, and only those.',
     off: 'Member reports leave out policy findings.',
@@ -154,7 +154,8 @@ export class WeeklyReportSettings extends LitElement {
       ${shown.map((spec) => {
         const on = !!prefs[spec.field];
         const blocked =
-          spec.field === 'member_policy_findings' && !prefs.members_enabled;
+          spec.field === 'member_policy_findings_enabled' &&
+          !prefs.members_enabled;
         return html`<div class="row">
           <sl-switch
             data-field=${spec.field}
