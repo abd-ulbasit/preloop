@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -62,7 +63,7 @@ func runtimeInstallSpecForKind(kind string) (runtimeInstallSpec, error) {
 	case "pi", "deepseek", "dsh", "deepseek harness":
 		runtime, name, pkg := "pi", "Pi", "@earendil-works/pi-coding-agent@0.85.1"
 		if !strings.EqualFold(strings.TrimSpace(kind), "pi") {
-			runtime, name, pkg = "deepseek", "DeepSeek Harness", "@deepseek-ai/dsh@0.1.5-rc.2"
+			runtime, name, pkg = "deepseek", "DeepSeek Harness", "@deepseek-ai/dsh@0.2.0-rc.2"
 		}
 		command := []string{"npm", "install", "-g", "--ignore-scripts", pkg}
 		return runtimeInstallSpec{kind: runtime, displayName: name, installCommand: command, installSummary: strings.Join(command, " "), onboardAgentName: name,
@@ -262,13 +263,17 @@ func runRuntimeInstallCommand(command []string, writer io.Writer) error {
 	if len(command) == 0 {
 		return fmt.Errorf("empty install command")
 	}
-	bin, err := exec.LookPath(command[0])
+	bin, prefix, err := resolveHostExecCommand(command[0])
 	if err != nil {
+		return err
+	}
+	args := append(prefix, command[1:]...)
+	if err := hostExecCommandLineError(runtime.GOOS, bin, args); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, command[1:]...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = runtimeInstallerEnvironment()
 	cmd.Stdout = writer
 	cmd.Stderr = writer

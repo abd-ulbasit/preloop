@@ -58,7 +58,7 @@ func jobHostExecWorkspace(job map[string]any) (*sessionWorkspaceSpec, error) {
 // read it from a fixed location inside the working directory, which in an
 // authorized directory is the operator's own project.
 func hostExecMCPConfigByFlag(harness string) bool {
-	return harness == hostExecHarnessClaude || harness == hostExecHarnessCopilot
+	return harness == hostExecHarnessClaude || harness == hostExecHarnessCopilot || isExtendedHostExecHarness(harness)
 }
 
 // validateHostExecWorkspaceJob refuses combinations that would write into

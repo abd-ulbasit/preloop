@@ -751,3 +751,99 @@ execution succeeded.
 
 See [Account runner requirements](policy.md) for console policy settings,
 compliance and member warnings.
+
+
+### Codex, OpenCode and DeepSeek native profiles
+
+Private runners can execute installed Codex (`codex`), OpenCode (`opencode`)
+and DeepSeek CLI (`dsh`) directly on Windows, macOS and Linux without Docker.
+This path uses the runner user's existing authenticated CLI credentials.
+It requires an explicit local host profile and a private runner pool; it does
+not silently switch to hosted compute or a gateway-funded model. Existing
+Docker flows keep their existing behavior when no host profile is selected.
+
+For example, add these profiles to the local `runner-host-profiles.json`
+file (use provider and model names configured in your local CLI):
+
+```json
+{
+  "profiles": [
+    {"name": "local-codex", "executable": "codex", "model_map": {"team-fast": "local-model"}},
+    {"name": "local-opencode", "executable": "opencode", "model_map": {"team-fast": "provider/model"}},
+    {"name": "local-deepseek", "executable": "dsh", "model_map": {"team-fast": "provider/model"}}
+  ]
+}
+```
+
+These adapters manage their own command arguments; leave `argv` empty.
+
+Use `agent_type: codex`, `opencode` or `deepseek`, respectively, and set
+`agent_config.host_exec_profile` to the local profile name. The advertised
+harness capabilities are `codex_cli`, `opencode` and `deepseek`. Configure the
+fixed executable and model map locally; the runner owns arguments and the
+control plane cannot supply an
+arbitrary host command. Map requested model identifiers to local CLI aliases
+in the profile's `model_map`, and select the alias with `codex_model`,
+`opencode_model` or `deepseek_model` in `agent_config`. Unknown requested
+models fail closed instead of silently selecting another model.
+
+Onboard the CLI's Preloop governance hooks or plugin before enabling the
+profile. Native permissions and Preloop approval policy both apply; installing
+a profile does not grant blanket approval. If OpenCode or DeepSeek reports
+`host_governance_not_ready`, reinstall or check the Preloop plugin: the runner
+withholds the task until plugin activation is acknowledged and terminates the
+process if readiness times out. Per-job MCP configuration carries
+execution credentials without placing tokens on the command line. A host
+workspace uses the runner user's filesystem permissions and is not a sandbox.
+
+DeepSeek requires `dsh` **0.2.0-rc.2** (the version installed by
+`preloop agents install-runtime deepseek`); the older 0.1.5 preview does not
+implement this JSON/stdin protocol. The per-run profile enables the harness's
+native credential and account services so `dsh` resolves its own saved login.
+Preloop does not import or copy those credentials. Extra provider environment
+variables require an explicit local profile `pass_env` entry; this does not
+create or select a hosted provider account.
+
+These three executors initially support fresh flow executions only. Native
+resume and pull-request publication are unavailable. Claude Code retains its
+existing native behavior. Protocol fixtures and fake executable tests validate
+launch and completion behavior without using credentials or paid providers;
+those checks are not evidence of live provider acceptance or native execution
+on every operating system. Validate your installed CLI version and governance
+configuration before using a production profile.
+
+For OpenCode and DeepSeek, each local model alias must include the configured
+provider as `provider/model`; DeepSeek rejects managed gateway model settings
+on this path. For Codex, see the official
+[noninteractive protocol](https://developers.openai.com/codex/noninteractive)
+and [native Windows setup](https://developers.openai.com/codex/windows).
+The runner selects `workspace-write` sandboxing and an approval policy of
+`never` (escalation is denied). On Windows, complete the native sandbox setup
+under your operator policy; Windows 11 is recommended and recent Windows 10
+is best effort. This mode launches the Windows CLI directly, without WSL.
+
+Native acceptance evidence distinguishes implementation checks from live runs:
+
+| Agent | Linux | macOS | Windows | Live provider acceptance |
+| --- | --- | --- | --- | --- |
+| Claude Code | Protocol / fake executable coverage | Protocol / fake executable coverage | CI / portable fake executable coverage | Not claimed |
+| Codex | Protocol / fake executable coverage | Protocol / fake executable coverage | CI / portable fake executable coverage | Not claimed |
+| OpenCode | Protocol / fake executable coverage | Protocol / fake executable coverage | CI / portable fake executable coverage | Not claimed |
+| DeepSeek CLI (`dsh`) | Protocol / fake executable coverage | Protocol / fake executable coverage | CI / portable fake executable coverage | Not claimed |
+
+These cells describe available test coverage, not successful native runs on
+every OS. A Windows cross-compile checks build compatibility only; a CI job
+counts as execution evidence only after its tests have run successfully.
+
+Codex must report the Preloop `PreToolUse` hook as enabled and trusted for the
+actual run workspace, with its hooks feature enabled. Open Codex `/hooks` as
+the runner user to review and trust the current hook, or use administrator
+managed policy. Updating a hook can require renewed trust. The runner checks
+effective metadata through `hooks/list` before delivering a task and fails
+closed when the API is unavailable; upgrade Codex if the check is unsupported.
+It does not grant hook trust or bypass native hook policy.
+
+If an older Codex hook used an unquoted Preloop path containing spaces, rerun
+`preloop agents onboard "Codex CLI" --approvals` as the runner user, then
+review and trust the updated hook in Codex `/hooks`. Native Windows hooks
+quote the executable for `cmd.exe`; no PowerShell invocation prefix is needed.

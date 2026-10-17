@@ -6,7 +6,7 @@ The Preloop CLI **is** the self-hosted runner on Windows too: it registers
 with your control plane, holds an outbound WebSocket, leases flow executions,
 and runs them locally. On a Windows developer laptop the primary execution
 mode is a [host execution profile](#host-execution-profiles-on-windows-advanced-override): the
-runner starts a locally installed agent CLI (Cursor, Copilot CLI) under your
+runner starts a locally installed agent CLI (Cursor, Copilot CLI, Claude Code, Codex, OpenCode or DeepSeek CLI) under your
 own login. Docker execution also works when a Docker engine is available
 (Docker Desktop runs the same Linux agent containers), but it is not required
 for host profiles.
@@ -334,3 +334,13 @@ completion, injection rejection). Windows specifics:
 | The runner is offline after signing in on a second account | Each account needs its own `preloop login` and `preloop runner enable`; the task and runner identity are per user. |
 | A stopped execution leaves processes behind | Report it: halt uses `taskkill /T /F` and should kill the whole tree. `runner.log` records the runner side. |
 | Docker flows report `docker is not available` | Host profiles do not need Docker. For the Docker harness, install Docker Desktop and make sure `docker info` succeeds as the runner user. |
+
+
+### Codex, OpenCode and DeepSeek native profiles
+
+Use the shared [native profile configuration](quickstart-linux.md#codex-opencode-and-deepseek-native-profiles)
+with the Windows `codex`, `opencode` or `dsh` executable installed and signed
+in as the runner user. Set an explicit host profile and a private runner
+pool; Docker and WSL are not required. Codex also requires its native Windows
+sandbox setup. The shared guide describes model maps, Preloop governance,
+Windows version guidance and the limits of fixture-based acceptance testing.

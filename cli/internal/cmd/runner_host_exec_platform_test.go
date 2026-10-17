@@ -860,13 +860,33 @@ func TestOpenCodeServiceInventoryRequiresRunnableInstall(t *testing.T) {
 			inv := buildHarnessInventory(deps)
 			if kind == "executable" {
 				entry := entryFor(t, inv, "opencode")
-				if entry.LoginState != harnessLoginSignedIn || entry.SupportLevel != harnessSupportFlowsOnly || !entry.Enabled {
-					t.Fatalf("runnable OpenCode not advertised for flows: %+v", entry)
+				if entry.LoginState != harnessLoginSignedIn || entry.SupportLevel != harnessSupportPresenceOnly || !entry.Enabled || entry.GeneratedProfile != nil {
+					t.Fatalf("OpenCode without an explicit profile must remain presence only: %+v", entry)
+				}
+				if len(entry.Capabilities) != 0 {
+					t.Fatalf("presence-only OpenCode advertised execution capabilities: %+v", entry)
 				}
 			} else {
 				for _, entry := range inv.Entries {
 					if entry.Harness == "opencode" {
 						t.Fatalf("unrunnable OpenCode advertised: %+v", entry)
+					}
+				}
+			}
+			// A local profile enables native flows only when the strict
+			// executable resolver can actually launch the install.
+			deps.Handwritten = []hostExecProfile{{Name: "local-opencode", Executable: "opencode"}}
+			deps.Resolve = lookupHostExecBinary
+			withProfile := buildHarnessInventory(deps)
+			if kind == "executable" {
+				entry := entryFor(t, withProfile, "opencode")
+				if entry.SupportLevel != harnessSupportFlowsOnly || !contains(entry.Capabilities, "host_exec") || entry.GeneratedProfile != nil {
+					t.Fatalf("explicit runnable OpenCode profile must support flows: %+v", entry)
+				}
+			} else {
+				for _, entry := range withProfile.Entries {
+					if entry.Harness == "opencode" {
+						t.Fatalf("profile must not make an unrunnable OpenCode install eligible: %+v", entry)
 					}
 				}
 			}

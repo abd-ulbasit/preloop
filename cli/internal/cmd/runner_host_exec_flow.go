@@ -27,7 +27,8 @@ import (
 //   - host_exec_mcp: a flow-scoped, short-lived Preloop MCP token. The runner
 //     builds the MCP URL from its own control plane URL, writes a per-job MCP
 //     config under the execution directory, and passes it to the CLI. The
-//     token never enters the CLI's environment or argv.
+//     token never enters argv. Codex receives it through its named MCP
+//     bearer-token environment variable; other harnesses use private files.
 //   - host_exec_checkout: the flow's git_clone_config, resolved to clone
 //     URLs, refs and a per-repository read credential. The runner clones
 //     only when the local profile sets allow_checkout.

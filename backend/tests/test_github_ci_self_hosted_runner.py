@@ -16,7 +16,14 @@ the suite. Two properties matter enough to pin down here:
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from tests.ci_workflow import load_ci_jobs, step_script
 from tests.test_github_ci_backend_shards import BACKEND_TEST_SPLITS
@@ -62,7 +69,7 @@ def _overflow_slot(pyver: str = "3.11") -> dict[str, Any]:
     ``python:3.11-bookworm`` would hide ``127.0.0.1:5432``.
     """
     del pyver
-    return {"runner": ["self-hosted", "Linux", "X64"]}
+    return {"runner": ["self-hosted", "Linux", "X64", "preloop-ci-general"]}
 
 
 def _backend_plan(idle: int, pyver: str = "3.11") -> list[dict[str, Any] | None]:
@@ -73,7 +80,7 @@ def _backend_plan(idle: int, pyver: str = "3.11") -> list[dict[str, Any] | None]
     the shard count. Mirrors pick-runner's jq in Python so GitLab's unit
     image (no ``jq``) can still pin the routing.
     """
-    idle = max(0, min(int(idle), BACKEND_TEST_SPLITS))
+    idle = max(0, min(int(idle), BACKEND_TEST_SPLITS // 2))
     threshold = BACKEND_TEST_SPLITS - idle
     shards: list[dict[str, Any] | None] = [None]
     shards.extend(
@@ -125,20 +132,14 @@ def test_pick_runner_falls_back_to_the_public_runner() -> None:
     """Missing secret, disabled variable, or API error all mean ubuntu-latest."""
     script = _pick_script()
     pick = load_ci_jobs()["pick-runner"]
-    # The knob that turns overflow off without a commit (main pushes only).
     assert "CI_SELF_HOSTED_TESTS" in str(pick)
     assert '"${SELF_HOSTED_TESTS:-true}" = "false"' in script
-    # PRs and non-main refs force hosted while the self-hosted pool flakes.
-    assert pick["steps"][0]["env"].get("GITHUB_REF") == "${{ github.ref }}"
-    assert '[ "${GITHUB_REF:-}" != "refs/heads/main" ]' in script
-    assert "SELF_HOSTED_TESTS=false" in script
-    assert "SELF_HOSTED_REASON=" in script
-    assert (
-        '"${SELF_HOSTED_REASON:-repository variable CI_SELF_HOSTED_TESTS is false}"'
-        in script
+    assert "TRUSTED_SOURCE" in str(pick)
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in str(
+        pick
     )
-    # An absent secret is the state on forks and Dependabot PRs.
-    assert '-z "${GH_TOKEN:-}"' in script
+    assert "dependabot[bot]" in str(pick)
+    assert '-z "${RUNNER_READ_TOKEN:-}"' in script
     # A failed API call must not abort the step.
     assert "could not list repository runners" in script
     assert "could not parse the runner list" in script
@@ -157,7 +158,7 @@ def test_pick_runner_falls_back_to_the_public_runner() -> None:
 def test_pick_runner_requires_an_idle_matching_runner() -> None:
     """Only an online, not-busy runner carrying all three labels counts."""
     script = _pick_script()
-    assert '["self-hosted","Linux","X64"]' in script
+    assert '["self-hosted","Linux","X64","preloop-ci-general"]' in script
     assert '.status == "online"' in script
     assert ".busy == false" in script
     for label in ("self-hosted", "Linux", "X64"):
@@ -182,7 +183,10 @@ def test_three_idle_runners_only_overflow_the_last_three_shards() -> None:
     overflow = plan[16:]
     assert all(slot["runner"] == "ubuntu-latest" for slot in hosted)
     assert all("container" not in slot for slot in hosted)
-    assert all(slot["runner"] == ["self-hosted", "Linux", "X64"] for slot in overflow)
+    assert all(
+        slot["runner"] == ["self-hosted", "Linux", "X64", "preloop-ci-general"]
+        for slot in overflow
+    )
     assert all("container" not in slot for slot in overflow)
 
 
@@ -280,3 +284,99 @@ def test_backend_postgres_reuses_a_listening_instance() -> None:
     for name in HOSTED_JOBS:
         assert "container" not in load_ci_jobs()[name]
         assert "services" not in load_ci_jobs()[name]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("pressure", 2),
+        ("no-pressure", 0),
+        ("young", 0),
+        ("assigned", 0),
+        ("waiting", 0),
+        ("private-queue", 0),
+        ("offline", 0),
+        ("busy", 0),
+        ("dedicated", 0),
+        ("unlabeled", 0),
+        ("fork", 0),
+        ("api-error", 0),
+        ("malformed", 0),
+        ("disabled", 0),
+        ("missing-token", 0),
+        ("inventory-error", 0),
+        ("jobs-error", 0),
+        ("inventory-malformed", 0),
+        ("many", 9),
+    ],
+)
+def test_real_selector_uses_optional_overflow(
+    tmp_path: Path, case: str, expected: int
+) -> None:
+    """Execute the workflow's actual selector against synthetic API responses."""
+    if not shutil.which("jq"):
+        pytest.skip("jq required to execute workflow shell")
+    gh = tmp_path / "gh"
+    gh.write_text("""#!/usr/bin/env python3
+import datetime, json, os, sys
+case = os.environ['CASE']
+endpoint = sys.argv[2]
+if case == 'api-error':
+    sys.exit(1)
+if case == 'malformed':
+    print('invalid json')
+    sys.exit(0)
+if case == 'inventory-error' and '/actions/runners' in endpoint:
+    sys.exit(1)
+if case == 'jobs-error' and '/jobs?' in endpoint:
+    sys.exit(1)
+if case == 'inventory-malformed' and '/actions/runners' in endpoint:
+    print('invalid json')
+    sys.exit(0)
+if '/jobs?' in endpoint:
+    age = 10 if case == 'young' else 300
+    created = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age)
+    job = dict(status='waiting' if case == 'waiting' else 'queued',
+               runner_id=7 if case == 'assigned' else 0,
+               labels=['self-hosted', 'ubuntu-latest'] if case == 'private-queue' else ['ubuntu-latest'], created_at=created.strftime('%Y-%m-%dT%H:%M:%SZ'))
+    print(json.dumps({'jobs': [] if case == 'no-pressure' else [job] * (30 if case == 'many' else 2)}))
+elif '/actions/runs?' in endpoint:
+    print('[123]')
+else:
+    labels = ['self-hosted', 'Linux', 'X64', 'preloop-ci-general']
+    if case == 'dedicated':
+        labels.append('gce-tests-only')
+    if case == 'unlabeled':
+        labels.remove('preloop-ci-general')
+    runner = dict(status='offline' if case == 'offline' else 'online',
+                  busy=case == 'busy', labels=[{'name': name} for name in labels])
+    print(json.dumps({'runners': [runner] * (30 if case == 'many' else 3)}))
+""")
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path}:{os.environ['PATH']}",
+        CASE=case,
+        TRUSTED_SOURCE="false" if case == "fork" else "true",
+        RUNNER_READ_TOKEN="" if case == "missing-token" else "synthetic",
+        SELF_HOSTED_TESTS="false" if case == "disabled" else "true",
+        REPO="example/repository",
+        GITHUB_OUTPUT=str(output),
+        GITHUB_STEP_SUMMARY=str(tmp_path / "summary"),
+    )
+    result = subprocess.run(
+        ["bash", "-c", _pick_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads(output.read_text().splitlines()[1])
+    assert len(plan) == BACKEND_TEST_SPLITS + 1
+    assert plan[0] is None
+    private = [slot for slot in plan[1:] if isinstance(slot["runner"], list)]
+    assert len(private) == expected
+    assert all("preloop-ci-general" in slot["runner"] for slot in private)
+    assert sum(slot["runner"] == "ubuntu-latest" for slot in plan[1:]) >= 9

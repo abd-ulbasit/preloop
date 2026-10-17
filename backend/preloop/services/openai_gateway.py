@@ -206,6 +206,7 @@ from preloop.services.azure_openai import (
 )
 from preloop.services.litellm_routing import (
     BEDROCK_PROVIDERS,
+    OPENAI_COMPATIBLE_PROVIDERS,
     apply_preloop_client_headers,
     is_openrouter_model,
     model_api_base,
@@ -6110,6 +6111,27 @@ class OpenAIGatewayService:
                 message=str(message),
             )
 
+        # Never promote an unfinished tool call to response.completed. Codex
+        # persists these items and replays them on resume; an empty or partial
+        # arguments string can then make every subsequent request fail.
+        # Inspect both sources: a statusless streamed item must not hide an
+        # explicitly unfinished item in the terminal response.
+        candidate_items = list(items_by_id.values())
+        terminal_output = (completed_response or {}).get("output")
+        if isinstance(terminal_output, list):
+            candidate_items.extend(terminal_output)
+        for item in candidate_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"function_call", "custom_tool_call"} and item.get(
+                "status"
+            ) in {"in_progress", "incomplete"}:
+                raise ModelGatewayAPIError(
+                    provider="openai",
+                    status_code=502,
+                    message="Codex upstream returned an unfinished tool call",
+                )
+
         # Materialise final ``output`` items from the per-item buffers.
         output: List[Dict[str, Any]] = []
         aggregate_text_parts: List[str] = []
@@ -8304,6 +8326,17 @@ class OpenAIGatewayService:
         ):
             if payload.get(source_key) is not None and target_key not in kwargs:
                 kwargs[target_key] = payload[source_key]
+        # Codex omits sampling controls. Compatible local servers otherwise
+        # receive LiteLLM's defaults instead of the operator's model settings.
+        # Request values retain precedence, and only portable sampling fields
+        # are read here: server-specific options must not leak onto the wire.
+        model_parameters = getattr(ai_model, "model_parameters", None)
+        if (ai_model.provider_name or "").strip().lower() in (
+            OPENAI_COMPATIBLE_PROVIDERS
+        ) and isinstance(model_parameters, dict):
+            for key in ("temperature", "top_p"):
+                if key not in kwargs and model_parameters.get(key) is not None:
+                    kwargs[key] = model_parameters[key]
         if payload.get("stop") is not None:
             kwargs["stop"] = payload["stop"]
         # Intentional global default, not zai-only. Matches aux generation.

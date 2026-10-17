@@ -202,8 +202,16 @@ preloop-opencode-plugin verify --config ~/.config/opencode/opencode.json
 preloop-opencode-plugin run --config ~/.config/opencode/opencode.json
 ```
 
-Then start `opencode`, trigger a permission-gated action, and approve/deny
-it from the Preloop console.
+`verify` checks the configuration; it does not prove that OpenCode loaded
+and invoked the plugin. Start `opencode`, check its logs for plugin load
+errors, then test a scoped deny rule against canonical tool `Write` and a
+synthetic file path. Confirm the tool reports `Preloop denied Write` and the
+file remains absent. A matching policy deny need not create a human approval
+prompt. Restore the temporary rule after the test.
+
+The package root exposes only the plugin factory through `dist/plugin.js`.
+OpenCode treats every root export as a factory, so implementation classes and
+singleton objects stay in the internal `dist/index.js` module.
 
 ## Development
 

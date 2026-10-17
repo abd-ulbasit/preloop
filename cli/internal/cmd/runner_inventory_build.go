@@ -41,6 +41,7 @@ var discoveryHarnessIDs = map[string]string{
 	"Claude Code":      "claude_code",
 	"Codex CLI":        "codex_cli",
 	"OpenCode":         "opencode",
+	"DeepSeek Harness": "deepseek",
 	"Gemini CLI":       "gemini_cli",
 	"Claude Desktop":   "claude_desktop",
 	"VSCode / Copilot": "vscode_copilot",
@@ -53,6 +54,7 @@ var harnessDisplayNames = map[string]string{
 	"claude_code":    "Claude Code",
 	"codex_cli":      "Codex CLI",
 	"opencode":       "OpenCode",
+	"deepseek":       "DeepSeek Harness",
 	"gemini_cli":     "Gemini CLI",
 	"claude_desktop": "Claude Desktop",
 	"vscode_copilot": "VS Code Copilot",
@@ -582,9 +584,39 @@ func buildHarnessInventory(d harnessInventoryDeps) harnessInventory {
 		if _, done := entries[id]; done {
 			continue
 		}
-		entries[id] = buildDiscoveredEntry(id, agent, d)
+		entry := buildDiscoveredEntry(id, agent, d)
+		if isExtendedHostExecHarness(id) {
+			// Explicit profiles avoid treating presence-only discovery as a
+			// runnable subscription or guessing provider authentication.
+			entry.SupportLevel = harnessSupportPresenceOnly
+			for _, profile := range d.Handwritten {
+				if hostExecProfileHarness(profile) != id || d.HandwrittenErr {
+					continue
+				}
+				if _, err := d.Resolve(profile.Executable); err != nil {
+					continue
+				}
+				entry.SupportLevel = harnessSupportFlowsOnly
+				entry.Capabilities = hostExecCapabilitiesFor(id)
+				break
+			}
+		}
+		entries[id] = entry
 	}
 
+	for _, profile := range d.Handwritten {
+		id := hostExecProfileHarness(profile)
+		if !isExtendedHostExecHarness(id) || d.HandwrittenErr {
+			continue
+		}
+		if _, ok := entries[id]; ok {
+			continue
+		}
+		if _, err := d.Resolve(profile.Executable); err != nil {
+			continue
+		}
+		entries[id] = harnessInventoryEntry{Harness: id, DisplayName: harnessDisplayNames[id], LoginState: harnessLoginUnknown, LoginSource: "unknown", Governance: "unknown", SupportLevel: harnessSupportFlowsOnly, SessionMode: "none", Billing: "unknown", Capabilities: hostExecCapabilitiesFor(id)}
+	}
 	ordered := make([]harnessInventoryEntry, 0, len(entries))
 	for _, id := range harnessIDs {
 		if entry, ok := entries[id]; ok {
