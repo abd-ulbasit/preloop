@@ -749,7 +749,13 @@ async def _redeliver_pending_commands(
             break
 
 
-_COMMAND_ACK_NAMES = {"ack", "command_ack", "command_result", "command_error"}
+_COMMAND_ACK_NAMES = {
+    "ack",
+    "command_ack",
+    "command_result",
+    "command_error",
+    "command_progress",
+}
 
 
 def _handle_command_ack(

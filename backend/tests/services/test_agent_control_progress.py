@@ -185,3 +185,24 @@ def test_progress_round_trip_keeps_one_tool_call_in_tracking_session(
     )
     prompt = next(row for row in rows if row.summary == "Run the checks")
     assert prompt.status == "completed"
+
+
+def test_progress_proves_receipt_before_terminal_command_result() -> None:
+    from preloop.api.endpoints.agent_control import _handle_command_ack
+
+    context = SimpleNamespace(account_id=uuid4(), managed_agent_id=uuid4())
+    inbound = SimpleNamespace(
+        type="event",
+        name="command_progress",
+        message_id="event-example",
+        payload={"command_id": "command-example"},
+    )
+    with patch(
+        "preloop.api.endpoints.agent_control.crud_agent_control_command"
+    ) as commands:
+        _handle_command_ack(MagicMock(), context, inbound, commit=False)
+    assert commands.mark_acked.call_args.kwargs["command_id"] == "command-example"
+    assert (
+        commands.mark_acked.call_args.kwargs["managed_agent_id"]
+        == context.managed_agent_id
+    )
