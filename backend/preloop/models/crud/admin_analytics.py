@@ -15,6 +15,7 @@ from preloop.models.gateway_usage import GATEWAY_USAGE_PURPOSES
 from preloop.models.crud import crud_account, crud_audit_log, crud_event
 
 TRACKING_KEY = "report_engagement_tracking"
+MAX_INTERACTIONS_PER_MESSAGE = 1000
 REPORT_EVENTS = ("report_sent", "report_open", "report_click", "report_unsubscribe")
 
 
@@ -95,10 +96,23 @@ def record_interaction(
     commit: bool = True,
 ) -> None:
     """Respect current and send-time preferences; never record IP or user agent."""
+    # Serialize replays across processes using the existing message row. Store
+    # the counter with the event insert in the same transaction, avoiding a scan.
+    message = (
+        db.query(models.Event)
+        .filter(models.Event.id == message.id)
+        .populate_existing()
+        .with_for_update()
+        .one()
+    )
     account = crud_account.get(db, id=message.account_id)
     data = message.event_data or {}
     if not account or not tracking_enabled(account) or not data.get("tracking"):
         return
+    count = data.get("interaction_count", 0)
+    if count >= MAX_INTERACTIONS_PER_MESSAGE:
+        return
+    message.event_data = {**data, "interaction_count": count + 1}
     crud_event.log_event(
         db,
         account_id=message.account_id,
