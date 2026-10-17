@@ -37,7 +37,16 @@ export interface AttentionPolicyNoticeEvidence {
 }
 
 function targetLabel(target: string): string {
-  return target === 'model.response' ? 'responses' : 'requests';
+  return (
+    (
+      {
+        'tool.args': 'tool inputs',
+        'tool.result': 'tool results',
+        'model.request': 'model requests',
+        'model.response': 'model responses',
+      } as Record<string, string>
+    )[target] || 'activity'
+  );
 }
 
 export function policyNoticeItems(
@@ -52,7 +61,7 @@ export function policyNoticeItems(
         kind: 'policy',
         severity: 'warning',
         title: notice.rule_description || notice.rule_id,
-        detail: `Notify rule ${notice.rule_id} matched model ${targetLabel(
+        detail: `Notify rule ${notice.rule_id} matched ${targetLabel(
           notice.target
         )} ${times} in the last 7 days`,
         href: POLICY_NOTICE_HREF,

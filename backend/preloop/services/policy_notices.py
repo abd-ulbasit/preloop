@@ -519,6 +519,23 @@ def _format_digest_bound(value: datetime) -> str:
     return as_utc(value).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def policy_notice_target_label(target: str) -> str:
+    """Return a human-readable activity name for a stored notice target.
+
+    Args:
+        target: Policy condition target, such as ``tool.args``.
+
+    Returns:
+        The matched activity, or a neutral label for an unknown target.
+    """
+    return {
+        "tool.args": "tool input",
+        "tool.result": "tool result",
+        "model.request": "model request",
+        "model.response": "model response",
+    }.get(target, "policy activity")
+
+
 @dataclass(frozen=True)
 class PolicyNoticeDigestSection:
     """The "Policy notices" section of the weekly digest.
@@ -570,6 +587,7 @@ class PolicyNoticeDigestSection:
         for row in self.rows:
             noun = "hit" if row.count == 1 else "hits"
             lines.append(f"- {row.rule_id}: {row.count} {noun}")
+            lines.append(f"  Target: {policy_notice_target_label(row.target)}")
             lines.append(f"  Last user: {row.last_username or 'unknown'}")
             lines.append(f"  Last excerpt: {row.last_excerpt or '(not available)'}")
         return "\n".join(lines)
@@ -586,6 +604,7 @@ class PolicyNoticeDigestSection:
         body = "".join(
             "<tr>"
             f"<td>{html.escape(row.rule_id)}</td>"
+            f"<td>{html.escape(policy_notice_target_label(row.target))}</td>"
             f"<td>{row.count}</td>"
             f"<td>{html.escape(row.last_username or 'unknown')}</td>"
             f"<td>{html.escape(row.last_excerpt or '(not available)')}</td>"
@@ -593,7 +612,7 @@ class PolicyNoticeDigestSection:
             for row in self.rows
         )
         return (
-            f"{heading}{window}<table><thead><tr><th>Rule</th><th>Count</th>"
+            f"{heading}{window}<table><thead><tr><th>Rule</th><th>Target</th><th>Count</th>"
             "<th>Last user</th><th>Last excerpt</th></tr></thead>"
             f"<tbody>{body}</tbody></table>"
         )

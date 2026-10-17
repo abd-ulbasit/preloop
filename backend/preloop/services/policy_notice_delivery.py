@@ -128,7 +128,9 @@ def _who(hit: models.PolicyNoticeHit, db: Session) -> str:
 
 
 def _target_label(target: str) -> str:
-    return "response" if target == "model.response" else "request"
+    from preloop.services.policy_notices import policy_notice_target_label
+
+    return policy_notice_target_label(target)
 
 
 def build_message(db: Session, hit: models.PolicyNoticeHit) -> Dict[str, str]:
@@ -147,7 +149,7 @@ def build_message(db: Session, hit: models.PolicyNoticeHit) -> Dict[str, str]:
     excerpt = hit.excerpt or "(excerpt not available)"
     link = attention_url()
     lines = [
-        f"The notify rule '{hit.rule_id}' matched a model {label} from {who}.",
+        f"The notify rule '{hit.rule_id}' matched a {label} from {who}.",
         "This notify rule did not block the call.",
     ]
     if hit.rule_description:
@@ -169,7 +171,7 @@ def build_message(db: Session, hit: models.PolicyNoticeHit) -> Dict[str, str]:
     )
     body_html = (
         f"<p>The notify rule <strong>{html.escape(hit.rule_id)}</strong> matched "
-        f"a model {label} from {html.escape(who)}. This notify rule did not block "
+        f"a {label} from {html.escape(who)}. This notify rule did not block "
         "the call.</p>"
         f"{description}"
         "<p>Excerpt (secrets redacted):</p>"
@@ -207,7 +209,7 @@ def send_email_notices(
 
 def build_push_payload(hit: models.PolicyNoticeHit) -> Dict[str, Any]:
     """APNs-shaped payload with no approval category (nothing to decide)."""
-    body = hit.excerpt or f"A model {_target_label(hit.target)} matched."
+    body = hit.excerpt or f"A {_target_label(hit.target)} matched."
     data = {
         "type": "policy_notice",
         "rule_id": hit.rule_id,
@@ -365,7 +367,7 @@ def build_webhook_payload(
         excerpt = hit.excerpt or "(excerpt not available)"
         text = (
             f"**{message['headline']}**\n\n"
-            f"The notify rule `{hit.rule_id}` matched a model "
+            f"The notify rule `{hit.rule_id}` matched a "
             f"{_target_label(hit.target)} from {_who(hit, db)}. "
             "This notify rule did not block the call.\n\n"
             f"**Excerpt (secrets redacted):**\n```\n{excerpt}\n```\n\n"
