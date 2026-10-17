@@ -90,6 +90,8 @@ export const CAPABILITY_ROUTES: readonly CapabilityRoute[] = [
 ];
 
 export const capabilityRouteLoaders: ComponentLoaders = {
+  'support-conversation-view': () =>
+    import('./views/authed/support-conversation-view'),
   'device-fleet-view': () => import('./views/authed/device-fleet-view'),
   'governance-view': () => import('./views/authed/governance-view'),
   'inference-hooks-view': () =>

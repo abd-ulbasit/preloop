@@ -1,7 +1,5 @@
 /** Console views register only when their route is visited. */
 export const consoleRouteLoaders = {
-  'support-conversation-view': () =>
-    import('../views/authed/support-conversation-view'),
   'console-shell': () => import('../views/authed/console-shell'),
   'oauth-consent-view': () => import('../views/authed/oauth-consent-view'),
   'dashboard-view': () =>

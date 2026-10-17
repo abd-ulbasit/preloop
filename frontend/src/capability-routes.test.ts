@@ -186,6 +186,21 @@ describe('capability routes', () => {
     expect(shell?.querySelector('cap-test-missing')).to.equal(null);
   });
 
+  it('loads the support console only with the Cloud support capability', async () => {
+    expect(
+      capabilityRoutesFor(NO_CAPABILITIES).some(
+        (route) => route.path === 'support/:conversationId'
+      )
+    ).to.equal(false);
+    const route = capabilityRoutesFor(caps('cloud_support')).find(
+      (route) => route.path === 'support/:conversationId'
+    )!;
+    expect(route.component).to.equal('support-conversation-view');
+    expect(route.load).to.be.a('function');
+    await route.load!();
+    expect(customElements.get('support-conversation-view')).to.be.a('function');
+  });
+
   it('lists every gated route with a loader', () => {
     for (const route of CAPABILITY_ROUTES) {
       expect(

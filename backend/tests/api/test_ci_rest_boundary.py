@@ -177,6 +177,9 @@ def test_route_inventory_includes_lazy_hidden_and_new_routes(app: Any) -> None:
     actual = restricted_route_inventory(app)
     assert actual == declared
     assert actual["GET /api/v1/auth/api-keys"] == "deny"
+    assert actual["POST /api/v1/chat/setup"] == "deny"
+    assert actual["POST /api/v1/chat/setup/{draft_id}/finish"] == "deny"
+    assert actual["POST /api/v1/chat/setup/slack/oauth"] == "deny"
     assert actual["GET /docs/api"] == "deny"
     assert actual["MOUNT /mcp"] == "deny"
     assert actual["MOUNT /static"] == "deny"
