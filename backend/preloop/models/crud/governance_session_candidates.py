@@ -7,6 +7,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+from preloop.models.models import governance_review as gov
 from preloop.models.gateway_usage import AGENT_GATEWAY_PREDICATE
 
 
@@ -78,14 +79,15 @@ def list_session_digest_retries(
 ) -> list[UUID]:
     """Return only the oldest failed or abandoned summaries for an account.
 
-    Filter and limit in SQL using the account/window index, so callers never
-    load completed history. Stale claims use the typed update timestamp rather
+    Filter and limit in SQL using the partial retry queue index, so completed
+    history is excluded from both the returned rows and the indexed scan. Stale claims use the typed update timestamp rather
     than parsing optional JSON diagnostics. No traffic watermark is required.
     """
     digest = models.GovernanceSessionDigest
     status = digest.digest["summary_status"].astext
     statement = select(digest.id).where(
         digest.account_id == account_id,
+        text(gov.SESSION_DIGEST_RETRY_PREDICATE),
         or_(
             status.in_(("budget_limited", "provider_failed")),
             and_(status == "summarizing", digest.updated_at <= stale_before),

@@ -208,3 +208,55 @@ def test_retry_reader_limits_orders_and_excludes_completed_or_live_claims(
         list_session_digest_retries(db_session, account_id=uuid4(), stale_before=now)
         == []
     )
+
+
+def test_retry_query_uses_partial_queue_index(db_session: Session) -> None:
+    from unittest.mock import MagicMock
+    from sqlalchemy import text
+    from preloop.models.models import governance_review as gov
+
+    fake = MagicMock()
+    fake.scalars.return_value.all.return_value = []
+    list_session_digest_retries(
+        fake, account_id=uuid4(), stale_before=datetime.now(timezone.utc)
+    )
+    statement = fake.scalars.call_args.args[0]
+    sql = str(
+        statement.compile(
+            dialect=db_session.get_bind().dialect,
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert gov.SESSION_DIGEST_RETRY_PREDICATE in sql
+    # Prove predicate/index eligibility independently of tiny-fixture cost estimates.
+    db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    plan = "\n".join(db_session.execute(text("EXPLAIN (COSTS OFF) " + sql)).scalars())
+    assert "ix_governance_session_digest_retry_queue" in plan
+
+
+def test_retry_index_matches_frozen_migration() -> None:
+    import importlib.util
+    from pathlib import Path
+    from preloop.models.models import governance_review as gov
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "preloop/models/alembic/versions/20261023_governance_retry_idx.py"
+    )
+    spec = importlib.util.spec_from_file_location("retry_index_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.PREDICATE == gov.SESSION_DIGEST_RETRY_PREDICATE
+    index = next(
+        i
+        for i in models.GovernanceSessionDigest.__table__.indexes
+        if i.name == module.INDEX
+    )
+    assert str(index.dialect_options["postgresql"]["where"]) == module.PREDICATE
+    assert [column.name for column in index.columns] == [
+        "account_id",
+        "window_end",
+        "runtime_session_id",
+        "segment_index",
+        "id",
+    ]
