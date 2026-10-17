@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from preloop.agents.base import AgentExecutionResult, AgentExecutor, AgentStatus
 from preloop.agents.errors import AgentStartError
 from preloop.utils.redaction import redact_dict
+from preloop.utils.secret_scrubbing import scrub_secrets
 from preloop.models.crud import (
     crud_agent_control_command,
     crud_flow_execution,
@@ -767,7 +768,9 @@ class AgentControlExecutor(AgentExecutor):
             result_status = payload.get("status") or (
                 "failed" if record.status == "failed" else "completed"
             )
-            lines.append(f"[agent_control] result: {result_status}")
+            detail = payload.get("error") or payload.get("reply_text")
+            suffix = f": {detail}" if isinstance(detail, str) and detail else ""
+            lines.append(f"[agent_control] result: {result_status}{suffix}")
         elif record.status == "failed":
             reason = record.last_error or "failed"
             lines.append(f"[agent_control] result: failed ({reason})")
@@ -776,8 +779,12 @@ class AgentControlExecutor(AgentExecutor):
         session_id = record.runtime_session_id
         binding = self._binding(session_reference)
         history_id = binding.get("history_session_id")
-        account_id = str(record.account_id)
-        for runtime_session_id in (history_id, session_id):
+        account_id = str(
+            getattr(record, "consuming_account_id", None) or record.account_id
+        )
+        for runtime_session_id in dict.fromkeys(
+            str(value) for value in (history_id, session_id) if value is not None
+        ):
             if runtime_session_id is None:
                 continue
             activities = crud_runtime_session_activity.list_for_runtime_session(
@@ -813,8 +820,9 @@ class AgentControlExecutor(AgentExecutor):
                         continue
                 summary = activity.summary or activity.activity_type
                 lines.append(f"[agent_control] {summary}")
+        lines = [(scrub_secrets(line) or "")[:2000] for line in lines]
         if tail is not None and tail >= 0:
-            return lines[-tail:]
+            return lines[-tail:] if tail else []
         return lines
 
     async def stop(self, session_reference: str) -> None:

@@ -140,3 +140,8 @@ npm test
 
 Tests use Node's built-in test runner with a fake Agent SDK; no network or
 Claude Code install is required.
+
+Owned turns forward bounded assistant and tool progress as `command_progress`
+events, correlated to the dispatched command. Tool arguments are excluded.
+A final progress line reports the turn duration and measured usage; command
+results continue to carry the complete bounded reply and final status.

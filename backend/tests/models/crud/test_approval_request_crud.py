@@ -166,7 +166,7 @@ def test_expire_stale_pending_marks_expired(crud_approval_request, mock_db_sessi
 
     assert result == 2
     mock_query.update.assert_called_once_with(
-        {"status": "expired", "resolved_at": now},
+        {"status": "expired", "resolved_at": ApprovalRequest.expires_at},
         synchronize_session="fetch",
     )
     mock_db_session.commit.assert_called_once()

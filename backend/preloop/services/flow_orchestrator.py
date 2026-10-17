@@ -908,6 +908,7 @@ class FlowExecutionOrchestrator:
         self.runtime_session: Optional[RuntimeSession] = None
         self.nats_client: Client = nats_client
         self.execution_logger = FlowExecutionLogger()
+        self._tool_history_restored = False
         self.temporary_api_key_id: Optional[uuid.UUID] = None
         self._log_streaming_task: Optional[asyncio.Task] = None
         self._runner_log_cursor: Optional[tuple[datetime, uuid.UUID]] = None
@@ -3759,6 +3760,18 @@ class FlowExecutionOrchestrator:
                 "for the completion contract (%s chars)",
                 len(stripped_line),
             )
+
+        if not self._tool_history_restored:
+            stored_usage = getattr(self.execution_log, "mcp_usage_logs", None)
+            if (
+                isinstance(stored_usage, list)
+                and not self.execution_logger.mcp_usage_logs
+            ):
+                self.execution_logger.mcp_usage_logs = [
+                    dict(entry) for entry in stored_usage if isinstance(entry, dict)
+                ]
+                self.tool_calls_count = max(self.tool_calls_count, len(stored_usage))
+            self._tool_history_restored = True
 
         previous_tool_calls_count = len(self.execution_logger.mcp_usage_logs)
 

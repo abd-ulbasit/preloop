@@ -2152,7 +2152,9 @@ export class PoliciesView extends LitElement {
         Condition attributes:
         <code>pii.found</code>, <code>pii.types_found</code>,
         <code>injection.score</code>, <code>moderation.flagged</code>,
-        <code>model.id</code>, <code>session.id</code>.
+        <code>model.id</code> (Preloop model UUID),
+        <code>model.name</code> (provider model identifier),
+        <code>session.id</code>.
       </p>
       ${
         rules.length === 0
@@ -2603,7 +2605,7 @@ export class PoliciesView extends LitElement {
                   Reads detector facts and request attributes, for example
                   <code>injection.score &gt; 0.7</code>,
                   <code>moderation.flagged == true</code>,
-                  <code>model.id == 'gpt-5'</code>, or
+                  <code>model.name == 'example-approved-model'</code>, or
                   <code>session.id != ''</code>.
                 </p>
               </div>

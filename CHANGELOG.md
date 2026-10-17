@@ -785,6 +785,13 @@ after the page scroller moved to the content area.
 
 ### Fixed
 
+- Policy model I/O hints distinguish provider model names from Preloop UUIDs.
+  Approval lists expire overdue requests on read, retaining their deadline as
+  resolution time. Execution headlines prefer terminal causes, native tool
+  events retain call IDs across replay, and persistent Agent Control runs expose
+  command progress and tracking-session navigation. Refs #1786, #1787, #1681,
+  and #1675.
+
 - A feedback continuation no longer force-pushes a reviewed pull request
   when the resume rebase leaves HEAD unchanged. `--force-with-lease` is
   used only after that rebase moves HEAD. An amended or squashed tip is

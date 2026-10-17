@@ -1,7 +1,7 @@
 import uuid
 from zoneinfo import ZoneInfo
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, Response
@@ -3758,3 +3758,59 @@ async def test_retry_native_continuation_refuses_before_creating_run(
     assert source in error.value.detail
     assert "follow-up preview" in error.value.detail
     trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_control_execution_logs_use_bound_executor(mock_account, mocker) -> None:
+    execution_id = uuid.uuid4()
+    execution = MagicMock()
+    execution.status = "RUNNING"
+    execution.agent_session_reference = f"control:{uuid.uuid4()}:example-command"
+    mocker.patch.object(flows.crud_flow_execution, "get", return_value=execution)
+    executor_class = mocker.patch("preloop.agents.agent_control.AgentControlExecutor")
+    executor_class.return_value.get_logs = AsyncMock(
+        return_value=["[agent_control] Read file"]
+    )
+    container_factory = mocker.patch("preloop.agents.create_agent_executor")
+    db = MagicMock()
+    result = await maybe_await(
+        flows.get_flow_execution_logs(
+            db=db, execution_id=execution_id, current_user=mock_account
+        )
+    )
+    assert result["source"] == "agent_control"
+    assert result["logs"][0]["payload"]["line"] == "[agent_control] Read file"
+    assert executor_class.call_args.kwargs["db"] is db
+    assert executor_class.call_args.kwargs["execution"] is execution
+    container_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_control_execution_log_tail_pagination_has_no_overlap(
+    mock_account, mocker
+) -> None:
+    execution_id = uuid.uuid4()
+    execution = MagicMock()
+    execution.status = "RUNNING"
+    execution.agent_session_reference = f"control:{uuid.uuid4()}:example-command"
+    mocker.patch.object(flows.crud_flow_execution, "get", return_value=execution)
+    executor_class = mocker.patch("preloop.agents.agent_control.AgentControlExecutor")
+    lines = [f"line-{index}" for index in range(450)]
+    executor_class.return_value.get_logs = AsyncMock(return_value=lines)
+    common = {
+        "db": MagicMock(),
+        "execution_id": execution_id,
+        "current_user": mock_account,
+    }
+    recent = await maybe_await(flows.get_flow_execution_logs(**common, tail=200))
+    older = await maybe_await(
+        flows.get_flow_execution_logs(**common, tail=500, skip=200)
+    )
+    assert recent["has_more"] is True
+    assert older["has_more"] is False
+    combined = older["logs"] + recent["logs"]
+    assert [row["payload"]["line"] for row in combined] == lines
+    assert len({row["payload"]["line"] for row in combined}) == len(lines)
+    executor_class.return_value.get_logs.assert_called_with(
+        execution.agent_session_reference
+    )

@@ -1042,3 +1042,28 @@ async def test_start_run_limits_carry_flow_timeout(
     )
     assert metadata["timeout_seconds"] == 1800
     assert metadata["run_limits"]["max_duration_seconds"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_get_logs_include_terminal_error_and_empty_tail(monkeypatch) -> None:
+    record = _command_record(
+        status="failed",
+        envelope={
+            COMMAND_RESULT_ENVELOPE_KEY: {
+                "status": "failed",
+                "error": "Invalid configuration",
+            }
+        },
+    )
+    executor, reference = _status_executor(monkeypatch, record)
+    monkeypatch.setattr(
+        "preloop.agents.agent_control.crud_runtime_session_activity.list_for_runtime_session",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "preloop.agents.agent_control.crud_flow_execution.get",
+        lambda *args, **kwargs: None,
+    )
+    lines = await executor.get_logs(reference)
+    assert any("Invalid configuration" in line for line in lines)
+    assert await executor.get_logs(reference, tail=0) == []

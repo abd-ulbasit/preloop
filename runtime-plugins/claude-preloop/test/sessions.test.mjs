@@ -194,29 +194,118 @@ test("spawn env registers an SDK session and records the final alias", async () 
   const os = await import("node:os");
   const path = await import("node:path");
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "preloop-1552-"));
-  const original = { home: process.env.HOME, alias: process.env.PRELOOP_SESSION_ALIAS, parent: process.env.PRELOOP_PARENT_SESSION_ID, fetch: globalThis.fetch };
+  const original = {
+    home: process.env.HOME,
+    alias: process.env.PRELOOP_SESSION_ALIAS,
+    parent: process.env.PRELOOP_PARENT_SESSION_ID,
+    fetch: globalThis.fetch,
+  };
   const requests = [];
   process.env.HOME = home;
   process.env.PRELOOP_SESSION_ALIAS = "brief";
-  process.env.PRELOOP_PARENT_SESSION_ID = "11111111-2222-3333-4444-555555555555";
+  process.env.PRELOOP_PARENT_SESSION_ID =
+    "11111111-2222-3333-4444-555555555555";
   globalThis.fetch = async (url, options) => {
-    requests.push({url: String(url), body: JSON.parse(options.body)});
-    return new Response(JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555", alias:"brief-2", parent_session_id:process.env.PRELOOP_PARENT_SESSION_ID}), {status:200});
+    requests.push({ url: String(url), body: JSON.parse(options.body) });
+    return new Response(
+      JSON.stringify({
+        runtime_session_id: "99999999-2222-3333-4444-555555555555",
+        alias: "brief-2",
+        parent_session_id: process.env.PRELOOP_PARENT_SESSION_ID,
+      }),
+      { status: 200 },
+    );
   };
-  await fs.mkdir(path.join(home, ".preloop/sessions"), {recursive:true});
-  await fs.writeFile(path.join(home, ".preloop/sessions/session-1.json"), JSON.stringify({runtime_session_id:"99999999-2222-3333-4444-555555555555",alias:"brief-2",title_sent:true}));
+  await fs.mkdir(path.join(home, ".preloop/sessions"), { recursive: true });
+  await fs.writeFile(
+    path.join(home, ".preloop/sessions/session-1.json"),
+    JSON.stringify({
+      runtime_session_id: "99999999-2222-3333-4444-555555555555",
+      alias: "brief-2",
+      title_sent: true,
+    }),
+  );
   const { manager } = makeManager();
   try {
-    await manager.sendMessage({text:"hello"});
+    await manager.sendMessage({ text: "hello" });
     assert.equal(requests.length, 1);
     assert.equal(requests[0].body.alias, "brief");
-    assert.equal(requests[0].body.parent_session_id, process.env.PRELOOP_PARENT_SESSION_ID);
-    const file = JSON.parse(await fs.readFile(path.join(home, ".preloop/sessions/session-1.json"), "utf8"));
+    assert.equal(
+      requests[0].body.parent_session_id,
+      process.env.PRELOOP_PARENT_SESSION_ID,
+    );
+    const file = JSON.parse(
+      await fs.readFile(
+        path.join(home, ".preloop/sessions/session-1.json"),
+        "utf8",
+      ),
+    );
     assert.equal(file.alias, "brief-2");
-    assert.equal(file.title_sent, true, "preserve the hook first-prompt marker");
+    assert.equal(
+      file.title_sent,
+      true,
+      "preserve the hook first-prompt marker",
+    );
   } finally {
-    manager.stop(); globalThis.fetch = original.fetch;
-    for (const [key, value] of [["HOME", original.home], ["PRELOOP_SESSION_ALIAS", original.alias], ["PRELOOP_PARENT_SESSION_ID", original.parent]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    await fs.rm(home, {recursive:true, force:true});
+    manager.stop();
+    globalThis.fetch = original.fetch;
+    for (const [key, value] of [
+      ["HOME", original.home],
+      ["PRELOOP_SESSION_ALIAS", original.alias],
+      ["PRELOOP_PARENT_SESSION_ID", original.parent],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("turn progress forwards bounded assistant/tool output and final usage", async () => {
+  const events = [];
+  const factory = async ({ prompt }) => ({
+    async interrupt() {},
+    async *[Symbol.asyncIterator]() {
+      yield { type: "system", subtype: "init", session_id: "progress-example" };
+      for await (const _ of prompt) {
+        yield {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "text", text: "x".repeat(4000) },
+              {
+                type: "tool_use",
+                id: "call-example",
+                name: "Read",
+                input: { secret: "excluded" },
+              },
+            ],
+          },
+        };
+        yield {
+          type: "result",
+          result: "done",
+          usage: { input_tokens: 3, output_tokens: 2 },
+        };
+      }
+    },
+  });
+  const manager = new SessionManager(baseConfig, factory);
+  try {
+    await manager.completeTurn({
+      text: "run",
+      onProgress: (event) => events.push(event),
+    });
+    assert.equal(events[0].summary.length, 1000);
+    assert.deepEqual(events[1], {
+      kind: "tool",
+      summary: "Tool: Read",
+      call_id: "call-example",
+      tool_name: "Read",
+    });
+    assert.match(events[2].summary, /Turn completed in .*ms; tokens: 5/);
+    assert.equal(JSON.stringify(events).includes("excluded"), false);
+  } finally {
+    manager.stop();
   }
 });

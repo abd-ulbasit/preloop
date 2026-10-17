@@ -33,7 +33,14 @@ export type SdkMessage = {
   errors?: string[];
   usage?: { input_tokens?: number; output_tokens?: number };
   total_cost_usd?: number;
-  message?: { content?: Array<{ type: string; text?: string }> };
+  message?: {
+    content?: Array<{
+      type: string;
+      text?: string;
+      id?: string;
+      name?: string;
+    }>;
+  };
 };
 
 /** Token and cost totals from one SDK result message. */
@@ -109,7 +116,16 @@ class AsyncQueue<T> implements AsyncIterable<T> {
   }
 }
 
+export type TurnProgress = {
+  kind: "assistant" | "tool" | "summary";
+  summary: string;
+  call_id?: string;
+  tool_name?: string;
+};
+
 type TurnWaiter = {
+  onProgress?: (event: TurnProgress) => void;
+  progressCount: number;
   resolve: (outcome: TurnOutcome) => void;
   reject: (error: Error) => void;
   settled: boolean;
@@ -133,7 +149,11 @@ class OwnedSession {
   /** Aborting it makes the SDK kill the Claude Code child process. */
   readonly abort = new AbortController();
 
-  constructor(readonly key: string, private registrar: SessionRegistrar, private cwd?: string) {}
+  constructor(
+    readonly key: string,
+    private registrar: SessionRegistrar,
+    private cwd?: string,
+  ) {}
 
   /** Consume SDK messages, resolving one waiter per completed turn. */
   async run(handle: SdkQueryHandle): Promise<void> {
@@ -151,13 +171,23 @@ class OwnedSession {
           for (const block of message.message?.content ?? []) {
             if (block.type === "text" && block.text) {
               this.turnText.push(block.text);
+              this.progress({
+                kind: "assistant",
+                summary: block.text.slice(0, 1000),
+              });
+            } else if (block.type === "tool_use" && block.id && block.name) {
+              this.progress({
+                kind: "tool",
+                summary: `Tool: ${block.name.slice(0, 100)}`,
+                call_id: block.id,
+                tool_name: block.name.slice(0, 100),
+              });
             }
           }
           continue;
         }
         if (message.type === "result") {
-          const reply =
-            message.result ?? this.turnText.join("\n").trim();
+          const reply = message.result ?? this.turnText.join("\n").trim();
           this.turnText = [];
           if (resultIsError(message)) {
             this.failNextWaiter(
@@ -170,7 +200,8 @@ class OwnedSession {
       }
     } catch (error) {
       if (!this.abort.signal.aborted) {
-        this.endError = error instanceof Error ? error : new Error(String(error));
+        this.endError =
+          error instanceof Error ? error : new Error(String(error));
       }
     } finally {
       this.ended = true;
@@ -184,6 +215,13 @@ class OwnedSession {
           waiter.reject(error);
         }
       }
+    }
+  }
+
+  private progress(event: TurnProgress): void {
+    const waiter = this.turnWaiters[0];
+    if (waiter && !waiter.settled && waiter.progressCount++ < 200) {
+      waiter.onProgress?.(event);
     }
   }
 
@@ -230,12 +268,19 @@ class OwnedSession {
   send(
     text: string,
     timeoutMs: number = DEFAULT_TURN_TIMEOUT_MS,
+    onProgress?: (event: TurnProgress) => void,
   ): Promise<TurnOutcome> {
     if (this.ended) {
       return Promise.reject(new Error("Claude Code session ended"));
     }
     const reply = new Promise<TurnOutcome>((resolve, reject) => {
-      const waiter: TurnWaiter = { resolve, reject, settled: false };
+      const waiter: TurnWaiter = {
+        resolve,
+        reject,
+        settled: false,
+        onProgress,
+        progressCount: 0,
+      };
       waiter.timer = setTimeout(() => {
         if (!waiter.settled) {
           waiter.settled = true;
@@ -327,6 +372,7 @@ function resultErrorText(message: SdkMessage): string {
 }
 
 export type SendMessageParams = {
+  onProgress?: (event: TurnProgress) => void;
   text: string;
   targetSessionId?: string;
   /** Native Claude session id for SDK `resume` when the envelope has it. */
@@ -354,7 +400,9 @@ export function flowExecutionId(
     return undefined;
   }
   const value = metadata["flow_execution_id"];
-  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+  return typeof value === "string" && UUID_PATTERN.test(value)
+    ? value
+    : undefined;
 }
 
 /**
@@ -475,7 +523,11 @@ export class SessionManager {
     model?: string,
     executionId?: string,
   ): Promise<OwnedSession> {
-    const session = new OwnedSession(resumeSessionId ?? randomUUID(), this.registrar, cwd ?? this.config.workspace_root);
+    const session = new OwnedSession(
+      resumeSessionId ?? randomUUID(),
+      this.registrar,
+      cwd ?? this.config.workspace_root,
+    );
     const executable = await this.claudeExecutable();
     const handle = await this.queryFactory({
       prompt: session.input,
@@ -540,7 +592,15 @@ export class SessionManager {
       `turn start session=${label()} model=${modelLabel} execution_id=${executionLabel} binary=${binary} timeout_ms=${timeoutMs}`,
     );
     try {
-      const reply = await session.send(params.text, timeoutMs);
+      const reply = await session.send(
+        params.text,
+        timeoutMs,
+        params.onProgress,
+      );
+      params.onProgress?.({
+        kind: "summary",
+        summary: `Turn completed in ${Date.now() - started}ms; tokens: ${reply.usage?.total_tokens ?? "unknown"}`,
+      });
       this.log(
         `turn end session=${label()} outcome=completed duration_ms=${Date.now() - started} model=${modelLabel} execution_id=${executionLabel} binary=${binary}`,
       );
@@ -548,6 +608,10 @@ export class SessionManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const outcome = /timed out/.test(message) ? "timeout" : "failed";
+      params.onProgress?.({
+        kind: "summary",
+        summary: `Turn ${outcome} after ${Date.now() - started}ms`,
+      });
       this.log(
         `turn error session=${label()} outcome=${outcome} duration_ms=${Date.now() - started} model=${modelLabel} execution_id=${executionLabel} binary=${binary} error=${JSON.stringify(message.slice(0, 500))}`,
       );
@@ -561,7 +625,8 @@ export class SessionManager {
   /** Close owned SDK sessions so a local `claude --resume` can take the TTY. */
   async release(targetSessionId?: string): Promise<string | undefined> {
     const session = targetSessionId
-      ? this.findBySessionId(targetSessionId) ?? this.sessions.get(targetSessionId)
+      ? (this.findBySessionId(targetSessionId) ??
+        this.sessions.get(targetSessionId))
       : this.mostRecentSession();
     const sessionId = session?.sessionId ?? session?.key;
     if (session) {

@@ -1,5 +1,6 @@
 """Service for logging flow execution details including MCP tool usage and agent actions."""
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -74,15 +75,15 @@ class FlowExecutionLogger:
         """
         log_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "server_name": server_name,
-            "tool_name": tool_name,
+            "server_name": scrub_secrets(server_name) or "",
+            "tool_name": scrub_secrets(tool_name) or "",
             "arguments": redact_dict(arguments),
             "status": status,
             "result_summary": result_summary,
             "error": error,
         }
         self.mcp_usage_logs.append(log_entry)
-        logger.debug(f"MCP tool call logged: {server_name}/{tool_name} - {status}")
+        logger.debug("MCP tool call recorded")
 
     def log_agent_action(
         self,
@@ -227,6 +228,9 @@ class FlowExecutionLogger:
             log_lines: Raw log lines from the agent
         """
         for line in log_lines:
+            if self._parse_tool_event(line):
+                continue
+
             # Look for MCP tool call patterns
             # Example: "Calling MCP tool: preloop-mcp/search_issues with args: {...}"
             line_lower = line.lower()
@@ -245,6 +249,59 @@ class FlowExecutionLogger:
                 self._try_extract_file_creation(line)
             elif "executed command" in line.lower() or "running:" in line.lower():
                 self._try_extract_command_execution(line)
+
+    def _parse_tool_event(self, line: str) -> bool:
+        """Count normalized native tool starts once by their harness call ID.
+
+        Stream deltas and completed assistant messages can repeat the same call.
+        Retained usage rows also seed deduplication after a stream is resumed.
+        Tool arguments and results are deliberately excluded from this rollup.
+        """
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(event, dict):
+            return False
+        blocks = []
+        message = event.get("message")
+        if event.get("type") == "assistant" and isinstance(message, dict):
+            blocks = message.get("content") or []
+        elif event.get("type") == "stream_event":
+            nested = event.get("event") or {}
+            if isinstance(nested, dict) and nested.get("type") == "content_block_start":
+                blocks = [nested.get("content_block")]
+        elif event.get("type") in {"item.started", "item.completed"}:
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") in {
+                "command_execution",
+                "mcp_tool_call",
+                "web_search",
+                "file_change",
+            }:
+                blocks = [
+                    {
+                        **item,
+                        "type": "tool_use",
+                        "name": item.get("tool") or item["type"],
+                    }
+                ]
+        recognized = False
+        known = {entry.get("call_id") for entry in self.mcp_usage_logs}
+        for block in blocks if isinstance(blocks, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            call_id = block.get("id")
+            name = block.get("name")
+            if not isinstance(call_id, str) or not isinstance(name, str):
+                continue
+            recognized = True
+            if call_id in known:
+                continue
+            self.log_mcp_tool_call("native", name, {}, status="detected")
+            self.mcp_usage_logs[-1]["call_id"] = call_id
+            known.add(call_id)
+        return recognized
 
     def _try_extract_mcp_call(self, line: str):
         """Try to extract MCP call information from a log line."""

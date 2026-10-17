@@ -283,9 +283,12 @@ test("reconnect replays only outcomes that missed delivery", async () => {
       payload: { text: "while online" },
     }),
   );
-  assert.equal(live.sent.length, 1);
-  assert.equal(live.sent[0].name, "command_result");
-  assert.equal(live.sent[0].payload.reply_text, "ok: while online");
+  assert.equal(live.sent.length, 2);
+  assert.equal(live.sent[0].name, "command_progress");
+  assert.equal(live.sent[0].payload.command_id, "live-1");
+  assert.match(live.sent[0].payload.summary, /tokens: 6/);
+  assert.equal(live.sent[1].name, "command_result");
+  assert.equal(live.sent[1].payload.reply_text, "ok: while online");
 
   const reconnected = fakeSocket();
   sidecar.replayCommandOutcomes(reconnected);

@@ -593,3 +593,24 @@ def test_repair_failure_is_a_readable_verification_block() -> None:
         == "verification_blocked"
     )
     assert analysis.transient is False
+
+
+def test_error_headline_excludes_startup_and_recovery_notice() -> None:
+    analysis = analyze_agent_failure(
+        "PRELOOP_STREAM_IDLE_TIMEOUT_SECONDS=600\n"
+        "Wrote git recovery artifacts under /workspace/evidence\n"
+        'ERROR: wire_api = "chat" is no longer supported\n'
+    )
+    assert analysis.message.startswith('ERROR: wire_api = "chat"')
+
+
+def test_verification_check_cause_takes_precedence() -> None:
+    analysis = analyze_agent_failure(
+        "PRELOOP_STREAM_IDLE_TIMEOUT_SECONDS=600\n"
+        "Wrote git recovery artifacts under /workspace/evidence\n"
+        "PRELOOP_VERIFICATION_VERDICT DENY status=failed "
+        "reason=git-diff-check: trailing whitespace at example.pm:17\n"
+    )
+    assert analysis.message == (
+        "Verification failed: git-diff-check: trailing whitespace at example.pm:17"
+    )

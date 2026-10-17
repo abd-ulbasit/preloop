@@ -961,3 +961,28 @@ async def test_replay_persisted_runner_logs_binds_opened_pr(
     assert orchestrator._opened_pr is not None
     assert orchestrator._opened_pr["url"] == "https://example.com/mr/1"
     orchestrator._publish_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovered_stream_restores_native_tool_ids(orchestrator) -> None:
+    orchestrator.execution_log.mcp_usage_logs = [
+        {"call_id": "call-example", "server_name": "native", "tool_name": "Read"}
+    ]
+    orchestrator._publish_update = AsyncMock()
+    event = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "id": "call-example", "name": "Read"}]
+            },
+        }
+    )
+    await orchestrator._process_agent_log_line(
+        event, session_reference="example", previous_line="", log_count=1
+    )
+    assert orchestrator.tool_calls_count == 1
+    assert len(orchestrator.execution_logger.mcp_usage_logs) == 1
+    assert all(
+        call.args[0] != "mcp_call"
+        for call in orchestrator._publish_update.call_args_list
+    )

@@ -1,5 +1,6 @@
 import { ConsoleStatus } from '../../controllers/console-status';
 import { formatUsd } from '../../utils/money';
+import { errorHeadline } from '../../utils/attention';
 
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -246,9 +247,7 @@ function timelineTime(timestamp: string): number {
  * of the error is what has to fit; the full text lives in the Output tab.
  */
 function firstErrorLine(message?: string | null): string {
-  if (!message) return '';
-  const line = message.split('\n').find((part) => part.trim().length > 0);
-  return (line || '').trim();
+  return errorHeadline(message);
 }
 
 /**
@@ -2100,6 +2099,14 @@ export class FlowExecutionView extends LitElement {
     // the orchestrator's generic "stopped by user request" (#1032).
     if (automaticStopReason(execution)) {
       return '';
+    }
+    if (
+      execution.error_message &&
+      ['verification_failed', 'verification_blocked', 'model_config'].includes(
+        execution.failure_category || ''
+      )
+    ) {
+      return liftLogfmtErrorField(firstErrorLine(execution.error_message));
     }
     const failed = this.firstFailedGatewayEvent();
     if (failed) {

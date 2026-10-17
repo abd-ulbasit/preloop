@@ -36,6 +36,7 @@ export interface FlowExecutionActionResource {
   /** Set once the run opened a runtime session worth linking to. */
   agent_session_reference?: string | null;
   flow_id?: string | null;
+  runtime_session_id?: string | null;
   trigger_event_details?: Record<string, unknown> | null;
   resume_of?: string | null;
 }
@@ -137,7 +138,16 @@ export function executionDetailUrl(
 export function executionSessionUrl(
   execution: FlowExecutionActionResource
 ): string {
-  return `/console/runtime-sessions?query=${encodeURIComponent(execution.id)}`;
+  const binding = execution.trigger_event_details?._agent_control;
+  const session =
+    binding && typeof binding === 'object'
+      ? (binding as Record<string, unknown>).history_session_id ||
+        (binding as Record<string, unknown>).runtime_session_id
+      : null;
+  return `/console/runtime-sessions?query=${encodeURIComponent(
+    execution.runtime_session_id ||
+      (typeof session === 'string' ? session : execution.id)
+  )}`;
 }
 
 export function flowExecutionActions(

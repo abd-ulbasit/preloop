@@ -643,6 +643,84 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             db.refresh(db_obj)
         return db_obj
 
+    def log_agent_control_progress(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        command_id: str,
+        event_id: str,
+        kind: str,
+        summary: str,
+        call_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        commit: bool = True,
+    ) -> RuntimeSessionActivity | None:
+        """Attach bounded progress to the server-owned command tracking session."""
+        from preloop.utils.secret_scrubbing import scrub_secrets
+
+        original = (
+            db.query(self.model)
+            .filter(
+                self.model.account_id == account_id,
+                self.model.activity_type == "agent_control_message",
+                self.model.metadata_["command_id"].astext == command_id,
+                self.model.metadata_["source"].astext.is_distinct_from(
+                    "agent_control_progress"
+                ),
+            )
+            .order_by(self.model.timestamp.asc())
+            .first()
+        )
+        if original is None:
+            return None
+        identity = call_id if kind == "tool" and call_id else event_id
+        existing = (
+            db.query(self.model)
+            .filter(
+                self.model.account_id == account_id,
+                self.model.runtime_session_id == original.runtime_session_id,
+                self.model.activity_type
+                == ("tool_call" if kind == "tool" else "agent_control_message"),
+                self.model.metadata_["command_id"].astext == command_id,
+                self.model.metadata_["progress_id"].astext == identity,
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing
+        metadata = {
+            "command_id": command_id,
+            "progress_id": identity,
+            "source": "agent_control_progress",
+            "role": "assistant",
+        }
+        safe_summary = (scrub_secrets(summary) or "")[:2000]
+        if kind == "tool" and call_id and tool_name:
+            source = (original.metadata_ or {}).get("source_metadata") or {}
+            source = source if isinstance(source, dict) else {}
+            return self.log_tool_call(
+                db,
+                account_id=account_id,
+                runtime_session_id=original.runtime_session_id,
+                server_name="native",
+                tool_name=(scrub_secrets(tool_name) or "tool")[:100],
+                status="detected",
+                summary=safe_summary,
+                metadata=metadata,
+                flow_execution_id=source.get("flow_execution_id"),
+                commit=commit,
+            )
+        return self.log_agent_control_message(
+            db,
+            account_id=account_id,
+            runtime_session_id=original.runtime_session_id,
+            message=safe_summary,
+            status="running",
+            metadata=metadata,
+            commit=commit,
+        )
+
     def log_agent_control_result(
         self,
         db: Session,
@@ -663,6 +741,9 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
                 self.model.account_id == account_id,
                 self.model.activity_type == "agent_control_message",
                 self.model.metadata_["command_id"].astext == command_id,
+                self.model.metadata_["source"].astext.is_distinct_from(
+                    "agent_control_progress"
+                ),
             )
             .order_by(self.model.timestamp.desc())
             .first()

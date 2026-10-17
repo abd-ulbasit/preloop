@@ -397,3 +397,11 @@ Preset synchronization updates uncustomized fields and marks customized saved
 flows as having an available update. Inspect the effective saved prompt and
 configuration before expecting template behavior. The publication-mode switch
 is deliberate and is not silently enabled by updating the prompt.
+
+### Native tool event counts
+
+Execution log parsing counts Claude tool-use blocks and Codex tool execution
+items by harness call ID. Stream starts and their completed message count once;
+restoring an execution also restores recorded call IDs before replay. Tool
+arguments and results are excluded from these metric entries. Legacy text MCP
+markers remain supported for harnesses without structured output.

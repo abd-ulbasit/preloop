@@ -750,21 +750,17 @@ export function stripLogPrefix(text: string | null | undefined): string {
   return rest;
 }
 
-/**
- * The one line that says what went wrong: the first line of the error with
- * its log prefix removed. A line that is nothing but prefix ("timestamp=...
- * level=error") is skipped for the next line that carries words; if every
- * line is plumbing the raw first line is kept, because a console that hides
- * what it cannot parse stops being a record.
- */
+/** Prefer terminal verification/errors, then meaningful text, over startup notices. */
 export function errorHeadline(text: string | null | undefined): string {
-  const lines = (text || '').split('\n');
-  for (const line of lines) {
-    const stripped = stripLogPrefix(line);
-    if (stripped) {
-      return stripped;
-    }
-  }
+  const lines = (text || '').split('\n').map(stripLogPrefix).filter(Boolean);
+  const terminal =
+    lines.find((line) => /^Verification (?:failed|blocked):/i.test(line)) ||
+    lines.find((line) => /^(?:ERROR:|FATAL:)/i.test(line));
+  if (terminal) return terminal;
+  const useful = lines.find(
+    (line) => !/^(?:[A-Z][A-Z0-9_]*=|Wrote git recovery artifacts\b)/.test(line)
+  );
+  if (useful) return useful;
   return firstLine(text);
 }
 

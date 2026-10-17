@@ -59,7 +59,12 @@ export {
   flowModel,
 } from "./flow-workspace.js";
 export type { WorkspaceSpec } from "./workspace.js";
-export type { QueryFactory, SdkQueryHandle, SdkMessage, SdkUserMessage } from "./sessions.js";
+export type {
+  QueryFactory,
+  SdkQueryHandle,
+  SdkMessage,
+  SdkUserMessage,
+} from "./sessions.js";
 export { TranscriptObserver } from "./observer.js";
 export type { SessionActivity } from "./observer.js";
 export { LauncherBridge, defaultSocketPath } from "./mode.js";
@@ -239,9 +244,7 @@ export class PreloopClaudeSidecar {
         headers: controlAuthHeaders(config.bearer_token!),
       });
     } catch (error) {
-      this.log(
-        `Preloop Agent Control connect failed: ${errorMessage(error)}`,
-      );
+      this.log(`Preloop Agent Control connect failed: ${errorMessage(error)}`);
       this.scheduleReconnect();
       return;
     }
@@ -304,9 +307,7 @@ export class PreloopClaudeSidecar {
     });
     socket.on("error", (error) => {
       // 'error' is followed by 'close'; log and let close drive reconnect.
-      this.log(
-        `Preloop Agent Control websocket error: ${errorMessage(error)}`,
-      );
+      this.log(`Preloop Agent Control websocket error: ${errorMessage(error)}`);
     });
   }
 
@@ -482,6 +483,15 @@ export class PreloopClaudeSidecar {
     try {
       const turn = await this.sessions.completeTurn({
         text,
+        onProgress: messageId
+          ? (event) =>
+              this.sendEnvelope({
+                type: "event",
+                name: "command_progress",
+                message_id: randomUUID(),
+                payload: { command_id: messageId, ...event },
+              })
+          : undefined,
         targetSessionId,
         resumeSessionId,
         metadata: payload.metadata,
@@ -509,7 +519,9 @@ export class PreloopClaudeSidecar {
 
   async takeOver(sessionId?: string): Promise<string> {
     const nativeId =
-      sessionId ?? this.launcher.lastSessionId ?? this.sessions?.ownedSessionIds()[0];
+      sessionId ??
+      this.launcher.lastSessionId ??
+      this.sessions?.ownedSessionIds()[0];
     if (this.launcher.hasLauncher() && this.launcher.mode === "local") {
       this.launcher.requestSwitch();
       await waitForCondition(
