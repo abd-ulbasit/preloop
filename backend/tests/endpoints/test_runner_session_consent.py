@@ -190,3 +190,90 @@ def test_invalid_request_does_not_request_consent(
     assert response.json()["detail"]["code"] == "workspace_not_authorized"
     assert db_session.query(models.OwnerConsent).count() == 0
     assert not service.plans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "decision,notification_failure",
+    [("pending", False), ("approved", False), ("pending", True)],
+)
+async def test_consent_does_not_require_a_second_worker_token(
+    monkeypatch: pytest.MonkeyPatch, decision: str, notification_failure: bool
+) -> None:
+    """A saturated sync-route pool can still finish consent DB work."""
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import anyio
+    from fastapi import HTTPException
+
+    from preloop.models.crud import owner_consent as consent_crud
+
+    consent = owner_consent.OwnerConsentResult(
+        status=decision, approval_id=uuid4(), created=decision == "pending"
+    )
+    worker_ids: list[int] = []
+    database_ids: list[int] = []
+
+    def check(*args: object, **kwargs: object) -> owner_consent.OwnerConsentResult:
+        database_ids.append(threading.get_ident())
+        return consent
+
+    def consume(*args: object, **kwargs: object) -> bool:
+        database_ids.append(threading.get_ident())
+        return True
+
+    monkeypatch.setattr(owner_consent, "check_owner_consent", check)
+    monkeypatch.setattr(consent_crud, "consume", consume)
+    notifications = AsyncMock(
+        side_effect=OSError("notification unavailable")
+        if notification_failure
+        else None
+    )
+    monkeypatch.setattr(owner_consent, "notify_owner_consent", notifications)
+    runner = SimpleNamespace(
+        id=uuid4(),
+        account_id=uuid4(),
+        registered_by_user_id=uuid4(),
+        name="Example runner",
+    )
+    user = SimpleNamespace(id=uuid4(), account_id=runner.account_id)
+    body = runner_sessions.RunnerSessionStartRequest(
+        consent_request_id=uuid4(),
+        harness="claude_code",
+        workspace={"kind": "authorized_directory", "id": "example-workspace"},
+    )
+
+    def route_worker() -> int:
+        worker_ids.append(threading.get_ident())
+        try:
+            runner_sessions._require_start_consent(
+                MagicMock(), user, runner, body, MagicMock()
+            )
+        except HTTPException as exc:
+            return exc.status_code
+        return 202
+
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    previous_tokens = limiter.total_tokens
+    limiter.total_tokens = 1
+    worker = asyncio.create_task(anyio.to_thread.run_sync(route_worker))
+    timed_out = False
+    try:
+        try:
+            result = await asyncio.wait_for(asyncio.shield(worker), timeout=2)
+        except TimeoutError:
+            timed_out = True
+    finally:
+        # Let a regressed nested offload drain rather than strand a thread
+        # after the assertion. The route is required to finish with ONE token.
+        if not worker.done():
+            limiter.total_tokens = 2
+        await worker
+        limiter.total_tokens = previous_tokens
+    assert not timed_out, "Consent waited for a second worker token"
+    assert result == (409 if decision == "pending" else 202)
+    assert database_ids == worker_ids * (2 if decision == "approved" else 1)
+    assert notifications.await_count == (1 if decision == "pending" else 0)

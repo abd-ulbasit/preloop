@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/preloop/preloop/cli/internal/api"
 	"github.com/preloop/preloop/cli/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -126,4 +129,35 @@ func parseRunnerConsentAnswer(answer, fallback string) string {
 		return runnerConsentChoices[n-1].value
 	}
 	return answer
+}
+
+// updateRunnerConsentBeforeEnable applies an explicit install choice before
+// the new service can resume an existing runner. Saved personal choices are
+// intentionally omitted so an ordinary enable preserves later console edits.
+func updateRunnerConsentBeforeEnable(cmd *cobra.Command) error {
+	choice, _ := cmd.Flags().GetString("flow-execution-consent")
+	if choice == "" {
+		return nil
+	}
+	state, err := readRunnerState()
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if state.ID == "" {
+		return nil
+	}
+	client, err := api.NewClient(FlagToken, FlagURL)
+	if err != nil {
+		return err
+	}
+	if err := client.Patch(
+		"/api/v1/runners/"+url.PathEscape(state.ID)+"/consent",
+		map[string]string{"flow_execution_consent": choice}, nil,
+	); err != nil {
+		return fmt.Errorf("update runner consent: %w", err)
+	}
+	return nil
 }

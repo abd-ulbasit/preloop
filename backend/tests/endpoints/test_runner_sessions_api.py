@@ -5,7 +5,6 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -273,9 +272,14 @@ def test_owner_starts_session(db_session, test_user, service):
 def test_admin_starts_session_on_another_members_runner(
     db_session, test_user, service, monkeypatch
 ):
+    from preloop.services.owner_consent import OwnerConsentResult
+
     monkeypatch.setattr(
-        "preloop.services.owner_consent.require_owner_consent",
-        AsyncMock(return_value=uuid4()),
+        "preloop.services.owner_consent.check_owner_consent",
+        lambda *args, **kwargs: OwnerConsentResult("approved", uuid4(), False),
+    )
+    monkeypatch.setattr(
+        "preloop.models.crud.owner_consent.consume", lambda *args, **kwargs: True
     )
     member = _member(db_session, test_user, "member")
     runner = _runner(db_session, member)
@@ -369,9 +373,14 @@ def test_other_member_is_refused(db_session, test_user, service):
 
 
 def test_authorizer_can_share_and_deny(db_session, test_user, service, monkeypatch):
+    from preloop.services.owner_consent import OwnerConsentResult
+
     monkeypatch.setattr(
-        "preloop.services.owner_consent.require_owner_consent",
-        AsyncMock(return_value=uuid4()),
+        "preloop.services.owner_consent.check_owner_consent",
+        lambda *args, **kwargs: OwnerConsentResult("approved", uuid4(), False),
+    )
+    monkeypatch.setattr(
+        "preloop.models.crud.owner_consent.consume", lambda *args, **kwargs: True
     )
     runner = _runner(db_session, test_user)
     member = _member(db_session, test_user, "member")

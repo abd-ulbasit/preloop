@@ -1494,7 +1494,10 @@ func runRunnerEnable(cmd *cobra.Command, args []string) error {
 	if err := prepareRunnerConsent(cmd); err != nil {
 		return err
 	}
-	return installRunnerService(cmd.OutOrStdout())
+	if err := updateRunnerConsentBeforeEnable(cmd); err != nil {
+		return err
+	}
+	return setupInstallRunner(cmd.OutOrStdout())
 }
 
 // installRunnerService writes the platform service unit and, on macOS,

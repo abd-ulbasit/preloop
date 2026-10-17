@@ -36,6 +36,9 @@ class OwnerConsent(Base):
         unique=True,
         index=True,
     )
+    notification_claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     notification_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )

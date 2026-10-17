@@ -344,6 +344,18 @@ def get_owner_consent_status(
     if result is None:
         raise HTTPException(status_code=404, detail="Consent request not found")
     _check_authorizer("view_owner_consent", {"current_user": current_user, "db": db})
+    resource_account_id = result.pop("account_id", current_user.account_id)
+    if resource_account_id != current_user.account_id:
+        from preloop.plugins.account_hooks import AuthorizationContext, authorize
+
+        decision = authorize(
+            AuthorizationContext(
+                account_id=resource_account_id, db=db, user=current_user
+            ),
+            "view_owner_consent",
+        )
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason or "Consent status access denied")
     expires_at = result["expires_at"]
     if expires_at is not None and expires_at.tzinfo is None:
         result["expires_at"] = expires_at.replace(tzinfo=timezone.utc)

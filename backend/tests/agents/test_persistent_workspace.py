@@ -136,6 +136,7 @@ async def test_executor_metadata_carries_workspace(
         account_id=account_id,
         display_name="Review node",
         lifecycle_state="active",
+        others_may_start_sessions="allow",
         agent_kind="openclaw",
         session_source_type="openclaw",
         runtime_session_id=uuid4(),

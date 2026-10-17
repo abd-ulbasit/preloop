@@ -74,6 +74,7 @@ def upgrade() -> None:
             sa.ForeignKey("approval_request.id", ondelete="CASCADE"),
             nullable=False,
         ),
+        sa.Column("notification_claimed_at", sa.DateTime(), nullable=True),
         sa.Column("notification_sent_at", sa.DateTime(), nullable=True),
         sa.Column("consumed_at", sa.DateTime(), nullable=True),
         sa.UniqueConstraint(

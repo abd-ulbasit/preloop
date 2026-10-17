@@ -4,12 +4,25 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud.account_halt import crud_account_halt
+
+
+def _execution_in_account(account_id: UUID, execution_id: UUID) -> Any:
+    """Scope a cross-account runner consent through its originating flow."""
+    return (
+        select(models.FlowExecution.id)
+        .join(models.Flow, models.FlowExecution.flow_id == models.Flow.id)
+        .where(
+            models.FlowExecution.id == execution_id,
+            models.Flow.account_id == account_id,
+        )
+        .exists()
+    )
 
 
 def runner_for_execution(
@@ -23,7 +36,7 @@ def runner_for_execution(
             models.OwnerConsent.approval_request_id == models.ApprovalRequest.id,
         )
         .filter(
-            models.OwnerConsent.account_id == account_id,
+            _execution_in_account(account_id, UUID(str(execution_id))),
             models.OwnerConsent.action == "runner_flow",
             models.ApprovalRequest.execution_id == str(execution_id),
         )
@@ -216,9 +229,59 @@ async def pending_notifications(db: AsyncSession) -> list[UUID]:
     return list(result.scalars().all())
 
 
-async def mark_notified(db: AsyncSession, consent: models.OwnerConsent) -> None:
-    """Persist completion only after a delivery or durable queue acceptance."""
-    consent.notification_sent_at = datetime.utcnow()
+NOTIFICATION_CLAIM_SECONDS = 120
+
+
+async def claim_notification(db: AsyncSession, approval_id: UUID) -> datetime | None:
+    """Lease delivery to one worker; abandoned claims become retryable."""
+    now = datetime.utcnow()
+    result = await db.execute(
+        update(models.OwnerConsent)
+        .where(
+            models.OwnerConsent.approval_request_id == approval_id,
+            models.OwnerConsent.notification_sent_at.is_(None),
+            or_(
+                models.OwnerConsent.notification_claimed_at.is_(None),
+                models.OwnerConsent.notification_claimed_at
+                < now - timedelta(seconds=NOTIFICATION_CLAIM_SECONDS),
+            ),
+        )
+        .values(notification_claimed_at=now)
+        .returning(models.OwnerConsent.notification_claimed_at)
+    )
+    claim = result.scalar_one_or_none()
+    await db.commit()
+    return claim
+
+
+async def release_notification(
+    db: AsyncSession, *, approval_id: UUID, claim: datetime
+) -> None:
+    """Release only this worker's claim after failed delivery."""
+    await db.rollback()
+    await db.execute(
+        update(models.OwnerConsent)
+        .where(
+            models.OwnerConsent.approval_request_id == approval_id,
+            models.OwnerConsent.notification_claimed_at == claim,
+        )
+        .values(notification_claimed_at=None)
+    )
+    await db.commit()
+
+
+async def mark_notified(
+    db: AsyncSession, consent: models.OwnerConsent, *, claim: datetime
+) -> None:
+    """Mark delivery only when this worker still holds the current lease."""
+    await db.execute(
+        update(models.OwnerConsent)
+        .where(
+            models.OwnerConsent.approval_request_id == consent.approval_request_id,
+            models.OwnerConsent.notification_claimed_at == claim,
+        )
+        .values(notification_sent_at=datetime.utcnow(), notification_claimed_at=None)
+    )
     await db.commit()
 
 
@@ -233,7 +296,7 @@ def poll_runner_execution(
             models.OwnerConsent.approval_request_id == models.ApprovalRequest.id,
         )
         .filter(
-            models.OwnerConsent.account_id == account_id,
+            _execution_in_account(account_id, UUID(str(execution_id))),
             models.OwnerConsent.action == "runner_flow",
             models.ApprovalRequest.execution_id == str(execution_id),
         )
@@ -248,7 +311,7 @@ def poll_runner_execution(
         row.resolved_at = datetime.utcnow()
         db.add(
             models.ApprovalEvent(
-                account_id=account_id,
+                account_id=row.account_id,
                 approval_request_id=row.id,
                 event_type="expired",
                 detail="Owner permission request timed out",
@@ -303,8 +366,7 @@ def status_for_requester(
         )
         .filter(
             models.OwnerConsent.approval_request_id == approval_id,
-            models.OwnerConsent.account_id == account_id,
-            models.ApprovalRequest.account_id == account_id,
+            models.OwnerConsent.account_id == models.ApprovalRequest.account_id,
         )
         .first()
     )
@@ -312,9 +374,14 @@ def status_for_requester(
         return None
     consent, approval = row
     requester = (approval.tool_args or {}).get("requester_user_id")
-    if consent.owner_user_id != user_id and requester != str(user_id):
+    is_owner = consent.account_id == account_id and consent.owner_user_id == user_id
+    if not is_owner and requester != str(user_id):
         return None
     status = approval.status
     if status == "pending" and approval.expires_at <= datetime.utcnow():
         status = "expired"
-    return {"status": status, "expires_at": approval.expires_at}
+    return {
+        "status": status,
+        "expires_at": approval.expires_at,
+        "account_id": consent.account_id,
+    }

@@ -132,6 +132,10 @@ def _has_online_private_runner(
             )
         )
         and getattr(row, "flow_execution_consent", None) != "never"
+        and (
+            getattr(row, "flow_execution_consent", None) == "always"
+            or getattr(row, "registered_by_user_id", None) is not None
+        )
         and getattr(row, "status", None) in ("online", "busy")
         and int(getattr(row, "free_slots", 0)) > 0
         for row in (matches or [])
@@ -880,15 +884,15 @@ def lease_job(
             continue
         if consent_mode != "always":
             if consent_owner is None:
-                if outcome is not None:
-                    outcome["consent_status"] = "declined"
+                # Legacy/system runners cannot answer an owner request. Keep
+                # looking for usable capacity instead of inventing a refusal.
                 continue
             from preloop.services.owner_consent import check_owner_consent
 
             try:
                 consent = check_owner_consent(
                     db,
-                    account_id=account_id,
+                    account_id=getattr(candidate, "account_id", account_id),
                     owner_user_id=consent_owner,
                     action="runner_flow",
                     subject_id=str(candidate.id),
@@ -900,8 +904,8 @@ def lease_job(
                     execution_id=str(execution_id),
                 )
             except ValueError:
-                if outcome is not None:
-                    outcome["consent_status"] = "declined"
+                # An unavailable or changed owner is not an owner decline.
+                # A different eligible runner may still accept this work.
                 continue
             if outcome is not None:
                 outcome["owner_consent"] = consent

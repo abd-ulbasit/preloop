@@ -1,5 +1,6 @@
 """Owner consent is human-only and bound to one exact session intent."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -271,6 +272,15 @@ async def test_notification_completion_only_after_delivery(sent: bool) -> None:
             return_value=consent,
         ),
         patch(
+            "preloop.services.owner_consent.crud.claim_notification",
+            new_callable=AsyncMock,
+            return_value=datetime.utcnow(),
+        ),
+        patch(
+            "preloop.services.owner_consent.crud.release_notification",
+            new_callable=AsyncMock,
+        ),
+        patch(
             "preloop.services.owner_consent.crud.mark_notified", new_callable=AsyncMock
         ) as mark,
     ):
@@ -505,3 +515,47 @@ def test_consent_status_returns_no_approval_details() -> None:
             uuid4(), current_user=actor, db=MagicMock()
         )
     assert result.model_dump() == {"status": "approved", "expires_at": None}
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_shared_consent_status_checks_resource_account_authorizer(
+    allowed: bool,
+) -> None:
+    from preloop.api.endpoints import approval_requests as endpoint
+    from preloop.models import models
+    from preloop.plugins.account_hooks import Decision
+
+    resource_account = uuid4()
+    actor = models.User(id=uuid4(), account_id=uuid4())
+    with (
+        patch.object(endpoint, "_managed_execution_credential", return_value=False),
+        patch(
+            "preloop.models.crud.owner_consent.status_for_requester",
+            return_value={
+                "status": "pending",
+                "expires_at": None,
+                "account_id": resource_account,
+            },
+        ),
+        patch("preloop.utils.permissions._check_authorizer") as caller_authorize,
+        patch(
+            "preloop.plugins.account_hooks.authorize",
+            return_value=Decision(
+                "allow" if allowed else "deny", reason="Resource account policy"
+            ),
+        ) as authorize,
+    ):
+        if allowed:
+            result = endpoint.get_owner_consent_status(
+                uuid4(), current_user=actor, db=MagicMock()
+            )
+            assert result.model_dump() == {"status": "pending", "expires_at": None}
+        else:
+            with pytest.raises(HTTPException) as exc:
+                endpoint.get_owner_consent_status(
+                    uuid4(), current_user=actor, db=MagicMock()
+                )
+            assert exc.value.status_code == 403
+        caller_authorize.assert_called_once()
+        assert authorize.call_args.args[0].account_id == resource_account
+        assert authorize.call_args.args[0].user is actor

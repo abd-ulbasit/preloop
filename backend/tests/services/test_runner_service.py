@@ -134,6 +134,7 @@ def test_resolve_runner_pool_auto_when_private_runner_has_a_second_slot(
             SimpleNamespace(
                 id=uuid4(),
                 status="busy",
+                flow_execution_consent="always",
                 free_slots=1,
                 capabilities={"docker_available": True},
                 accept_untagged=True,

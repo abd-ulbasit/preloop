@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from anyio import CancelScope
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -73,28 +74,40 @@ async def notify_owner_consent(approval_id: UUID) -> None:
         consent = await crud.get_by_approval_async(db, approval_id)
         if consent is None or consent.notification_sent_at is not None:
             return
-        workflow = crud.notification_workflow(consent, approval)
-        results = await service.send_notifications(approval, workflow)
-        if any(
-            isinstance(channel, dict)
-            and (
-                channel.get("success") is True
-                or isinstance(channel.get("queued"), int)
-                and channel["queued"] > 0
-                or isinstance(channel.get("sent"), int)
-                and channel["sent"] > 0
-                or channel.get("scheduled") is True
+        claim = await crud.claim_notification(db, approval_id)
+        if claim is None:
+            return
+        try:
+            workflow = crud.notification_workflow(consent, approval)
+            results = await asyncio.wait_for(
+                service.send_notifications(approval, workflow), timeout=25
             )
-            for channel in results.values()
-        ):
-            await crud.mark_notified(db, consent)
-        _log_approval_lifecycle_async(
-            str(approval.account_id),
-            approval.id,
-            "created",
-            tool_name="owner_consent",
-            execution_id=approval.execution_id,
-        )
+            if any(
+                isinstance(channel, dict)
+                and (
+                    channel.get("success") is True
+                    or isinstance(channel.get("queued"), int)
+                    and channel["queued"] > 0
+                    or isinstance(channel.get("sent"), int)
+                    and channel["sent"] > 0
+                    or channel.get("scheduled") is True
+                )
+                for channel in results.values()
+            ):
+                await crud.mark_notified(db, consent, claim=claim)
+            _log_approval_lifecycle_async(
+                str(approval.account_id),
+                approval.id,
+                "created",
+                tool_name="owner_consent",
+                execution_id=approval.execution_id,
+            )
+        finally:
+            # A timeout or transport failure must not strand the durable request.
+            with CancelScope(shield=True):
+                await asyncio.shield(
+                    crud.release_notification(db, approval_id=approval_id, claim=claim)
+                )
 
 
 async def require_owner_consent(
@@ -136,9 +149,17 @@ async def require_owner_consent(
             logger.exception(
                 "Owner notification pending retry for %s", result.approval_id
             )
-    if result.status == "approved" and await run_db_off_loop(
+    consumed = result.status == "approved" and await run_db_off_loop(
         lambda: crud.consume(db, approval_id=result.approval_id)
-    ):
+    )
+    return require_owner_consent_result(result, action=action, consumed=consumed)
+
+
+def require_owner_consent_result(
+    result: OwnerConsentResult, *, action: str, consumed: bool
+) -> UUID:
+    """Return a claimed approval or the shared HTTP refusal for one intent."""
+    if result.status == "approved" and consumed:
         return result.approval_id
     raise HTTPException(
         status_code=409 if result.status == "pending" else 403,

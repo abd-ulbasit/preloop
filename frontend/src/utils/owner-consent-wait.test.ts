@@ -5,22 +5,39 @@ import {
 } from './execution-presentation';
 
 describe('isWaitingForRunnerOwner', () => {
-  it('reads a queued run held for the owner as a wait', () => {
-    expect(
-      isWaitingForRunnerOwner({
-        status: 'PENDING',
-        error_message: WAITING_FOR_RUNNER_OWNER,
-      })
-    ).to.equal(true);
-  });
+  for (const status of [
+    'PENDING',
+    'QUEUED',
+    'STARTING',
+    'RUNNING',
+    'running',
+  ]) {
+    it(`reads ${status} runs held for the owner as a wait`, () => {
+      expect(
+        isWaitingForRunnerOwner({
+          status,
+          error_message: WAITING_FOR_RUNNER_OWNER,
+        })
+      ).to.equal(true);
+    });
+  }
 
   it('leaves finished runs and other messages alone', () => {
-    expect(
-      isWaitingForRunnerOwner({
-        status: 'FAILED',
-        error_message: WAITING_FOR_RUNNER_OWNER,
-      })
-    ).to.equal(false);
+    for (const status of [
+      'FAILED',
+      'COMPLETED',
+      'SUCCEEDED',
+      'STOPPED',
+      'TIMEOUT',
+      'CANCELLED',
+    ]) {
+      expect(
+        isWaitingForRunnerOwner({
+          status,
+          error_message: WAITING_FOR_RUNNER_OWNER,
+        })
+      ).to.equal(false);
+    }
     expect(
       isWaitingForRunnerOwner({ status: 'PENDING', error_message: 'Other' })
     ).to.equal(false);

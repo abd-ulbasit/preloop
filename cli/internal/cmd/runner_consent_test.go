@@ -6,6 +6,8 @@ import (
 	"github.com/preloop/preloop/cli/internal/api"
 	"github.com/preloop/preloop/cli/internal/config"
 	"github.com/preloop/preloop/cli/internal/testenv"
+	"github.com/spf13/cobra"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -159,5 +161,93 @@ func TestRunnerSetupUnattendedExplicitConsent(t *testing.T) {
 	got, _, err := config.RunnerFlowExecutionConsent()
 	if err != nil || got != "never" {
 		t.Fatalf("consent = %q, error %v", got, err)
+	}
+}
+
+func TestRunnerEnableAppliesOnlyExplicitConsentBeforeInstall(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing bool
+		choice   string
+		refused  bool
+	}{
+		{name: "existing runner always", existing: true, choice: "always"},
+		{name: "existing runner asks", existing: true, choice: "ask_me"},
+		{name: "existing runner never", existing: true, choice: "never"},
+		{name: "saved personal value preserves console", existing: true},
+		{name: "new runner choice waits for registration", choice: "never"},
+		{name: "server refusal prevents install", existing: true, choice: "always", refused: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testenv.SetTempHome(t)
+			oldToken, oldURL := FlagToken, FlagURL
+			oldInstall, oldOverride := setupInstallRunner, runnerConsentOverride
+			t.Cleanup(func() {
+				FlagToken, FlagURL = oldToken, oldURL
+				setupInstallRunner, runnerConsentOverride = oldInstall, oldOverride
+			})
+			if err := config.SetRunnerFlowExecutionConsent("always"); err != nil {
+				t.Fatal(err)
+			}
+			if tc.existing {
+				if err := writeRunnerState(&runnerState{ID: "runner-example", Token: "runner-token"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			patches, installed := 0, false
+			serverConsent := "ask_me"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				patches++
+				if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/runners/runner-example/consent" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				if r.Header.Get("Authorization") != "Bearer example-owner-token" {
+					t.Error("consent update did not use the authenticated owner's credential")
+				}
+				var body map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["flow_execution_consent"] != tc.choice {
+					t.Errorf("consent = %q", body["flow_execution_consent"])
+				}
+				if tc.refused {
+					http.Error(w, `{"detail":"Only the runner owner can change consent"}`, http.StatusForbidden)
+					return
+				}
+				serverConsent = body["flow_execution_consent"]
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "runner-example"})
+			}))
+			defer server.Close()
+			FlagToken, FlagURL = "example-owner-token", server.URL
+			setupInstallRunner = func(out io.Writer) error {
+				installed = true
+				if tc.existing && tc.choice != "" && serverConsent != tc.choice {
+					t.Error("service installed before consent was applied")
+				}
+				return nil
+			}
+			command := &cobra.Command{}
+			command.Flags().String("flow-execution-consent", tc.choice, "")
+			err := runRunnerEnable(command, nil)
+			if tc.refused {
+				if err == nil || installed {
+					t.Fatalf("refused update: err %v, installed %v", err, installed)
+				}
+			} else if err != nil || !installed {
+				t.Fatalf("enable: err %v, installed %v", err, installed)
+			}
+			expectedPatches := 0
+			if tc.existing && tc.choice != "" {
+				expectedPatches = 1
+			}
+			if patches != expectedPatches {
+				t.Fatalf("patches = %d, want %d", patches, expectedPatches)
+			}
+			if tc.choice == "" && serverConsent != "ask_me" {
+				t.Fatal("saved personal consent overwrote console choice")
+			}
+		})
 	}
 }

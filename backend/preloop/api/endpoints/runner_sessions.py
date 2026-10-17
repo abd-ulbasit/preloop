@@ -946,7 +946,12 @@ def _require_start_consent(
             "consent_request_id_required",
             "A consent_request_id is required to request runner owner approval.",
         )
-    from preloop.services.owner_consent import require_owner_consent
+    from preloop.models.crud.owner_consent import consume
+    from preloop.services.owner_consent import (
+        check_owner_consent,
+        notify_owner_consent,
+        require_owner_consent_result,
+    )
 
     intent = {
         "runner_id": str(runner.id),
@@ -958,10 +963,11 @@ def _require_start_consent(
         json.dumps(intent, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     try:
-        # This helper bounds notification delivery itself. It runs after all
-        # eligibility checks and before checkout credentials are minted.
-        approval_id = from_thread.run(
-            lambda: require_owner_consent(
+        # This route already owns a worker thread. A bridge to an async gate
+        # which offloads DB work would wait for a second worker token and
+        # deadlock when every token is occupied by a starting session.
+        try:
+            consent = check_owner_consent(
                 db,
                 account_id=runner.account_id,
                 owner_user_id=owner_id,
@@ -977,6 +983,26 @@ def _require_start_consent(
                     "consent_request_id": str(body.consent_request_id),
                 },
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if consent.created:
+
+            async def notify() -> None:
+                try:
+                    with anyio.fail_after(25):
+                        await notify_owner_consent(consent.approval_id)
+                except Exception:
+                    logger.exception(
+                        "Runner owner notification pending retry for %s",
+                        consent.approval_id,
+                    )
+
+            from_thread.run(notify)
+        consumed = consent.status == "approved" and consume(
+            db, approval_id=consent.approval_id
+        )
+        approval_id = require_owner_consent_result(
+            consent, action="runner_session_start", consumed=consumed
         )
     except HTTPException as exc:
         audit.log(

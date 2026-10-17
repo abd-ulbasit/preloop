@@ -116,7 +116,8 @@ def test_consume_requires_unconsumed_approved_row(
 @pytest.mark.parametrize("expired", [False, True])
 def test_status_is_private_minimal_and_expires(actor: str, expired: bool) -> None:
     owner, requester = uuid4(), uuid4()
-    consent = SimpleNamespace(owner_user_id=owner)
+    account = uuid4()
+    consent = SimpleNamespace(owner_user_id=owner, account_id=account)
     approval = SimpleNamespace(
         tool_args={"requester_user_id": str(requester), "secret": "private"},
         status="pending",
@@ -130,7 +131,7 @@ def test_status_is_private_minimal_and_expires(actor: str, expired: bool) -> Non
     result = owner_consent.status_for_requester(
         db,
         approval_id=uuid4(),
-        account_id=uuid4(),
+        account_id=account,
         user_id={"owner": owner, "requester": requester, "other": uuid4()}[actor],
     )
     assert result == (
@@ -139,6 +140,7 @@ def test_status_is_private_minimal_and_expires(actor: str, expired: bool) -> Non
         else {
             "status": "expired" if expired else "pending",
             "expires_at": approval.expires_at,
+            "account_id": account,
         }
     )
     db.commit.assert_not_called()
@@ -155,3 +157,27 @@ def test_status_missing_or_cross_account_is_hidden() -> None:
         )
         is None
     )
+
+
+def test_day_long_workflow_window_keeps_all_seconds() -> None:
+    account, owner = uuid4(), uuid4()
+    db = MagicMock()
+    db.query.return_value.filter_by.return_value.first.side_effect = [
+        None,
+        SimpleNamespace(id=owner),
+        SimpleNamespace(timeout_seconds=86400),
+        SimpleNamespace(id=uuid4()),
+    ]
+    db.get.return_value = SimpleNamespace(meta_data={})
+    before = datetime.utcnow()
+    with patch.object(owner_consent.crud_account_halt, "lock_account"):
+        _, approval, _ = owner_consent.get_or_create(
+            db,
+            account_id=account,
+            owner_user_id=owner,
+            action="runner_flow",
+            subject_id="example-runner",
+            request_key="day-long-request",
+            details={},
+        )
+    assert 86400 <= (approval.expires_at - before).total_seconds() < 86401
