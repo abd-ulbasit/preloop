@@ -47,6 +47,7 @@ def spend_evidence(
                 "runtime_session_id": sid,
                 "title": row.title or f"{name} · {started:%d %b %H:%M} UTC",
                 "agent_name": name,
+                "flow_name": row.flow_name,
                 "started_at": started.replace(tzinfo=timezone.utc).isoformat(),
                 "cost": 0.0,
                 "href": f"/console/runtime-sessions?sessionId={sid}",
@@ -157,7 +158,8 @@ def tool_evidence(
             measurement = item["per_session"].setdefault(
                 sid, {"request_count": 0, "tokens": 0, "cost": 0.0}
             )
-            measurement["request_count"] += 1
+            requests = getattr(row, "request_count", 1)
+            measurement["request_count"] += requests
             tokens = tool.get("schema_tokens_estimate")
             known = (
                 isinstance(tokens, (int, float))
@@ -165,12 +167,12 @@ def tool_evidence(
                 and tokens >= 0
             )
             measurement["tokens"] = (
-                measurement["tokens"] + int(tokens)
+                measurement["tokens"] + int(tokens) * requests
                 if known and measurement["tokens"] is not None
                 else None
             )
             measurement["cost"] = (
-                measurement["cost"] + tokens * price
+                measurement["cost"] + tokens * price * requests
                 if known and price is not None and measurement["cost"] is not None
                 else None
             )

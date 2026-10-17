@@ -327,9 +327,9 @@ class RuntimeSessionExplorerService:
         for item in items:
             principal_type = item.runtime_principal_type
             principal_id = item.runtime_principal_id
-            row = by_session.get(str(item.id))
-            if row is None and principal_type == "managed_agent":
-                row = by_id.get(principal_id)
+            row = by_id.get(principal_id) if principal_type == "managed_agent" else None
+            if row is None:
+                row = by_session.get(str(item.id))
             if row is None:
                 row = by_principal.get((principal_type, principal_id))
             if row is None and principal_id and ":" in principal_id:

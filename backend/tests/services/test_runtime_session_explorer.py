@@ -1023,7 +1023,21 @@ def test_session_detail_links_its_managed_principal_and_flow(
         patch.object(
             rse_mod.crud_api_usage, "get_gateway_usage_by_model", return_value=[]
         ),
-        patch.object(service, "_account_managed_agents", return_value=[agent]),
+        patch.object(
+            service,
+            "_account_managed_agents",
+            return_value=[
+                SimpleNamespace(
+                    id=str(uuid.uuid4()),
+                    display_name="Legacy agent",
+                    agent_kind="codex",
+                    runtime_session_id=row["id"],
+                    session_source_type="codex",
+                    session_source_id="legacy",
+                ),
+                agent,
+            ],
+        ),
     ):
         detail = service.get_account_session_detail(
             account=_make_account(), runtime_session_id=row["id"]

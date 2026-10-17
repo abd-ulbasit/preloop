@@ -67,6 +67,7 @@ def test_daily_series_has_zero_days_and_linked_contributors() -> None:
     assert session["href"].endswith(f"sessionId={UUID(int=1)}")
     assert session["agent_href"].endswith(str(UUID(int=3)))
     assert session["flow_href"].endswith(str(UUID(int=4)))
+    assert session["flow_name"] == "Review"
 
 
 def test_tool_cost_is_per_tool_and_unknown_stays_unknown() -> None:
@@ -263,21 +264,28 @@ def test_contributor_prefers_explicit_agent_over_legacy_session_association(
                 last_seen_at=START.replace(tzinfo=None),
             )
         )
-    db_session.add(
-        models.ApiUsage(
-            account_id=test_user.account_id,
-            runtime_session_id=session.id,
-            runtime_principal_type="managed_agent",
-            runtime_principal_id=str(UUID(int=20)),
-            timestamp=START.replace(tzinfo=None),
-            endpoint="/v1/messages",
-            method="POST",
-            status_code=200,
-            duration=1,
-            action_type="model_gateway",
-            estimated_cost=2,
+    for minute in range(2):
+        db_session.add(
+            models.ApiUsage(
+                account_id=test_user.account_id,
+                runtime_session_id=session.id,
+                runtime_principal_type="managed_agent",
+                runtime_principal_id=str(UUID(int=20)),
+                timestamp=(START + timedelta(minutes=minute)).replace(tzinfo=None),
+                endpoint="/v1/messages",
+                method="POST",
+                status_code=200,
+                duration=1,
+                action_type="model_gateway",
+                estimated_cost=2,
+                cost_source="subscription",
+                meta_data={
+                    "tools_meta": [
+                        {"name": "mcp__tracker__search", "schema_tokens_estimate": 100}
+                    ]
+                },
+            )
         )
-    )
     db_session.flush()
     projected = usage_rows(
         db_session, account_id=test_user.account_id, start=START, end=END
@@ -285,3 +293,19 @@ def test_contributor_prefers_explicit_agent_over_legacy_session_association(
     assert len(projected) == 1
     assert projected[0].agent_id == UUID(int=20)
     assert projected[0].agent_name == "direct"
+    assert projected[0].request_count == 2
+    assert projected[0].estimated_cost == 4
+    tool = tool_evidence(db_session, account_id=test_user.account_id, rows=projected)[
+        "mcp__tracker__search"
+    ]
+    assert tool["request_count"] == 2
+    assert tool["estimated_weekly_tokens"] == 200
+
+
+def test_aggregated_tool_requests_keep_measured_tokens_and_cost() -> None:
+    tools = tool_evidence(None, account_id=UUID(int=9), rows=[row(request_count=17)])
+    search = tools["mcp__tracker__search"]
+    assert search["request_count"] == 17
+    assert search["estimated_weekly_tokens"] == 1700
+    assert search["schema_tokens_per_request"] == 100
+    assert search["estimated_weekly_savings"] == 0
