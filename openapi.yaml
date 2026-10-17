@@ -11810,6 +11810,45 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/ai-models/{model_id}/used-by:
+    get:
+      tags:
+      - AI Models
+      - AI Models
+      summary: Get Ai Model Used By
+      description: List visible, tenant-owned agents and flows configured to use a
+        model.
+      operationId: get_ai_model_used_by_api_v1_ai_models__model_id__used_by_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Model Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelUsedByResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/ai-models/{model_id}/summary:
     get:
       tags:
@@ -20707,6 +20746,24 @@ paths:
       x-restricted-ci: deny
 components:
   schemas:
+    AIModelAgentLink:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        agent_kind:
+          type: string
+          title: Agent Kind
+      type: object
+      required:
+      - id
+      - name
+      - agent_kind
+      title: AIModelAgentLink
+      description: An agent configured to use this model, independent of traffic.
     AIModelAliasFailure:
       properties:
         alias:
@@ -21041,6 +21098,20 @@ components:
         to decide whether Preloop''s copy is newer than the local login before it
 
         downloads the bundle through the export endpoint.'
+    AIModelFlowLink:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+      type: object
+      required:
+      - id
+      - name
+      title: AIModelFlowLink
+      description: A flow whose saved model selection names this model.
     AIModelGatewayUsageSummaryResponse:
       properties:
         ai_model_id:
@@ -21688,6 +21759,25 @@ components:
       type: object
       title: AIModelUpdate
       description: Schema for updating an existing AIModel entry. All fields are optional.
+    AIModelUsedByResponse:
+      properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/AIModelAgentLink'
+          type: array
+          title: Agents
+        flows:
+          items:
+            $ref: '#/components/schemas/AIModelFlowLink'
+          type: array
+          title: Flows
+        truncated:
+          type: boolean
+          title: Truncated
+          default: false
+      type: object
+      title: AIModelUsedByResponse
+      description: Visible configured consumers; observed usage has its own endpoint.
     AIModelsOverviewResponse:
       properties:
         period_start:
@@ -35382,6 +35472,11 @@ components:
       properties:
         agent:
           $ref: '#/components/schemas/ManagedAgentSummary'
+        devices:
+          items:
+            $ref: '#/components/schemas/ManagedAgentDeviceSummary'
+          type: array
+          title: Devices
         aggregate:
           $ref: '#/components/schemas/ManagedAgentUsageAggregate'
         usage_by_model:
@@ -35425,6 +35520,36 @@ components:
       - aggregate
       title: ManagedAgentDetailResponse
       description: One managed agent plus its recent runtime session history.
+    ManagedAgentDeviceSummary:
+      properties:
+        device_key:
+          type: string
+          title: Device Key
+        hostname:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hostname
+        os:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Os
+        runner_state:
+          type: string
+          title: Runner State
+        last_seen_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Seen At
+      type: object
+      required:
+      - device_key
+      - runner_state
+      title: ManagedAgentDeviceSummary
+      description: An explicitly associated device from the optional fleet projection.
     ManagedAgentEnrollmentCreateRequest:
       properties:
         enrollment_type:

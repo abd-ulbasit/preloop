@@ -69,6 +69,7 @@ import {
 import type {
   GatewayUsageByModel,
   ManagedAgentDetailResponse,
+  ManagedAgentDevice,
   ManagedAgentModelBindingSummary,
   ManagedAgentServerActivitySummary,
   ManagedAgentSummary,
@@ -80,6 +81,12 @@ import type {
 } from '../../types';
 import type { AccessRuleSummary } from '../../components/governance-rule-set-editor';
 import consoleStyles from '../../styles/console-styles.css?inline';
+import {
+  deviceLabel,
+  fleetHref,
+  osLabel,
+  runnerStateChip,
+} from '../../device-fleet-api';
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
 import {
   normalizeScopedToolRules,
@@ -165,6 +172,10 @@ export class AgentDetailView extends LitElement {
 
   @state()
   private aggregate: ManagedAgentUsageAggregate | null = null;
+
+  /** Machines the agent is reported on; empty when unknown. */
+  @state()
+  private devices: ManagedAgentDevice[] = [];
 
   @state()
   private usageByModel: GatewayUsageByModel[] = [];
@@ -492,6 +503,20 @@ export class AgentDetailView extends LitElement {
         padding: 0 2px;
       }
 
+      .strip-devices,
+      .strip-device {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .strip-devices {
+        gap: 6px 12px;
+      }
+      .strip-devices a {
+        color: var(--console-link-color);
+      }
+
       .strip-sep {
         color: var(--console-meta-color, var(--sl-color-neutral-500));
       }
@@ -505,6 +530,7 @@ export class AgentDetailView extends LitElement {
       }
 
       .strip-spend .strip-label,
+      .strip-devices .strip-label,
       .strip-spend .strip-requests {
         color: var(--console-meta-color, var(--sl-color-neutral-600));
         font-size: var(--sl-font-size-small);
@@ -899,6 +925,7 @@ export class AgentDetailView extends LitElement {
           if (generation !== this.detailLoadGeneration) return detail;
           this.agent = detail.agent;
           this.aggregate = detail.aggregate;
+          this.devices = detail.devices ?? [];
           this.selectedOwnerUserId = detail.agent.owner_user_id ?? '';
           if (!isSoftRefresh)
             this.editableDisplayName = detail.agent.display_name;
@@ -1481,6 +1508,7 @@ export class AgentDetailView extends LitElement {
                   ${this.renderStripId(reference, 'Copy session reference')}`
               : nothing
           }
+          ${this.renderStripDevices()}
           <span class="badge-row">${this.renderHeaderChips()}</span>
         </div>
         <div class="strip-spend">
@@ -1516,6 +1544,32 @@ export class AgentDetailView extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /**
+   * Where the agent runs, as one fact per machine: hostname linked to the
+   * device page, the OS, and the runner's state. Several machines are listed
+   * in turn; an agent with no reported machine shows nothing rather than a
+   * guess.
+   */
+  private renderStripDevices(): TemplateResult | typeof nothing {
+    if (!this.devices.length) return nothing;
+    return html`<span class="strip-sep" aria-hidden="true">·</span>
+      <span class="strip-devices" data-testid="agent-devices">
+        <span class="strip-label"
+          >${this.devices.length === 1 ? 'Device' : 'Devices'}</span
+        >
+        ${this.devices.map((device) => {
+          const chip = runnerStateChip(device.runner_state);
+          return html`<span class="strip-device">
+            <a href=${fleetHref(device.device_key)}>${deviceLabel(device)}</a>
+            <span class="meta">${osLabel(device.os)}</span>
+            <sl-badge class="chip" variant=${chip.variant} pill
+              >${chip.label}</sl-badge
+            >
+          </span>`;
+        })}
+      </span>`;
   }
 
   /**

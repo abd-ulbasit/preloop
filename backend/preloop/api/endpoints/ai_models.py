@@ -31,6 +31,7 @@ from preloop.schemas.ai_model import (
     AIModelRead,
     AIModelsOverviewResponse,
     AIModelUpdate,
+    AIModelUsedByResponse,
     AvailableModelsRequest,
     AvailableModelsResponse,
 )
@@ -553,6 +554,24 @@ def get_ai_model(
             ),
         )
     return model
+
+
+@router.get(
+    "/ai-models/{model_id}/used-by",
+    response_model=AIModelUsedByResponse,
+    tags=["AI Models"],
+)
+@require_permission("view_ai_models")
+def get_ai_model_used_by(
+    model_id: uuid.UUID,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_active_user),
+) -> AIModelUsedByResponse:
+    """List visible, tenant-owned agents and flows configured to use a model."""
+    from preloop.services.ai_model_usage_links import configured_model_consumers
+
+    _get_readable_ai_model(db=db, model_id=model_id, current_user=current_user)
+    return configured_model_consumers(db, user=current_user, model_id=str(model_id))
 
 
 # Both dates omitted means the last 7 days (model_detail_window). One bound
