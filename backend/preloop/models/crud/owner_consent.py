@@ -289,3 +289,32 @@ def notification_workflow(
     workflow.escalation_team_ids = []
     workflow.approvals_required = 1
     return workflow
+
+
+def status_for_requester(
+    db: Session, *, approval_id: UUID, account_id: UUID, user_id: UUID
+) -> dict[str, Any] | None:
+    """Expose only the decision to the bound owner or session requester."""
+    row = (
+        db.query(models.OwnerConsent, models.ApprovalRequest)
+        .join(
+            models.ApprovalRequest,
+            models.OwnerConsent.approval_request_id == models.ApprovalRequest.id,
+        )
+        .filter(
+            models.OwnerConsent.approval_request_id == approval_id,
+            models.OwnerConsent.account_id == account_id,
+            models.ApprovalRequest.account_id == account_id,
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    consent, approval = row
+    requester = (approval.tool_args or {}).get("requester_user_id")
+    if consent.owner_user_id != user_id and requester != str(user_id):
+        return None
+    status = approval.status
+    if status == "pending" and approval.expires_at <= datetime.utcnow():
+        status = "expired"
+    return {"status": status, "expires_at": approval.expires_at}

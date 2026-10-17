@@ -54,7 +54,7 @@ async def test_offline_negative_decision_terminates_without_lease(
     assert status == AgentStatus.FAILED
     assert execution.status == "FAILED"
     assert execution.end_time is not None
-    assert "did not authorize" in execution.error_message
+    assert "runner owner declined this run" in execution.error_message
     lease.assert_not_called()
 
 

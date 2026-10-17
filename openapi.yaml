@@ -6214,6 +6214,44 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/approval-requests/{request_id}/consent-status:
+    get:
+      tags:
+      - Approval Requests
+      - approval_requests
+      summary: Get Owner Consent Status
+      description: Let a human requester wait for their own session permission.
+      operationId: get_owner_consent_status_api_v1_approval_requests__request_id__consent_status_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Request Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerConsentStatusResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/approval-requests/stats:
     get:
       tags:
@@ -37432,6 +37470,23 @@ components:
       type: object
       title: OrganizationUpdate
       description: Model for updating an organization.
+    OwnerConsentStatusResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+      type: object
+      required:
+      - status
+      - expires_at
+      title: OwnerConsentStatusResponse
+      description: Minimal decision visibility without approval payload or queue access.
     PIIDetectorConfig:
       properties:
         types:

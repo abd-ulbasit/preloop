@@ -110,3 +110,48 @@ def test_consume_requires_unconsumed_approved_row(
     else:
         db.rollback.assert_called_once()
         db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("actor", ["owner", "requester", "other"])
+@pytest.mark.parametrize("expired", [False, True])
+def test_status_is_private_minimal_and_expires(actor: str, expired: bool) -> None:
+    owner, requester = uuid4(), uuid4()
+    consent = SimpleNamespace(owner_user_id=owner)
+    approval = SimpleNamespace(
+        tool_args={"requester_user_id": str(requester), "secret": "private"},
+        status="pending",
+        expires_at=datetime.utcnow() + timedelta(seconds=-1 if expired else 60),
+    )
+    db = MagicMock()
+    db.query.return_value.join.return_value.filter.return_value.first.return_value = (
+        consent,
+        approval,
+    )
+    result = owner_consent.status_for_requester(
+        db,
+        approval_id=uuid4(),
+        account_id=uuid4(),
+        user_id={"owner": owner, "requester": requester, "other": uuid4()}[actor],
+    )
+    assert result == (
+        None
+        if actor == "other"
+        else {
+            "status": "expired" if expired else "pending",
+            "expires_at": approval.expires_at,
+        }
+    )
+    db.commit.assert_not_called()
+
+
+def test_status_missing_or_cross_account_is_hidden() -> None:
+    db = MagicMock()
+    db.query.return_value.join.return_value.filter.return_value.first.return_value = (
+        None
+    )
+    assert (
+        owner_consent.status_for_requester(
+            db, approval_id=uuid4(), account_id=uuid4(), user_id=uuid4()
+        )
+        is None
+    )

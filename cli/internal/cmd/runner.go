@@ -126,9 +126,9 @@ func init() {
 	runnerCmd.AddCommand(runnerStatusCmd)
 	runnerCmd.AddCommand(runnerRotateTokenCmd)
 	for _, command := range []*cobra.Command{runnerSetupCmd, runnerFgCmd, runnerEnableCmd} {
-		command.Flags().String("flow-execution-consent", "", "flow execution permission: always (automatic), ask_me (owner approval, default), never (blocked)")
+		command.Flags().String("flow-execution-consent", "", "whether flows on this runner need your approval: ask_me (default, ask each time), always (run without asking), never (no flows)")
 	}
-	runnerSetupCmd.Flags().Bool("yes", false, "install without the installation prompt; unattended installs require --flow-execution-consent or managed configuration")
+	runnerSetupCmd.Flags().Bool("yes", false, "install without asking; pair it with --flow-execution-consent unless managed configuration sets it")
 	runnerDisableCmd.Flags().Bool(
 		"delete", false,
 		"also delete the runner on the server and forget its local state",

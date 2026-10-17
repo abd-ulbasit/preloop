@@ -37,10 +37,24 @@ func TestChooseRunnerConsent(t *testing.T) {
 			if err != nil || got != want {
 				t.Fatalf("choice = %q, error %v", got, err)
 			}
-			if !strings.Contains(out.String(), "default: ask_me") {
+			if !strings.Contains(out.String(), "1) Ask me each time (default)") {
 				t.Fatalf("missing default: %s", &out)
 			}
 		})
+	}
+}
+
+func TestChooseRunnerConsentByNumber(t *testing.T) {
+	for answer, want := range map[string]string{"1": "ask_me", "2": "always", "3": "never"} {
+		testenv.SetTempHome(t)
+		var out bytes.Buffer
+		if err := chooseRunnerConsent(strings.NewReader(answer+"\n"), &out, true, ""); err != nil {
+			t.Fatal(err)
+		}
+		got, _, err := config.RunnerFlowExecutionConsent()
+		if err != nil || got != want {
+			t.Fatalf("answer %s: choice = %q, error %v", answer, got, err)
+		}
 	}
 }
 

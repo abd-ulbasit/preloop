@@ -5,6 +5,7 @@ import inspect
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated, Any, AsyncGenerator, Callable, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -311,6 +312,42 @@ def _require_approval_permission(permission: str) -> Callable:
         return sync_checked
 
     return decorate
+
+
+class OwnerConsentStatusResponse(BaseModel):
+    """Minimal decision visibility without approval payload or queue access."""
+
+    status: str
+    expires_at: datetime | None
+
+
+@router.get("/{request_id}/consent-status", response_model=OwnerConsentStatusResponse)
+def get_owner_consent_status(
+    request_id: uuid.UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> OwnerConsentStatusResponse:
+    """Let a human requester wait for their own session permission."""
+    from preloop.models.crud.owner_consent import status_for_requester
+    from preloop.utils.permissions import _check_authorizer
+
+    if not isinstance(current_user, User) or _managed_execution_credential(
+        current_user
+    ):
+        raise HTTPException(status_code=403, detail="Human authentication required")
+    result = status_for_requester(
+        db,
+        approval_id=request_id,
+        account_id=current_user.account_id,
+        user_id=current_user.id,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Consent request not found")
+    _check_authorizer("view_owner_consent", {"current_user": current_user, "db": db})
+    expires_at = result["expires_at"]
+    if expires_at is not None and expires_at.tzinfo is None:
+        result["expires_at"] = expires_at.replace(tzinfo=timezone.utc)
+    return OwnerConsentStatusResponse(**result)
 
 
 def _record_viewed_event(

@@ -148,10 +148,10 @@ async def require_owner_consent(
             "message": (
                 "Waiting for runner owner"
                 if action.startswith("runner_")
-                else "Waiting for agent owner"
+                else "Waiting for the agent owner to approve this session."
             )
             if result.status == "pending"
-            else "Owner consent does not authorize this session",
+            else "The agent owner declined this session, or the request timed out.",
         },
     )
 

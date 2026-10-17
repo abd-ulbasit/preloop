@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/preloop/preloop/cli/internal/config"
 	"github.com/spf13/cobra"
@@ -21,7 +23,7 @@ func prepareRunnerConsent(cmd *cobra.Command) error {
 	}
 	if managed {
 		if choice != "" && choice != value {
-			return fmt.Errorf("flow execution consent is controlled by managed configuration")
+			return fmt.Errorf("flow run approval on this runner is set by your organization's managed configuration")
 		}
 		return nil
 	}
@@ -46,16 +48,16 @@ func chooseRunnerConsent(in io.Reader, out io.Writer, tty bool, choice string) e
 	}
 	if managed {
 		if choice != "" && choice != value {
-			return fmt.Errorf("flow execution consent is controlled by managed configuration")
+			return fmt.Errorf("flow run approval on this runner is set by your organization's managed configuration")
 		}
-		fmt.Fprintf(out, "Flow execution permission is managed by your organisation: %s.\n", value)
+		fmt.Fprintf(out, "Flow runs on this runner: %s (set by your organization's managed configuration).\n", runnerConsentLabel(value))
 		return nil
 	}
 	if choice != "" {
 		return config.SetRunnerFlowExecutionConsent(choice)
 	}
 	if !tty {
-		return fmt.Errorf("unattended runner setup requires --flow-execution-consent=always|ask_me|never or managed configuration")
+		return fmt.Errorf("unattended setup needs a flow run choice: pass --flow-execution-consent=ask_me|always|never")
 	}
 	if value == "" {
 		value = "ask_me"
@@ -64,16 +66,64 @@ func chooseRunnerConsent(in io.Reader, out io.Writer, tty bool, choice string) e
 	if !ok {
 		reader = bufio.NewReader(in)
 	}
-	fmt.Fprintln(out, "May Preloop execute flows on this runner?")
-	fmt.Fprintln(out, "  ask_me: ask for your approval before each flow")
-	fmt.Fprintln(out, "  always: allow flows automatically")
-	fmt.Fprintln(out, "  never: do not allow flows")
-	answer, err := promptForTextInput(reader, out, fmt.Sprintf("Flow execution permission [always/ask_me/never] (default: %s): ", value))
+	fmt.Fprintln(out, "Should Preloop ask you before it runs a flow on this runner?")
+	for i, choice := range runnerConsentChoices {
+		marker := ""
+		if choice.value == value {
+			marker = " (default)"
+		}
+		fmt.Fprintf(out, "  %d) %s%s\n", i+1, choice.label, marker)
+	}
+	answer, err := promptForTextInput(reader, out, fmt.Sprintf("Choice [%d]: ", runnerConsentIndex(value)+1))
 	if err != nil {
 		return err
 	}
-	if answer == "" {
-		answer = value
+	answer = parseRunnerConsentAnswer(answer, value)
+	if err := config.SetRunnerFlowExecutionConsent(answer); err != nil {
+		return err
 	}
-	return config.SetRunnerFlowExecutionConsent(answer)
+	fmt.Fprintf(out, "Flow runs on this runner: %s. Change it later in the console or with --flow-execution-consent.\n", runnerConsentLabel(answer))
+	return nil
+}
+
+type runnerConsentChoice struct {
+	value string
+	label string
+}
+
+// runnerConsentChoices keeps the console's wording (frontend/src/utils/owner-consent.ts).
+var runnerConsentChoices = []runnerConsentChoice{
+	{"ask_me", "Ask me each time"},
+	{"always", "Allow without asking"},
+	{"never", "Never run flows on this runner"},
+}
+
+func runnerConsentIndex(value string) int {
+	for i, choice := range runnerConsentChoices {
+		if choice.value == value {
+			return i
+		}
+	}
+	return 0
+}
+
+func runnerConsentLabel(value string) string {
+	for _, choice := range runnerConsentChoices {
+		if choice.value == value {
+			return choice.label
+		}
+	}
+	return value
+}
+
+// parseRunnerConsentAnswer accepts a menu number or a value name; empty keeps the default.
+func parseRunnerConsentAnswer(answer, fallback string) string {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return fallback
+	}
+	if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(runnerConsentChoices) {
+		return runnerConsentChoices[n-1].value
+	}
+	return answer
 }

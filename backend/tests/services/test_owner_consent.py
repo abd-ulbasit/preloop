@@ -455,3 +455,53 @@ async def test_session_gate_performs_sync_database_work_off_event_loop() -> None
     assert result == approval_id
     assert len(observed) == 2
     assert all(thread != loop_thread for thread in observed)
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_consent_status_rejects_managed_and_preserves_account_veto(
+    managed: bool,
+) -> None:
+    from preloop.api.endpoints import approval_requests as endpoint
+    from preloop.models import models
+
+    actor = models.User(id=uuid4(), account_id=uuid4())
+    with (
+        patch.object(endpoint, "_managed_execution_credential", return_value=managed),
+        patch(
+            "preloop.models.crud.owner_consent.status_for_requester",
+            return_value={"status": "pending", "expires_at": None},
+        ) as lookup,
+        patch(
+            "preloop.utils.permissions._check_authorizer",
+            side_effect=HTTPException(status_code=403, detail="Account policy denied"),
+        ) as authorize,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            endpoint.get_owner_consent_status(
+                uuid4(), current_user=actor, db=MagicMock()
+            )
+        assert exc.value.status_code == 403
+        if managed:
+            lookup.assert_not_called()
+            authorize.assert_not_called()
+        else:
+            authorize.assert_called_once()
+
+
+def test_consent_status_returns_no_approval_details() -> None:
+    from preloop.api.endpoints import approval_requests as endpoint
+    from preloop.models import models
+
+    actor = models.User(id=uuid4(), account_id=uuid4())
+    with (
+        patch.object(endpoint, "_managed_execution_credential", return_value=False),
+        patch(
+            "preloop.models.crud.owner_consent.status_for_requester",
+            return_value={"status": "approved", "expires_at": None},
+        ),
+        patch("preloop.utils.permissions._check_authorizer"),
+    ):
+        result = endpoint.get_owner_consent_status(
+            uuid4(), current_user=actor, db=MagicMock()
+        )
+    assert result.model_dump() == {"status": "approved", "expires_at": None}

@@ -504,9 +504,10 @@ preloop runner rotate-token             # New runner token, service restarted
 preloop runner start|stop|restart|status
 ```
 
-Runner setup asks whether Preloop may execute flows on your machine. The
-choices are `ask_me` (default, each flow waits for your approval), `always`
-(allow flows automatically), and `never` (block flows). For unattended setup:
+Runner setup asks whether Preloop should ask you before it runs a flow on
+your machine. The choices are `ask_me` (default: each flow waits for your
+approval), `always` (flows run without asking), and `never` (no flows run
+here; your own sessions still work). For unattended setup:
 
 ```bash
 preloop runner setup --yes --flow-execution-consent=ask_me
