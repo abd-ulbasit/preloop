@@ -120,6 +120,24 @@ describe('UserManagementView', () => {
     );
   });
 
+  it('marks the person a device page linked to', async () => {
+    history.replaceState({}, '', `?user=${sampleUser.id}`);
+    try {
+      fetchStub = createFetchStub({ users: [sampleUser] });
+      const element = (await fixture(
+        html`<user-management-view></user-management-view>`
+      )) as UserManagementView;
+      await waitUntil(() => (element as any).users?.length === 1);
+      await element.updateComplete;
+      const card = element.shadowRoot!.querySelector(
+        `sl-card[data-user-id="${sampleUser.id}"]`
+      )!;
+      expect(card.getAttribute('aria-current')).to.equal('true');
+    } finally {
+      history.replaceState({}, '', '/');
+    }
+  });
+
   it('renders the user list when users exist', async () => {
     fetchStub = createFetchStub({ users: [sampleUser] });
     const element = (await fixture(

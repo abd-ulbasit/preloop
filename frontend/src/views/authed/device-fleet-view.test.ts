@@ -19,9 +19,55 @@ const device = {
   agents_not_onboarded: 1,
   users: [{ id: 'user-1', label: 'Jane Doe', source: 'runner_registrant' }],
   runners: [{ id: 'runner-1', name: 'Example runner', state: 'online' }],
-  agents: [],
+  agents: [
+    {
+      id: 'candidate-1',
+      kind: 'codex',
+      name: null,
+      status: 'new',
+      managed_agent_id: null,
+      first_seen_at: '2026-10-15T12:00:00Z',
+      last_seen_at: '2026-10-16T12:00:00Z',
+      source: 'candidate',
+    },
+    {
+      id: 'inventory-1',
+      kind: 'claude-code',
+      name: 'Example agent',
+      status: 'onboarded',
+      managed_agent_id: 'agent-1',
+      first_seen_at: '2026-10-15T12:00:00Z',
+      last_seen_at: '2026-10-16T12:00:00Z',
+      source: 'inventory',
+    },
+    {
+      id: 'managed-1',
+      kind: 'claude-code',
+      name: 'Example agent',
+      status: 'onboarded',
+      managed_agent_id: 'agent-1',
+      first_seen_at: '2026-10-15T12:00:00Z',
+      last_seen_at: '2026-10-16T12:00:00Z',
+      source: 'managed_agent',
+    },
+  ],
   possible_same_machine_as: [],
-  findings: [],
+  findings: [
+    {
+      id: 'finding-1',
+      rule: 'discovered_not_onboarded',
+      device_key: 'fp:' + 'a'.repeat(64),
+      user_id: null,
+      state: 'open',
+      opened_at: '2026-10-16T12:00:00Z',
+      last_evaluated_at: '2026-10-16T12:00:00Z',
+      evidence: {},
+      limitation: 'Self-reported.',
+      title: 'Discovered agent not onboarded',
+      detail: 'codex has not been onboarded.',
+      href: '/console/settings/device-fleet',
+    },
+  ],
 };
 const settings = {
   schema_version: 1,
@@ -141,10 +187,92 @@ describe('Device fleet', () => {
     const text = view.shadowRoot.textContent.replace(/\s+/g, ' ');
     expect(text).to.include('example-workstation');
     expect(text).to.include('Jane Doe');
-    expect(text).to.include('1 onboarded / 1 not onboarded');
-    expect(text).to.include('Unverified');
-    expect(text).not.to.include('expected but missing');
+    expect(text).to.include('1 governed');
+    expect(text).to.include('1 not onboarded');
+    expect(text).to.include('1 open');
+    expect(text).not.to.include('Expected, never seen');
     expect(text).to.include('not attestation');
+    const stat = (id: string) =>
+      view.shadowRoot
+        .querySelector(`[data-testid="${id}"] .stat-number`)
+        .textContent.trim();
+    expect(stat('stat-devices')).to.equal('1');
+    expect(stat('stat-ungoverned')).to.equal('1');
+    expect(stat('stat-runners-offline')).to.equal('0');
+    expect(stat('stat-findings')).to.equal('1');
+    expect(view.shadowRoot.querySelector('a[href*="user=user-1"]')).to.exist;
+  });
+
+  it('says how to add the first device when the fleet is empty', async () => {
+    setup();
+    api.restore();
+    api = mockApi({
+      capabilities: ['fleet_coverage'],
+      profile: { permissions: ['view_device_fleet'] },
+      routes: [
+        {
+          path: '/api/v1/fleet/device-fleet',
+          body: {
+            schema_version: 1,
+            items: [],
+            total: 0,
+            truncated: false,
+            summary: {
+              devices: 0,
+              with_runner_online: 0,
+              with_ungoverned_agents: 0,
+              expected_missing: 0,
+              has_roster: false,
+            },
+            unassigned_agents: [],
+          },
+        },
+      ],
+    });
+    const view = await mount();
+    const empty = view.shadowRoot.querySelector('[data-testid="fleet-empty"]');
+    expect(empty.textContent).to.include('preloop runner fg');
+  });
+
+  it('shows a retry when the fleet fails to load', async () => {
+    api = mockApi({
+      capabilities: ['fleet_coverage'],
+      profile: { permissions: ['view_device_fleet'] },
+      routes: [{ path: '/api/v1/fleet/device-fleet', status: 500, body: {} }],
+    });
+    const view = await mount();
+    const alert = view.shadowRoot.querySelector('sl-alert[role="alert"]');
+    expect(alert.textContent).to.include('Retry to refresh it');
+    expect(alert.querySelector('sl-button')).to.exist;
+  });
+
+  it('links people, runners and governed agents on the device page', async () => {
+    history.replaceState(
+      {},
+      '',
+      '?device=' + encodeURIComponent(device.device_key)
+    );
+    setup();
+    const view = await mount();
+    const root = view.shadowRoot;
+    expect(api.callsTo('/api/v1/fleet/device-fleet')).to.have.length(0);
+    expect(root.textContent).to.include('Unverified');
+    expect(
+      root.querySelector('[data-testid="device-people"] a[href*="user=user-1"]')
+        .textContent
+    ).to.include('Jane Doe');
+    expect(root.textContent).to.include('Registered the runner');
+    const governed = root.querySelectorAll(
+      '[data-testid="device-governed"] a[href="/console/agents/agent-1"]'
+    );
+    expect(governed).to.have.length(1);
+    const ungoverned = root.querySelector('[data-testid="device-ungoverned"]');
+    expect(
+      ungoverned.querySelector('sl-copy-button.onboard').getAttribute('value')
+    ).to.equal('preloop agents onboard codex');
+    expect(
+      root.querySelector('[data-testid="device-findings"]').textContent
+    ).to.include('Discovered agent not onboarded');
   });
   it('reads detail by encoded device key and links its runner', async () => {
     history.replaceState(

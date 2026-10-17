@@ -17,6 +17,9 @@ export interface FleetAgent {
   managed_agent_id: string | null;
   owner_user_id?: string | null;
   name?: string | null;
+  version?: string | null;
+  /** candidate ids are discovery-candidate ids; inventory ids are synthetic. */
+  source?: 'candidate' | 'inventory' | 'managed_agent';
   first_seen_at: string | null;
   last_seen_at: string | null;
 }
@@ -32,8 +35,19 @@ export interface DeviceFleetDevice {
   last_seen_at: string | null;
   agents_onboarded: number;
   agents_not_onboarded: number;
-  users: { id: string; label: string }[];
-  runners: { id: string; name: string; state: string }[];
+  /** Roster entries may have no account user, so no id to link. */
+  users: {
+    id: string | null;
+    label: string;
+    source?: 'runner_registrant' | 'agent_owner' | 'roster';
+  }[];
+  runners: {
+    id: string;
+    name: string;
+    state: string;
+    hostname?: string | null;
+    last_heartbeat?: string | null;
+  }[];
   agents: FleetAgent[];
   sources: Record<string, unknown>[];
   possible_same_machine_as: string[];
@@ -188,4 +202,45 @@ export function fleetFindingTitle(rule: string): string {
   return rule === 'traffic_without_runner'
     ? 'Agent traffic continued while no runner of this user was online.'
     : 'Discovered agents have not been onboarded.';
+}
+
+/**
+ * One chip recipe for a runner's state wherever a device is named: live
+ * states are success, everything else is a neutral state, never an alarm.
+ */
+export function runnerStateChip(state: string): {
+  label: string;
+  variant: 'success' | 'neutral';
+} {
+  const live = state === 'online' || state === 'busy' || state === 'idle';
+  const label =
+    state === 'never'
+      ? 'No runner'
+      : `Runner ${state === 'online' ? 'online' : state}`;
+  return { label, variant: live ? 'success' : 'neutral' };
+}
+
+/** A device's display name: the hostname, else a shortened key. */
+export function deviceLabel(device: {
+  hostname: string | null;
+  device_key: string;
+}): string {
+  if (device.hostname) return device.hostname;
+  const [kind, value = ''] = device.device_key.split(':', 2);
+  return kind === 'runner'
+    ? `Runner ${value.slice(0, 8)}`
+    : `Device ${value.slice(0, 8)}`;
+}
+
+/** Platform names as people write them. */
+export function osLabel(os: string | null): string {
+  if (!os) return 'Unknown OS';
+  const known: Record<string, string> = {
+    darwin: 'macOS',
+    macos: 'macOS',
+    linux: 'Linux',
+    windows: 'Windows',
+    win32: 'Windows',
+  };
+  return known[os.toLowerCase()] || os;
 }

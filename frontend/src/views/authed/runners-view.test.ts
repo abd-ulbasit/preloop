@@ -163,6 +163,44 @@ describe('RunnersView', () => {
     return text;
   }
 
+  it('marks the runner a device page linked to', async () => {
+    history.replaceState(
+      {},
+      '',
+      '?runner=11111111-1111-4111-8111-111111111111'
+    );
+    try {
+      fetchStub = createFetchStub([
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'office-mac',
+          hostname: 'mac.local',
+          os: 'darwin',
+          arch: 'arm64',
+          labels: [],
+          status: 'online',
+          last_heartbeat: '2026-08-17T10:00:00Z',
+          current_execution_id: null,
+          registered_by_email: 'ops@example.com',
+        },
+      ]);
+      const element = (await fixture(
+        html`<runners-view></runners-view>`
+      )) as RunnersView;
+      await waitUntil(
+        () => !(element as unknown as { loading: boolean }).loading
+      );
+      await element.updateComplete;
+      const row = element.shadowRoot!.querySelector(
+        'tr[data-runner-id="11111111-1111-4111-8111-111111111111"]'
+      )!;
+      expect(row.getAttribute('aria-current')).to.equal('true');
+      expect(row.classList.contains('linked')).to.equal(true);
+    } finally {
+      history.replaceState({}, '', '/');
+    }
+  });
+
   it('renders the runners list', async () => {
     fetchStub = createFetchStub([
       {
