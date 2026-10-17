@@ -949,7 +949,9 @@ def resolve_note_target(
         )
         if session is None:
             raise NoteTargetError("Runtime session not found")
-        agent = getattr(session, "managed_agent", None)
+        agent = crud_managed_agent.get_for_note_session(
+            db, account_id=account_id, runtime_session=session
+        )
         return (agent.id if agent is not None else None, session.id)
 
     if execution_id is not None:
@@ -961,7 +963,9 @@ def resolve_note_target(
                 "This execution has no runtime session yet. A note can "
                 "only be delivered once the run has made a governed call."
             )
-        agent = getattr(session, "managed_agent", None)
+        agent = crud_managed_agent.get_for_note_session(
+            db, account_id=account_id, runtime_session=session
+        )
         return (agent.id if agent is not None else None, session.id)
 
     agent = crud_managed_agent.get_for_account(
