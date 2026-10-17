@@ -167,3 +167,23 @@ def test_projection_scope_and_window(
     rows = usage_rows(db_session, account_id=test_user.account_id, start=START, end=END)
     assert len(rows) == 1 and rows[0].estimated_cost == 2
     assert usage_rows(db_session, account_id=UUID(int=42), start=START, end=END) == []
+
+
+def test_imported_costs_are_included_without_inventing_sessions() -> None:
+    imported = SimpleNamespace(
+        user_id=UUID(int=2), day=(START + timedelta(days=2)).date(), cost_usd=3
+    )
+    evidence = spend_evidence(
+        [row()],
+        day="2026-10-07",
+        user_id=str(UUID(int=2)),
+        start=START,
+        end=END,
+        details={"spend_usd": 25.39},
+        imported_rows=[imported],
+        imported_complete=False,
+    )
+    assert evidence["daily_series"][2]["cost"] == 25.39
+    assert evidence["daily_series"][2]["imported_cost"] == 3
+    assert evidence["contributing_sessions"][0]["cost"] == 22.39
+    assert evidence["imported_complete"] is False

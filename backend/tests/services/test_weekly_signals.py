@@ -1029,3 +1029,32 @@ def test_group_by_user_orders_developers_and_keeps_unattributed() -> None:
     grouped = group_by_user(signals)
     assert [row.user_id for row in grouped] == [low, high, None]
     assert [row.sessions[0].request_count for row in grouped] == [3, 2, 1]
+
+
+def test_native_automatic_approvals_do_not_inflate_human_requests(
+    db_session: Session, test_user: User
+) -> None:
+    """Repeated audit events cannot multiply real requests or human latency."""
+    for index in range(3):
+        request = _approval_request(db_session, test_user, f"native-{index}")
+        request.status = "approved"
+        request.auto_approved_reason = "native_tool_approvals_off"
+        request.managed_agent_id = uuid.UUID(int=1 if index < 2 else 2)
+        request.resolved_at = _naive(START + timedelta(seconds=2))
+        for _ in range(2):
+            _event(
+                db_session, request, "approval_requested", "Approval requested", START
+            )
+    pending = _approval_request(db_session, test_user, "waiting-for-human")
+    _event(db_session, pending, "approval_requested", "Approval requested", START)
+    signals = collect_weekly_signals(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    assert signals.approvals.requested == 1
+    assert signals.approvals.pending == 1
+    assert signals.approvals.granted == 0
+    assert signals.approvals.median_decision_seconds == 0
+    assert signals.approvals.auto_approved == 3
+    assert signals.approvals.auto_approved_reasons == (
+        {"reason": "native_tool_approvals_off", "count": 3, "agent_count": 2},
+    )

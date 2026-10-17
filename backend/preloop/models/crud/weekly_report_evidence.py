@@ -1,6 +1,6 @@
 """Account-scoped projections for weekly charts and tool trade-offs."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 from sqlalchemy import String, cast, or_, select
@@ -73,8 +73,8 @@ def usage_rows(
         .filter(
             usage.account_id == account_id,
             usage.action_type == "model_gateway",
-            usage.timestamp >= start.replace(tzinfo=None),
-            usage.timestamp < end.replace(tzinfo=None),
+            usage.timestamp >= start.astimezone(timezone.utc).replace(tzinfo=None),
+            usage.timestamp < end.astimezone(timezone.utc).replace(tzinfo=None),
             exclude_replay_usage_condition(),
         )
         .order_by(usage.timestamp, usage.id)

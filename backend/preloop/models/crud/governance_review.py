@@ -1229,6 +1229,7 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
         *,
         account_id: UUID,
         kind: Optional[str] = None,
+        category: Optional[str] = None,
         severity: Optional[str] = None,
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
@@ -1243,6 +1244,7 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
             db: Database session.
             account_id: Owning account.
             kind: Filter to one kind.
+            category: Filter to one measured category; tool_hygiene aliases unused_tools.
             severity: Filter to one severity.
             user_id: Filter to one user.
             run_id: Filter to one run.
@@ -1260,6 +1262,11 @@ class CRUDGovernanceFinding(CRUDBase[GovernanceFinding]):
         )
         if allowed_kinds is not None:
             query = query.filter(GovernanceFinding.kind.in_(allowed_kinds))
+        if category is not None:
+            query = query.filter(
+                GovernanceFinding.category
+                == ("unused_tools" if category == "tool_hygiene" else category)
+            )
         if kind is not None:
             query = query.filter(GovernanceFinding.kind == kind)
         if severity is not None:

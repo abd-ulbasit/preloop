@@ -1,7 +1,7 @@
 """Measured weekly evidence, independent of model-generated prose."""
 
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 from sqlalchemy.orm import Session
@@ -25,6 +25,8 @@ def spend_evidence(
     start: datetime,
     end: datetime,
     details: Mapping[str, Any],
+    imported_rows: Sequence[Any] = (),
+    imported_complete: bool = True,
 ) -> dict[str, Any]:
     """Build a daily chart and the outlier day's contributing sessions."""
     totals: dict[str, float] = {}
@@ -54,16 +56,28 @@ def spend_evidence(
                 "flow_href": f"/console/flows/{row.flow_id}" if row.flow_id else None,
             }
         sessions[sid]["cost"] += cost
+    imported_totals: dict[str, float] = {}
+    for imported in imported_rows:
+        if user_id and str(imported.user_id) != str(user_id):
+            continue
+        key = imported.day.isoformat()
+        imported_totals[key] = imported_totals.get(key, 0) + float(imported.cost_usd)
     series = []
-    current = start.date()
-    while (
-        current < end.date()
-        or current == end.date()
-        and end.time().isoformat() != "00:00:00"
-    ):
+    current = min(start.date(), date.fromisoformat(day))
+    end_day = max(
+        end.date() + (timedelta(days=1) if end.time() != time.min else timedelta()),
+        date.fromisoformat(day) + timedelta(days=1),
+    )
+    while current < end_day:
         key = current.isoformat()
         series.append(
-            {"day": key, "cost": round(totals.get(key, 0), 6), "is_outlier": key == day}
+            {
+                "day": key,
+                "cost": round(totals.get(key, 0) + imported_totals.get(key, 0), 6),
+                "gateway_cost": round(totals.get(key, 0), 6),
+                "imported_cost": round(imported_totals.get(key, 0), 6),
+                "is_outlier": key == day,
+            }
         )
         current += timedelta(days=1)
     return {
@@ -75,8 +89,10 @@ def spend_evidence(
         "contributing_sessions": sorted(
             sessions.values(),
             key=lambda item: (-item["cost"], item["runtime_session_id"]),
-        ),
-        "series_source": "gateway",
+        )[:100],
+        "series_source": "gateway_and_imports",
+        "imported_complete": imported_complete,
+        "contributing_sessions_count": len(sessions),
         "imported_cost": details.get("imported_usd", 0),
     }
 

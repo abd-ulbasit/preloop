@@ -259,7 +259,14 @@ def first_seen_signals(
                         agent_kind,
                         (first_seen_at AT TIME ZONE 'UTC'),
                         NULL::uuid,
-                        0::int
+                        (SELECT COUNT(*) FROM api_usage u
+                         JOIN managed_agent m ON m.id = discovered_agent_candidate.managed_agent_id
+                         AND m.account_id = discovered_agent_candidate.account_id
+                         WHERE u.account_id = discovered_agent_candidate.account_id
+                         AND (u.runtime_session_id = m.runtime_session_id OR
+                              (u.runtime_principal_type = 'managed_agent' AND u.runtime_principal_id = m.id::text))
+                         AND u.action_type = 'model_gateway'
+                         AND u.timestamp >= :start AND u.timestamp < :end)::int
                     FROM discovered_agent_candidate
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND (first_seen_at AT TIME ZONE 'UTC') >= :start
@@ -287,7 +294,12 @@ def first_seen_signals(
                         tool_name,
                         (first_seen AT TIME ZONE 'UTC'),
                         NULL::uuid,
-                        usage_count
+                        (SELECT COUNT(*) FROM runtime_session_activity a
+                         WHERE a.account_id = CAST(:account_id AS uuid)
+                         AND a.activity_type = 'tool_call'
+                         AND a.timestamp >= :start AND a.timestamp < :end
+                         AND (a.tool_name = tools.tool_name OR
+                            ('mcp__' || a.server_name || '__' || a.tool_name) = tools.tool_name))::int
                     FROM (
                         SELECT
                             elem ->> 'name' AS tool_name,
