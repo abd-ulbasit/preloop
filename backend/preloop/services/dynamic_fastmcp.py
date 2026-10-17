@@ -8,6 +8,7 @@ Phase 1B: Added support for proxied tools from external MCP servers.
 
 import asyncio
 from copy import deepcopy
+from datetime import datetime
 from dataclasses import dataclass
 import copy
 import hashlib
@@ -502,6 +503,7 @@ class GrantDispatchSnapshot:
     server_name: str
     upstream_name: str
     client_config: dict[str, Any]
+    registry_revision: Optional[str] = None
 
 
 _grant_dispatch_var: ContextVar[Optional[GrantDispatchSnapshot]] = ContextVar(
@@ -548,6 +550,11 @@ async def _prepare_grant_dispatch(
                 account_id=account_id,
                 tool_name=tool_name,
                 server_name=server.name,
+                registry_revision=(
+                    server.updated_at.isoformat()
+                    if isinstance(getattr(server, "updated_at", None), datetime)
+                    else None
+                ),
                 upstream_name=_upstream_tool_name(
                     getattr(server, "tool_prefix", None), tool_name
                 ),
@@ -1989,6 +1996,13 @@ async def {internal_name}({params_str}):
             return _wrapper_tool_error(denial, status="refused")
         # Call tool on external server
         result = await client.call_tool(upstream_name, arguments)
+        try:
+            await self._observe_mcp_dispatch(snapshot, user_context)
+        except Exception as observation_error:
+            logger.warning(
+                "Safe MCP observation could not be scheduled (%s)",
+                type(observation_error).__name__,
+            )
         # Keep isError/structuredContent before filters rebuild the list.
         upstream = result
         logger.info(
@@ -3091,6 +3105,20 @@ async def {internal_name}({params_str}):
         return _wrapper_tool_error(
             error or "Result withheld: approval was not granted.",
             status=TOOL_CALL_STATUS_REFUSED,
+        )
+
+    async def _observe_mcp_dispatch(
+        self, snapshot: GrantDispatchSnapshot, user_context: UserContext
+    ) -> None:
+        """Publish a safe identity-only extension event off the event loop."""
+        from preloop.services.mcp_observation import publish_dispatch_observation
+
+        await asyncio.to_thread(
+            publish_dispatch_observation,
+            account_id=snapshot.account_id,
+            server_id=snapshot.client_config["server_id"],
+            registry_revision=snapshot.registry_revision,
+            runtime_session_id=getattr(user_context, "runtime_session_id", None),
         )
 
     def _persist_tool_call_activity(

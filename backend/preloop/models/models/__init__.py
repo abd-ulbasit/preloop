@@ -183,6 +183,8 @@ from .security_maintenance import (
 from .callback_receipt import CallbackKeyBinding, CallbackReceipt
 
 __all__ = [
+    "MCPInventoryFinding",
+    "MCPInventoryReview",
     "FleetFinding",
     "FleetAlertSettings",
     "DESKTOP_VIEW_OPEN_STATES",
@@ -391,3 +393,5 @@ from .readiness import (
 )
 
 from .person_auth_identity import PersonAuthIdentity, PersonPasswordCredential
+
+from .mcp_inventory import MCPInventoryFinding, MCPInventoryReview

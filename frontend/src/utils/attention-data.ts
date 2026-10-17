@@ -1,3 +1,4 @@
+import { loadMCPFindings } from '../mcp-findings-api';
 import {
   getAccountAgents,
   getAttentionDismissals,
@@ -125,6 +126,7 @@ export interface LoadAttentionInputsOptions {
 export async function loadAttentionInputs(
   options: LoadAttentionInputsOptions = {}
 ): Promise<LoadedAttentionInputs> {
+  const mcpFindings = loadMCPFindings();
   const now = options.now || new Date();
   const sessionsStart = new Date(
     now.getTime() - ATTENTION_QUERY.sessionsWindowDays * DAY_MS
@@ -223,6 +225,7 @@ export async function loadAttentionInputs(
       : [];
 
   return {
+    mcpFindings: await mcpFindings,
     approvals:
       approvals.status === 'fulfilled' && Array.isArray(approvals.value)
         ? (approvals.value as AttentionApproval[]).filter((approval) =>

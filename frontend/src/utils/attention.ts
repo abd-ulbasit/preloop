@@ -1,3 +1,4 @@
+import type { MCPFinding } from '../mcp-findings-api';
 import type { BudgetPolicy } from '../api';
 import type {
   AccountGatewayUsageSummaryResponse,
@@ -49,6 +50,7 @@ export type AttentionKind =
   | 'budget'
   | 'spend'
   | 'pricing'
+  | 'mcp'
   | 'policy';
 
 /**
@@ -129,6 +131,7 @@ export interface AttentionBudgetDetail {
  * inbox unactionable.
  */
 export interface AttentionEvidence {
+  mcpFinding?: MCPFinding;
   failedRuns?: AttentionFailedRun[];
   /** "Failed to start agent Job: (409) Conflict" plus how many runs said it. */
   mostCommonError?: { message: string; count: number; total: number };
@@ -292,6 +295,7 @@ export interface AttentionInputs {
   spendOutliers?: SpendOutlierFinding[];
   /** Notify rule hits of the last seven days, one row per rule. */
   policyNotices?: AttentionPolicyNotice[];
+  mcpFindings?: MCPFinding[];
   /**
    * Active dismissals. `undefined` (an older backend without the endpoint)
    * hides nothing and is not an error.
@@ -346,6 +350,12 @@ export const ATTENTION_KIND_META: Record<
     icon: 'tags',
     sectionHref: '/console/cost/spend',
   },
+  mcp: {
+    label: 'MCP route',
+    plural: 'MCP routes',
+    icon: 'hdd-network',
+    sectionHref: '/console/tools',
+  },
   policy: {
     label: 'Policy notice',
     plural: 'Policy notices',
@@ -364,6 +374,7 @@ export const ATTENTION_KIND_ORDER: AttentionKind[] = [
   'spend',
   'pricing',
   'policy',
+  'mcp',
 ];
 
 /** The Cost page reads `panel` and scrolls its pricing card into view. */
@@ -1407,6 +1418,23 @@ export function deriveAttentionItems(inputs: AttentionInputs): AttentionResult {
       dismissals,
       now
     ),
+    ...(inputs.mcpFindings || [])
+      .filter((finding) => finding.state === 'open')
+      .map((finding): AttentionItem => ({
+        id: `mcp:${finding.id}`,
+        kind: 'mcp',
+        severity: 'warning',
+        title:
+          finding.evidence_class === 'observed_call'
+            ? 'Observed MCP call needs inventory review'
+            : 'Configured MCP route needs inventory review',
+        detail: `Account approval: ${finding.approval_state}. ${finding.limitation}`,
+        href: '/console/tools',
+        at: finding.first_seen_at,
+        fingerprint: finding.id,
+        dismissable: false,
+        evidence: { mcpFinding: finding },
+      })),
     ...policyNoticeItems(inputs.policyNotices || []),
   ];
 

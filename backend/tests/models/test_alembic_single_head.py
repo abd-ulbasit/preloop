@@ -389,6 +389,8 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert thresholds.down_revision == "20261018_hosted_credit"
     jira_callback = script.get_revision("20261020_jira_callback")
     assert jira_callback.down_revision == "20261019_gov_thresholds"
+    mcp_inventory = script.get_revision("20261021_mcp_inventory")
+    assert mcp_inventory.down_revision == "20261020_jira_callback"
     runner_models = script.get_revision("20261021_runner_models")
     assert runner_models.down_revision == "20261020_jira_callback"
     device_fleet = script.get_revision("20261021_device_fleet")
@@ -398,4 +400,9 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261021_runner_models",
         "20261021_device_fleet",
     }
-    assert script.get_heads() == ["20261021_fleet_models_merge"]
+    inventory_merge = script.get_revision("20261021_mcp_fleet_merge")
+    assert set(inventory_merge.down_revision) == {
+        "20261021_mcp_inventory",
+        "20261021_fleet_models_merge",
+    }
+    assert script.get_heads() == ["20261021_mcp_fleet_merge"]
