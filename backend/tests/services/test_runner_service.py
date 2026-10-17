@@ -108,6 +108,7 @@ def test_resolve_runner_pool_auto_when_online_private_runner(
             SimpleNamespace(
                 id=uuid4(),
                 status="online",
+                flow_execution_consent="always",
                 free_slots=2,
                 capabilities={"docker_available": True},
                 accept_untagged=True,
@@ -133,6 +134,7 @@ def test_resolve_runner_pool_auto_when_private_runner_has_a_second_slot(
             SimpleNamespace(
                 id=uuid4(),
                 status="busy",
+                flow_execution_consent="always",
                 free_slots=1,
                 capabilities={"docker_available": True},
                 accept_untagged=True,
@@ -244,6 +246,7 @@ def test_lease_job_claims_row_and_does_not_persist_token(
     runner = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=2,
         capabilities={"docker_available": True},
         accept_untagged=True,
@@ -296,6 +299,7 @@ def test_lease_job_skips_locked_runner_and_claims_next(
     locked = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={"docker_available": True},
         accept_untagged=True,
@@ -303,6 +307,7 @@ def test_lease_job_skips_locked_runner_and_claims_next(
     next_runner = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={"docker_available": True},
         accept_untagged=True,
@@ -342,12 +347,14 @@ def test_lease_job_skips_runner_missing_host_exec_profile(
     missing = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={"host_exec_profiles": []},
     )
     matching = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={
             "host_exec_profiles": [
@@ -388,6 +395,7 @@ def test_lease_job_queues_when_no_runner_advertises_profile(
     runner = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={"host_exec_profiles": [{"name": "other"}]},
     )
@@ -421,6 +429,7 @@ def test_lease_job_queues_when_no_runner_advertises_profile(
         arch="arm64",
         labels=["local"],
         status="online",
+        flow_execution_consent="always",
         last_heartbeat=datetime(2026, 9, 3, tzinfo=timezone.utc),
         current_execution_id=None,
         registered_by_user_id=user_id,
@@ -456,6 +465,7 @@ def test_emit_runner_updated_includes_registered_by_email(monkeypatch) -> None:
         arch="arm64",
         labels=["local"],
         status="online",
+        flow_execution_consent="always",
         last_heartbeat=datetime(2026, 9, 3, tzinfo=timezone.utc),
         current_execution_id=None,
         registered_by_user_id=uuid4(),
@@ -479,6 +489,7 @@ def test_emit_runner_updated_publishes_runners_topic(monkeypatch) -> None:
         arch="arm64",
         labels=["local"],
         status="online",
+        flow_execution_consent="always",
         last_heartbeat=datetime(2026, 9, 3, tzinfo=timezone.utc),
         current_execution_id=None,
         registered_by_user_id=None,
@@ -517,6 +528,7 @@ def test_lease_job_matches_copilot_lease_to_copilot_profile_only(
     same_name_cursor = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={
             "host_exec_profiles": [
@@ -527,6 +539,7 @@ def test_lease_job_matches_copilot_lease_to_copilot_profile_only(
     copilot = SimpleNamespace(
         id=uuid4(),
         status="online",
+        flow_execution_consent="always",
         free_slots=1,
         capabilities={
             "host_exec_profiles": [
@@ -695,6 +708,7 @@ def test_default_runner_does_not_capture_untagged_work(
         lambda *args, **kwargs: [
             SimpleNamespace(
                 status="online",
+                flow_execution_consent="always",
                 free_slots=2,
                 accept_untagged=False,
                 capabilities={"docker_available": True},

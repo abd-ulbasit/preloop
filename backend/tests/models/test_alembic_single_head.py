@@ -416,4 +416,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261023_gov_retry_idx",
         "20261024_weekly_members",
     }
-    assert script.get_heads() == ["20261024_weekly_report_merge"]
+    owner_consent = script.get_revision("20261022_owner_consent")
+    assert owner_consent.down_revision == "20261024_weekly_report_merge"
+    assert script.get_heads() == ["20261022_owner_consent"]

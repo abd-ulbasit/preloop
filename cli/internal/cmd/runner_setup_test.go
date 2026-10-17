@@ -251,7 +251,7 @@ func TestPerformRunnerSetupYesThenInstalledSkips(t *testing.T) {
 	}
 }
 
-func TestPerformRunnerSetupRequiredDoesNotAsk(t *testing.T) {
+func TestPerformRunnerSetupRequiredAsksConsentOnly(t *testing.T) {
 	testenv.SetTempHome(t)
 	shortenRunnerOnlineWait(t)
 	installs := stubRunnerInstall(t)
@@ -275,8 +275,8 @@ func TestPerformRunnerSetupRequiredDoesNotAsk(t *testing.T) {
 	if *installs != 1 {
 		t.Fatalf("required did not install, output %q", out.String())
 	}
-	if strings.Contains(out.String(), "[y/N]") {
-		t.Fatal("required asked a question")
+	if strings.Contains(out.String(), "Install a Preloop runner on this machine?") {
+		t.Fatal("required asked whether to install")
 	}
 	if !strings.Contains(out.String(), "Your organisation requires a Preloop runner") {
 		t.Fatalf("missing required notice: %q", out.String())
@@ -351,6 +351,10 @@ func TestPerformRunnerSetupPrintsHarnessesWhenPresent(t *testing.T) {
 	stubRunnerInstall(t)
 	const runnerID = "11111111-1111-4111-8111-111111111111"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && r.URL.Path == "/api/v1/runners/"+runnerID+"/consent" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.URL.Path != "/api/v1/runners/"+runnerID {
 			http.NotFound(w, r)
 			return
@@ -564,6 +568,10 @@ func TestPerformRunnerSetupStartFailureSkipsOnlineWait(t *testing.T) {
 	})
 	probes := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/consent") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		probes++
 		http.NotFound(w, r)
 	}))
@@ -645,6 +653,9 @@ func TestRunRunnerSetupRequiresLogin(t *testing.T) {
 }
 
 func TestRunRunnerSetupFetchesRequiredPolicy(t *testing.T) {
+	oldTerminal := loginTerminal
+	loginTerminal = func() bool { return true }
+	t.Cleanup(func() { loginTerminal = oldTerminal })
 	testenv.SetTempHome(t)
 	shortenRunnerOnlineWait(t)
 	installs := stubRunnerInstall(t)
