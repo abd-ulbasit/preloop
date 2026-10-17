@@ -17,9 +17,30 @@ import {
 import type { ResourceAccessPanel } from './resource-access-panel';
 const control = (panel: ResourceAccessPanel, name: string) =>
   panel.shadowRoot!.querySelector<HTMLElement>(`[data-testid="${name}"]`)!;
+/** The element a pointer at the centre of `element` would land on. */
+function deepHit(element: HTMLElement): Element | null {
+  const box = element.getBoundingClientRect();
+  const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+  let hit = document.elementFromPoint(x, y);
+  while (hit?.shadowRoot) {
+    const next = hit.shadowRoot.elementFromPoint(x, y);
+    if (!next || next === hit) break;
+    hit = next;
+  }
+  return hit;
+}
 async function pointerClick(element: HTMLElement) {
   element.scrollIntoView({ block: 'center', inline: 'nearest' });
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  // A person clicks what is painted: wait for an opening dialog to finish
+  // animating in over the page before aiming at its button.
+  await waitUntil(
+    () => {
+      const hit = deepHit(element);
+      return !!hit && (hit === element || element.contains(hit));
+    },
+    'The control must be the topmost element under the pointer',
+    { timeout: 2000 }
+  );
   const box = element.getBoundingClientRect();
   await sendMouse({
     type: 'click',

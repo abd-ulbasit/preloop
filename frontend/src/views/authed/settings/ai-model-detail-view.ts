@@ -45,6 +45,7 @@ import {
   getAIModelGatewayUsageSearch,
   getAIModelGatewayUsageSummary,
   getAIModelRuntimeSessions,
+  getAIModelUsedBy,
   getFeatures,
   repriceCost,
   updateAIModel,
@@ -58,6 +59,7 @@ import type {
   AIModelPricingResponse,
   AIModelGatewayUsageSummaryResponse,
   AIModelRuntimeSessionListResponse,
+  AIModelUsedByResponse,
   GatewayUsageByDay,
   GatewayUsageSearchResultItem,
   RuntimeSessionSummary,
@@ -145,6 +147,9 @@ export class AIModelDetailView extends LitElement {
   @state()
   private sessions: AIModelRuntimeSessionListResponse | null = null;
   @state() private sessionsLoading = false;
+  /** Configured consumers; null while loading or after an error. */
+  @state() private usedBy: AIModelUsedByResponse | null = null;
+  @state() private usedByError: string | null = null;
   @state() private sessionsError: string | null = null;
   @state() private summaryLoading = false;
 
@@ -293,6 +298,35 @@ export class AIModelDetailView extends LitElement {
     consoleDialogStyles,
     unsafeCSS(consoleStyles),
     css`
+      .used-by-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .used-by-list li {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--console-hairline);
+      }
+      .used-by-list li:last-child {
+        border-bottom: 0;
+      }
+      .used-by-list a {
+        color: var(--console-link-color);
+      }
+      .used-by-empty {
+        margin: 0;
+      }
+      .observed {
+        margin-top: var(--sl-spacing-large);
+      }
+      .observed-title {
+        font-size: var(--console-text-body);
+        font-weight: 600;
+      }
       :host {
         display: block;
       }
@@ -804,6 +838,10 @@ export class AIModelDetailView extends LitElement {
       this.summary = null;
       this.sessions = null;
       this.interactions = null;
+      // Another model's consumers must not show here, nor be subtracted
+      // from this model's traffic as "configured".
+      this.usedBy = null;
+      this.usedByError = null;
     }
     if (!options.preserveLoadingState) {
       this.loading = true;
@@ -821,6 +859,7 @@ export class AIModelDetailView extends LitElement {
         return;
       }
       this.model = model;
+      void this.loadUsedBy(modelId);
     } catch (error) {
       if (!isCurrent()) {
         this.refreshInFlight = false;
@@ -1084,6 +1123,185 @@ export class AIModelDetailView extends LitElement {
    * is one request. Reloading the page would cost five (the model, its price,
    * the summary, the sessions and the search) to change one list.
    */
+  /** Configuration, not traffic: independent of the selected range. */
+  private async loadUsedBy(modelId: string): Promise<void> {
+    this.usedByError = null;
+    try {
+      const usedBy = await getAIModelUsedBy(modelId);
+      if (modelId === this.modelId) this.usedBy = usedBy;
+    } catch (error) {
+      if (modelId !== this.modelId) return;
+      this.usedBy = null;
+      this.usedByError =
+        error instanceof Error
+          ? error.message
+          : 'Could not load what uses this model';
+    }
+  }
+
+  /**
+   * Agents and flows seen calling this model in the loaded sessions that are
+   * not configured to use it. Traffic is evidence of use, not of
+   * configuration, so these are listed apart and labelled as observed.
+   */
+  private observedConsumers(): {
+    key: string;
+    kind: 'Agent' | 'Flow';
+    name: string;
+    href: string;
+  }[] {
+    const configured = new Set([
+      ...(this.usedBy?.agents || []).map((agent) => `agent:${agent.id}`),
+      ...(this.usedBy?.flows || []).map((flow) => `flow:${flow.id}`),
+    ]);
+    const seen = new Map<
+      string,
+      { key: string; kind: 'Agent' | 'Flow'; name: string; href: string }
+    >();
+    const add = (
+      key: string,
+      kind: 'Agent' | 'Flow',
+      name: string,
+      href: string
+    ) => {
+      if (!configured.has(key) && !seen.has(key))
+        seen.set(key, { key, kind, name, href });
+    };
+    for (const session of this.sessions?.items || []) {
+      if (session.agent_id)
+        add(
+          `agent:${session.agent_id}`,
+          'Agent',
+          session.agent_name || session.agent_id,
+          session.agent_href ||
+            `/console/agents/${encodeURIComponent(session.agent_id)}`
+        );
+      if (session.flow_id)
+        add(
+          `flow:${session.flow_id}`,
+          'Flow',
+          session.flow_name || session.flow_id,
+          session.flow_href ||
+            `/console/flows/${encodeURIComponent(session.flow_id)}`
+        );
+    }
+    return [...seen.values()];
+  }
+
+  private observedCaption(): string {
+    const count = this.sessions?.items.length ?? 0;
+    const sessions =
+      count === 1
+        ? 'the most recent session'
+        : `the ${count} most recent sessions`;
+    return `Called this model in ${sessions} (${this.rangeWindowLabel()}) but is not configured to use it.`;
+  }
+
+  private renderUsedBy() {
+    const usedBy = this.usedBy;
+    // Until the configured list is known, nothing can be called unconfigured.
+    const observed = usedBy ? this.observedConsumers() : [];
+    const consumers = usedBy
+      ? [
+          ...usedBy.agents.map((agent) => ({
+            key: `agent:${agent.id}`,
+            kind: 'Agent',
+            name: agent.name,
+            detail: agent.agent_kind,
+            href: `/console/agents/${encodeURIComponent(agent.id)}`,
+          })),
+          ...usedBy.flows.map((flow) => ({
+            key: `flow:${flow.id}`,
+            kind: 'Flow',
+            name: flow.name,
+            detail: null,
+            href: `/console/flows/${encodeURIComponent(flow.id)}`,
+          })),
+        ]
+      : [];
+    return html`
+      <sl-card class="used-by" data-testid="model-used-by">
+        <div slot="header" class="model-heading">
+          <div class="model-title">Used by</div>
+          ${
+            usedBy
+              ? html`<div class="meta-line">
+                  ${`${usedBy.agents.length} agent${usedBy.agents.length === 1 ? '' : 's'} · ${usedBy.flows.length} flow${usedBy.flows.length === 1 ? '' : 's'} configured`}
+                </div>`
+              : nothing
+          }
+        </div>
+        ${
+          this.usedByError
+            ? html`<p class="meta-line" role="alert">
+                ${this.usedByError}.
+                <a
+                  href="#"
+                  @click=${(event: Event) => {
+                    event.preventDefault();
+                    void this.loadUsedBy(this.modelId);
+                  }}
+                  >Retry</a
+                >
+              </p>`
+            : !usedBy
+              ? html`<p class="meta-line" role="status">
+                  Loading configured agents and flows…
+                </p>`
+              : consumers.length
+                ? html`<ul class="used-by-list">
+                    ${consumers.map(
+                      (item) =>
+                        html`<li>
+                          <sl-badge class="chip" variant="neutral" pill
+                            >${item.kind}</sl-badge
+                          >
+                          <a href=${item.href}>${item.name}</a>
+                          ${
+                            item.detail
+                              ? html`<span class="meta-line"
+                                  >${item.detail}</span
+                                >`
+                              : nothing
+                          }
+                        </li>`
+                    )}
+                  </ul>`
+                : html`<p class="used-by-empty meta-line">
+                    No agent or flow is configured to use this model. Pick it in
+                    an agent's model settings or a flow's model field.
+                  </p>`
+        }
+        ${
+          usedBy?.truncated
+            ? html`<p class="meta-line">
+                Showing the first results only; more are configured.
+              </p>`
+            : nothing
+        }
+        ${
+          observed.length
+            ? html`<div class="observed" data-testid="model-observed">
+                <div class="observed-title">Observed, not configured</div>
+                <div class="meta-line">${this.observedCaption()}</div>
+                <ul class="used-by-list">
+                  ${observed.map(
+                    (item) =>
+                      html`<li>
+                        <sl-badge class="chip" variant="neutral" pill
+                          >${item.kind}</sl-badge
+                        >
+                        <a href=${item.href}>${item.name}</a>
+                      </li>`
+                  )}
+                </ul>
+              </div>`
+            : nothing
+        }
+      </sl-card>
+    `;
+  }
+
   private async loadInteractions() {
     if (!this.modelId) {
       return;
@@ -2936,6 +3154,8 @@ export class AIModelDetailView extends LitElement {
                     `
               }
             </sl-card>
+
+            ${this.renderUsedBy()}
 
             <sl-card>
               <div slot="header" class="model-title">Budget Management</div>

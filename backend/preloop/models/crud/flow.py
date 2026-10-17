@@ -2,6 +2,7 @@ from typing import Any, List, Optional, Union
 from uuid import UUID
 
 from sqlalchemy import String, cast, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Query, Session, joinedload, load_only
 
 from .. import models, schemas
@@ -14,6 +15,35 @@ class CRUDFlow(CRUDBase[models.Flow]):
     def __init__(self):
         """Initialize with the Flow model."""
         super().__init__(model=models.Flow)
+
+    def list_configured_for_model(
+        self, db: Session, *, account_id: str, model_id: str, limit: int = 5001
+    ) -> List[models.Flow]:
+        """Find saved default, label-routing and enabled retry model selections.
+
+        Match only supported configuration fields, never arbitrary JSON strings
+        or historical execution snapshots. Disabled flows retain configuration.
+        """
+        config = cast(self.model.agent_config, JSONB)
+        model_ref = {"ai_model_id": model_id}
+        return (
+            db.query(self.model)
+            .options(load_only(self.model.id, self.model.name, self.model.account_id))
+            .filter(
+                self.model.account_id == account_id,
+                or_(
+                    self.model.ai_model_id == model_id,
+                    config["model_routing"]["rules"].contains([model_ref]),
+                    config["model_by_label"].contains([model_ref]),
+                    config["retry_on_no_progress"].contains(
+                        {"enabled": True, **model_ref}
+                    ),
+                ),
+            )
+            .order_by(self.model.name.asc(), self.model.id.asc())
+            .limit(limit)
+            .all()
+        )
 
     def _query_with_ai_model(self, db: Session) -> Query:
         """List queries that serialize ``ai_model_name`` join the model."""

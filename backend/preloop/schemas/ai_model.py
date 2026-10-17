@@ -16,6 +16,30 @@ from preloop.schemas.gateway_usage import (
 OPENAI_CODEX_OAUTH_TYPE = "oauth_openai_codex"
 ANTHROPIC_CLAUDE_CODE_OAUTH_TYPE = "oauth_anthropic_claude_code"
 
+
+class AIModelAgentLink(BaseModel):
+    """An agent configured to use this model, independent of traffic."""
+
+    id: str
+    name: str
+    agent_kind: str
+
+
+class AIModelFlowLink(BaseModel):
+    """A flow whose saved model selection names this model."""
+
+    id: str
+    name: str
+
+
+class AIModelUsedByResponse(BaseModel):
+    """Visible configured consumers; observed usage has its own endpoint."""
+
+    agents: list[AIModelAgentLink] = Field(default_factory=list)
+    flows: list[AIModelFlowLink] = Field(default_factory=list)
+    truncated: bool = False
+
+
 # Keys the credential resolver reads for each subscription-OAuth type. Codex
 # needs the ChatGPT account id on every upstream call, and the server refreshes
 # its single-use token, so refresh and expiry are mandatory. Claude Code also

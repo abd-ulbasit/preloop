@@ -131,6 +131,10 @@ export class UserManagementView extends LitElement {
         width: 100%;
       }
 
+      sl-card.linked::part(base) {
+        outline: 2px solid var(--sl-color-primary-600);
+        outline-offset: 2px;
+      }
       .user-card-content {
         display: grid;
         grid-template-columns: auto 1fr auto;
@@ -423,6 +427,29 @@ export class UserManagementView extends LitElement {
     await dialog?.show(subject);
   }
 
+  /**
+   * `?user=<id>` from a link elsewhere (a device's people, say). The router constructs
+   * the view before it writes the destination URL and reuses it between
+   * queries, so the id comes from the route, not from construction time.
+   */
+  @state() private linkedUserId = '';
+  private linkedUserShown = false;
+
+  onBeforeEnter(context: { search: string }): void {
+    this.linkedUserId = new URLSearchParams(context.search).get('user') || '';
+    this.linkedUserShown = false;
+  }
+
+  updated(): void {
+    if (!this.linkedUserId || this.linkedUserShown) return;
+    const card = this.shadowRoot?.querySelector(
+      `sl-card[data-user-id="${CSS.escape(this.linkedUserId)}"]`
+    );
+    if (!card) return;
+    this.linkedUserShown = true;
+    card.scrollIntoView?.({ block: 'center' });
+  }
+
   render() {
     if (this.isLoading) {
       return html`
@@ -468,7 +495,11 @@ export class UserManagementView extends LitElement {
           this.users,
           (user) => user.id,
           (user) => html`
-            <sl-card>
+            <sl-card
+              data-user-id=${user.id}
+              class=${user.id === this.linkedUserId ? 'linked' : ''}
+              aria-current=${user.id === this.linkedUserId ? 'true' : 'false'}
+            >
               <div class="user-card-content">
                 <div class="user-icon">
                   <sl-icon name="person-circle"></sl-icon>
