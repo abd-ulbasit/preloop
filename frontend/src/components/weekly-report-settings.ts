@@ -121,7 +121,8 @@ export class WeeklyReportSettings extends LitElement {
     }
   }
 
-  private async toggle(field: Field, on: boolean): Promise<void> {
+  private async toggle(field: Field, control: HTMLInputElement): Promise<void> {
+    const on = control.checked;
     if (this.switching) return;
     const spec = SWITCHES.find((s) => s.field === field)!;
     this.switching = field;
@@ -133,7 +134,7 @@ export class WeeklyReportSettings extends LitElement {
         error instanceof Error ? error.message : 'Could not change the report',
         'danger'
       );
-      this.requestUpdate();
+      control.checked = !!this.prefs?.[field];
     } finally {
       this.switching = '';
     }
@@ -162,10 +163,7 @@ export class WeeklyReportSettings extends LitElement {
             ?checked=${on}
             ?disabled=${!this.canManage || blocked || !!this.switching}
             @sl-change=${(event: Event) =>
-              void this.toggle(
-                spec.field,
-                (event.target as HTMLInputElement).checked
-              )}
+              void this.toggle(spec.field, event.target as HTMLInputElement)}
             >${spec.label}</sl-switch
           >
           <div class="meta">

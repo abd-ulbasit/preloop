@@ -14,6 +14,7 @@ function json(data: unknown, status = 200): Response {
 
 function stubApi(options: {
   capability?: boolean;
+  putStatus?: number;
   permissions?: string[] | null;
   prefs?: Record<string, boolean>;
 }) {
@@ -45,6 +46,8 @@ function stubApi(options: {
         if (init?.method === 'PUT') {
           const body = JSON.parse(String(init.body));
           puts.push(body);
+          if (options.putStatus)
+            return json({ detail: 'Write rejected' }, options.putStatus);
           Object.assign(prefs, body);
         }
         return json(prefs);
@@ -106,6 +109,21 @@ describe('weekly-report-settings', () => {
     expect(switchFor(el, 'account_enabled')!.checked).to.be.true;
     expect(switchFor(el, 'account_enabled')!.disabled).to.be.false;
   });
+
+  for (const status of [403, 500]) {
+    it(`restores the persisted switch after a ${status} write failure`, async () => {
+      const { puts } = stubApi({ putStatus: status });
+      const el = await mount();
+      await waitUntil(() => switchFor(el, 'members_enabled'));
+      const sw = switchFor(el, 'members_enabled')!;
+      sw.checked = false;
+      sw.dispatchEvent(new Event('sl-change'));
+      await waitUntil(() => puts.length === 1);
+      await waitUntil(() => !sw.disabled);
+      expect(sw.checked).to.be.true;
+      expect(switchFor(el, 'account_enabled')!.checked).to.be.true;
+    });
+  }
 
   it('is read-only without manage_account', async () => {
     stubApi({ permissions: ['view_policies'] });
