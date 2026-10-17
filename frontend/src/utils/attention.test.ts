@@ -1708,6 +1708,23 @@ describe('ATTENTION_KIND_META', () => {
 });
 
 describe('errorHeadline', () => {
+  it('prefers a terminal cause over startup and recovery notices', () => {
+    expect(
+      errorHeadline(
+        'PRELOOP_STREAM_IDLE_TIMEOUT_SECONDS=600\n' +
+          'Wrote git recovery artifacts under /workspace/evidence\n' +
+          'ERROR: wire_api = "chat" is no longer supported'
+      )
+    ).to.equal('ERROR: wire_api = "chat" is no longer supported');
+    expect(
+      errorHeadline(
+        'Wrote git recovery artifacts under /workspace/evidence\n' +
+          'Verification failed: git-diff-check: trailing whitespace at example.pm:17'
+      )
+    ).to.equal(
+      'Verification failed: git-diff-check: trailing whitespace at example.pm:17'
+    );
+  });
   it('drops a logfmt prefix from the line it shows', () => {
     expect(
       errorHeadline(

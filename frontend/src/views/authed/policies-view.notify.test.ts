@@ -92,6 +92,16 @@ describe('PoliciesView notify action', () => {
       '[data-testid="rule-dialog"] sl-option[value="notify"]'
     );
 
+  it('describes both model identities in the condition hint', async () => {
+    const element = await mountWithDialog();
+    const text =
+      element.shadowRoot?.querySelector('.model-io-hint')?.textContent;
+    expect(text).to.contain('model.id');
+    expect(text).to.contain('Preloop model UUID');
+    expect(text).to.contain('model.name');
+    expect(text).to.contain('provider model identifier');
+  });
+
   it('offers Notify for model text rules and explains it', async () => {
     const element = await mountWithDialog();
     expect(notifyOption(element)).to.exist;

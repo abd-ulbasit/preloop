@@ -407,6 +407,9 @@ class ExecutionContinuationNavigation(BaseModel):
 
 
 class FlowExecutionResponse(FlowExecutionBase, ExecutionModelProjection):
+    runtime_session_id: Optional[str] = Field(
+        None, description="Runtime tracking session for persistent Agent Control runs."
+    )
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime

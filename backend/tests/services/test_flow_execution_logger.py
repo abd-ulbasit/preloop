@@ -619,3 +619,72 @@ class TestRunnerMcpMarkers:
         )
 
         assert logger.mcp_usage_logs == []
+
+
+def test_native_tool_events_count_once_across_stream_replay() -> None:
+    import json
+
+    logger = FlowExecutionLogger()
+    start = {
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "call-example", "name": "Read"},
+        },
+    }
+    complete = {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "id": "call-example", "name": "Read"}]
+        },
+    }
+    logger.parse_agent_logs(
+        [json.dumps(start), json.dumps(complete), json.dumps(start)]
+    )
+    assert len(logger.mcp_usage_logs) == 1
+    resumed = FlowExecutionLogger()
+    resumed.mcp_usage_logs = list(logger.mcp_usage_logs)
+    resumed.parse_agent_logs([json.dumps(start), json.dumps(complete)])
+    assert len(resumed.mcp_usage_logs) == 1
+    assert resumed.mcp_usage_logs[0]["call_id"] == "call-example"
+
+
+def test_codex_native_tools_and_no_tool_run() -> None:
+    import json
+
+    logger = FlowExecutionLogger()
+    logger.parse_agent_logs(['{"type":"thread.started","thread_id":"example"}'])
+    assert logger.mcp_usage_logs == []
+    logger.parse_agent_logs(
+        [
+            json.dumps(
+                {
+                    "type": event,
+                    "item": {"id": "item-example", "type": "command_execution"},
+                }
+            )
+            for event in ["item.started", "item.completed"]
+        ]
+    )
+    assert len(logger.mcp_usage_logs) == 1
+
+
+def test_control_session_projection_uses_tracking_identity() -> None:
+    from preloop.models import models
+
+    execution = models.FlowExecution(
+        trigger_event_details={
+            "_agent_control": {
+                "command_id": "command-example",
+                "runtime_session_id": "live-example",
+                "history_session_id": "history-example",
+            }
+        }
+    )
+    assert execution.runtime_session_id == "history-example"
+    execution.trigger_event_details = {
+        "_agent_control": {"runtime_session_id": "live-example"}
+    }
+    assert execution.runtime_session_id == "live-example"
+    execution.trigger_event_details = {}
+    assert execution.runtime_session_id is None

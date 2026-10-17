@@ -1,6 +1,7 @@
 import { expect } from '@open-wc/testing';
 import {
   confirmRetryExecution,
+  executionSessionUrl,
   flowExecutionActions,
 } from './flow-execution-actions';
 import { actionIds, intersectActions } from './registry';
@@ -123,5 +124,23 @@ describe('flowExecutionActions', () => {
 
   it('exposes confirmRetryExecution function', () => {
     expect(confirmRetryExecution).to.be.a('function');
+  });
+});
+
+describe('persistent execution session link', () => {
+  it('links to the tracking session instead of a control command id', () => {
+    expect(
+      executionSessionUrl({
+        id: 'execution-example',
+        status: 'RUNNING',
+        agent_session_reference: 'control:agent-example:command-example',
+        trigger_event_details: {
+          _agent_control: {
+            history_session_id: 'session-example',
+            runtime_session_id: 'live-example',
+          },
+        },
+      })
+    ).to.equal('/console/runtime-sessions?query=session-example');
   });
 });

@@ -293,6 +293,7 @@ _EXECUTION_BUDGET_RE = re.compile(
 # "Model 'openai/gpt-5.4' is bound to another agent's subscription credentials"
 _MODEL_CONFIG_RE = re.compile(
     r"does not support parameters"
+    r"|wire_api.{0,80}(?:no longer supported|unsupported)"
     r"|is bound to another agent"
     r"|model metadata for [`'\"][^`'\"]+[`'\"] not found"
     r"|\bmodel not found\b|unsupported model|invalid model",

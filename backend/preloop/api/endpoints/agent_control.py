@@ -1061,6 +1061,56 @@ def _persist_agent_control_result(
     )
 
 
+def _persist_agent_control_progress(
+    db: Session,
+    context: AgentControlConnectionContext,
+    inbound: AgentControlInboundEnvelope,
+) -> None:
+    """Accept progress only for a command dispatched to this authenticated agent."""
+    if inbound.type != "event" or inbound.name != "command_progress":
+        return
+    command_id = inbound.payload.get("command_id")
+    summary = inbound.payload.get("summary")
+    if (
+        not isinstance(command_id, str)
+        or not isinstance(summary, str)
+        or not isinstance(inbound.message_id, str)
+        or not inbound.message_id
+    ):
+        return
+    command = crud_agent_control_command.get_by_command_id(
+        db,
+        account_id=context.account_id,
+        managed_agent_id=context.managed_agent_id,
+        command_id=command_id,
+    )
+    if command is None or command.kind != "command" or command.status != "acked":
+        return
+    kind = inbound.payload.get("kind")
+    call_id = inbound.payload.get("call_id")
+    tool_name = inbound.payload.get("tool_name")
+    if not isinstance(kind, str) or kind not in {"assistant", "tool", "summary"}:
+        return
+    if kind == "tool" and not (
+        isinstance(call_id, str)
+        and 0 < len(call_id) <= 200
+        and isinstance(tool_name, str)
+        and 0 < len(tool_name) <= 100
+    ):
+        return
+    crud_runtime_session_activity.log_agent_control_progress(
+        db,
+        account_id=command.consuming_account_id or context.account_id,
+        command_id=command_id,
+        event_id=str(inbound.message_id),
+        kind=kind,
+        summary=summary[:2000],
+        call_id=call_id if isinstance(call_id, str) else None,
+        tool_name=tool_name if isinstance(tool_name, str) else None,
+        commit=False,
+    )
+
+
 async def _emit_agent_message(
     connection: AgentControlConnectionContext,
     inbound: AgentControlInboundEnvelope,
@@ -1104,6 +1154,7 @@ def _process_control_message(
     _mark_control_verified_from_capabilities(db, connection, inbound, commit=False)
     _handle_command_ack(db, connection, inbound, commit=False)
     _persist_agent_control_result(db, connection, inbound, commit=False)
+    _persist_agent_control_progress(db, connection, inbound)
     control_connection.commit(db)
     return True
 

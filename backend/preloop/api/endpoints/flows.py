@@ -1267,7 +1267,9 @@ def read_flow_execution(
                 "status": row.status,
                 "summary": row.summary,
                 "result_summary": row.summary if succeeded else None,
-                "error": None if succeeded else row.summary,
+                "error": row.summary
+                if row.status in {"error", "failed", "refused", "declined", "blocked"}
+                else None,
                 "correlation_id": (row.metadata_ or {}).get("correlation_id"),
                 "arguments_summary": (row.metadata_ or {}).get("arguments_summary"),
             }
@@ -1887,6 +1889,33 @@ async def get_flow_execution_logs(
             or pool_from_session_reference(session_reference) is not None
         )
     )
+
+    if session_reference and session_reference.startswith("control:"):
+        from preloop.agents.agent_control import AgentControlExecutor
+
+        agent = AgentControlExecutor(
+            "claude_code",
+            {},
+            db=db,
+            account_id=current_user.account_id,
+            execution=execution,
+        )
+        lines = await agent.get_logs(session_reference, tail=tail)
+        timestamp = (execution.start_time or execution.created_at).isoformat()
+        selected = lines[skip:] if limit is None else lines[skip : skip + limit]
+        return {
+            "logs": [
+                {
+                    "execution_id": str(execution_id),
+                    "timestamp": timestamp,
+                    "type": "agent_log_line",
+                    "payload": {"line": line},
+                }
+                for line in selected
+            ],
+            "source": "agent_control",
+            "has_more": limit is not None and len(lines) > skip + limit,
+        }
 
     if is_running and session_reference and not runner_backed:
         # Fetch logs directly from container

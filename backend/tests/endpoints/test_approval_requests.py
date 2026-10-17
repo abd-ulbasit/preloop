@@ -136,6 +136,9 @@ class TestListApprovalRequests:
             assert result[0] == ApprovalRequestResponse.model_validate(
                 mock_approval_request
             )
+            mock_crud.expire_stale_pending.assert_called_once_with(
+                mock_db_session, account_id=mock_user.account_id
+            )
             mock_crud.get_multi_by_account.assert_called_once_with(
                 mock_db_session,
                 account_id=mock_user.account_id,
@@ -1414,3 +1417,34 @@ class TestViewedEventRecording:
             )
 
         assert result == ApprovalRequestResponse.model_validate(mock_approval_request)
+
+
+def test_pending_list_expires_past_deadline_rows(db_engine) -> None:
+    expired_at = datetime.utcnow() - timedelta(days=10)
+    owner, request_id = TestDecideRequestsBatchAgainstPostgres._seed(
+        db_engine, expires_at=expired_at
+    )
+    try:
+        user = MagicMock()
+        user.account_id = owner
+        with Session(db_engine) as db:
+            response = Response()
+            rows = approval_requests.list_approval_requests(
+                response=response,
+                status="pending",
+                execution_id=None,
+                runtime_session_id=None,
+                tool_name=None,
+                q=None,
+                skip=0,
+                limit=50,
+                current_user=user,
+                db=db,
+            )
+            assert rows == []
+            assert response.headers["X-Total-Count"] == "0"
+            row = db.get(models.ApprovalRequest, request_id)
+            assert row.status == "expired"
+            assert row.resolved_at == expired_at
+    finally:
+        TestDecideRequestsBatchAgainstPostgres._drop(db_engine, owner)

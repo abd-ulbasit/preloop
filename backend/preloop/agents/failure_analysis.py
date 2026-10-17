@@ -422,7 +422,7 @@ def _fallback_message(lines: list[str]) -> str:
     def window(index: int, before: int, after: int) -> str:
         start = max(0, index - before)
         end = min(len(lines), index + after)
-        return "\n".join(lines[start:end])
+        return "\n".join([lines[index], *lines[start:index], *lines[index + 1 : end]])
 
     for index in range(len(lines) - 1, -1, -1):
         if lines[index].strip().upper().startswith("ERROR:"):
@@ -437,7 +437,16 @@ def _fallback_message(lines: list[str]) -> str:
         if _is_low_value(lines[index]):
             continue
         lowered = lines[index].lower()
-        if any(marker in lowered for marker in ("error", "failed", "fatal")):
+        if any(
+            marker in lowered
+            for marker in (
+                "error",
+                "failed",
+                "fatal",
+                "no longer supported",
+                "trailing whitespace",
+            )
+        ):
             return window(index, 2, 3)
 
     informative = [line for line in lines if not _is_low_value(line)]

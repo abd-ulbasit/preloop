@@ -297,3 +297,18 @@ operator endpoint uses the same
 *   **Planned Voice Path:** Mobile/watch voice should start as a native app feature using vendor STT/TTS APIs, then post normalized operator messages into the same runtime session and Agent Control channel used by the console. The server remains the source of truth for transcript, command intent, approval requirements, and delivery state.
 *   **Siri Constraints:** Siri Shortcuts and App Intents can launch a predefined Preloop action, capture structured parameters, and hand the user into the app. They should not be treated as a general always-listening background transport for arbitrary agent conversations.
 *   **Google Assistant Constraints:** Google Assistant/App Actions can deep link into Android flows and pass structured intent data where supported, but arbitrary background agent chat or cross-app streaming is not a dependable control surface. Android should hand off to the Preloop app before sending audited commands.
+
+### Persistent flow execution diagnostics
+
+Flow execution detail exposes `runtime_session_id`, preferring the command's
+tracking history session over a shared live session. The console's Open session
+action uses that identity. For `control:` execution references, the execution
+logs endpoint returns `source: agent_control` and reads the command lifecycle
+and bounded, credential-scrubbed session activities through the bound Agent
+Control executor. It does not attempt to look up a container for these runs.
+
+The Claude sidecar forwards up to 200 assistant/tool progress messages per turn,
+plus a final duration/usage summary. The server checks the authenticated agent's
+command ownership and attaches progress to the command's tracking session.
+Tool starts are normalized as tool-call activities, with replay deduplication by
+command and call ID; arguments and tool results are excluded.

@@ -116,3 +116,16 @@ on an ungoverned machine can still call services directly. Device fleet reportin
 can identify that coverage gap when deployed; this pack neither installs the
 fleet plugin nor blocks that machine. See
 [Endpoint coverage and threat model](../endpoint-coverage.md).
+
+## Model identity in CEL
+
+`model.id` is the stable Preloop AIModel UUID. `model.name` is the provider
+model identifier (falling back to the configured model name when unavailable).
+For example, to notify on Opus models outside an approved set:
+
+```cel
+model.name.contains("opus") && !(model.name in ["example-approved-opus-model"])
+```
+
+The allowlist contains provider model names, not Preloop UUIDs. These names are
+synthetic; replace them with the exact identifiers configured for your models.

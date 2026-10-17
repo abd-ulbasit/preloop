@@ -1686,6 +1686,25 @@ describe('FlowExecutionView', () => {
       expect(transcript.events).to.have.length(1);
     });
 
+    it('shows the terminal cause after startup and recovery notices', async () => {
+      const element = await load('exec-1');
+      (element as any).execution = {
+        ...(element as any).execution,
+        status: 'FAILED',
+        failure_category: 'model_config',
+        error_message:
+          'PRELOOP_STREAM_IDLE_TIMEOUT_SECONDS=600\n' +
+          'Wrote git recovery artifacts under /workspace/evidence\n' +
+          'ERROR: wire_api = "chat" is no longer supported',
+      };
+      await element.updateComplete;
+      expect(
+        element
+          .shadowRoot!.querySelector('[data-testid="error-line"]')!
+          .textContent!.trim()
+      ).to.equal('ERROR: wire_api = "chat" is no longer supported');
+    });
+
     it('shows the first error line under the strip and the full error in Output', async () => {
       const element = await load('exec-1');
       (element as any).execution = {
@@ -2309,6 +2328,25 @@ describe('FlowExecutionView', () => {
           .shadowRoot!.querySelector('[data-testid="error-line"]')!
           .textContent!.trim()
       ).to.equal('Execution failed: HTTP 499 from model provider');
+    });
+
+    it('prefers a terminal verification refusal over an earlier gateway failure', async () => {
+      const element = await load('exec-failed');
+      await waitUntil(() => (element as any).gatewayEvents.length > 0);
+      (element as any).execution = {
+        ...(element as any).execution,
+        failure_category: 'verification_failed',
+        error_message:
+          'Verification failed: git-diff-check: trailing whitespace at example.pm:17',
+      };
+      await element.updateComplete;
+      expect(
+        element
+          .shadowRoot!.querySelector('[data-testid="error-line"]')!
+          .textContent!.trim()
+      ).to.equal(
+        'Verification failed: git-diff-check: trailing whitespace at example.pm:17'
+      );
     });
 
     it('leads the error line with the gateway message, not the log prefix', async () => {

@@ -87,7 +87,7 @@ class CRUDApprovalRequest(CRUDBase[ApprovalRequest]):
                     row.tool_args = cleaned
                     flag_modified(row, "tool_args")
             expired += pending.update(
-                {"status": "expired", "resolved_at": now},
+                {"status": "expired", "resolved_at": self.model.expires_at},
                 synchronize_session="fetch",
             )
         if commit:

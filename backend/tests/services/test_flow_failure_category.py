@@ -469,3 +469,13 @@ def test_budget_error_class_wins_over_generated_rate_limit_sentence():
         )
         == "budget_exceeded"
     )
+
+
+def test_unsupported_wire_api_is_model_configuration() -> None:
+    assert (
+        derive_failure_category(
+            status="FAILED",
+            error_message='ERROR: wire_api = "chat" is no longer supported',
+        )
+        == "model_config"
+    )

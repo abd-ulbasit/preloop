@@ -692,3 +692,43 @@ def test_registered_loop_schedule_failure_closes_wrapper() -> None:
         assert inspect.getcoroutinestate(captured["coro"]) == inspect.CORO_CLOSED
     finally:
         set_model_io_approval_loop(None)
+
+
+@pytest.mark.parametrize(
+    "name,matched",
+    [
+        ("example-unapproved-opus-model", True),
+        ("example-approved-opus-model", False),
+        ("example-small-model", False),
+    ],
+)
+def test_model_name_allowlist_preserves_uuid_identity(name: str, matched: bool) -> None:
+    model_id = uuid4()
+    expression = (
+        'model.name.contains("opus") && '
+        '!(model.name in ["example-approved-opus-model"]) && '
+        f'model.id == "{model_id}"'
+    )
+    decision = evaluate_model_io(
+        rules=[
+            _rule(
+                conditions=[
+                    ToolCondition(
+                        expression=expression, action="notify", condition_type="cel"
+                    )
+                ]
+            )
+        ],
+        target="model.request",
+        text="hello",
+        record=False,
+        account_id=uuid4(),
+        ai_model=SimpleNamespace(
+            id=model_id,
+            model_identifier=name,
+            name="Display name",
+            provider_name="example",
+        ),
+    )
+    assert decision.action == ("notify" if matched else "allow")
+    assert bool(decision.notices) is matched

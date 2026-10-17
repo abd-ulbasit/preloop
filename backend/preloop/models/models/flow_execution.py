@@ -452,5 +452,15 @@ class FlowExecution(Base):
         "FlowExecutionLog", back_populates="execution", cascade="all, delete-orphan"
     )
 
+    @property
+    def runtime_session_id(self) -> Optional[str]:
+        """Resolve a persistent execution's tracking session, not its command ID."""
+        details = self.trigger_event_details or {}
+        binding = details.get("_agent_control")
+        if not isinstance(binding, dict):
+            return None
+        value = binding.get("history_session_id") or binding.get("runtime_session_id")
+        return value if isinstance(value, str) else None
+
     def __repr__(self):
         return f"<FlowExecution(id={self.id}, flow_id={self.flow_id}, status='{self.status}')>"

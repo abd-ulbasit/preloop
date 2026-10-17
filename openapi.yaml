@@ -30550,6 +30550,12 @@ components:
           title: Estimated Cost
           description: Estimated cost in USD for this execution
           default: 0.0
+        runtime_session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Runtime Session Id
+          description: Runtime tracking session for persistent Agent Control runs.
         id:
           type: string
           format: uuid
