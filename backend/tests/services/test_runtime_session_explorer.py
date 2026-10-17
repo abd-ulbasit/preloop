@@ -993,7 +993,9 @@ def test_history_policy_is_resolved_once_per_request_and_not_cached(
     assert abs((next_cutoff - (now - timedelta(days=730))).total_seconds()) < 2
 
 
-def test_session_detail_links_its_managed_principal_and_flow(service) -> None:
+def test_session_detail_links_its_managed_principal_and_flow(
+    service: RuntimeSessionExplorerService,
+) -> None:
     """A managed principal id resolves even without a source-key match."""
     from types import SimpleNamespace
 

@@ -187,3 +187,101 @@ def test_imported_costs_are_included_without_inventing_sessions() -> None:
     assert evidence["daily_series"][2]["imported_cost"] == 3
     assert evidence["contributing_sessions"][0]["cost"] == 22.39
     assert evidence["imported_complete"] is False
+
+
+def test_imported_chart_rows_follow_evaluator_validation() -> None:
+    from preloop.services.spend_outliers import (
+        ImportedSpendRow,
+        imported_spend_for_report,
+    )
+
+    good = ImportedSpendRow(
+        user_id=UUID(int=1),
+        day=START.date(),
+        model="example-model",
+        cost_usd=1,
+        source="example",
+    )
+    rows = [
+        good,
+        ImportedSpendRow(
+            user_id=good.user_id,
+            day=good.day,
+            model=good.model,
+            cost_usd=-1,
+            source="example",
+        ),
+        ImportedSpendRow(
+            user_id=good.user_id,
+            day=good.day,
+            model=good.model,
+            cost_usd=float("nan"),
+            source="example",
+        ),
+        ImportedSpendRow(
+            user_id=good.user_id,
+            day=END.date(),
+            model=good.model,
+            cost_usd=1,
+            source="example",
+        ),
+    ]
+    with patch(
+        "preloop.services.spend_outliers._imported_rows", return_value=(rows, False)
+    ):
+        selected, complete = imported_spend_for_report(
+            None, account_id=UUID(int=1), start_day=START.date(), end_day=START.date()
+        )
+    assert selected == [good] and complete is False
+
+
+def test_contributor_prefers_explicit_agent_over_legacy_session_association(
+    db_session: Session, test_user: models.User
+) -> None:
+    session = models.RuntimeSession(
+        account_id=test_user.account_id,
+        session_source_type="test",
+        session_source_id="report-attribution",
+        started_at=START.replace(tzinfo=None),
+    )
+    db_session.add(session)
+    db_session.flush()
+    for identifier, source, linked in [
+        (UUID(int=10), "legacy", session.id),
+        (UUID(int=20), "direct", None),
+    ]:
+        db_session.add(
+            models.ManagedAgent(
+                id=identifier,
+                account_id=test_user.account_id,
+                agent_kind="codex",
+                session_source_type="test",
+                session_source_id=source,
+                display_name=source,
+                runtime_session_id=linked,
+                lifecycle_updated_at=START.replace(tzinfo=None),
+                last_seen_at=START.replace(tzinfo=None),
+            )
+        )
+    db_session.add(
+        models.ApiUsage(
+            account_id=test_user.account_id,
+            runtime_session_id=session.id,
+            runtime_principal_type="managed_agent",
+            runtime_principal_id=str(UUID(int=20)),
+            timestamp=START.replace(tzinfo=None),
+            endpoint="/v1/messages",
+            method="POST",
+            status_code=200,
+            duration=1,
+            action_type="model_gateway",
+            estimated_cost=2,
+        )
+    )
+    db_session.flush()
+    projected = usage_rows(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    assert len(projected) == 1
+    assert projected[0].agent_id == UUID(int=20)
+    assert projected[0].agent_name == "direct"

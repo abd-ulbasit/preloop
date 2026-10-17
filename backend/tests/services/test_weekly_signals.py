@@ -1058,3 +1058,41 @@ def test_native_automatic_approvals_do_not_inflate_human_requests(
     assert signals.approvals.auto_approved_reasons == (
         {"reason": "native_tool_approvals_off", "count": 3, "agent_count": 2},
     )
+
+
+def test_first_seen_tool_usage_counts_calls_instead_of_schema_exposures(
+    db_session: Session, test_user: User
+) -> None:
+    session = models.RuntimeSession(
+        account_id=test_user.account_id,
+        session_source_type="test",
+        session_source_id="new-tool-usage",
+        started_at=_naive(START),
+    )
+    db_session.add(session)
+    db_session.flush()
+    _usage(
+        db_session,
+        test_user,
+        at=START + timedelta(hours=1),
+        duration=0.1,
+        session_id=session.id,
+        tools=["mcp__tracker__search"],
+    )
+    for moment in [START, START + timedelta(hours=1), END]:
+        db_session.add(
+            models.RuntimeSessionActivity(
+                account_id=test_user.account_id,
+                runtime_session_id=session.id,
+                activity_type="tool_call",
+                tool_name="search",
+                server_name="tracker",
+                timestamp=moment,
+            )
+        )
+    db_session.flush()
+    signals = collect_weekly_signals(
+        db_session, account_id=test_user.account_id, start=START, end=END
+    )
+    tool = next(item for item in signals.first_seen if item.kind == "mcp_tool")
+    assert tool.usage_count == 2

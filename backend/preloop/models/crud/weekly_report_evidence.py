@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, case, cast, or_, select
 from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.models.crud.api_usage import exclude_replay_usage_condition
@@ -29,10 +29,19 @@ def usage_rows(
             & (agent.session_source_id == usage.runtime_principal_id),
         ),
     )
+    precedence = case(
+        (
+            (usage.runtime_principal_type == "managed_agent")
+            & (cast(agent.id, String) == usage.runtime_principal_id),
+            0,
+        ),
+        (agent.runtime_session_id == usage.runtime_session_id, 1),
+        else_=2,
+    )
     agent_id = (
         select(agent.id)
         .where(*agent_match)
-        .order_by(agent.id)
+        .order_by(precedence, agent.id)
         .limit(1)
         .correlate(usage)
         .scalar_subquery()
@@ -40,7 +49,7 @@ def usage_rows(
     agent_name = (
         select(agent.display_name)
         .where(*agent_match)
-        .order_by(agent.id)
+        .order_by(precedence, agent.id)
         .limit(1)
         .correlate(usage)
         .scalar_subquery()
