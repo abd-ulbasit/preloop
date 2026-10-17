@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.auth.key_scopes import DISCOVERY_REPORT_SCOPE
 from preloop.api.common import get_account_for_user
+from preloop.services.fleet_findings import evaluate_fleet_findings
 from preloop.models import models
 from preloop.models.crud import (
     crud_account_discovery_salt,
@@ -172,6 +173,7 @@ def create_discovery_report(
             created += 1
             emit_agent_discovered(db, outcome.candidate)
     db.commit()
+    evaluate_fleet_findings(db, account_id=account.id)
     return DiscoveryReportResponse(
         received=len(outcomes), created=created, updated=len(outcomes) - created
     )
@@ -228,4 +230,5 @@ def update_discovery_candidate(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Discovery candidate not found",
         )
+    evaluate_fleet_findings(db, account_id=account.id)
     return _summary(candidate)

@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import socket
 import secrets
 import weakref
@@ -32,8 +33,10 @@ from preloop.agents.runner_launch import (
     prepare_runner_delivery,
 )
 from preloop.api.auth import get_current_active_user
+from preloop.services.fleet_findings import evaluate_fleet_findings
 from preloop.models import models, schemas
 from preloop.models.crud import (
+    crud_account,
     crud_api_key,
     crud_audit_log,
     crud_flow,
@@ -242,15 +245,57 @@ def _refresh_presence(db: Session, runner: FlowRunner) -> bool:
     )
 
 
+def _can_manage_runner_fingerprints(db: Session, viewer: models.User) -> bool:
+    """Fingerprint access follows manage_agents, including the implicit owner."""
+    from preloop.utils.permissions import user_holds_permission
+
+    account = crud_account.get(db, id=viewer.account_id)
+    return (
+        account is not None and str(account.primary_user_id) == str(viewer.id)
+    ) or user_holds_permission(db, viewer, "manage_agents")
+
+
+def _record_runner_fingerprint(
+    db: Session, runner: models.FlowRunner, value: Any
+) -> None:
+    """Ignore malformed optional heartbeat metadata without dropping liveness."""
+    if (
+        not runner.ephemeral
+        and isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value)
+        and value != runner.workstation_fingerprint
+    ):
+        crud_flow_runner.update(
+            db, db_obj=runner, obj_in={"workstation_fingerprint": value}
+        )
+
+
 def _to_response(
     row: FlowRunner,
     db: Optional[Session] = None,
     viewer: Optional[User] = None,
     viewer_is_admin: Optional[bool] = None,
+    viewer_can_manage_agents: Optional[bool] = None,
 ) -> schemas.RunnerResponse:
     from preloop.models.crud.flow_runner import runner_labels
 
     data = schemas.RunnerResponse.model_validate(row)
+    if data.workstation_fingerprint:
+        same_account = viewer is not None and str(viewer.account_id) == str(
+            row.account_id
+        )
+        registrant = viewer is not None and str(viewer.id) == str(
+            row.registered_by_user_id
+        )
+        allowed = False
+        if viewer is not None and same_account and db is not None:
+            allowed = registrant or (
+                viewer_can_manage_agents
+                if viewer_can_manage_agents is not None
+                else _can_manage_runner_fingerprints(db, viewer)
+            )
+        if not allowed:
+            data.workstation_fingerprint = None
     data.labels = runner_labels(row)
     presence = derive_presence(row)
     data.presence = presence.state
@@ -314,7 +359,15 @@ def register_runner(
             "last_heartbeat": datetime.now(timezone.utc),
             "ephemeral": body.ephemeral or existing.ephemeral,
         }
-        for field in ("name", "hostname", "os", "arch", "labels", "instance_id"):
+        for field in (
+            "name",
+            "hostname",
+            "os",
+            "arch",
+            "labels",
+            "instance_id",
+            "workstation_fingerprint",
+        ):
             if value := getattr(body, field):
                 updates[field] = value
         existing = crud_flow_runner.update(db, db_obj=existing, obj_in=updates)
@@ -326,6 +379,7 @@ def register_runner(
         )
         if body.harness_inventory is not None:
             record_harness_inventory(db, existing, body.harness_inventory)
+        evaluate_fleet_findings(db, account_id=existing.account_id)
         emit_runner_updated(existing, db)
         return schemas.RunnerRegisterResponse(
             **_to_response(existing, db, current_user).model_dump(by_alias=True),
@@ -342,6 +396,7 @@ def register_runner(
             "instance_id": body.instance_id,
             "name": name,
             "hostname": body.hostname,
+            "workstation_fingerprint": body.workstation_fingerprint,
             "os": body.os,
             "arch": body.arch,
             "labels": body.labels or [],
@@ -358,6 +413,7 @@ def register_runner(
         )
     if body.harness_inventory is not None:
         record_harness_inventory(db, row, body.harness_inventory)
+    evaluate_fleet_findings(db, account_id=row.account_id)
     emit_runner_updated(row, db)
     return schemas.RunnerRegisterResponse(
         **_to_response(row, db, current_user).model_dump(by_alias=True), token=token
@@ -415,12 +471,18 @@ def list_runners(
         if any(row.harness_inventory is not None for row in rows)
         else False
     )
+    can_manage_fingerprints = (
+        _can_manage_runner_fingerprints(db, current_user)
+        if any(row.workstation_fingerprint for row in rows)
+        else False
+    )
     return [
         _to_response(
             row,
             db if row.account_id == current_user.account_id else None,
             current_user,
             viewer_is_admin=is_admin,
+            viewer_can_manage_agents=can_manage_fingerprints,
         )
         for row in rows
     ]
@@ -1049,6 +1111,9 @@ async def runner_ws(
                     crud_flow_runner.update(
                         db, db_obj=runner, obj_in={"capabilities": merged}
                     )
+                _record_runner_fingerprint(
+                    db, runner, raw.get("workstation_fingerprint")
+                )
                 # Harness inventory (#1480): every heartbeat names its hash,
                 # the body comes only when it changed or we asked for it.
                 inventory_wanted = False
@@ -1076,6 +1141,7 @@ async def runner_ws(
                     )
                 crud_flow_runner.set_presence_signals(db, runner, **presence_signals)
                 presence_changed = _refresh_presence(db, runner)
+                evaluate_fleet_findings(db, account_id=runner.account_id)
                 reply: Dict[str, Any] = {"type": "ack", "concurrency": runner.capacity}
                 if inventory_wanted:
                     reply["inventory_wanted"] = True

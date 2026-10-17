@@ -226,6 +226,7 @@ class AuthUserResponse(BaseModel):
     full_name: Optional[str] = None
     email_verified: bool
     is_superuser: bool = False
+    is_account_owner: bool = False
     permissions: Optional[List[str]] = None
     avatar_url: Optional[str] = None
     avatar_source: Optional[str] = None

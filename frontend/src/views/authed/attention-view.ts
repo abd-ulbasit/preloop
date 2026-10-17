@@ -1,3 +1,10 @@
+import {
+  hasFleetPermission,
+  getFleetFindings,
+  fleetHref,
+  fleetFindingTitle,
+  type FleetFinding,
+} from '../../device-fleet-api';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { formatUsd, formatUsdExact } from '../../utils/money';
@@ -115,6 +122,9 @@ export class AttentionView extends AuthedElement {
   @state() private gatewayFailures: GatewayUsageSearchResultItem[] = [];
   @state() private budgetPolicies: BudgetPolicy[] = [];
   @state() private priceOverrides: AttentionPriceOverride[] = [];
+  @state() private fleetFindings: FleetFinding[] = [];
+  @state() private fleetError = false;
+  private fleetAllowed = false;
   @state() private policyNotices: AttentionPolicyNotice[] = [];
   @state() private spendOutliers: SpendOutlierFinding[] = [];
   @state() private showSpendSettings = false;
@@ -722,6 +732,8 @@ export class AttentionView extends AuthedElement {
         if (generation !== this.permissionsGeneration || !this.isConnected)
           return;
         this.permissions = profile?.permissions ?? null;
+        this.fleetAllowed =
+          !!profile && hasFleetPermission(profile, 'view_device_fleet');
         this.permissionsReady = true;
       })
       .catch(() => {
@@ -775,11 +787,30 @@ export class AttentionView extends AuthedElement {
     this.dismissalsSupported = inputs.dismissalsSupported;
     this.billingEnabled = features?.features?.billing === true;
 
+    this.fleetFindings = [];
+    this.fleetError = false;
+    if (
+      features?.features?.fleet_coverage === true &&
+      this.permissionsReady &&
+      this.fleetAllowed
+    ) {
+      try {
+        const findings = await getFleetFindings();
+        if (generation !== this.refreshGeneration || !this.isConnected) return;
+        this.fleetFindings = findings.items.filter(
+          (item) =>
+            item.state === 'open' && item.evidence.attention_enabled === true
+        );
+      } catch {
+        if (generation !== this.refreshGeneration || !this.isConnected) return;
+        this.fleetError = true;
+      }
+    }
     this.lastUpdatedAt = new Date().toISOString();
     this.loading = false;
     // The header's bell has no budget for these nine requests; it states the
     // counts this page just derived.
-    publishAttentionSummary(this.items);
+    publishAttentionSummary(this.items, this.fleetFindings.length);
   }
 
   private get derived() {
@@ -1941,6 +1972,26 @@ export class AttentionView extends AuthedElement {
 
       <div class="column-layout wide">
         <div class="main-column">
+          ${this.fleetError ? html`<p role="alert">Device fleet findings could not be loaded. <a href=${fleetHref()}>Review device fleet</a></p>` : nothing}
+          ${
+            this.fleetFindings.length
+              ? html`<section aria-label="Device fleet findings">
+                  <h2>Device fleet</h2>
+                  ${this.fleetFindings.map(
+                    (finding) =>
+                      html`<details>
+                        <summary>${fleetFindingTitle(finding.rule)}</summary>
+                        <p>Opened ${formatRelativeTime(finding.opened_at)}</p>
+                        <p>${finding.limitation}</p>
+                        <pre>${JSON.stringify(finding.evidence, null, 2)}</pre>
+                        <a href=${fleetHref(finding.device_key || undefined)}
+                          >Review device evidence</a
+                        >
+                      </details>`
+                  )}
+                </section>`
+              : nothing
+          }
           ${
             this.permissionsError
               ? html`<div role="alert" class="row-detail">
@@ -1973,7 +2024,9 @@ export class AttentionView extends AuthedElement {
                   }
                   <div class="sections">
                     ${
-                      items.length === 0
+                      items.length === 0 &&
+                      this.fleetFindings.length === 0 &&
+                      !this.fleetError
                         ? this.renderAllClear(dismissed.length)
                         : ATTENTION_KIND_ORDER.map((kind) =>
                             this.renderSection(kind, grouped.get(kind) || [])

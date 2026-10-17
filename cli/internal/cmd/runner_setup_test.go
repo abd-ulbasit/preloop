@@ -472,8 +472,19 @@ func TestLoadOrRegisterRunnerSecondCallResumes(t *testing.T) {
 	testenv.SetTempHome(t)
 	var creates, resumes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == discoverySaltPath {
+			_ = json.NewEncoder(w).Encode(map[string]any{"salt": testDiscoverySalt})
+			return
+		}
+		if r.URL.Path != "/api/v1/runners/register" {
+			http.NotFound(w, r)
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["workstation_fingerprint"] != workstationFingerprint(testDiscoverySalt, "example-device") {
+			t.Error("registration must carry the discovery fingerprint")
+		}
 		if body["runner_id"] == nil || body["runner_id"] == "" {
 			creates++
 		} else {
@@ -492,10 +503,10 @@ func TestLoadOrRegisterRunnerSecondCallResumes(t *testing.T) {
 	defer server.Close()
 
 	client := api.NewClientWithToken(server.URL, "tok")
-	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2); err != nil {
+	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, "example-device"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2); err != nil {
+	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, "example-device"); err != nil {
 		t.Fatal(err)
 	}
 	if creates != 1 || resumes != 1 {

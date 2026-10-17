@@ -324,6 +324,10 @@ func TestRunnerReportsItsConcurrency(t *testing.T) {
 	testenv.SetTempHome(t)
 	registered := make(chan int, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/runners/register" {
+			http.NotFound(w, r)
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		concurrency, _ := body["concurrency"].(float64)

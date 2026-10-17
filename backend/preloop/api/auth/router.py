@@ -221,6 +221,12 @@ def _normalize_runtime_session_scopes(requested_scopes: List[str]) -> List[str]:
     return normalized_scopes or list(RUNTIME_SESSION_ALLOWED_SCOPES)
 
 
+def _is_account_owner(user: UserModel, db: Session) -> bool:
+    """Expose selected-account ownership for restricted views without RBAC."""
+    account = crud_account.get(db, id=user.account_id)
+    return account is not None and account.primary_user_id == user.id
+
+
 def _resolve_user_permissions(user: UserModel, db: Session) -> Optional[List[str]]:
     """Return RBAC permissions, or None when RBAC is disabled/unavailable.
 
@@ -320,6 +326,7 @@ def _build_auth_user_response(user: UserModel, db: Session) -> AuthUserResponse:
         email_verified=profile.email_verified,
         is_superuser=bool(user.is_superuser),
         permissions=_resolve_user_permissions(user, db),
+        is_account_owner=_is_account_owner(user, db),
         avatar_url=profile.avatar_url,
         avatar_source=profile.avatar_source,
         # The console already fetches this profile on every load, so carrying

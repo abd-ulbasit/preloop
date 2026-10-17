@@ -83,6 +83,32 @@ describe('attention summary', () => {
     expect(formatAttentionSummary(null)).to.equal('');
   });
 
+  it('includes fleet findings and suppresses low-only wording', () => {
+    publishAttentionSummary([item('model', 'low')], 2);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '2 items need attention: 2 fleet findings'
+    );
+    publishAttentionSummary([item('flow')], 1);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '2 items need attention: 1 flow, 1 fleet finding'
+    );
+  });
+
+  it('preserves fleet counts across Overview updates until explicitly refreshed', () => {
+    publishAttentionSummary([], 2);
+    publishAttentionSummary([item('flow')]);
+    expect(formatAttentionSummary(readAttentionSummary())).to.equal(
+      '3 items need attention: 1 flow, 2 fleet findings'
+    );
+    publishAttentionSummary([], 0);
+    publishAttentionSummary([]);
+    expect(readAttentionSummary()?.total).to.equal(0);
+    publishAttentionSummary([], 2);
+    invalidateApiCaches();
+    publishAttentionSummary([]);
+    expect(readAttentionSummary()?.total).to.equal(0);
+  });
+
   it('is forgotten when the account changes', () => {
     publishAttentionSummary([item('flow')]);
     expect(readAttentionSummary()?.total).to.equal(1);

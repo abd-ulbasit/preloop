@@ -161,3 +161,10 @@ def test_enforced_permission_names_are_seeded() -> None:
                         enforced_permissions.add(permission_arg.value)
 
     assert enforced_permissions <= permission_names
+
+
+def test_fleet_permissions_are_admin_only() -> None:
+    for name in ("view_device_fleet", "manage_device_fleet"):
+        assert name in _permission_names()
+        for role in SYSTEM_ROLES:
+            assert (name in _role_permissions(role)) == (role in {"owner", "admin"})
