@@ -145,7 +145,8 @@ def spend(
     """Aggregate a UTC window before joining account names, without loading rows."""
     if period not in {"day", "week", "month"}:
         raise ValueError("Invalid period")
-    usage, model = models.ApiUsage, models.AIModel
+    usage: Any = models.ApiUsage
+    model = models.AIModel
     builtin = or_(
         model.meta_data["hosted"].astext == "true",
         and_(
@@ -163,7 +164,7 @@ def spend(
         usage.completion_tokens,
         usage.estimated_cost,
     )
-    bounds = [
+    bounds: list[Any] = [
         text("api_usage.action_type = 'model_gateway'"),
         usage.timestamp >= start,
         usage.timestamp < end,
@@ -350,12 +351,15 @@ def activity(
         value["last_active"] = max(
             filter(None, (value["last_active"], last.replace(tzinfo=timezone.utc)))
         )
-    names = (
-        dict(
-            db.query(models.Account.id, models.Account.organization_name)
+    names: dict[UUID, str | None] = (
+        {
+            key: name
+            for key, name in db.query(
+                models.Account.id, models.Account.organization_name
+            )
             .filter(models.Account.id.in_([UUID(key) for key in result]))
             .all()
-        )
+        }
         if result
         else {}
     )
@@ -407,12 +411,15 @@ def engagement(
         event.event_type,
         event.event_data["section"].astext,
     ).all()
-    names = (
-        dict(
-            db.query(models.Account.id, models.Account.organization_name)
+    names: dict[UUID, str | None] = (
+        {
+            key: name
+            for key, name in db.query(
+                models.Account.id, models.Account.organization_name
+            )
             .filter(models.Account.id.in_({row.account_id for row in rows}))
             .all()
-        )
+        }
         if rows
         else {}
     )

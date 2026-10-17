@@ -33,6 +33,13 @@ def upgrade() -> None:
             if_not_exists=True,
         )
         op.create_index(
+            "ix_runtime_session_admin_activity",
+            "runtime_session",
+            [sa.text("coalesce(last_activity_at, started_at)"), "account_id"],
+            postgresql_concurrently=True,
+            if_not_exists=True,
+        )
+        op.create_index(
             "ix_event_report_window",
             "event",
             ["timestamp", "account_id", "event_type"],
@@ -47,6 +54,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop only the analytics indexes."""
     with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_runtime_session_admin_activity",
+            table_name="runtime_session",
+            postgresql_concurrently=True,
+            if_exists=True,
+        )
         op.drop_index(
             "ix_api_usage_admin_legacy",
             table_name="api_usage",
