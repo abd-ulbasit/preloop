@@ -927,6 +927,15 @@ expressions between validation and evaluation without retaining request bindings
 The [back-office policy pack](docs/guide/policies/back-office-ai.md) demonstrates
 portable server allowlists, write approvals and bulk-export checks.
 
+The optional weekly outcome ranking uses account-scoped projections in
+`models/crud/weekly_value.py` and a nullable forge evidence cache on
+`IssueCostPullRequest` (`value_evidence`, `value_observed_at`). Migration
+`20261023_weekly_value_cache` adds those fields without changing existing issue
+attribution. The shared console's weekly outcome component is gated by the
+`weekly_work_value` server capability and View cost permission. Attribution,
+forge fetching, scoring and the API live in the commercial plugin; an OSS
+server does not advertise or call them.
+
 Weekly report settings live in core Account fields and the audited
 `models.crud.weekly_report` transaction. `/api/v1/weekly-report/preferences`
 keeps individual unsubscribe separate from independent account controls for

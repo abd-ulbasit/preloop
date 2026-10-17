@@ -7,6 +7,7 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '../../components/view-header';
 import '../../components/resource-actions';
 import '../../components/list-toolbar';
+import '../../components/weekly-value-section';
 import {
   loadViewMode,
   saveViewMode,
@@ -359,6 +360,11 @@ export class GovernanceView extends LitElement {
   @state() private reviewMode: string | null = null;
   @state() private unsubscribe: '' | 'ask' | 'done' = '';
   private scrollToSection = false;
+  @state() private weeklyValueEnabled = false;
+  private valueStart = '';
+  private valueEnd = '';
+  private valueDeepLink = false;
+  private valueSectionLink = false;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -370,15 +376,24 @@ export class GovernanceView extends LitElement {
     const params = new URLSearchParams(window.location.search);
     this.runId = params.get('run_id') ?? this.runId;
     const section = params.get('section') ?? '';
+    this.valueSectionLink = section === 'valuable_work';
     this.section = section in SECTIONS ? section : '';
     this.scrollToSection = !!section;
+    this.valueStart = params.get('start') ?? '';
+    this.valueEnd = params.get('end') ?? '';
+    this.valueDeepLink =
+      section === 'valuable_work' && !!this.valueStart && !!this.valueEnd;
     if (params.get('unsubscribe') === 'weekly-report') this.unsubscribe = 'ask';
   }
   protected updated(): void {
     if (!this.scrollToSection || this.loading) return;
     this.scrollToSection = false;
     this.renderRoot
-      .querySelector('[aria-label="Findings"]')
+      .querySelector(
+        this.valueSectionLink
+          ? 'weekly-value-section'
+          : '[aria-label="Findings"]'
+      )
       ?.scrollIntoView({ block: 'start' });
   }
   private async stopEmails(): Promise<void> {
@@ -447,6 +462,7 @@ export class GovernanceView extends LitElement {
       if (generation !== this.generation) return;
       this.enabled = hasCapability(features.features, 'governance_review');
       this.permissions = profile.permissions;
+      this.weeklyValueEnabled = features.features?.weekly_work_value === true;
       if (!this.enabled) return;
       if (hasPermission(this.permissions, 'view_policies'))
         getGovernanceReviewSettings()
@@ -507,7 +523,10 @@ export class GovernanceView extends LitElement {
     if (target.name === 'kind') this.kind = target.value;
     if (target.name === 'severity') this.severity = target.value;
     if (target.name === 'user_id') this.userId = target.value.trim();
-    if (target.name === 'run_id') this.runId = target.value;
+    if (target.name === 'run_id') {
+      this.runId = target.value;
+      this.valueDeepLink = false;
+    }
     this.offset = 0;
     this.dismissedOffset = 0;
     this.dismissed = [];
@@ -1115,6 +1134,14 @@ export class GovernanceView extends LitElement {
                 ? this.detailView(this.detail)
                 : nothing
               : html` ${this.notices()} ${this.coverage(this.selectedRun)}
+                  ${
+                    this.weeklyValueEnabled && this.canCost
+                      ? html`<weekly-value-section
+                          .start=${this.valueDeepLink ? this.valueStart : (this.selectedRun?.window_start ?? '')}
+                          .end=${this.valueDeepLink ? this.valueEnd : (this.selectedRun?.window_end ?? '')}
+                        ></weekly-value-section>`
+                      : nothing
+                  }
                   <dl class="kinds" data-kind-legend>
                     ${Object.entries(KIND_HELP).map(
                       ([kind, help]) =>

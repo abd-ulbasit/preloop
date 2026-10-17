@@ -1,8 +1,10 @@
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
+import sinon from 'sinon';
 import {
   mockApi,
   signInForTest,
   type MockApi,
+  TEST_PROFILE,
 } from '../../test-helpers/capability-api';
 import type { GovernanceFinding, GovernanceRun } from '../../governance-api';
 import { sessionName, type GovernanceView } from './governance-view';
@@ -96,13 +98,46 @@ const tool: GovernanceFinding = {
 describe('Weekly review deep links and report evidence', () => {
   let api: MockApi;
   let mode: string;
+  let valueEnabled: boolean;
+  let costAllowed: boolean;
+  let weeks: GovernanceRun[];
   beforeEach(() => {
     signInForTest();
     mode = 'on_platform';
+    valueEnabled = false;
+    costAllowed = true;
+    weeks = [run];
     api = mockApi({
       capabilities: ['governance_review'],
       routes: [
-        { path: `${BASE}/runs`, body: () => [run] },
+        {
+          path: '/api/v1/features',
+          body: () => ({
+            features: {
+              governance_review: true,
+              weekly_work_value: valueEnabled,
+            },
+          }),
+        },
+        {
+          path: '/api/v1/auth/users/me',
+          body: () => ({
+            ...TEST_PROFILE,
+            permissions: costAllowed ? null : ['view_policies'],
+          }),
+        },
+        {
+          path: '/api/v1/billing/weekly-value',
+          body: () => ({
+            window_start: run.window_start,
+            window_end: run.window_end,
+            items: [],
+            method: 'Evidence',
+            prs_observed: 0,
+            prs_considered: 0,
+          }),
+        },
+        { path: `${BASE}/runs`, body: () => weeks },
         {
           path: `${BASE}/findings`,
           body: (call) =>
@@ -134,6 +169,7 @@ describe('Weekly review deep links and report evidence', () => {
   });
   afterEach(() => {
     api.restore();
+    sinon.restore();
     window.history.replaceState({}, '', '/');
   });
   const text = (el: GovernanceView) =>
@@ -229,5 +265,72 @@ describe('Weekly review deep links and report evidence', () => {
     expect(sessionName({ runtime_session_id: 'abcdef123456' })).to.equal(
       'Session abcdef12'
     );
+  });
+  it('gates recorded outcomes by capability and View cost permission', async () => {
+    const hidden = await mount();
+    expect(hidden.shadowRoot!.querySelector('weekly-value-section')).not.to
+      .exist;
+    expect(api.callsTo('/api/v1/billing/weekly-value')).to.have.length(0);
+    hidden.remove();
+    valueEnabled = true;
+    costAllowed = false;
+    const denied = await mount();
+    expect(denied.shadowRoot!.querySelector('weekly-value-section')).not.to
+      .exist;
+    expect(api.callsTo('/api/v1/billing/weekly-value')).to.have.length(0);
+  });
+
+  it('uses the exact email window and switches to the newly selected week', async () => {
+    valueEnabled = true;
+    const scroll = sinon.spy(Element.prototype, 'scrollIntoView');
+    weeks = [
+      run,
+      {
+        ...run,
+        id: 'run-2',
+        window_start: '2026-10-03T09:00:00Z',
+        window_end: run.window_start,
+      },
+    ];
+    const el = await mount(
+      '?section=valuable_work&start=2026-10-11T00:00:00Z&end=2026-10-16T00:00:00Z'
+    );
+    await waitUntil(
+      () => api.callsTo('/api/v1/billing/weekly-value').length > 0
+    );
+    expect(
+      new URLSearchParams(
+        api.callsTo('/api/v1/billing/weekly-value')[0].search
+      ).get('start')
+    ).to.equal('2026-10-11T00:00:00Z');
+    expect(
+      scroll.calledOn(el.shadowRoot!.querySelector('weekly-value-section'))
+    ).to.equal(true);
+    const selector = el.shadowRoot!.querySelector(
+      'select[name="run_id"]'
+    ) as HTMLSelectElement;
+    selector.value = 'run-2';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitUntil(() =>
+      api
+        .callsTo('/api/v1/billing/weekly-value')
+        .some(
+          (c) =>
+            new URLSearchParams(c.search).get('start') === weeks[1].window_start
+        )
+    );
+  });
+
+  it('uses the selected run when an outcomes link omits the window', async () => {
+    valueEnabled = true;
+    await mount('?section=valuable_work');
+    await waitUntil(
+      () => api.callsTo('/api/v1/billing/weekly-value').length > 0
+    );
+    const params = new URLSearchParams(
+      api.callsTo('/api/v1/billing/weekly-value')[0].search
+    );
+    expect(params.get('start')).to.equal(run.window_start);
+    expect(params.get('end')).to.equal(run.window_end);
   });
 });

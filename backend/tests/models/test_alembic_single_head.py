@@ -409,6 +409,8 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert weekly_email.down_revision == "20261021_mcp_fleet_merge"
     retry_index = script.get_revision("20261023_gov_retry_idx")
     assert retry_index.down_revision == "20261022_weekly_report_email"
+    value_cache = script.get_revision("20261023_weekly_value_cache")
+    assert value_cache.down_revision == "20261023_gov_retry_idx"
     member_reports = script.get_revision("20261024_weekly_members")
     assert member_reports.down_revision == "20261022_weekly_report_email"
     report_merge = script.get_revision("20261024_weekly_report_merge")
@@ -416,6 +418,16 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261023_gov_retry_idx",
         "20261024_weekly_members",
     }
+    value_merge = script.get_revision("20261025_weekly_value_merge")
+    assert set(value_merge.down_revision) == {
+        "20261023_weekly_value_cache",
+        "20261024_weekly_report_merge",
+    }
     owner_consent = script.get_revision("20261022_owner_consent")
     assert owner_consent.down_revision == "20261024_weekly_report_merge"
-    assert script.get_heads() == ["20261022_owner_consent"]
+    consent_value_merge = script.get_revision("20261026_value_consent_merge")
+    assert set(consent_value_merge.down_revision) == {
+        "20261025_weekly_value_merge",
+        "20261022_owner_consent",
+    }
+    assert script.get_heads() == ["20261026_value_consent_merge"]
