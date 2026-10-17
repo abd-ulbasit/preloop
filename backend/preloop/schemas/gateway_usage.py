@@ -743,10 +743,21 @@ class AccountManagedAgentListResponse(BaseModel):
     items: List[SharedResourceRead | ManagedAgentSummary] = Field(default_factory=list)
 
 
+class ManagedAgentDeviceSummary(BaseModel):
+    """An explicitly associated device from the optional fleet projection."""
+
+    device_key: str
+    hostname: Optional[str] = None
+    os: Optional[str] = None
+    runner_state: str
+    last_seen_at: Optional[datetime] = None
+
+
 class ManagedAgentDetailResponse(BaseModel):
     """One managed agent plus its recent runtime session history."""
 
     agent: ManagedAgentSummary
+    devices: List[ManagedAgentDeviceSummary] = Field(default_factory=list)
     aggregate: ManagedAgentUsageAggregate
     usage_by_model: List[GatewayUsageByModel] = Field(default_factory=list)
     activity_by_server: List[ManagedAgentServerActivitySummary] = Field(

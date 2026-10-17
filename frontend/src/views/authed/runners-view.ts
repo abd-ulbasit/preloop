@@ -128,6 +128,12 @@ export class RunnersView extends LitElement {
     [
       unsafeCSS(consoleStyles),
       css`
+        /* The runner a device page linked to: a rule, like the sidebar's
+           active item, not a resting tint. */
+        tr.linked > td:first-child {
+          box-shadow: inset 3px 0 var(--sl-color-primary-600);
+          font-weight: 600;
+        }
         :host {
           display: block;
           font-size: 14px;
@@ -871,6 +877,30 @@ export class RunnersView extends LitElement {
     `;
   }
 
+  /**
+   * `?runner=<id>` from a link elsewhere (a device page, say). The router constructs
+   * the view before it writes the destination URL and reuses it between
+   * queries, so the id comes from the route, not from construction time.
+   */
+  @state() private linkedRunnerId = '';
+  private linkedRunnerShown = false;
+
+  onBeforeEnter(context: { search: string }): void {
+    this.linkedRunnerId =
+      new URLSearchParams(context.search).get('runner') || '';
+    this.linkedRunnerShown = false;
+  }
+
+  updated(): void {
+    if (!this.linkedRunnerId || this.linkedRunnerShown) return;
+    const row = this.shadowRoot?.querySelector(
+      `tr[data-runner-id="${CSS.escape(this.linkedRunnerId)}"]`
+    );
+    if (!row) return;
+    this.linkedRunnerShown = true;
+    row.scrollIntoView?.({ block: 'center' });
+  }
+
   render() {
     return html`
       <view-header
@@ -942,7 +972,11 @@ export class RunnersView extends LitElement {
                       <tbody>
                         ${this.runners.map(
                           (row) => html`
-                            <tr>
+                            <tr
+                              data-runner-id=${row.id}
+                              class=${row.id === this.linkedRunnerId ? 'linked' : ''}
+                              aria-current=${row.id === this.linkedRunnerId ? 'true' : 'false'}
+                            >
                               <td>${row.name}</td>
                               <td>
                                 <div class="labels">

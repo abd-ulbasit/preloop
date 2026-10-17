@@ -163,6 +163,49 @@ describe('RunnersView', () => {
     return text;
   }
 
+  it('marks the runner a device page linked to, from the route', async () => {
+    const runner = (id: string, name: string) => ({
+      id,
+      name,
+      hostname: `${name}.local`,
+      os: 'darwin',
+      arch: 'arm64',
+      labels: [],
+      status: 'online',
+      last_heartbeat: '2026-08-17T10:00:00Z',
+      current_execution_id: null,
+      registered_by_email: 'ops@example.com',
+    });
+    const first = '11111111-1111-4111-8111-111111111111';
+    const second = '33333333-3333-4333-8333-333333333333';
+    fetchStub = createFetchStub([
+      runner(first, 'office-mac'),
+      runner(second, 'build-box'),
+    ]);
+    // The router builds the view before it writes the destination URL, so
+    // the location still holds the previous page's query here.
+    const element = document.createElement('runners-view') as RunnersView;
+    element.onBeforeEnter({ search: `?runner=${first}` });
+    document.body.append(element);
+    try {
+      await waitUntil(
+        () => !(element as unknown as { loading: boolean }).loading
+      );
+      await element.updateComplete;
+      const row = (id: string) =>
+        element.shadowRoot!.querySelector(`tr[data-runner-id="${id}"]`)!;
+      expect(row(first).getAttribute('aria-current')).to.equal('true');
+      expect(row(first).classList.contains('linked')).to.equal(true);
+      // The same view is reused for another runner's link.
+      element.onBeforeEnter({ search: `?runner=${second}` });
+      await element.updateComplete;
+      expect(row(first).getAttribute('aria-current')).to.equal('false');
+      expect(row(second).getAttribute('aria-current')).to.equal('true');
+    } finally {
+      element.remove();
+    }
+  });
+
   it('renders the runners list', async () => {
     fetchStub = createFetchStub([
       {

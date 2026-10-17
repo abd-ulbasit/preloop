@@ -120,6 +120,26 @@ describe('UserManagementView', () => {
     );
   });
 
+  it('marks the person a device page linked to, from the route', async () => {
+    fetchStub = createFetchStub({ users: [sampleUser] });
+    // Built before the router writes the destination URL.
+    const element = document.createElement(
+      'user-management-view'
+    ) as UserManagementView;
+    element.onBeforeEnter({ search: `?user=${sampleUser.id}` });
+    document.body.append(element);
+    try {
+      await waitUntil(() => (element as any).users?.length === 1);
+      await element.updateComplete;
+      const card = element.shadowRoot!.querySelector(
+        `sl-card[data-user-id="${sampleUser.id}"]`
+      )!;
+      expect(card.getAttribute('aria-current')).to.equal('true');
+    } finally {
+      element.remove();
+    }
+  });
+
   it('renders the user list when users exist', async () => {
     fetchStub = createFetchStub({ users: [sampleUser] });
     const element = (await fixture(
