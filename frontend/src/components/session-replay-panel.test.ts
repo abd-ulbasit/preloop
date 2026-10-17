@@ -1,7 +1,7 @@
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import './session-replay-panel';
 import type { SessionReplayPanel } from './session-replay-panel';
-import type { FlowGatewayEvent } from '../types';
+import type { FlowGatewayEvent, RuntimeSessionActivityItem } from '../types';
 
 const SESSION = {
   id: 'session-1',
@@ -1228,6 +1228,45 @@ describe('SessionReplayPanel', () => {
       '.chat-turn.jump-highlight'
     )!;
     expect(highlighted.getAttribute('data-event-id')).to.equal('e2');
+  });
+
+  it('jumps to a delivered note named by its note id', async () => {
+    // A note is a timeline row with no gateway twin: the Notes tab links
+    // to it by note id, and the activity row carries that id.
+    const events: FlowGatewayEvent[] = [
+      previewEvent('e1', '2026-06-07T12:00:00Z', [
+        { role: 'user', text: 'FIRST_TURN' },
+      ]),
+    ];
+    const activity = [
+      {
+        activity_type: 'agent_control_message',
+        timestamp: '2026-06-07T12:00:30Z',
+        title: 'Operator message',
+        summary: 'rebase first',
+        status: 'delivered',
+        metadata: { kind: 'operator_note', note_id: 'note-7', role: 'user' },
+      },
+    ] as unknown as RuntimeSessionActivityItem[];
+    const element = await fixture<SessionReplayPanel>(html`
+      <session-replay-panel
+        replayMode="timeline"
+        .session=${SESSION}
+        .events=${events}
+        .activity=${activity}
+        .focusEventId=${'note-7'}
+      ></session-replay-panel>
+    `);
+    await waitUntil(
+      () =>
+        Boolean(element.shadowRoot?.querySelector('.chat-turn.jump-highlight')),
+      'The linked note was never jumped to'
+    );
+    const highlighted = element.shadowRoot!.querySelector(
+      '.chat-turn.jump-highlight'
+    )!;
+    expect(highlighted.getAttribute('data-note-id')).to.equal('note-7');
+    expect(highlighted.textContent).to.contain('rebase first');
   });
 
   it('jumps to a deep linked turn named by its event id', async () => {
