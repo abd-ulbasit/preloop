@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, and_, case, cast, func, or_, select
+from sqlalchemy import Float, and_, case, cast, func, select
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+from preloop.models.crud import crud_api_usage
 from preloop.models.crud.api_usage import (
     cache_split_columns,
     cache_split_from_row,
@@ -85,11 +86,6 @@ def usage_snapshot(
     # so a ranking change is never mistaken for a newly active identity.
     dimensions = {
         "models": (usage.ai_model_id, usage.model_alias),
-        "agents": (
-            usage.runtime_principal_type,
-            usage.runtime_principal_id,
-            usage.runtime_principal_name,
-        ),
         "flows": (usage.flow_id, models.Flow.name),
     }
     for kind, keys in dimensions.items():
@@ -143,6 +139,18 @@ def usage_snapshot(
                 )
             items.append(value)
         result[kind] = items
+    result["agents"] = [
+        row
+        for row in crud_api_usage.get_gateway_usage_by_agent(
+            db,
+            account_id=str(account_id),
+            start_date=start,
+            end_date=end,
+            user_id=str(user_id) if user_id else None,
+            limit=None,
+        )
+        if row.get("name")
+    ]
     return result
 
 
@@ -155,54 +163,9 @@ def report_approvals(
     user_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Count approvals decided by or triggered by the member, once per request."""
-    if user_id is None:
-        return approval_signals(
-            db, account_id=account_id, start=start, end=end
-        )._asdict()
-    approval, key, agent = models.ApprovalRequest, models.ApiKey, models.ManagedAgent
-    triggered = or_(
-        approval.api_key_id.in_(
-            select(key.id).where(key.account_id == account_id, key.user_id == user_id)
-        ),
-        approval.managed_agent_id.in_(
-            select(agent.id).where(
-                agent.account_id == account_id, agent.owner_user_id == user_id
-            )
-        ),
-    )
-    decided = approval.responses.contains([{"user_id": str(user_id)}])
-    automatic = or_(
-        approval.auto_approved_reason.isnot(None), approval.decided_by_ai.is_(True)
-    )
-    requested = and_(
-        approval.requested_at >= start.replace(tzinfo=None),
-        approval.requested_at < end.replace(tzinfo=None),
-    )
-    resolved = and_(
-        approval.resolved_at >= start.replace(tzinfo=None),
-        approval.resolved_at < end.replace(tzinfo=None),
-    )
-    row = (
-        db.query(
-            func.count().filter(and_(requested, ~automatic)).label("requested"),
-            func.count()
-            .filter(and_(resolved, ~automatic, approval.status == "approved"))
-            .label("granted"),
-            func.count()
-            .filter(and_(resolved, ~automatic, approval.status == "declined"))
-            .label("denied"),
-            func.count()
-            .filter(and_(requested, automatic, approval.status == "approved"))
-            .label("auto_approved"),
-        )
-        .filter(approval.account_id == account_id, or_(triggered, decided))
-        .one()
-    )
-    return {
-        **dict.fromkeys(("expired", "pending", "median_decision_seconds"), 0),
-        **dict(row._mapping),
-        "auto_approved_reasons": [],
-    }
+    return approval_signals(
+        db, account_id=account_id, start=start, end=end, user_id=user_id
+    )._asdict()
 
 
 def member_findings(
@@ -215,6 +178,8 @@ def member_findings(
     include_policy: bool,
 ) -> list[dict[str, Any]]:
     """Only explicitly attributed findings from the latest completed window."""
+    if not include_policy:
+        return []
     finding, run = models.GovernanceFinding, models.GovernanceReviewRun
     run_id = (
         select(run.id)
@@ -235,8 +200,6 @@ def member_findings(
         finding.run_id == run_id,
         finding.dismissed_at.is_(None),
     )
-    if not include_policy:
-        query = query.filter(finding.kind == "inefficiency")
     # Evidence can reference other members in a shared session. Personal views
     # use the attributed recommendation only, never raw cross-user evidence.
     return [

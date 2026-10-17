@@ -115,3 +115,102 @@ def test_usage_is_user_scoped_before_percentiles_and_window_bounds(
         db_session, account_id=UUID(int=999), user_id=test_user.id, start=START, end=END
     )
     assert foreign["request_count"] == 0
+
+
+def test_member_approvals_include_decisions_but_not_unrelated_requests(
+    db_session: Session, test_user: models.User
+) -> None:
+    from preloop.models.crud.weekly_report_data import report_approvals
+
+    workflow = models.ApprovalWorkflow(
+        account_id=test_user.account_id,
+        name="Example approvals",
+        approval_type="manual",
+    )
+    db_session.add(workflow)
+    db_session.flush()
+    tool = models.ToolConfiguration(
+        tool_name="example_tool",
+        tool_source="builtin",
+        account_id=test_user.account_id,
+        approval_workflow_id=workflow.id,
+    )
+    db_session.add(tool)
+    db_session.flush()
+    for token, responses, automatic in (
+        ("member", [{"user_id": str(test_user.id)}], False),
+        ("other", [{"user_id": str(UUID(int=99))}], False),
+        ("member-auto", [{"user_id": str(test_user.id)}], True),
+    ):
+        db_session.add(
+            models.ApprovalRequest(
+                account_id=test_user.account_id,
+                tool_configuration_id=tool.id,
+                approval_workflow_id=workflow.id,
+                tool_name=tool.tool_name,
+                tool_args={},
+                status="approved",
+                requested_at=START.replace(tzinfo=None),
+                resolved_at=(START + timedelta(seconds=20)).replace(tzinfo=None),
+                approval_token=token,
+                responses=responses,
+                decided_by_ai=automatic,
+            )
+        )
+    db_session.flush()
+    result = report_approvals(
+        db_session,
+        account_id=test_user.account_id,
+        user_id=test_user.id,
+        start=START,
+        end=END,
+    )
+    assert result["requested"] == 1
+    assert result["granted"] == 1
+    assert result["auto_approved"] == 1
+    assert result["median_decision_seconds"] == 20
+
+
+def test_member_findings_require_attribution_and_policy_switch(
+    db_session: Session, test_user: models.User
+) -> None:
+    from preloop.models.crud.weekly_report_data import member_findings
+
+    run = models.GovernanceReviewRun(
+        account_id=test_user.account_id,
+        window_start=START,
+        window_end=END,
+        started_at=END,
+        status="completed",
+        mode_before="on_platform",
+        mode_after="on_platform",
+    )
+    db_session.add(run)
+    db_session.flush()
+    for index, (kind, owner) in enumerate(
+        (("inefficiency", test_user.id), ("violation", test_user.id), ("anomaly", None))
+    ):
+        db_session.add(
+            models.GovernanceFinding(
+                account_id=test_user.account_id,
+                run_id=run.id,
+                kind=kind,
+                category="cache_miss",
+                severity="low",
+                title=f"Example finding {index}",
+                suggestion="Review your session.",
+                user_id=owner,
+                fingerprint=f"example-{index}",
+                evidence=[{"excerpt": "Other person's private data"}],
+            )
+        )
+    db_session.flush()
+    arguments = dict(
+        account_id=test_user.account_id, user_id=test_user.id, start=START, end=END
+    )
+    result = member_findings(db_session, **arguments, include_policy=False)
+    assert result == []
+    assert all(not row["evidence"] for row in result)
+    result = member_findings(db_session, **arguments, include_policy=True)
+    assert {row["kind"] for row in result} == {"inefficiency", "violation"}
+    assert "private data" not in str(result)
