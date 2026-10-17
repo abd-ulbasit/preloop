@@ -911,6 +911,10 @@ def evaluate_policy(
     trigger_event: Optional[Dict[str, Any]] = None,
     subject_context: Optional[Dict[str, Any]] = None,
     server_name: Optional[str] = None,
+    resolve_tool_configuration: bool = True,
+    extra_bindings: Optional[Dict[str, Any]] = None,
+    record: bool = True,
+    trace: Optional[list[dict[str, Any]]] = None,
 ) -> PolicyDecision:
     """Evaluate tool access policy and determine the action to take.
 
@@ -930,6 +934,12 @@ def evaluate_policy(
         user_id: Optional user ID (for condition evaluation context).
         execution_id: Optional execution ID (for condition evaluation context).
         trigger_event: Optional trigger event data (for condition evaluation context).
+        subject_context: Subject identity and scope for tool rules.
+        server_name: Server identity for policy storage scope.
+        resolve_tool_configuration: Look up a configuration by name when no ID is given.
+        extra_bindings: Additional condition roots, such as sensitive-data findings.
+        record: Emit audit records when True; disable for read-only simulation.
+        trace: Optional list populated with condition results in evaluation order.
 
     Returns:
         A :class:`PolicyDecision`, which unpacks as the historical 3-tuple
@@ -948,6 +958,7 @@ def evaluate_policy(
     try:
         denial = _account_authorizer_denial(
             db,
+            record=record,
             tool_name=tool_name,
             tool_args=tool_args,
             account_id=account_id,
@@ -988,7 +999,7 @@ def evaluate_policy(
             tool_config = crud_tool_configuration.get(
                 db, id=tool_configuration_id, account_id=account_id
             )
-        else:
+        elif resolve_tool_configuration:
             tool_config = crud_tool_configuration.get_by_tool_name(
                 db, account_id=account_id, tool_name=tool_name
             )
@@ -998,6 +1009,9 @@ def evaluate_policy(
                     tool_config = crud_tool_configuration.get_by_tool_name(
                         db, account_id=account_id, tool_name=alias
                     )
+
+        else:
+            tool_config = None
 
         # Resolve the account's default approval workflow (if any) up front so it
         # can serve as the implicit fallback for ``require_approval`` rules that
@@ -1026,7 +1040,11 @@ def evaluate_policy(
                 "runtime_principal_name"
             ),
         }
+        if extra_bindings:
+            context[EXTRA_BINDINGS_KEY] = dict(extra_bindings)
         scoped_decision = _evaluate_rule_candidates(
+            record=record,
+            trace=trace,
             rules=scoped_rules,
             tool_name=tool_name,
             tool_args=tool_args,
@@ -1043,15 +1061,16 @@ def evaluate_policy(
             return scoped_decision
 
         if scoped_rules:
-            _log_policy_decision_async(
-                account_id=account_id,
-                tool_name=tool_name,
-                action="allow",
-                rule_description="No scoped rules matched (default allow for subject)",
-                tool_args=tool_args,
-                user_id=user_id,
-                execution_id=execution_id,
-            )
+            if record:
+                _log_policy_decision_async(
+                    account_id=account_id,
+                    tool_name=tool_name,
+                    action="allow",
+                    rule_description="No scoped rules matched (default allow for subject)",
+                    tool_args=tool_args,
+                    user_id=user_id,
+                    execution_id=execution_id,
+                )
             return PolicyDecision(
                 "allow", None, "No scoped rules matched (default allow for subject)"
             )
@@ -1059,15 +1078,16 @@ def evaluate_policy(
         if not tool_config:
             # No configuration found, default allow
             # Log the policy decision (fire-and-forget)
-            _log_policy_decision_async(
-                account_id=account_id,
-                tool_name=tool_name,
-                action="allow",
-                rule_description="No tool configuration found",
-                tool_args=tool_args,
-                user_id=user_id,
-                execution_id=execution_id,
-            )
+            if record:
+                _log_policy_decision_async(
+                    account_id=account_id,
+                    tool_name=tool_name,
+                    action="allow",
+                    rule_description="No tool configuration found",
+                    tool_args=tool_args,
+                    user_id=user_id,
+                    execution_id=execution_id,
+                )
             return PolicyDecision("allow", None, "No tool configuration found")
 
         # Load all access rules for this tool, ordered by priority (lower first)
@@ -1079,6 +1099,8 @@ def evaluate_policy(
         )
 
         return _evaluate_loaded_access_rules(
+            record=record,
+            trace=trace,
             rules=rules,
             tool_config=tool_config,
             tool_name=tool_name,

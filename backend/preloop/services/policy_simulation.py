@@ -17,7 +17,7 @@ from preloop.services.policy import load_policy_from_string
 from preloop.services.policy_evaluator import (
     _also_matched_rule_ids,
     _evaluate_loaded_access_rules,
-    evaluate_policy_async,
+    evaluate_policy,
 )
 from preloop.services.sensitive_data.policy_store import (
     detector_config_from,
@@ -248,7 +248,9 @@ async def simulate_policy(
             return PolicyEvaluationResponse(
                 decision="deny", description="Stored tool is disabled"
             )
-        decision = await evaluate_policy_async(
+        # The API dependency supplies a sync Session; use sync CRUD throughout.
+        decision = await run_in_threadpool(
+            evaluate_policy,
             db,
             tool_name=request.name,
             tool_args=request.args,

@@ -230,10 +230,11 @@ def test_evaluate_endpoint_returns_draft_and_rejects_invalid_yaml() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stored_evaluation_uses_async_firewall_without_recording(
+@pytest.mark.parametrize("expression", ["args.count > 0", "grant.active == true"])
+async def test_stored_evaluation_uses_sync_firewall_without_recording(
     monkeypatch: pytest.MonkeyPatch,
+    expression: str,
 ) -> None:
-    from unittest.mock import AsyncMock
     from preloop.services import policy_evaluator as evaluator
     from preloop.services import policy_simulation as simulation
     from preloop.services.policy.schema import SensitiveDataConfig
@@ -249,7 +250,7 @@ async def test_stored_evaluation_uses_async_firewall_without_recording(
         id=uuid4(),
         priority=0,
         action="deny",
-        condition_expression="args.count > 0",
+        condition_expression=expression,
         condition_type="simple",
         description=None,
         approval_workflow_id=None,
@@ -264,19 +265,27 @@ async def test_stored_evaluation_uses_async_firewall_without_recording(
         "get_for_server",
         lambda *args, **kwargs: [config],
     )
-    monkeypatch.setattr(evaluator, "get_meta_data_async", AsyncMock(return_value={}))
     monkeypatch.setattr(
-        evaluator, "get_tool_config_by_id_async", AsyncMock(return_value=config)
+        evaluator.crud_account,
+        "get",
+        lambda *args, **kwargs: models.Account(meta_data={}),
     )
     monkeypatch.setattr(
-        evaluator, "get_default_approval_workflow_async", AsyncMock(return_value=None)
+        evaluator.crud_tool_configuration, "get", lambda *args, **kwargs: config
     )
     monkeypatch.setattr(
-        evaluator, "get_multi_by_config_async", AsyncMock(return_value=[rule])
+        evaluator.crud_approval_workflow, "get_default", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        evaluator.crud_tool_access_rule,
+        "get_multi_by_config",
+        lambda *args, **kwargs: [rule],
     )
     with patch.object(evaluator, "_log_policy_decision_async") as audit:
         result = await simulate_policy(
-            PolicyEvaluationRequest(name="read_file", stored=True, args={"count": 2}),
+            PolicyEvaluationRequest(
+                name="read_file", stored=True, args={"count": 2}, grant={"active": True}
+            ),
             db=MagicMock(),
             account_id=account_id,
             user_id=user_id,
@@ -375,3 +384,126 @@ def test_exact_server_configuration_lookup_filters_in_database(
         tool_name="read_example",
         mcp_server_id=str(servers[1].id),
     ) == [configs[2]]
+
+
+@pytest.mark.parametrize("action", ["allow", "deny", "require_approval"])
+def test_authenticated_stored_simulation_with_sync_dependency(
+    db_session: Session,
+    test_user: models.User,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    """Exercise real authentication, sync CRUD and matching through HTTP."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import sessionmaker
+
+    from preloop.api.auth.jwt import create_access_token
+    from preloop.api.endpoints.policies import router
+    from preloop.models import crud, schemas
+    from preloop.models.db import session as db_module
+
+    server = crud.crud_mcp_server.create(
+        db_session,
+        obj_in={
+            "name": "synthetic-crm",
+            "url": "https://mcp.example.com/mcp",
+            "account_id": test_user.account_id,
+            "auth_type": "none",
+        },
+    )
+    config = crud.crud_tool_configuration.create(
+        db_session,
+        config_in=schemas.ToolConfigurationCreate(
+            account_id=str(test_user.account_id),
+            tool_name="update_record",
+            tool_source="mcp",
+            mcp_server_id=str(server.id),
+        ),
+    )
+    rule = crud.crud_tool_access_rule.create(
+        db_session,
+        obj_in={
+            "account_id": test_user.account_id,
+            "tool_configuration_id": config.id,
+            "action": action,
+            "condition_expression": "args.count > 0",
+            "condition_type": "simple",
+            "priority": 0,
+            "description": "Synthetic stored rule",
+        },
+    )
+    # Keep the real get_db_session dependency, binding its factory to the test
+    # transaction so request sessions cannot persist changes outside this test.
+    monkeypatch.setattr(
+        db_module,
+        "get_session_factory",
+        lambda: sessionmaker(
+            bind=db_session.connection(), join_transaction_mode="create_savepoint"
+        ),
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    token = create_access_token({"sub": str(test_user.id)})
+    with (
+        TestClient(app) as client,
+        patch("preloop.services.policy_evaluator._log_policy_decision_async") as audit,
+        patch(
+            "preloop.services.sensitive_data.tool_policy.schedule_policy_notice"
+        ) as notice,
+    ):
+        assert (
+            client.post(
+                "/api/v1/policies/evaluate",
+                json={"name": "update_record", "stored": True},
+            ).status_code
+            == 401
+        )
+        response = client.post(
+            "/api/v1/policies/evaluate",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": "update_record",
+                "server": "synthetic-crm",
+                "args": {"count": 2},
+                "stored": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["decision"] == action
+        assert result["matched_rule"] == str(rule.id)
+        assert result["description"] == "Synthetic stored rule"
+        assert result["checked_rules"] == [
+            {
+                "id": str(rule.id),
+                "expression": "args.count > 0",
+                "matched": True,
+                "error": None,
+            }
+        ]
+        # A nonmatching rule and a different server both default to allow.
+        # The latter must never fall back to a same-name tool on another server.
+        for server_name, args in [
+            ("synthetic-crm", {"count": 0}),
+            ("unregistered-crm", {"count": 2}),
+            ("builtin", {"count": 2}),
+        ]:
+            response = client.post(
+                "/api/v1/policies/evaluate",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "name": "update_record",
+                    "server": server_name,
+                    "args": args,
+                    "stored": True,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["decision"] == "allow"
+            assert response.json()["matched_rule"] is None
+        audit.assert_not_called()
+        notice.assert_not_called()
+    assert not crud.crud_approval_request.get_multi(
+        db_session, account_id=str(test_user.account_id)
+    )
