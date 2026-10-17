@@ -268,8 +268,14 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
 ) -> None:
     ws = await connect(control_server, principal[0])
     other = await connect(control_server, principal[1])
+    # The connected frame precedes command replay. Drain both handshakes so
+    # the SQL listener cannot mistake replay's queries for the blocked message.
+    await heartbeat(ws)
+    await heartbeat(other)
+    await pool_idle(control_server.engine)
     command_id = persist_command(db_engine, principal[0])
     requested_lock = threading.Event()
+    release_query = threading.Event()
 
     def before_execute(
         conn: Any,
@@ -279,16 +285,19 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
         context: Any,
         executemany: bool,
     ) -> None:
-        if (
+        waits_for_lock = (
             message_kind == "heartbeat"
             and "FROM managed_agent" in statement
             and "FOR UPDATE" in statement
-        ):
+        ) or (
+            message_kind == "ack"
+            and statement.lower().startswith("update agent_control_command")
+        )
+        if waits_for_lock and not requested_lock.is_set():
             requested_lock.set()
-        if message_kind == "ack" and statement.lower().startswith(
-            "update agent_control_command"
-        ):
-            requested_lock.set()
+            # Hold just the first worker here, before PostgreSQL starts its
+            # lock_timeout. Other requests must progress while it is parked.
+            assert release_query.wait(10), "Control worker was not released"
 
     event.listen(control_server.engine, "before_cursor_execute", before_execute)
     try:
@@ -301,7 +310,6 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
                 blocker.query(models.AgentControlCommand).filter_by(
                     command_id=command_id
                 ).with_for_update().one()
-            start = time.monotonic()
             await ws.send(
                 json.dumps(
                     {"type": "heartbeat"}
@@ -314,23 +322,21 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
                 )
             )
             assert await asyncio.to_thread(requested_lock.wait, 2)
-            # These must finish while the row lock is still held. The server
-            # gives up after 1500ms, so a deadline under that still fails if
-            # the wait blocks the event loop, without stacking four serial
-            # budgets that a busy runner cannot meet.
+            # Test worker isolation independently of PostgreSQL's 1500ms
+            # lock_timeout. Otherwise ordinary query/pool latency can consume
+            # the overlap window even when the event loop is responsive.
             async with httpx.AsyncClient(
                 base_url=f"http://{control_server.url}"
             ) as client:
 
-                async def ping() -> None:
+                async def probes() -> None:
+                    # The parked worker owns one of the two connections.
+                    # Exercise progress on the remaining connection without
+                    # making the probes contend with each other as well.
                     assert (await client.get("/ping")).status_code == 200
-
-                async def auth() -> None:
                     assert (
                         await client.get("/auth", params={"token": principal[1].token})
                     ).status_code == 200
-
-                async def refresh() -> None:
                     assert (
                         await client.post(
                             "/refresh",
@@ -341,11 +347,12 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
                             },
                         )
                     ).status_code == 200
+                    await heartbeat(other)
 
-                await asyncio.wait_for(
-                    asyncio.gather(ping(), auth(), refresh(), heartbeat(other)),
-                    1.2,
-                )
+                await asyncio.wait_for(probes(), 5)
+            # Now exercise the real PostgreSQL wait and its unchanged bound.
+            start = time.monotonic()
+            release_query.set()
             with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
                 await asyncio.wait_for(ws.recv(), 4)
             assert closed.value.rcvd.code == 1013
@@ -359,6 +366,7 @@ async def test_independent_row_lock_is_bounded_and_other_socket_http_progress(
         await heartbeat(replacement)
         await replacement.close()
     finally:
+        release_query.set()
         event.remove(control_server.engine, "before_cursor_execute", before_execute)
         await ws.close()
         await other.close()
