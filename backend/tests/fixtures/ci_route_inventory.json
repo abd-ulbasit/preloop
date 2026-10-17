@@ -403,6 +403,7 @@
   "POST /api/v1/runner-sessions/{session_id}/stop": "deny",
   "POST /api/v1/runner-sessions/{session_id}/turns": "deny",
   "POST /api/v1/runners/register": "deny",
+  "POST /api/v1/runners/{runner_id}/models": "deny",
   "POST /api/v1/runners/{runner_id}/sessions": "deny",
   "POST /api/v1/runners/{runner_id}/token": "deny",
   "POST /api/v1/runtime-sessions/search": "deny",
