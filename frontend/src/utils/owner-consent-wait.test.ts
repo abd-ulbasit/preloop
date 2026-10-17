@@ -22,6 +22,15 @@ describe('isWaitingForRunnerOwner', () => {
     });
   }
 
+  it('still reads it as a wait once the orchestrator marks the row running', () => {
+    expect(
+      isWaitingForRunnerOwner({
+        status: 'RUNNING',
+        error_message: WAITING_FOR_RUNNER_OWNER,
+      })
+    ).to.equal(true);
+  });
+
   it('leaves finished runs and other messages alone', () => {
     for (const status of [
       'FAILED',
