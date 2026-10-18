@@ -121,3 +121,34 @@ def test_events_without_preview_pass_through():
         "payload": None,
     }
     assert elide_replayed_history([event]) == [event]
+
+
+def test_window_bounds_the_oldest_event_to_its_last_messages():
+    """#1689: a page on a long session must not carry the whole history."""
+    events = _session(40)
+    result = elide_replayed_history(events[:20], window=10)
+    oldest = result[-1]
+    preview = oldest["payload"]["conversation_preview"]
+    positions = [message["position"] for message in preview["messages"]]
+    total = len(events[19]["payload"]["conversation_preview"]["messages"])
+    # The last user message is kept as the event's title even when old.
+    tail = [p for p in positions if p >= total - 10]
+    assert tail == list(range(total - 10, total))
+    assert len(positions) <= 11
+    assert preview["metadata"]["history_window_start"] == total - 10
+    assert preview["metadata"]["history_elided_count"] == total - len(positions)
+    assert len(oldest["payload"]["tools"]) == 10
+
+
+def test_window_keeps_newer_events_new_messages():
+    events = _session(5)
+    windowed = elide_replayed_history(events, window=10)
+    plain = elide_replayed_history(events)
+    assert [_texts(e) for e in windowed[:-1]] == [_texts(e) for e in plain[:-1]]
+
+
+def test_no_window_leaves_the_oldest_event_whole():
+    events = _session(10)
+    result = elide_replayed_history(events)
+    preview = result[-1]["payload"]["conversation_preview"]
+    assert "history_window_start" not in preview["metadata"]

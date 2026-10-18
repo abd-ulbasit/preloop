@@ -4055,6 +4055,22 @@ paths:
           older event on the same page already carried. Positions are kept: each returned
           message carries its original `position`. The event detail endpoint still
           returns the full payload.'
+      - name: history_window
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 500
+            minimum: 1
+          - type: 'null'
+          description: With `history=delta`, each event keeps at most its last N messages
+            and tool entries, so the oldest event on a page of a long session does
+            not carry the whole conversation (#1689).
+          title: History Window
+        description: With `history=delta`, each event keeps at most its last N messages
+          and tool entries, so the oldest event on a page of a long session does not
+          carry the whole conversation (#1689).
       responses:
         '200':
           description: Successful Response

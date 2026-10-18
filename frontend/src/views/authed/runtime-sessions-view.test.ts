@@ -1019,6 +1019,44 @@ describe('RuntimeSessionsView', () => {
     }
   });
 
+  it('keeps the filters on one row in the 1440 content column (#1689)', async () => {
+    await loadShoelaceTokens();
+    await setViewport({ width: 1440, height: 900 });
+    try {
+      // 1440 minus the console sidebar and page padding.
+      const wrapper = (await fixture(
+        html`<div style="width: 1150px">
+          <runtime-sessions-view></runtime-sessions-view>
+        </div>`
+      )) as HTMLElement;
+      const element = wrapper.querySelector(
+        'runtime-sessions-view'
+      ) as RuntimeSessionsView;
+      await waitUntil(
+        () => !(element as any).loading,
+        'Runtime sessions view did not finish loading'
+      );
+      await element.updateComplete;
+      const toolbar = element.shadowRoot!.querySelector('list-toolbar') as any;
+      await toolbar.updateComplete;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const controls = [
+        toolbar.shadowRoot!.querySelector('sl-input.search-input'),
+        ...Array.from(toolbar.querySelectorAll('sl-select')),
+        toolbar.querySelector('.filter-actions'),
+      ] as HTMLElement[];
+      expect(controls.length).to.equal(6);
+      const bottoms = controls.map((node) =>
+        Math.round(node.getBoundingClientRect().bottom)
+      );
+      for (const bottom of bottoms) {
+        expect(Math.abs(bottom - bottoms[0])).to.be.at.most(2);
+      }
+    } finally {
+      await setViewport({ width: 1280, height: 800 });
+    }
+  });
+
   describe('artifact counts on the list (#1084)', () => {
     async function listPanelOf(element: RuntimeSessionsView) {
       await waitUntil(

@@ -3674,6 +3674,16 @@ async def get_account_runtime_session_gateway_events(
             "The event detail endpoint still returns the full payload."
         ),
     ),
+    history_window: int | None = Query(
+        None,
+        ge=1,
+        le=500,
+        description=(
+            "With `history=delta`, each event keeps at most its last N "
+            "messages and tool entries, so the oldest event on a page of a "
+            "long session does not carry the whole conversation (#1689)."
+        ),
+    ),
 ) -> dict[str, Any]:
     """Return one compact page of stored gateway event metadata for a session."""
     from preloop.models.crud.runtime_session_activity import (
@@ -3721,7 +3731,7 @@ async def get_account_runtime_session_gateway_events(
             for row in rows
         ]
         if history == "delta" and not metadata_only:
-            events = elide_replayed_history(events)
+            events = elide_replayed_history(events, window=history_window)
         next_offset = offset + len(events)
         return {
             "source": "database",

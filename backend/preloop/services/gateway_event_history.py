@@ -54,12 +54,27 @@ def _last_user_index(messages: list[Any]) -> int | None:
     return None
 
 
-def elide_replayed_history(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def elide_replayed_history(
+    events: list[dict[str, Any]], window: int | None = None
+) -> list[dict[str, Any]]:
     """Return ``events`` with history already carried by an older event elided.
 
     ``events`` are ``{"id", "timestamp", "type", "payload"}`` dicts in any
     order. Payloads are copied before they are changed; the input is not
     mutated. The order of the returned list matches the input.
+
+    Args:
+        events: The page of gateway events.
+        window: When set, each event keeps at most its last ``window``
+            messages and tool entries (plus its last user message). Without
+            it the oldest event on the page carries the whole conversation,
+            which on a 400-call session is megabytes (#1689). Older turns
+            stay reachable through earlier pages and the event detail
+            endpoint; ``history_window_start`` in the preview metadata says
+            where the kept messages begin.
+
+    Returns:
+        The events with replayed history elided.
     """
     seen_messages: set[str] = set()
     seen_tools: set[str] = set()
@@ -80,9 +95,13 @@ def elide_replayed_history(events: list[dict[str, Any]]) -> list[dict[str, Any]]
         messages = preview.get("messages") if isinstance(preview, dict) else None
         if isinstance(messages, list):
             keep_index = _last_user_index(messages)
+            window_start = max(0, len(messages) - window) if window is not None else 0
             new_messages: list[Any] = []
             for index, message in enumerate(messages):
                 if not isinstance(message, dict):
+                    continue
+                if index < window_start and index != keep_index:
+                    elided += 1
                     continue
                 signature = _message_signature(index, message)
                 if (
@@ -101,6 +120,8 @@ def elide_replayed_history(events: list[dict[str, Any]]) -> list[dict[str, Any]]
             # it a delta preview reads like a short conversation. A few bytes
             # per event, against the kilobytes elided.
             new_metadata["history_elided_count"] = elided
+            if window is not None:
+                new_metadata["history_window_start"] = window_start
             new_payload["conversation_preview"] = {
                 **preview,
                 "messages": new_messages,
@@ -109,6 +130,8 @@ def elide_replayed_history(events: list[dict[str, Any]]) -> list[dict[str, Any]]
 
         tools = payload.get("tools")
         if isinstance(tools, list):
+            if window is not None:
+                tools = tools[-window:] if window > 0 else []
             new_tools: list[Any] = []
             for entry in tools:
                 signature = _tool_signature(entry)

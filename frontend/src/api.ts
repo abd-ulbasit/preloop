@@ -3441,6 +3441,12 @@ export async function getRuntimeSessionGatewayEvents(
          * carried; kept messages carry their original `position` (#1586).
          */
         history?: 'full' | 'delta';
+        /**
+         * With `history: 'delta'`, keep at most the last N messages per
+         * event, so the oldest event on a page of a long session does not
+         * carry the whole conversation (#1689).
+         */
+        historyWindow?: number;
       } = {}
 ): Promise<FlowGatewayEventsResponse> {
   const searchParams = new URLSearchParams();
@@ -3455,6 +3461,8 @@ export async function getRuntimeSessionGatewayEvents(
       searchParams.set('offset', String(options.offset));
     if (options.metadataOnly) searchParams.set('metadata_only', 'true');
     if (options.history === 'delta') searchParams.set('history', 'delta');
+    if (options.historyWindow !== undefined)
+      searchParams.set('history_window', String(options.historyWindow));
   }
   const params = searchParams.toString() ? `?${searchParams.toString()}` : '';
   const response = await fetchWithAuth(
