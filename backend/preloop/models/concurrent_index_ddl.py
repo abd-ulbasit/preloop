@@ -9,15 +9,22 @@ original session settings are restored even when an operation fails.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from contextlib import contextmanager
 from typing import Iterator
 
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
+from sqlalchemy.exc import SQLAlchemyError
+
+from preloop.models.migration_runtime import sqlstate_of
 
 DEFAULT_LOCK_TIMEOUT_SECONDS = 60
-DEFAULT_STATEMENT_TIMEOUT_SECONDS = 300
+DEFAULT_STATEMENT_TIMEOUT_SECONDS = 120
+
+logger = logging.getLogger("alembic.runtime.concurrent_index")
 
 
 def _seconds(name: str, default: int, maximum: int) -> int:
@@ -61,7 +68,13 @@ def concurrent_index_ddl(context: MigrationContext) -> Iterator[None]:
         statement_seconds = _seconds(
             "PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS",
             DEFAULT_STATEMENT_TIMEOUT_SECONDS,
-            900,
+            240,
+        )
+        started = time.monotonic()
+        logger.info(
+            "Concurrent-index DDL starting (lock_timeout=%ss, statement_timeout=%ss).",
+            lock_seconds,
+            statement_seconds,
         )
         try:
             connection.execute(
@@ -72,6 +85,19 @@ def concurrent_index_ddl(context: MigrationContext) -> Iterator[None]:
                 },
             )
             yield
+        except SQLAlchemyError as error:
+            logger.warning(
+                "Concurrent-index DDL failed after %.1fs (SQLSTATE %s); inspect old transactions, "
+                "pg_blocking_pids and pg_stat_progress_create_index before retrying. "
+                "An interrupted build may leave an invalid index for repair.",
+                time.monotonic() - started,
+                sqlstate_of(error) or "unknown",
+            )
+            raise
+        else:
+            logger.info(
+                "Concurrent-index DDL completed in %.1fs.", time.monotonic() - started
+            )
         finally:
             connection.execute(
                 set_timeouts,

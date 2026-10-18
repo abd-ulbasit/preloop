@@ -1,9 +1,9 @@
 """Index purpose-tagged governance spend without scanning account traffic."""
 
+import sqlalchemy as sa
 from alembic import op
 
 from preloop.models.concurrent_index_ddl import concurrent_index_ddl
-import sqlalchemy as sa
 
 revision = "20261018_gov_spend_idx"
 down_revision = "20261028_obs_verification"

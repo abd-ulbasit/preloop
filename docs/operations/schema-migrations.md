@@ -32,20 +32,13 @@ queues behind it, so a migration that waits a minute for a lock stalls reads of
 that table for a minute.
 
 **A separate budget for concurrent indexes.** Explicit
-`concurrent_index_ddl` blocks allow 60 seconds to acquire a lock and 300 seconds
+`concurrent_index_ddl` blocks allow 60 seconds to acquire a lock and 120 seconds
 for the entire statement. Concurrent index operations wait for older writers
 and snapshots while ordinary reads and writes can continue. Canceling every
 five seconds can leave an invalid index and repeatedly restart its repair.
 The longer budget applies only to these explicit blocks, including invalid-index
 cleanup; the previous lock and statement settings are restored on success or
 failure. Blocking schema changes keep the five-second lock timeout.
-
-**A whole-Job deadline.** `migrationJob.activeDeadlineSeconds` defaults to 900
-seconds, including every attempt and replacement pod. Helm must wait longer
-than this deadline so it observes the final result rather than abandoning a
-still-running hook. Use `helm upgrade ... --timeout 20m` with the defaults.
-If you change the Job deadline, adjust the Helm timeout too. Helm timing out
-does not itself stop a hook Job or undo already committed revisions.
 
 **A bounded retry loop** (`migrationJob.maxAttempts`, default 20, with
 `migrationJob.retryMinSeconds` to `migrationJob.retryMaxSeconds` of jittered
@@ -55,7 +48,7 @@ the first attempt with its own error, because retrying it twenty times would
 only delay the report. A statement timeout (`57014`) also ends the container
 attempt. For blocking DDL, investigate whether a drain is needed. For concurrent
 indexes, inspect older transactions and index progress before tuning only the
-concurrent budgets; the whole-Job deadline still applies.
+concurrent budgets; the deployment deadline is unchanged.
 
 The shorter blocking-DDL budget limits disruption to serving traffic. The
 separate concurrent-index budget allows safe waiting without repeatedly
@@ -67,8 +60,7 @@ canceling a build that is making progress.
 | --- | --- | --- |
 | `migrationJob.lockTimeout` | `5s` | How long one revision waits for a lock before giving up. |
 | `migrationJob.concurrentLockTimeoutSeconds` | `60` | Lock wait only inside concurrent-index blocks; positive integer, maximum 300. |
-| `migrationJob.concurrentStatementTimeoutSeconds` | `300` | Whole concurrent statement budget; positive integer, maximum 900. |
-| `migrationJob.activeDeadlineSeconds` | `900` | Total Kubernetes Job lifetime across every attempt and pod retry. |
+| `migrationJob.concurrentStatementTimeoutSeconds` | `120` | Whole concurrent statement budget; positive integer, maximum 240. |
 | `migrationJob.maxAttempts` | `20` | Attempts at `upgrade head` before the Job fails. |
 | `migrationJob.retryMinSeconds` | `3` | Lower bound of the jittered backoff. |
 | `migrationJob.retryMaxSeconds` | `15` | Upper bound of the jittered backoff. |
@@ -82,8 +74,17 @@ Concurrent index overrides are
 `PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS` and
 `PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS`. Zero, negative,
 non-integer or out-of-range values fall back to the finite defaults. The
-whole-Job deadline is enforced by Kubernetes; a manual process needs its own
-overall execution deadline.
+deployment deadline remains unchanged. Per-statement limits do not guarantee
+the total duration of multiple pending revisions.
+
+Concurrent blocks log their start, elapsed duration and SQLSTATE on failure
+through Alembic logging. An unsuccessful operation points to
+`pg_stat_activity`, `pg_blocking_pids(pid)` and
+`pg_stat_progress_create_index`: inspect transaction age, lock relationships
+and build phase before retrying. Check `pg_index.indisvalid` and `indisready`
+for interrupted builds. A current snapshot cannot identify a historical
+blocker once its transaction has ended. Do not increase deployment timeouts
+to hide a repeatedly canceled build.
 
 ## Application sessions must not idle in a transaction
 
@@ -162,7 +163,7 @@ executions are re-dispatched by the stale-claim reaper.
 
 ```bash
 kubectl scale deploy/preloop-api deploy/preloop-preloop-sync-worker-default --replicas=0
-helm upgrade preloop ./helm/preloop -f values.yaml --timeout 20m
+helm upgrade preloop ./helm/preloop -f values.yaml
 kubectl scale deploy/preloop-api --replicas=<n>
 kubectl scale deploy/preloop-preloop-sync-worker-default --replicas=<n>
 ```
