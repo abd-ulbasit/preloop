@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 import re
 from uuid import UUID
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import crud_account, crud_api_usage
+from preloop.models.crud.governance_budget import PURPOSES, _run_spend_query
 from preloop.models.gateway_usage import GATEWAY_USAGE_PURPOSES
 
 
@@ -268,6 +270,15 @@ def test_spend_predicates_match_frozen_migration_and_purpose_vocabulary(
         start=datetime.now(timezone.utc),
     )
     assert migration.PREDICATE in str(query.statement).replace("api_usage.", "")
+    assert set(PURPOSES) == purposes
+    weekly = _run_spend_query(
+        db_session,
+        account_id=UUID("00000000-0000-0000-0000-000000000001"),
+        window_start=datetime.now(timezone.utc) - timedelta(days=7),
+        window_end=datetime.now(timezone.utc),
+        run_id=uuid4(),
+    )
+    assert migration.PREDICATE in str(weekly.statement).replace("api_usage.", "")
 
 
 def test_migrated_governance_index_survives_autogenerate(db_session: Session) -> None:
