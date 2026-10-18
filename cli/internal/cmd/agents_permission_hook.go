@@ -311,6 +311,12 @@ func resolvePermissionDecision(source string, raw []byte, failOpen bool) hookDec
 		}
 	}
 
+	// A local pause defers to the agent's own permission handling without
+	// calling Preloop, so an unavailable approval service does not block work.
+	if decision, paused := pausedPermissionDecision(source); paused {
+		return decision
+	}
+
 	registerSpawnFromPermissionHook(source, raw)
 
 	// Cursor's preToolUse fires for every tool, including Shell and MCP tools
@@ -553,7 +559,10 @@ func permissionSourceDisplayName(source string) string {
 // hook or disable it, for use in fail-closed deny reasons.
 func permissionHookRemediation(source string) string {
 	remediation := fmt.Sprintf(
-		"Re-run `preloop agents onboard %q --approvals` to repair it",
+		"To keep working, run `%s` (resumes automatically in %s). "+
+			"To repair: re-run `preloop agents onboard %q --approvals`",
+		approvalsPauseCommand,
+		defaultPauseLabel,
 		permissionSourceDisplayName(source),
 	)
 	if configPath, err := approvalHookConfigPath(source); err == nil {
@@ -856,7 +865,7 @@ func callPermissionCheck(
 // which Codex delivers to the model whether or not the hook blocks the call.
 func writeCodexPreToolUseDecision(out io.Writer, decision hookDecision) error {
 	payload := map[string]interface{}{}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != "allow" && decision.Behavior != hookBehaviorPass {
 		payload["hookSpecificOutput"] = map[string]interface{}{
 			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": decision.Reason,
 		}
@@ -903,6 +912,9 @@ func writeHookDecision(out io.Writer, source string, decision hookDecision) erro
 func renderHookDecision(source string, decision hookDecision) map[string]interface{} {
 	allow := decision.Behavior == "allow"
 	ask := decision.Behavior == "ask"
+	if decision.Behavior == hookBehaviorPass {
+		return renderPassHookDecision(source, decision)
+	}
 	switch source {
 	case permissionSourceDevinCLI:
 		if allow {
@@ -980,6 +992,19 @@ func renderHookDecision(source string, decision hookDecision) map[string]interfa
 		return payload
 	default:
 		return map[string]interface{}{"permission": "deny"}
+	}
+}
+
+// renderPassHookDecision answers without a verdict, so the agent falls back
+// to its own permission handling. Devin requires a decision, so it approves.
+func renderPassHookDecision(source string, decision hookDecision) map[string]interface{} {
+	switch source {
+	case permissionSourceDevinCLI:
+		return map[string]interface{}{"decision": "approve"}
+	case permissionSourceClaudeCode:
+		return map[string]interface{}{"systemMessage": decision.Reason}
+	default:
+		return map[string]interface{}{}
 	}
 }
 

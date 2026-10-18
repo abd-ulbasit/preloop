@@ -928,7 +928,8 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("--all-users cannot be combined with --%s", name)
 			}
 		}
-		return runAllUsersInventory(cmd.OutOrStdout(), true)
+		deviceRef, _ := cmd.Flags().GetString("device-ref")
+		return runAllUsersInventory(cmd.OutOrStdout(), true, deviceRef)
 	}
 	asJSON, _ := cmd.Flags().GetBool("json")
 	addServers, _ := cmd.Flags().GetBool("add")
@@ -1809,6 +1810,9 @@ func runAgentsStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Config: %s\n", agent.ConfigPath)
 	fmt.Printf("Runtime principal: %s\n", runtimePrincipalIDForAgent(agent))
 	printAgentStatusDisclosure(os.Stdout, agent)
+	if line := approvalsPauseStatusLine(permissionSourceForAgent(agent)); line != "" {
+		fmt.Println(line)
+	}
 	if localState != nil {
 		fmt.Printf("Local backup: %s\n", localState.BackupPath)
 		fmt.Printf("Managed MCP URL: %s\n", localState.ManagedServerURL)

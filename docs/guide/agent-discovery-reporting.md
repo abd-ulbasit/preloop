@@ -154,8 +154,11 @@ The scan enumerates local profiles from `/Users` on macOS, `/home` and `/root`
 on Linux, or Windows `ProfileList`. It covers the known application registry,
 not every possible install location or network/directory-service profile.
 It scans at most 64 profiles, reads at most 4 MiB per configuration file, and
-reports at most 100 application contexts. Symlinks and unsafe configuration
-paths are refused. Reaching a limit or failing to read a profile leaves the
+reports at most 100 application contexts. Symlinks, hard-linked configurations,
+special files and unsafe configuration paths are refused. Configuration files
+are opened relative to the selected profile with link checks at open time;
+the collector never executes a discovered application or reads its credential
+store. Reaching a limit or failing to read a profile leaves the
 coverage incomplete rather than treating that scope as an empty successful scan.
 
 All-user reports send `evidence.schema_version: 2` on the existing report
@@ -172,8 +175,15 @@ Offline v2 output also associates probe results with `profile_ref`. Its fresh
 per-run random salt makes profile references unrelated across offline runs.
 Reported references use the account salt and workstation context instead.
 
-If profile enumeration fails, the inventory has `completeness: failed` and
-`scope.error_code: profiles_unavailable`. A profile limit produces partial
+If no profiles can be enumerated, the inventory has `completeness: failed` and
+`scope.error_code: profiles_unavailable`. An unreadable Windows `ProfileList`
+entry produces its own hashed failed profile, and collection continues for
+other profiles. Unsafe registry paths (including network paths, alternate data
+streams and traversal) also produce a failed profile without being opened.
+If enumeration returns readable profiles alongside an error, those profiles
+are scanned and the inventory is partial with `profiles_unavailable`. On Linux,
+`/root` is still scanned when `/home` cannot be enumerated.
+A profile limit produces partial
 inventory with `scope.error_code: profile_limit`. The report retains enumerated
 profile states even when no apps were readable; its evidence records partial
 or failed completeness and an `unavailable` error. A report truncated at 100
@@ -199,6 +209,15 @@ turn reporting on without `--report` or the existing opt-in environment flag.
 Matching hashes correlate administrative identifiers and do not attest a device,
 its executable identity or effective governance. Candidate-only reports establish
 receipt history, not collection completeness or trusted control verification.
+
+`--all-users --report --device-ref synthetic-device` uses this same identifier
+for both the workstation fingerprint and its profile references. All-user
+reporting never creates a fallback identity file: if the OS identifier is
+unavailable, it reuses an existing CLI workstation id or fails with a request
+to supply `--device-ref`. Offline inventory does not look up machine identity.
+macOS identity lookup uses the fixed system `ioreg` path, and Windows reads
+`MachineGuid` directly from the registry, so inherited `PATH` cannot select a
+program to execute with collector privileges.
 
 ## Deployment and coverage
 

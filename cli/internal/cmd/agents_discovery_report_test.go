@@ -108,10 +108,13 @@ func useDiscoveryServer(t *testing.T, url string) {
 	oldURL, oldToken := FlagURL, FlagToken
 	FlagURL, FlagToken = url, "tok"
 	oldReader := readMachineID
+	oldInventoryReader := readInventoryMachineID
 	readMachineID = func() (string, error) { return testMachineID, nil }
+	readInventoryMachineID = readMachineID
 	t.Cleanup(func() {
 		FlagURL, FlagToken = oldURL, oldToken
 		readMachineID = oldReader
+		readInventoryMachineID = oldInventoryReader
 	})
 }
 
