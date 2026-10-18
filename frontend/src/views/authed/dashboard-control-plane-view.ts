@@ -110,7 +110,19 @@ import type {
   InventoryModelRow,
   InventoryToolRow,
   InventoryUserRow,
+  InventoryDeviceRow,
+  InventoryTab,
 } from '../../components/inventory-card';
+import {
+  deviceLabel,
+  fleetAccess,
+  fleetHref,
+  getDeviceFleet,
+  osLabel,
+  runnerStateChip,
+  type DeviceFleetDevice,
+} from '../../device-fleet-api';
+import { userHref } from '../../utils/user-href';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import {
   normalizeTimeRangeKey,
@@ -308,6 +320,21 @@ export const NEXT_STEPS_DISMISSED_KEY = 'dashboard_next_steps_dismissed';
  */
 type GatewayFormat = '/openai/v1' | '/anthropic/v1' | '/google/v1';
 
+/**
+ * A read the onboarding prompts are decided on. Until each has answered at
+ * least once, nothing on the page asks the reader to set the account up.
+ */
+type OnboardingInput = 'agents' | 'flows' | 'executions' | 'budget' | 'tools';
+
+/** The permission each input's endpoint requires. */
+const ONBOARDING_INPUT_PERMISSION: Record<OnboardingInput, string> = {
+  agents: 'view_agents',
+  flows: 'view_flows',
+  executions: 'view_flows',
+  budget: 'view_cost',
+  tools: 'view_tools',
+};
+
 interface NextStep {
   /** Nice to have: never keeps the card alive on its own. */
   optional?: boolean;
@@ -443,6 +470,20 @@ export class DashboardView extends AuthedElement {
   @state() private userManagementEnabled = false;
   /** True once the feature flags have answered, either way. */
   @state() private featuresResolved = false;
+  /**
+   * Onboarding inputs whose last read failed. A failed read is an unknown,
+   * not an empty account: settling it to `[]` drew "Connect your first
+   * agent" and Next steps on a populated account until the next refresh
+   * took them back.
+   */
+  @state() private unansweredInputs: ReadonlySet<OnboardingInput> = new Set();
+  /** Device fleet rows for the Inventory, when this reader may see them. */
+  @state() private fleetDevices: DeviceFleetDevice[] = [];
+  @state() private fleetDevicesTotal = 0;
+  @state() private fetchingDevices = true;
+  @state() private canViewFleet = false;
+  /** The last fleet read failed; the tab says so instead of "0". */
+  @state() private devicesUnavailable = false;
   /** Whether the profile, and with it the permissions, has answered. */
   @state() private profileResolved = false;
   /** The people list started with the fold, for the deferred pass to join. */
@@ -527,6 +568,8 @@ export class DashboardView extends AuthedElement {
   private backgroundTimer: number | null = null;
   /** The budget fetch, for the parts of the page that do need to wait on it. */
   private budgetReady: Promise<void> = Promise.resolve();
+  /** The profile read of the current load; permissions are known after it. */
+  private profileReady: Promise<void> = Promise.resolve();
   /** Set while a coalesced sessionStorage write is pending. */
   private cacheWriteScheduled = false;
   /** So a full cache is reported once per session, not once per write. */
@@ -1845,7 +1888,10 @@ export class DashboardView extends AuthedElement {
     return (
       !this.fetchingAgents &&
       !this.fetchingFlows &&
-      !this.fetchingRecentExecutions
+      !this.fetchingRecentExecutions &&
+      !this.unansweredInputs.has('agents') &&
+      !this.unansweredInputs.has('flows') &&
+      !this.unansweredInputs.has('executions')
     );
   }
 
@@ -1861,6 +1907,8 @@ export class DashboardView extends AuthedElement {
       this.onboardingResolved &&
       !this.fetchingBudget &&
       !this.fetchingTools &&
+      !this.unansweredInputs.has('budget') &&
+      !this.unansweredInputs.has('tools') &&
       this.featuresResolved &&
       // The invite step reads the people list, so a checklist that offers it
       // waits for that list too rather than ticking the row a beat later.
@@ -2121,7 +2169,8 @@ export class DashboardView extends AuthedElement {
           ReturnType<typeof getAccountRuntimeSessions>
         >
       ),
-      this.catchWith403Handling(
+      this.readOnboardingInput(
+        'agents',
         getAccountAgents({ status: 'all', limit: 100 }),
         { items: [], total: 0 } as unknown as Awaited<
           ReturnType<typeof getAccountAgents>
@@ -2131,7 +2180,8 @@ export class DashboardView extends AuthedElement {
     this.runtimeSessions = runtimeSessions.items || [];
     this.totalRuntimeSessionsCount =
       runtimeSessions.total ?? this.runtimeSessions.length;
-    this.applyAgentsList(managedAgents);
+    // A failed read keeps the agents already on screen.
+    if (managedAgents) this.applyAgentsList(managedAgents);
   }
 
   /** What an approval event can change. */
@@ -2148,14 +2198,15 @@ export class DashboardView extends AuthedElement {
   /** What a flow execution event can change. */
   private async refreshFlowRuns(): Promise<void> {
     const [flows, flowExecutions] = await Promise.all([
-      this.catchWith403Handling(getFlowSummaries(), [] as any[]),
-      this.catchWith403Handling(
+      this.readOnboardingInput('flows', getFlowSummaries(), [] as any[]),
+      this.readOnboardingInput(
+        'executions',
         getFlowExecutions({ limit: FLOW_EXECUTIONS_PAGE_SIZE }),
         [] as FlowExecution[]
       ),
     ]);
-    this.applyFlows(flows);
-    this.applyFlowExecutions(flowExecutions);
+    if (flows) this.applyFlows(flows);
+    if (flowExecutions) this.applyFlowExecutions(flowExecutions);
   }
 
   /**
@@ -2268,11 +2319,15 @@ export class DashboardView extends AuthedElement {
           : getFeatures().catch(() => null),
       ]);
 
-      const policies = await getBudgetPolicies().catch(
-        () => [] as BudgetPolicy[]
+      const policies = await this.readOnboardingInput(
+        'budget',
+        getBudgetPolicies(),
+        [] as BudgetPolicy[]
       );
 
-      this.budgetPolicies = Array.isArray(policies) ? policies : [];
+      if (policies !== undefined) {
+        this.budgetPolicies = Array.isArray(policies) ? policies : [];
+      }
       this.budgetAgents = budgetAgents.items || [];
       this.scheduleCacheWrite();
     } finally {
@@ -2294,6 +2349,47 @@ export class DashboardView extends AuthedElement {
       console.error('Dashboard data fetch error:', error);
       return defaultValue;
     }
+  }
+
+  /**
+   * Read one onboarding input. A refusal for a reader without the
+   * permission answers "nothing this reader can see" with `forbidden`; any
+   * other failure answers nothing at all: the input is marked unanswered and
+   * `undefined` tells the caller to keep what it has. The API helpers throw
+   * without a status code, so a refusal is recognised by the reader's
+   * permissions once the profile has answered.
+   */
+  private async readOnboardingInput<T>(
+    input: OnboardingInput,
+    promise: Promise<T>,
+    forbidden: T
+  ): Promise<T | undefined> {
+    let value: T | undefined;
+    try {
+      value = await promise;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.profileReady.catch(() => undefined);
+      const refused =
+        message.includes('403') ||
+        !hasPermission(this.permissions, ONBOARDING_INPUT_PERMISSION[input]);
+      if (!refused) {
+        console.error(`Overview ${input} read failed:`, error);
+        this.setInputAnswered(input, false);
+        return undefined;
+      }
+      value = forbidden;
+    }
+    this.setInputAnswered(input, true);
+    return value;
+  }
+
+  private setInputAnswered(input: OnboardingInput, answered: boolean): void {
+    if (answered !== this.unansweredInputs.has(input)) return;
+    const next = new Set(this.unansweredInputs);
+    if (answered) next.delete(input);
+    else next.add(input);
+    this.unansweredInputs = next;
   }
 
   private queueDashboardRefresh(options: {
@@ -2482,6 +2578,7 @@ export class DashboardView extends AuthedElement {
 
     try {
       const adminPromise = this.fetchAdminStatus();
+      this.profileReady = adminPromise;
       const featuresPromise = this.fetchFeatures();
       if (!options.preserveLoadingState) {
         // The activity feed waits for this list instead of asking for its
@@ -2582,7 +2679,8 @@ export class DashboardView extends AuthedElement {
             sessions.total ?? this.runtimeSessions.length;
           return sessions;
         }),
-        this.catchWith403Handling(
+        this.readOnboardingInput(
+          'agents',
           getAccountAgents({ status: 'all', limit: 100 }),
           {
             items: [],
@@ -2595,7 +2693,7 @@ export class DashboardView extends AuthedElement {
             range !== this.gatewayTimeRange
           )
             return agents;
-          this.applyAgentsList(agents);
+          if (agents) this.applyAgentsList(agents);
           this.fetchingAgents = false;
           return agents;
         }),
@@ -2635,7 +2733,7 @@ export class DashboardView extends AuthedElement {
       this.runtimeSessions = runtimeSessions.items || [];
       this.totalRuntimeSessionsCount =
         runtimeSessions.total ?? this.runtimeSessions.length;
-      this.applyAgentsList(managedAgents);
+      if (managedAgents) this.applyAgentsList(managedAgents);
       this.fetchingAgents = false;
 
       this.lastUpdatedAt = new Date().toISOString();
@@ -2645,7 +2743,7 @@ export class DashboardView extends AuthedElement {
       // Not awaited: the Usage card and the checklist wait on
       // `fetchingBudget` themselves, and nothing above the fold does.
       this.budgetReady = this.fetchBudgetSummary({
-        sharedAgents: managedAgents,
+        sharedAgents: managedAgents ?? null,
         features: featuresRes,
       });
       this.scheduleCacheWrite();
@@ -2792,19 +2890,47 @@ export class DashboardView extends AuthedElement {
    * waits for the fold (D32).
    */
   private startInventoryListFetches(): void {
+    void this.fetchDevicesList();
     void this.fetchFlowsList();
     void this.fetchModelsList();
     void this.fetchToolsList();
   }
 
+  /**
+   * The device fleet, for the Inventory's Devices tab. Nothing is asked of
+   * the fleet API until the feature and the reader's permission allow it,
+   * the same rule the fleet page follows.
+   */
+  private async fetchDevicesList(): Promise<void> {
+    this.fetchingDevices = true;
+    try {
+      const access = await fleetAccess().catch(() => ({
+        view: false,
+        manage: false,
+      }));
+      this.canViewFleet = access.view;
+      if (!access.view) return;
+      const page = await getDeviceFleet();
+      this.fleetDevices = page.items || [];
+      this.fleetDevicesTotal = page.total ?? this.fleetDevices.length;
+      this.devicesUnavailable = false;
+    } catch (error) {
+      console.error('Failed to load the device fleet', error);
+      this.devicesUnavailable = true;
+    } finally {
+      this.fetchingDevices = false;
+    }
+  }
+
   private async fetchFlowsList(): Promise<void> {
     this.fetchingFlows = true;
     try {
-      const flows = await this.catchWith403Handling(
+      const flows = await this.readOnboardingInput(
+        'flows',
         getFlowSummaries(),
         [] as any[]
       );
-      this.applyFlows(flows);
+      if (flows) this.applyFlows(flows);
     } catch (error) {
       console.error('Failed to load the flows list', error);
     } finally {
@@ -2827,8 +2953,12 @@ export class DashboardView extends AuthedElement {
   private async fetchToolsList(): Promise<void> {
     this.fetchingTools = true;
     try {
-      const tools = await this.catchWith403Handling(getToolsSummary(), []);
-      this.applyToolsList(tools);
+      const tools = await this.readOnboardingInput(
+        'tools',
+        getToolsSummary(),
+        [] as ToolSummary[]
+      );
+      if (tools) this.applyToolsList(tools);
     } catch (error) {
       console.error('Failed to load the tools list', error);
     } finally {
@@ -2867,11 +2997,12 @@ export class DashboardView extends AuthedElement {
       // Executions are the Flows tab's usage. Apply them on arrival so a
       // slow approvals or search call cannot hold the run counts at zero.
       const executionsPromise = (async () => {
-        const flowExecutions = await this.catchWith403Handling(
+        const flowExecutions = await this.readOnboardingInput(
+          'executions',
           getFlowExecutions({ limit: FLOW_EXECUTIONS_PAGE_SIZE }),
           [] as FlowExecution[]
         );
-        this.applyFlowExecutions(flowExecutions);
+        if (flowExecutions) this.applyFlowExecutions(flowExecutions);
         this.fetchingFlowUsage = false;
       })();
       const [allApprovalRequests] = await Promise.all([
@@ -3486,13 +3617,22 @@ export class DashboardView extends AuthedElement {
   }
 
   /**
-   * True when at least one tool is disabled or approval-gated. The next-step
-   * label ("Restrict a tool") matches this signal. Subject-scoped model lists
-   * and other Policies-page rules are not visible here.
+   * True when somebody on the account restricted a tool: a tool
+   * configuration exists (`config_id`) and it disables the tool, gates it on
+   * an approval or carries access rules. A builtin that ships disabled
+   * (`default_enabled: false`) reports `is_enabled: false` with no
+   * configuration, and counting it ticked this step on a brand new account.
+   * Subject-scoped model lists and other Policies-page rules are not visible
+   * here.
    */
   private get hasToolPolicy(): boolean {
     return this.tools.some(
-      (tool) => !tool.is_enabled || Boolean(tool.approval_workflow_id)
+      (tool) =>
+        Boolean(tool.config_id) &&
+        (!tool.is_enabled ||
+          Boolean(tool.approval_workflow_id) ||
+          tool.has_approval_condition === true ||
+          (tool.access_rules?.length ?? 0) > 0)
     );
   }
 
@@ -4455,6 +4595,45 @@ export class DashboardView extends AuthedElement {
    * they own, which is the only link the gateway records between a request
    * and a human; flows carry no owner at all, so there is no flows column.
    */
+  private get inventoryDeviceRows(): InventoryDeviceRow[] {
+    return this.fleetDevices.map((device) => {
+      const chip = runnerStateChip(device.runner_state);
+      const people = new Map<string, InventoryDeviceRow['people'][number]>();
+      for (const user of device.users) {
+        const key = user.id ? `id:${user.id}` : `label:${user.label}`;
+        if (people.has(key)) continue;
+        people.set(key, {
+          id: user.id,
+          label: user.label,
+          href: user.id ? userHref(user.id) : null,
+        });
+      }
+      return {
+        key: device.device_key,
+        name: deviceLabel(device),
+        os: osLabel(device.os),
+        href: fleetHref(device.device_key),
+        people: [...people.values()],
+        runnerState: device.runner_state,
+        runnerLabel: chip.label,
+        runnerLive: chip.variant === 'success',
+        agentsGoverned: device.agents_onboarded,
+        agentsUngoverned: device.agents_not_onboarded,
+        lastSeenAt: device.last_seen_at,
+      };
+    });
+  }
+
+  /** Tabs whose list could not be read, so they do not claim "0". */
+  private get unavailableInventoryTabs(): InventoryTab[] {
+    const tabs: InventoryTab[] = [];
+    if (this.unansweredInputs.has('agents')) tabs.push('agents');
+    if (this.unansweredInputs.has('flows')) tabs.push('flows');
+    if (this.unansweredInputs.has('tools')) tabs.push('tools');
+    if (this.devicesUnavailable) tabs.push('devices');
+    return tabs;
+  }
+
   private get inventoryUserRows(): InventoryUserRow[] {
     const perAgent = new Map<
       string,
@@ -4581,6 +4760,10 @@ export class DashboardView extends AuthedElement {
         .modelRows=${this.inventoryModelRows}
         .toolRows=${this.inventoryToolRows}
         .userRows=${this.inventoryUserRows}
+        .deviceRows=${this.inventoryDeviceRows}
+        .devicesTotal=${this.fleetDevicesTotal}
+        ?showDevices=${this.canViewFleet}
+        .unavailableTabs=${this.unavailableInventoryTabs}
         .agentsTotal=${this.totalAgentsCount}
         .flowsTotal=${this.totalFlowsCount}
         .modelsTotal=${this.aiModelsCount}
@@ -4595,6 +4778,7 @@ export class DashboardView extends AuthedElement {
         .loadingModels=${this.fetchingModels}
         .loadingTools=${this.fetchingTools}
         .loadingUsers=${this.fetchingUsers}
+        .loadingDevices=${this.fetchingDevices}
         .usageAvailable=${this.gatewayUsageRange === this.gatewayTimeRange}
         .modelUsageAvailable=${this.modelUsageRange === this.gatewayTimeRange}
         ?usageLoading=${this.usageColumnsPending}
