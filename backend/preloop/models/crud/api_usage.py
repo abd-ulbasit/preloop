@@ -1,7 +1,10 @@
 """CRUD operations for ApiUsage model."""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+import json
+import math
 import logging
 from types import SimpleNamespace
 import uuid
@@ -71,6 +74,21 @@ def _refresh_committed_row(db: Session, db_obj: Any) -> None:
         )
         for key, value in snapshot.items():
             set_committed_value(db_obj, key, value)
+
+
+@dataclass(frozen=True)
+class GovernanceSpendSnapshot:
+    """Statement-consistent governance costs read before account admission.
+
+    Keep the original cost per id so settling a provisional row between the
+    read and the lock contributes only its cost change, never a second charge.
+    Comparing by row id also catches backdated and late-committing inserts.
+    """
+
+    account_id: str
+    start: datetime
+    costs: dict[str, float]
+    total: float
 
 
 GATEWAY_USAGE_FUNDING = frozenset({"platform", "account"})
@@ -3103,6 +3121,73 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             query = query.filter(ApiUsage.timestamp <= execution.end_time)
 
         return query.count()
+
+    def _governance_spend_query(
+        self, db: Session, *, account_id: str, start: datetime
+    ) -> Any:
+        """Select the small indexed governance subset, including reservations."""
+        return db.query(self.model).filter(
+            self.model.account_id == account_id,
+            self.model.timestamp >= start,
+            self.model.action_type == "model_gateway",
+            self.model.meta_data["purpose"].astext.in_(
+                ("governance_session_digest", "governance_review")
+            ),
+            self.model.meta_data["funding"].astext == "platform",
+        )
+
+    def snapshot_governance_spend(
+        self, db: Session, *, account_id: str, start: datetime
+    ) -> GovernanceSpendSnapshot:
+        """Read weekly spend before taking the account admission lock.
+
+        Retain row costs rather than a wall-clock cutoff: inserts may carry old
+        usage timestamps or commit after admission starts. Settlements may change
+        an existing reservation in either direction.
+        """
+        costs = (
+            self._governance_spend_query(db, account_id=account_id, start=start)
+            .with_entities(
+                func.jsonb_object_agg(
+                    cast(self.model.id, String),
+                    func.coalesce(self.model.estimated_cost, 0.0),
+                ),
+            )
+            .scalar()
+        )
+        costs = costs or {}
+        return GovernanceSpendSnapshot(
+            account_id, start, costs, math.fsum(costs.values())
+        )
+
+    def governance_spend_since_snapshot(
+        self, db: Session, *, snapshot: GovernanceSpendSnapshot
+    ) -> float:
+        """Apply only inserted or changed costs under the account admission lock.
+
+        PostgreSQL READ COMMITTED supplies a fresh statement snapshot after the
+        lock wait. Costs that have not changed remain in the baseline. Removed or
+        reclassified historical rows can only leave a conservative overestimate;
+        admission never depends on concurrent retention reducing spend.
+        """
+        rows = (
+            self._governance_spend_query(
+                db, account_id=snapshot.account_id, start=snapshot.start
+            )
+            .with_entities(self.model.id, self.model.estimated_cost)
+            .filter(
+                text(
+                    "COALESCE(api_usage.estimated_cost, 0) IS DISTINCT FROM "
+                    "((CAST(:governance_costs AS jsonb) ->> api_usage.id::text)"
+                    "::double precision)"
+                ).bindparams(governance_costs=json.dumps(snapshot.costs))
+            )
+            .all()
+        )
+        return snapshot.total + sum(
+            (cost or 0.0) - snapshot.costs.get(str(identifier), 0.0)
+            for identifier, cost in rows
+        )
 
     def get_gateway_spend(
         self,
