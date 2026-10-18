@@ -957,10 +957,11 @@ async def agent_session_start(
 
 
 class AgentSessionEventRequest(BaseModel):
-    """A harness turn ending or session ending under a hook (#1889).
+    """API payload for a harness turn-end or session-end signal (#1889).
 
-    Sent by the Stop, SubagentStop and SessionEnd hooks. Only the time and
-    the kind are kept.
+    Accepts Stop, SubagentStop and SessionEnd event names, storing the kind
+    and receipt time without content. Producer integration is separate from
+    this backend contract.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -981,7 +982,7 @@ def _record_session_event(
     from preloop.models.crud import crud_runtime_session
     from preloop.services.agent_session_headers import normalize_session_id
     from preloop.services.agent_session_lineage import (
-        resolve_external_session,
+        runner_session_for_external,
         session_source_id_for,
     )
 
@@ -991,21 +992,28 @@ def _record_session_event(
     if not principal_type or not principal_id or external is None:
         return False
     with get_session_factory()() as db:
-        session = crud_runtime_session.get_by_source(
+        session = runner_session_for_external(
             db,
             account_id=identity.account_id,
-            session_source_type=principal_type,
-            session_source_id=session_source_id_for(principal_id, external),
+            external_session_id=external,
+            actor_user_id=identity.user_id,
         )
         if session is None:
-            found = resolve_external_session(
+            qualified = session_source_id_for(principal_id, external)
+            session = crud_runtime_session.get_by_source(
                 db,
                 account_id=identity.account_id,
-                external_session_id=external,
-                principal_type=principal_type,
-                principal_id=principal_id,
+                session_source_type=principal_type,
+                session_source_id=qualified,
             )
-            session = found[0] if found else None
+            # An account-local harness id is not authority to mutate its
+            # session. Require a positively owned registration; importer
+            # rows without a runtime principal cannot be ended by this hook.
+            if session is not None and (
+                session.runtime_principal_type != principal_type
+                or session.runtime_principal_id not in {principal_id, qualified}
+            ):
+                return False
         if session is None:
             return False
         record_session_event(

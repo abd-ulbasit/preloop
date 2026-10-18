@@ -168,6 +168,43 @@ def test_fold_moves_old_minutes_into_hours(
     )
 
 
+@pytest.mark.parametrize("empty_histogram", ["reply", "approval", "both"])
+def test_fold_preserves_counts_with_empty_histograms(
+    db_session: Session, account_id: uuid.UUID, empty_histogram: str
+) -> None:
+    hour = utc_floor(datetime.now(UTC) - timedelta(days=3), 3600)
+    delta = RollupDelta(
+        account_id,
+        60,
+        hour + timedelta(minutes=1),
+        "account",
+        "empty-histogram",
+        requests=3,
+        tool_calls=2,
+        spend_usd=Decimal("0.25"),
+        reply_latency_hist=[] if empty_histogram in {"reply", "both"} else [1],
+        approval_latency_hist=[] if empty_histogram in {"approval", "both"} else [2],
+    )
+    crud_live_activity.upsert_rollups(db_session, deltas=[delta], pass_id=uuid.uuid4())
+    assert (
+        crud_live_activity.fold_minutes_into_hours(
+            db_session, older_than=datetime.now(UTC) - timedelta(hours=48)
+        )
+        == 1
+    )
+    db_session.expire_all()
+    row = _rollup(db_session, account_id, "empty-histogram")
+    assert (row.granularity, row.bucket_start, row.requests, row.tool_calls) == (
+        3600,
+        hour,
+        3,
+        2,
+    )
+    assert row.spend_usd == Decimal("0.25")
+    assert row.reply_latency_hist == delta.reply_latency_hist
+    assert row.approval_latency_hist == delta.approval_latency_hist
+
+
 def test_retention_deletes_in_batches(
     db_session: Session, account_id: uuid.UUID
 ) -> None:

@@ -1040,8 +1040,11 @@ tracking or cross-account analytics endpoints.
 
 ### Optional live activity foundations
 
-Core stores content-free prompt and turn timestamps, bounded activity rollups,
-presence transitions and worker watermarks through its CRUD layer. Optional
+Core accepts content-free prompt and turn timestamps through backend APIs and
+stores them alongside bounded activity rollups, presence transitions and worker
+watermarks through its CRUD layer. CLI and runtime-plugin hook producers are
+outside this foundation. Hook timestamps stay out of the session replay timeline
+and remain available to activity aggregation. Optional
 Cloud and Enterprise extensions own derivation and authenticated board APIs;
 core keeps the capability off by default. Presence realtime events require
 `view_users` for another person or device, with an own-subject exception.

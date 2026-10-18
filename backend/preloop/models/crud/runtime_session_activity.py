@@ -954,7 +954,8 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
     ) -> list[Any]:
         """Return recent activity for the timeline, newest first.
 
-        Same rows as ``list_for_runtime_session``, but a model gateway call
+        Content-free hook timestamps are excluded before the row limit. Other
+        rows match ``list_for_runtime_session``, but a model gateway call
         comes back without its history keys, removed in SQL so Postgres never
         ships them. Every other activity type keeps its full metadata.
         A focused operator note adds at most one row from the same account
@@ -980,6 +981,7 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
         ).filter(
             self.model.account_id == account_id,
             self.model.runtime_session_id == runtime_session_id,
+            self.model.activity_type.notin_(HOOK_TURN_ACTIVITY_TYPES),
         )
         rows = query.order_by(self.model.timestamp.desc()).limit(limit).all()
         if operator_note_id and not any(

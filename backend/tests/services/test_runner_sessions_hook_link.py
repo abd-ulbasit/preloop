@@ -440,6 +440,38 @@ def test_admin_started_session_links_runner_owner_hook_only(
     assert start.runtime_session_id == str(row.runtime_session_id)
 
 
+def test_session_event_requires_runner_actor_or_owner(
+    endpoint_db: Session,
+    runner: models.FlowRunner,
+    test_user: models.User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from preloop.api.endpoints import agent_permission
+    from preloop.services import session_hook_events
+
+    db = endpoint_db
+    owner = _user(db, test_user.account_id, "hook-owner")
+    runner.registered_by_user_id = owner.id
+    row = _start(db, runner, test_user)
+    hs = str(uuid.uuid4())
+    _go_idle(db, runner, row, hs)
+    stranger = _user(db, test_user.account_id, "hook-stranger")
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(session_hook_events, "emit_account_event", events.append)
+    payload = agent_permission.AgentSessionEventRequest(
+        session_id=hs, hook_event_name="SessionEnd"
+    )
+    assert not agent_permission._record_session_event(_identity(db, stranger), payload)
+    runtime = db.get(models.RuntimeSession, row.runtime_session_id)
+    db.refresh(runtime)
+    assert runtime.ended_at is None
+    assert events == []
+    assert agent_permission._record_session_event(_identity(db, owner), payload)
+    db.refresh(runtime)
+    assert runtime.ended_at is not None
+    assert [event["type"] for event in events] == ["runtime_session_hook_ended"]
+
+
 def _row_fields(db: Session, row: models.RunnerRemoteSession) -> tuple:
     runtime = db.get(models.RuntimeSession, row.runtime_session_id)
     db.refresh(runtime)

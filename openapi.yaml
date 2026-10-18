@@ -24468,12 +24468,14 @@ components:
       - session_id
       - hook_event_name
       title: AgentSessionEventRequest
-      description: 'A harness turn ending or session ending under a hook (#1889).
+      description: 'API payload for a harness turn-end or session-end signal (#1889).
 
 
-        Sent by the Stop, SubagentStop and SessionEnd hooks. Only the time and
+        Accepts Stop, SubagentStop and SessionEnd event names, storing the kind
 
-        the kind are kept.'
+        and receipt time without content. Producer integration is separate from
+
+        this backend contract.'
     AgentSessionStartRequest:
       properties:
         session_id:

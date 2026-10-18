@@ -443,10 +443,12 @@ class CRUDLiveActivity:
                         agg.tool_calls, agg.prompts, agg.turn_ends,
                         agg.approvals_requested, agg.approvals_decided,
                         agg.prompt_tokens, agg.completion_tokens, agg.spend_usd,
-                        rha.arr, aha.arr, agg.active_seconds, now(), now()
+                        COALESCE(rha.arr, '{}'::smallint[]),
+                        COALESCE(aha.arr, '{}'::smallint[]),
+                        agg.active_seconds, now(), now()
                     FROM agg
-                    JOIN rha USING (account_id, subject_type, subject_id, hour)
-                    JOIN aha USING (account_id, subject_type, subject_id, hour)
+                    LEFT JOIN rha USING (account_id, subject_type, subject_id, hour)
+                    LEFT JOIN aha USING (account_id, subject_type, subject_id, hour)
                     ON CONFLICT ON CONSTRAINT uq_activity_rollup_key DO UPDATE SET
                         requests = activity_rollup.requests + excluded.requests,
                         tool_calls = activity_rollup.tool_calls + excluded.tool_calls,

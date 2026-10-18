@@ -1,9 +1,8 @@
-"""Prompt, turn-end and session-end timestamps from the harness hooks (#1889).
+"""Backend APIs for prompt, turn-end and session-end timestamps (#1889).
 
-The hooks already run on every onboarded harness; these tests pin what is
-persisted from them (a kind and a time, never prompt text), the dedupe that
-keeps a doubled hook from counting twice, and that an unknown session never
-fails the harness.
+These tests submit synthetic hook payloads to pin content-free persistence,
+duplicate suppression and unknown-session handling. This backend foundation
+does not add or verify CLI or runtime-plugin hook producers.
 """
 
 from __future__ import annotations
@@ -326,7 +325,7 @@ def test_mark_ended_by_hook_stamps_only_an_open_session(
 def test_both_session_end_routes_end_and_record_once(
     client: Any, db_session: Session, token: str, emitted: list
 ) -> None:
-    """The CLI posts /session-end and /session-event together."""
+    """Either API can receive duplicate end signals without double-counting."""
     started = _start(client, token)
     for url, body in (
         ("/api/v1/agents/session-end", {"external_session_id": "ext-1"}),
@@ -340,3 +339,37 @@ def test_both_session_end_routes_end_and_record_once(
     assert session.ended_at is not None
     assert len(_rows(db_session, session.id, "session_end")) == 1
     assert [e["type"] for e in emitted] == ["runtime_session_hook_ended"]
+
+
+@pytest.mark.parametrize("hook_event_name", ["Stop", "SessionEnd"])
+def test_session_event_cannot_modify_another_managed_principals_session(
+    client: Any,
+    db_session: Session,
+    token: str,
+    emitted: list[dict[str, Any]],
+    hook_event_name: str,
+) -> None:
+    """An account-local harness id is not authority over its principal."""
+    started = _start(client, token)
+    session = db_session.get(RuntimeSession, started["runtime_session_id"])
+    before_activity = session.last_activity_at
+    other = client.post(
+        TOKEN_URL,
+        json={
+            "session_source_type": "claude_code",
+            "session_source_id": "another-laptop",
+        },
+    )
+    assert other.status_code == 201, other.text
+    response = client.post(
+        EVENT_URL,
+        json={"session_id": "ext-1", "hook_event_name": hook_event_name},
+        headers=_auth(other.json()["token"]),
+    )
+    assert response.status_code == 204
+    db_session.refresh(session)
+    assert session.ended_at is None
+    assert session.last_activity_at == before_activity
+    assert _rows(db_session, session.id, "turn_end") == []
+    assert _rows(db_session, session.id, "session_end") == []
+    assert emitted == []
