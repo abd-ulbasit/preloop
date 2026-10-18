@@ -130,7 +130,19 @@ def build_fleet_map(
             partial_sources.add(name)
         rows = rows[:SOURCE_LIMIT]
         source_rows[name] = rows
-        return filter_viewable(db, user, resource_type, rows) if resource_type else rows
+        if not resource_type:
+            return rows
+        if name == "models":
+            # Match the Models console: available built-ins are public catalog
+            # entries, not tenant resources governed by resource access rules.
+            owned = [row for row in rows if row.account_id is not None]
+            visible_ids = {
+                row.id for row in filter_viewable(db, user, resource_type, owned)
+            }
+            return [
+                row for row in rows if row.account_id is None or row.id in visible_ids
+            ]
+        return filter_viewable(db, user, resource_type, rows)
 
     agents = read("agents", "view_agents", VISIBLE_MANAGED_AGENT)
     ai_models = read("models", "view_ai_models", VISIBLE_AI_MODEL)
