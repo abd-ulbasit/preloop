@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace as Row
+from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -506,14 +507,48 @@ def test_legacy_fallback_uses_latest_enrollment_when_no_preferred_type_exists(
 def test_built_in_binding_preserves_impact_without_operator_credentials(
     sources: tuple[MagicMock, MagicMock],
 ) -> None:
+    from preloop.plugins.account_hooks import (
+        ALLOW,
+        ACTION_RESOURCE_VIEW,
+        VISIBLE_AI_MODEL,
+        AuthorizationContext,
+        Decision,
+        filter_viewable,
+        get_authorizer,
+        register_authorizer,
+    )
+
     crud, _ = sources
-    crud.crud_ai_model.get_multi.return_value = [model(account_id=None)]
-    with patch(f"{MODULE}.built_in_models_enabled", return_value=True):
-        graph = build_fleet_map(MagicMock(), user=viewer())
+    crud.crud_ai_model.get_multi.return_value = [model(account_id=None), model("owned")]
+    checked: list[str] = []
+
+    def deny_model_rows(
+        ctx: AuthorizationContext, action: str, resource: Any = None
+    ) -> Decision:
+        if (
+            action == ACTION_RESOURCE_VIEW
+            and ctx.attributes.get("resource_type") == VISIBLE_AI_MODEL
+        ):
+            checked.append(resource.id)
+            return Decision("deny")
+        return ALLOW
+
+    previous = get_authorizer()
+    register_authorizer(deny_model_rows)
+    try:
+        with (
+            patch(f"{MODULE}.built_in_models_enabled", return_value=True),
+            patch(f"{MODULE}.filter_viewable", filter_viewable),
+        ):
+            graph = build_fleet_map(MagicMock(), user=viewer())
+    finally:
+        register_authorizer(previous)
     assert crud.crud_ai_model.get_multi.call_args.kwargs["include_built_in"] is True
     assert any(
         e.kind == "uses_model" and e.target == "model:model-a" for e in graph.edges
     )
+    assert checked == ["owned"]
+    assert not any(n.id == "model:owned" for n in graph.nodes)
     assert not any(n.type == "provider_account" for n in graph.nodes)
     assert "secret-a" not in graph.model_dump_json()
     assert not graph.truncated
