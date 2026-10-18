@@ -65,6 +65,11 @@ describe('AIModelsView', () => {
           JSON.stringify({
             period_start: '2026-02-09T00:00:00Z',
             period_end: '2026-03-09T23:59:59Z',
+            prior_period_estimated_cost: url.includes(
+              'include_prior_period=true'
+            )
+              ? 1.25
+              : null,
             models: [
               {
                 ai_model_id: 'model-1',
@@ -663,20 +668,29 @@ describe('AIModelsView', () => {
         .filter((call) =>
           String(call.args[0]).startsWith('/api/v1/ai-models/overview')
         ).length;
-    // Mount asks for this window and the one before it, once each.
-    expect(overviewCalls()).to.equal(2);
+    const overviewUrls = () =>
+      fetchStub
+        .getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((url) => url.startsWith('/api/v1/ai-models/overview'));
+    // Mount asks once: the prior window rides on the same request (#1694).
+    expect(overviewCalls()).to.equal(1);
+    expect(overviewUrls()[0]).to.contain('include_prior_period=true');
+    expect((element as any).priorFleetSpend).to.equal(1.25);
 
-    // A websocket refresh is one request, not two: the prior 30 day window
-    // moves once a day, and a burst of extra calls is what emptied the API
-    // connection pool on 2026-09-03.
+    // A websocket refresh is one request and does not ask for the prior
+    // window: it moves once a day, and a burst of extra work is what emptied
+    // the API connection pool on 2026-09-03.
     await element.fetchModels({ preserveLoadingState: true });
-    expect(overviewCalls()).to.equal(3);
+    expect(overviewCalls()).to.equal(2);
+    expect(overviewUrls()[1]).not.to.contain('include_prior_period');
 
     // Even a full reload reuses the loaded prior window while it is current.
     await element.fetchModels();
-    await waitUntil(() => overviewCalls() >= 4, 'reload did not fetch');
-    expect(overviewCalls()).to.equal(4);
-    expect((element as any).priorFleetSpend).to.be.a('number');
+    await waitUntil(() => overviewCalls() >= 3, 'reload did not fetch');
+    expect(overviewCalls()).to.equal(3);
+    expect(overviewUrls()[2]).not.to.contain('include_prior_period');
+    expect((element as any).priorFleetSpend).to.equal(1.25);
   });
 
   it('renders compact counts and shared sub-cent spend', async () => {

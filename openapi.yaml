@@ -11804,6 +11804,19 @@ paths:
           in this window are newer than the timestamp. The console passes the moment
           an operator marked the model fixed, so a row can say ''2 failed since fix''
           instead of repeating the whole window''s total.'
+      - name: include_prior_period
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Also return prior_period_estimated_cost, the spend of the window
+            of equal length just before this one, so the page needs one request instead
+            of two.
+          default: false
+          title: Include Prior Period
+        description: Also return prior_period_estimated_cost, the spend of the window
+          of equal length just before this one, so the page needs one request instead
+          of two.
       responses:
         '200':
           description: Successful Response
@@ -22316,6 +22329,14 @@ components:
             $ref: '#/components/schemas/AIModelOverviewItem'
           type: array
           title: Models
+        prior_period_estimated_cost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Prior Period Estimated Cost
+          description: Estimated cost of the same models over the window of equal
+            length that ends where this one starts. Only set when the request asked
+            for it with include_prior_period.
       type: object
       required:
       - period_start

@@ -4462,11 +4462,17 @@ export async function getAvailableModelsForProvider(
  * detail page, where a person is looking at exactly one model.
  */
 export async function getAIModelsOverview(
-  params: GatewayUsageSummaryParams = {}
+  params: GatewayUsageSummaryParams & {
+    /** Also return the prior window's spend, in the same request (#1694). */
+    includePriorPeriod?: boolean;
+  } = {}
 ): Promise<AIModelsOverviewResponse> {
-  const response = await fetchWithAuth(
-    `/api/v1/ai-models/overview${buildGatewayUsageQuery(params)}`
-  );
+  const { includePriorPeriod, ...usageParams } = params;
+  let query = buildGatewayUsageQuery(usageParams);
+  if (includePriorPeriod) {
+    query += `${query ? '&' : '?'}include_prior_period=true`;
+  }
+  const response = await fetchWithAuth(`/api/v1/ai-models/overview${query}`);
   if (!response.ok) {
     throw new Error('Failed to fetch AI models overview');
   }
