@@ -139,9 +139,13 @@ class RuntimeSessionExplorerService:
         flow_execution_id: Optional[str] = None,
         active_within_minutes: Optional[int] = None,
         has_artifacts: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
     ) -> AccountRuntimeSessionListResponse:
         principals, source_types = self._resolve_agent_filters(
-            account=account, agent=agent, agent_kind=agent_kind
+            account=account,
+            agent=agent,
+            agent_kind=agent_kind,
+            owner_user_id=owner_user_id,
         )
         history_window = resolve_history_window(self.db, account=account)
         start_date, end_date = self._normalize_period(start_date, end_date)
@@ -206,6 +210,7 @@ class RuntimeSessionExplorerService:
         account: Account,
         agent: Optional[str],
         agent_kind: Optional[str],
+        owner_user_id: Optional[str] = None,
     ) -> tuple[Optional[list[tuple[str, str]]], Optional[list[str]]]:
         """Turn the agent and kind filters into principal and source filters.
 
@@ -219,6 +224,16 @@ class RuntimeSessionExplorerService:
         session by its source label). ``claude-code`` and ``claude_code`` are
         the same kind.
 
+        ``owner_user_id`` keeps the managed agents that user owns. An owner
+        with no agents yields no principals, so the list is empty rather than
+        unfiltered.
+
+        Args:
+            account: The account whose managed agents are matched.
+            agent: Managed agent id or display name, or ``None``.
+            agent_kind: Agent kind, or ``None``.
+            owner_user_id: Owning user id, or ``None``.
+
         Returns:
             ``(principals, source_types)`` for the CRUD query, ``None`` for a
             filter that was not asked for.
@@ -229,7 +244,8 @@ class RuntimeSessionExplorerService:
         kind = normalize_agent_kind(agent_kind) or None
         if kind is not None and not is_valid_agent_kind(kind):
             raise HTTPException(status_code=422, detail=AGENT_KIND_SHAPE_ERROR)
-        if agent is None and kind is None:
+        owner = (owner_user_id or "").strip().lower() or None
+        if agent is None and kind is None and owner is None:
             return None, None
 
         agents = self._account_managed_agents(account)
@@ -253,6 +269,13 @@ class RuntimeSessionExplorerService:
             agents = matches
         if kind is not None:
             agents = [row for row in agents if row.agent_kind == kind]
+        if owner is not None:
+            agents = [
+                row
+                for row in agents
+                if row.owner_user_id is not None
+                and str(row.owner_user_id).lower() == owner
+            ]
 
         principals = [
             (row.session_source_type, row.session_source_id) for row in agents
@@ -738,6 +761,7 @@ class RuntimeSessionExplorerService:
         account: Account,
         runtime_session_id: str,
         interaction_limit: int = 100,
+        operator_note_id: Optional[str] = None,
     ) -> RuntimeSessionActivityListResponse:
         history_window = resolve_history_window(self.db, account=account)
         summary_row = crud_runtime_session.get_account_session_summary(
@@ -785,6 +809,7 @@ class RuntimeSessionExplorerService:
         items = self._build_activity_timeline(
             summary_row=summary_row,
             interactions=interaction_items,
+            operator_note_id=operator_note_id,
         )
         cutoff = history_window.cutoff
         if cutoff is not None:
@@ -1218,6 +1243,7 @@ class RuntimeSessionExplorerService:
         *,
         summary_row: dict,
         interactions,
+        operator_note_id: Optional[str] = None,
     ) -> list[RuntimeSessionActivityItem]:
         items: list[RuntimeSessionActivityItem] = []
         interaction_api_usage_ids = {
@@ -1273,6 +1299,7 @@ class RuntimeSessionExplorerService:
                 account_id=summary_row["account_id"],
                 runtime_session_id=summary_row["id"],
                 limit=100,
+                operator_note_id=operator_note_id,
             )
         )
         if activity_rows:
