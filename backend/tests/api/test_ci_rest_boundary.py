@@ -251,6 +251,19 @@ def test_real_routes_deny_valid_requests_without_side_effects(
         ("GET", "/api/v1/runners", None),
         ("POST", "/api/v1/auth/refresh", {"refresh_token": token}),
     ]
+    requests.extend(
+        ("GET", f"/api/v1/audit-logs{suffix}", None)
+        for suffix in (
+            "",
+            "/actors",
+            "/denials",
+            "/grouped",
+            "/overview",
+            "/stats",
+            f"/user/{owner.id}",
+            f"/{project.id}",
+        )
+    )
     for method, path, payload in requests:
         response = client.request(method, path, headers=headers, json=payload)
         expected = 422 if path.endswith("/trigger") else 403
