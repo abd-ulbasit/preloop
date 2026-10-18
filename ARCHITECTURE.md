@@ -730,7 +730,7 @@ account, so one model offered by two providers does not join their blast radius.
 Omitted visible nodes are
 summarized by type, and source/output truncation and unavailable projections remain
 explicit so a partial graph never claims complete blast-radius coverage.
-`active_within_hours` narrows the graph to recent activity: agents, devices and
+`active_within_minutes` (1 to 527,040) narrows the graph to recent activity: agents, devices and
 runners count by their own last-seen evidence, what an active agent reaches stays,
 and people and devices stay when something they hold is active; the response echoes
 the window. The console defaults to 30 days, lights the line live gateway traffic and

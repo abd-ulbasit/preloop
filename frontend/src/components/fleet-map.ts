@@ -191,6 +191,7 @@ export class FleetMap extends LitElement {
   private spatialCache?: { key: unknown[]; layout: FleetMapLayout };
 
   private refreshTimer?: ReturnType<typeof setInterval>;
+  private windowFit = false;
   private staleTimer?: ReturnType<typeof setTimeout>;
 
   /**
@@ -203,7 +204,14 @@ export class FleetMap extends LitElement {
     if (!hit || !this.graph) return;
     const edges = edgesForActivity(this.graph, hit);
     if (edges.length) this.activity.add(edges, hit.kind);
-    else this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
+    // Only an agent the map lacks makes the graph stale. A mapped agent with
+    // no matching line (ambient model, no device) just shows no highlight,
+    // and under Any time activity can't reveal anything new.
+    else if (
+      this.activityWindow !== 'any' &&
+      !this.graph.nodes.some((node) => node.id === hit.agent)
+    )
+      this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
   }
 
   /** Fire `fleet-map-stale` once after ``delay`` ms; repeat calls coalesce. */
@@ -305,11 +313,14 @@ export class FleetMap extends LitElement {
     }
     // A background refresh replaces the graph; only the first graph or a new
     // window re-fits, so polling never resets the user's zoom and pan.
-    if (
-      (changed.has('graph') && !changed.get('graph')) ||
-      (changed.has('activityWindow') && changed.get('activityWindow'))
-    )
+    // A window change is fitted when the graph for that window arrives, not
+    // against the old graph still on screen.
+    if (changed.has('activityWindow') && changed.get('activityWindow'))
+      this.windowFit = true;
+    if (changed.has('graph') && (this.windowFit || !changed.get('graph'))) {
+      this.windowFit = false;
       this.refit = true;
+    }
     if (changed.has('activityWindow') || changed.has('live'))
       this.scheduleRefresh();
     if (this.refit && this.lastLayout) {

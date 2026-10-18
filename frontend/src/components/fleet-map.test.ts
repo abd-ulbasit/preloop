@@ -608,8 +608,8 @@ describe('fleet-map labels', () => {
     it('asks the host to refetch when an unmapped agent becomes active', async () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map
-          .graph=${sampleFleetMap()}
-          .activityWindow=${'any'}
+          .graph=${{ ...sampleFleetMap(), active_within_minutes: 43200 }}
+          .activityWindow=${'30d'}
         ></fleet-map>`
       );
       el.live = true;
@@ -630,6 +630,59 @@ describe('fleet-map labels', () => {
       } finally {
         clock.restore();
       }
+    });
+
+    it('does not refetch for a mapped agent without a matching line, or under Any time', async () => {
+      for (const window of ['30d', 'any'] as const) {
+        const el = await fixture<FleetMap>(
+          html`<fleet-map
+            .graph=${{ ...sampleFleetMap(), active_within_minutes: 43200 }}
+            .activityWindow=${window}
+            live
+          ></fleet-map>`
+        );
+        const stale = spy();
+        el.addEventListener('fleet-map-stale', stale);
+        const clock = useFakeTimers();
+        try {
+          el.recordActivity('gateway_activity', {
+            type: 'model_gateway_call',
+            payload: {
+              managed_agent_id: 'codex',
+              model_alias: 'ambient-model',
+            },
+          });
+          if (window === 'any')
+            el.recordActivity('gateway_activity', {
+              type: 'model_gateway_call',
+              payload: { managed_agent_id: 'not-on-the-map', model_alias: 'x' },
+            });
+          clock.tick(10_000);
+          expect(stale.callCount, window).to.equal(0);
+        } finally {
+          clock.restore();
+          el.remove();
+        }
+      }
+    });
+
+    it('fits the graph that arrives for a new window, not the old one', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'30d'}
+        ></fleet-map>`
+      );
+      const fit = spy(el as unknown as { fit: () => void }, 'fit');
+      el.activityWindow = '1h';
+      await el.updateComplete;
+      fit.resetHistory();
+      el.graph = { ...sampleFleetMap() };
+      await el.updateComplete;
+      expect(fit.callCount).to.equal(1);
+      el.graph = { ...sampleFleetMap() };
+      await el.updateComplete;
+      expect(fit.callCount, 'a background refresh keeps the zoom').to.equal(1);
     });
 
     it('polls on the window cadence so quiet resources drop out', async () => {
