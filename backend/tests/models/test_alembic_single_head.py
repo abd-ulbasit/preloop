@@ -441,4 +441,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     }
     verification = script.get_revision("20261028_obs_verification")
     assert verification.down_revision == "20261028_chat_admin_merge"
-    assert script.get_heads() == ["20261028_obs_verification"]
+    governance_spend = script.get_revision("20261018_gov_spend_idx")
+    assert governance_spend.down_revision == "20261028_obs_verification"
+    assert script.get_heads() == ["20261018_gov_spend_idx"]
