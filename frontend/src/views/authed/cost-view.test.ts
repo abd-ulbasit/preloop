@@ -2515,6 +2515,51 @@ describe('CostView', () => {
       // Health has its own lookback; say so next to the range-scoped block.
       expect(alert?.textContent).to.contain('last 24 hours');
     });
+
+    it('keeps the accounting notice compact and inline (#1696)', async () => {
+      healthPayload = {
+        window_hours: 24,
+        status: 'warn',
+        checks: [
+          {
+            key: 'subscription_billing_coverage',
+            status: 'warn',
+            detail: 'detail text',
+          },
+        ],
+      };
+      const element = await loadView();
+      await waitUntil(
+        () =>
+          element.shadowRoot?.querySelector('[aria-label="Accounting health"]'),
+        'the accounting findings must render'
+      );
+      const notice = element.shadowRoot?.querySelector(
+        '[aria-label="Accounting health"]'
+      ) as HTMLDetailsElement;
+      expect(notice.tagName).to.equal('DETAILS');
+      expect(notice.open).to.equal(false);
+      expect(
+        (notice.querySelector('summary')?.textContent ?? '').replace(
+          /\s+/g,
+          ' '
+        )
+      ).to.contain('1 accounting check needs attention');
+    });
+
+    it('puts the spend chart before subscription workload and catalog (#1696)', async () => {
+      const element = await loadView();
+      const results = element.shadowRoot?.querySelector('.results');
+      const kids = Array.from(results?.children ?? []);
+      const idx = (sel: string) =>
+        kids.findIndex((el) => el.matches(sel) || !!el.querySelector(sel));
+      const metrics = idx('[aria-label="Cost summary metrics"]');
+      const chart = idx('spend-chart');
+      const sub = idx('[aria-label="Subscription workload"]');
+      expect(metrics).to.be.greaterThan(-1);
+      expect(chart).to.be.greaterThan(metrics);
+      if (sub !== -1) expect(sub).to.be.greaterThan(chart);
+    });
   });
 
   describe('digest from another account', () => {

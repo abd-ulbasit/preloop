@@ -558,6 +558,18 @@ export class CostView extends AuthedElement {
           font-weight: 600;
         }
 
+        .accounting-findings {
+          color: var(--sl-color-warning-700);
+          font-size: var(--sl-font-size-small);
+        }
+
+        .accounting-findings summary {
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: var(--sl-spacing-2x-small);
+        }
+
         .accounting-findings ul {
           margin: var(--sl-spacing-2x-small) 0 0;
           padding-left: var(--sl-spacing-large);
@@ -2032,24 +2044,28 @@ export class CostView extends AuthedElement {
     `;
   }
 
+  // A compact inline notice (#1696): one line that does not push the chart
+  // down; the individual findings sit behind a disclosure.
   private renderAccountingFindings() {
     if (!this.accountingFindings.length) return nothing;
+    const count = this.accountingFindings.length;
     return html`
-      <sl-alert
+      <details
         class="accounting-findings"
-        variant="warning"
-        open
         role="status"
         aria-label="Accounting health"
       >
-        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-        Accounting health (last 24 hours, not the selected range)
+        <summary>
+          <sl-icon name="exclamation-triangle"></sl-icon>
+          ${count} accounting ${count === 1 ? 'check needs' : 'checks need'}
+          attention (last 24 hours, not the selected range)
+        </summary>
         <ul>
           ${this.accountingFindings.map(
             (check) => html`<li data-check=${check.key}>${check.detail}</li>`
           )}
         </ul>
-      </sl-alert>
+      </details>
     `;
   }
 
@@ -4369,10 +4385,11 @@ export class CostView extends AuthedElement {
                     class="results ${updating ? 'is-updating' : ''}"
                     aria-busy=${updating ? 'true' : 'false'}
                   >
-                    ${this.renderMetrics()} ${this.renderSubscriptionUsage()}
-                    ${this.renderCatalogInfo()} ${this.renderUnpricedNotice()}
+                    ${this.renderMetrics()} ${this.renderUnpricedNotice()}
                     ${this.renderAccountingFindings()}
                     <spend-chart .period=${this.currentPeriod}></spend-chart>
+                    ${this.renderSubscriptionUsage()}
+                    ${this.renderCatalogInfo()}
                     <div class="column-layout dashboard extra-wide">
                       <div class="main-column">
                         ${this.renderBreakdown()} ${this.renderImportedUsage()}

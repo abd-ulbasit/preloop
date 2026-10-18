@@ -272,7 +272,8 @@ function compareFlowRowsByKey(
     case 'last_run':
     default:
       return (
-        timeValue(a.lastRun?.start_time) - timeValue(b.lastRun?.start_time)
+        timeValue(a.lastRun?.start_time || a.lastRunAt) -
+        timeValue(b.lastRun?.start_time || b.lastRunAt)
       );
   }
 }
@@ -931,12 +932,6 @@ export class FlowsView extends LitElement {
       // caught and shown rather than left to become an unhandled rejection
       // that skips the socket and renders "No flows yet" over an account that
       // has flows.
-      void getFlowExecutions({ limit: EXECUTIONS_SAMPLE_LIMIT })
-        .then((executions) => {
-          if (generation === this.flowsLoadGeneration)
-            this.executions = executions;
-        })
-        .catch(() => undefined);
       void getFlowExecutions({
         limit: 20,
         status: [...IN_FLIGHT_EXECUTION_STATUSES],
@@ -976,13 +971,22 @@ export class FlowsView extends LitElement {
       }
       this.hasInitializedPresetVisibility = true;
 
+      // /flows/presets is large, so it loads only when the presets UI is
+      // shown (an empty account, "Show presets" or Create flow). Until then a
+      // cloned flow reads "From a preset" (#1695).
       if (this.showPresets) {
         void this.ensurePresetsLoaded();
-      } else if (this.flows.some((flow) => flow.source_preset_id)) {
-        // Cloned flows name their preset in the list and in the Type filter,
-        // so the names are worth one background fetch once we know some flow
-        // has a preset behind it.
-        void this.ensurePresetsLoaded();
+      }
+      // The 200-run executions sample is only a fallback for a summary that
+      // predates `stats_since`; the server counts runs and the last run time
+      // itself (#1695).
+      if (!this.countsFromServer) {
+        void getFlowExecutions({ limit: EXECUTIONS_SAMPLE_LIMIT })
+          .then((executions) => {
+            if (generation === this.flowsLoadGeneration)
+              this.executions = executions;
+          })
+          .catch(() => undefined);
       }
       void this.loadTrackerNames();
     } finally {
@@ -1066,9 +1070,11 @@ export class FlowsView extends LitElement {
 
   async refreshExecutions() {
     const [executions, activeExecutions] = await Promise.all([
-      getFlowExecutions({ limit: EXECUTIONS_SAMPLE_LIMIT }).catch(
-        () => this.executions
-      ),
+      this.countsFromServer
+        ? Promise.resolve(this.executions)
+        : getFlowExecutions({ limit: EXECUTIONS_SAMPLE_LIMIT }).catch(
+            () => this.executions
+          ),
       getFlowExecutions({
         limit: 20,
         status: [...IN_FLIGHT_EXECUTION_STATUSES],
@@ -1690,6 +1696,7 @@ export class FlowsView extends LitElement {
           max-options-visible="1"
           placeholder="All types"
           .value=${this.filters.presets}
+          @sl-show=${() => void this.ensurePresetsLoaded()}
           @sl-change=${(event: Event) => {
             const select = event.target as HTMLElement & {
               value: string | string[];
@@ -1858,7 +1865,7 @@ export class FlowsView extends LitElement {
         headerClass: 'col-last-run',
         sort: 'number',
         value: (row) => {
-          const time = timeValue(row.lastRun?.start_time);
+          const time = timeValue(row.lastRun?.start_time || row.lastRunAt);
           return Number.isFinite(time) ? time : 0;
         },
         searchText: () => '',

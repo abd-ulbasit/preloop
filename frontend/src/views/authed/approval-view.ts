@@ -1,5 +1,5 @@
 import { ConsoleStatus } from '../../controllers/console-status';
-import { html, css, unsafeCSS } from 'lit';
+import { html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
 import {
   AuthedElement,
@@ -1295,6 +1295,20 @@ export class ApprovalView extends AuthedElement {
 
     const isQuestion = this.isQuestion;
 
+    const argsSection = html`
+      <div class="content-section">
+        <h2>${this.argsHeading(request)}</h2>
+        <!-- A file edit is decided by reading what changes, not by
+               reading two escaped strings; args-diff falls back to the raw
+               arguments for every other kind of call. -->
+        <args-diff
+          .args=${withoutApprovalMetadata(request.tool_args)}
+          .raw=${toolArgs}
+        ></args-diff>
+      </div>
+    `;
+    const isFileDiff =
+      fileEditsFromArgs(withoutApprovalMetadata(request.tool_args)).length > 0;
     return html`
       <div class="header">
         <h1>
@@ -1389,17 +1403,10 @@ export class ApprovalView extends AuthedElement {
         ${this.renderFactStrip(request, source, isPending, countdown)}
         ${this.renderPublicationDestinations(request)}
 
-        <div class="content-section">
-          <h2>${this.argsHeading(request)}</h2>
-          <!-- A file edit is decided by reading what changes, not by
-               reading two escaped strings; args-diff falls back to the raw
-               arguments for every other kind of call. -->
-          <args-diff
-            .args=${withoutApprovalMetadata(request.tool_args)}
-            .raw=${toolArgs}
-          ></args-diff>
-        </div>
-
+        <!-- A short command reads first; a file diff can run to thousands
+             of lines, so the reasoning and rule context sit above it
+             (#1691) and stay in view of the decision. -->
+        ${isFileDiff ? nothing : argsSection}
         ${
           request.agent_reasoning
             ? html`
@@ -1422,6 +1429,7 @@ export class ApprovalView extends AuthedElement {
               `
             : ''
         }
+        ${isFileDiff ? argsSection : nothing}
         ${
           this.history.length
             ? html`

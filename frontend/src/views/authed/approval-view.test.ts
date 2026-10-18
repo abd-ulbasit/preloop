@@ -620,6 +620,26 @@ describe('ApprovalView', () => {
     );
   });
 
+  it('puts reasoning above a collapsed heavy diff', async () => {
+    const content = Array.from({ length: 2000 }, (_, i) => `l${i}`).join('\n');
+    const element = await renderRequest({
+      ...pendingRequest(),
+      tool_name: 'Write',
+      tool_args: { file_path: '/srv/big.txt', content },
+    });
+    const root = element.shadowRoot!;
+    const reasoning = Array.from(root.querySelectorAll('h2')).find(
+      (h) => h.textContent === 'Why the agent wants this'
+    )!;
+    const diff = root.querySelector('args-diff')!;
+    expect(
+      reasoning.compareDocumentPosition(diff) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).to.not.equal(0);
+    expect(element.getBoundingClientRect().height).to.be.below(
+      3 * window.innerHeight
+    );
+  });
+
   it('renders the resolved state for an approved request', async () => {
     fetchStub = createFetchStub({
       request: pendingRequest({

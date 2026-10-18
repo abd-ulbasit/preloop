@@ -509,6 +509,37 @@ describe('FlowsView', () => {
     expect(urls.some((u) => u.includes('/api/v1/flows/presets'))).to.be.false;
   });
 
+  it('does not fetch presets or the 200-run sample on first load (#1695)', async () => {
+    const mockFlows = [
+      {
+        id: 'flow-1',
+        name: 'Cloned Flow',
+        source_preset_id: 'preset-1',
+        execution_stats: {
+          since: '2026-01-01T00:00:00Z',
+          runs: 1,
+          failed: 0,
+          cost: 0,
+          last_run_at: '2026-01-02T00:00:00Z',
+        },
+      },
+    ];
+    fetchStub = createFetchStub(mockFlows, [
+      { id: 'preset-1', name: 'Preset' },
+    ]);
+    const element = (await fixture(
+      html`<flows-view></flows-view>`
+    )) as FlowsView;
+    await waitUntil(() => !(element as any).isLoading);
+    await element.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const urls = fetchStub.getCalls().map((c) => String(c.args[0]));
+    expect(urls.some((u) => u.includes('/api/v1/flows/presets'))).to.be.false;
+    expect(urls.some((u) => /flows\/executions.*limit=200/.test(u))).to.be
+      .false;
+  });
+
   it('stubs fetch for flows API', async () => {
     fetchStub = createFetchStub([], []);
     const element = (await fixture(
@@ -854,6 +885,10 @@ describe('FlowsView', () => {
 
     it('filters by the preset a flow was cloned from', async () => {
       const element = await renderFlows();
+      // Preset names load only once the Type filter is opened (#1695).
+      element.shadowRoot
+        ?.querySelector('.preset-filter')
+        ?.dispatchEvent(new CustomEvent('sl-show'));
       await waitUntil(
         () =>
           element.rows.some(
@@ -1026,8 +1061,8 @@ describe('FlowsView', () => {
 
       const firstRow = element.shadowRoot?.querySelector('tbody tr.flow-row');
       const text = (firstRow?.textContent || '').replace(/\s+/g, ' ');
-      expect(text).to.contain('Succeeded');
-      expect(text).to.contain('PR #12');
+      // The server's last run time, not a 200-run sample (#1695).
+      expect(text).to.contain('Ran 10m ago');
       // Above a cent, two decimals (DESIGN.md, "Money").
       expect(text).to.contain('$1.23');
 

@@ -1812,10 +1812,6 @@ export class ApiUsageView extends LitElement {
           </sl-input>
         </div>
 
-        <capability-extension
-          name="usage-rollup"
-          .context=${{ range: this.selectedRange }}
-        ></capability-extension>
         ${
           this.error
             ? html`
@@ -1848,6 +1844,12 @@ export class ApiUsageView extends LitElement {
                     aria-busy=${this.loading ? 'true' : 'false'}
                   >
                     ${this.renderSummary(this.summary)}
+                    <!-- The per-subaccount rollup sits below the KPIs so it
+                         never pushes them down the page (#1696). -->
+                    <capability-extension
+                      name="usage-rollup"
+                      .context=${{ range: this.selectedRange }}
+                    ></capability-extension>
 
                     <sl-card class="breakdown-card">
                       <div slot="header" class="section-header">
