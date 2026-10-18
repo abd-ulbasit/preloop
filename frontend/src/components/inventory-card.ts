@@ -15,6 +15,13 @@ import '@shoelace-style/shoelace/dist/components/tab-group/tab-group.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import './user-avatar';
 import './time-range-select';
+import './fleet-map';
+import { getFleetMap, type FleetMapGraph } from '../fleet-map-api';
+import {
+  loadFleetMapWindow,
+  windowMinutes,
+  type FleetMapWindow,
+} from '../utils/fleet-map-activity';
 import { DEFAULT_USAGE_RANGE, USAGE_RANGE_OPTIONS } from './usage-card';
 import { userHref } from '../utils/user-href';
 
@@ -374,6 +381,18 @@ export class InventoryCard extends LitElement {
    */
   @property({ type: Boolean }) flowRunsCapped = false;
 
+  /**
+   * Instance administrators may swap the table for the spatial fleet map.
+   * Everyone else keeps the table and never sees the choice.
+   */
+  @property({ type: Boolean }) instanceAdmin = false;
+  /** Whose inventory view and map positions are stored. */
+  @property({ type: String }) userId = '';
+  @state() private inventoryView: 'table' | 'map' = 'table';
+  @state() private map: FleetMapGraph | null = null;
+  @state() private mapError = '';
+  @state() private mapWindow: FleetMapWindow = loadFleetMapWindow();
+  private mapController: AbortController | null = null;
   @state() private tab: InventoryTab = 'agents';
   @state() private sorts: Record<InventoryTab, string> = {
     agents: SORT_OPTIONS.agents[0].value,
@@ -441,6 +460,33 @@ export class InventoryCard extends LitElement {
         .title {
           font-size: var(--console-text-card-title);
           font-weight: 600;
+        }
+
+        .inventory-view {
+          display: inline-flex;
+          border: 1px solid var(--console-button-border);
+          border-radius: var(--sl-border-radius-medium);
+          overflow: hidden;
+        }
+        .inventory-view button {
+          font: inherit;
+          font-size: var(--console-text-meta);
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 10px;
+          min-height: 30px;
+          border: 0;
+          background: var(--console-button-face);
+          color: var(--console-meta-color);
+          cursor: pointer;
+        }
+        .inventory-view button[aria-pressed='true'] {
+          color: var(--console-body-color);
+          background: var(--console-hover-tint);
+        }
+        .inventory-map {
+          --fleet-map-stage-height: 520px;
         }
 
         .header-controls {
@@ -782,6 +828,7 @@ export class InventoryCard extends LitElement {
 
   disconnectedCallback(): void {
     window.removeEventListener('resize', this.onResize);
+    this.mapController?.abort();
     super.disconnectedCallback();
   }
 
@@ -1013,6 +1060,106 @@ export class InventoryCard extends LitElement {
     return rows;
   }
 
+  private get inventoryViewKey(): string {
+    return `preloop:inventory:view:${this.userId || 'anonymous'}`;
+  }
+
+  protected willUpdate(changed: Map<string, unknown>): void {
+    super.willUpdate?.(changed);
+    if (changed.has('userId') || changed.has('instanceAdmin')) {
+      let saved: string | null = null;
+      try {
+        saved = localStorage.getItem(this.inventoryViewKey);
+      } catch {
+        saved = null;
+      }
+      this.inventoryView =
+        this.instanceAdmin && saved === 'map' ? 'map' : 'table';
+      if (this.inventoryView === 'map' && !this.map) void this.loadMap();
+    }
+  }
+
+  private setInventoryView(view: 'table' | 'map'): void {
+    if (!this.instanceAdmin || view === this.inventoryView) return;
+    this.inventoryView = view;
+    try {
+      localStorage.setItem(this.inventoryViewKey, view);
+    } catch {
+      // A preference, not a requirement.
+    }
+    if (view === 'map' && !this.map) void this.loadMap();
+  }
+
+  /** ``quiet``: a background refresh keeps the current map on failure. */
+  private async loadMap(quiet = false): Promise<void> {
+    this.mapController?.abort();
+    const controller = (this.mapController = new AbortController());
+    this.mapError = '';
+    try {
+      const map = await getFleetMap(
+        controller.signal,
+        windowMinutes(this.mapWindow)
+      );
+      if (!controller.signal.aborted) this.map = map;
+    } catch (error) {
+      if (!controller.signal.aborted && !(quiet && this.map))
+        this.mapError =
+          error instanceof Error
+            ? error.message
+            : 'The fleet map could not be loaded.';
+    }
+  }
+
+  private renderViewChoice() {
+    if (!this.instanceAdmin) return nothing;
+    return html`<div
+      class="inventory-view"
+      role="group"
+      aria-label="Inventory view"
+    >
+      ${(
+        [
+          ['table', 'Table', 'table'],
+          ['map', 'Map', 'diagram-3'],
+        ] as const
+      ).map(
+        ([view, label, icon]) =>
+          html`<button
+            type="button"
+            data-inventory-view=${view}
+            aria-pressed=${this.inventoryView === view ? 'true' : 'false'}
+            @click=${() => this.setInventoryView(view)}
+          >
+            <sl-icon name=${icon} aria-hidden="true"></sl-icon>${label}
+          </button>`
+      )}
+    </div>`;
+  }
+
+  private renderMap() {
+    if (this.mapError)
+      return html`<div class="empty" role="status">${this.mapError}</div>`;
+    if (!this.map)
+      return html`<div class="empty" role="status">Mapping the fleet...</div>`;
+    return html`<fleet-map
+      class="inventory-map"
+      .graph=${this.map}
+      .activityWindow=${this.mapWindow}
+      live
+      instance-admin
+      spatial-only
+      positions-scope="inventory"
+      user-id=${this.userId}
+      @fleet-map-window-change=${(
+        event: CustomEvent<{ window: FleetMapWindow }>
+      ) => {
+        this.mapWindow = event.detail.window;
+        void this.loadMap();
+      }}
+      @fleet-map-stale=${() => void this.loadMap(true)}
+    ></fleet-map>`;
+  }
+
   private renderHeader() {
     const options = SORT_OPTIONS[this.activeTab];
     const sortHeld =
@@ -1023,6 +1170,7 @@ export class InventoryCard extends LitElement {
       <div slot="header" class="card-head">
         <span class="title">Inventory</span>
         <div class="header-controls">
+          ${this.renderViewChoice()}
           <sl-select
             class="sort-select"
             label="Sort ${TAB_LABELS[this.activeTab].toLowerCase()} by"
@@ -1825,6 +1973,12 @@ export class InventoryCard extends LitElement {
   }
 
   render() {
+    if (this.instanceAdmin && this.inventoryView === 'map')
+      return html`
+        <sl-card class="content-card">
+          ${this.renderHeader()} ${this.renderMap()}
+        </sl-card>
+      `;
     return html`
       <sl-card class="content-card">
         ${this.renderHeader()} ${this.renderTabs()} ${this.renderBody()}

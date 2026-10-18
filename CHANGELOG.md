@@ -10,7 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Fleet Map** adds a Table | Map view to Device fleet and the bounded,
 permission-filtered `GET /api/v1/fleet/map` endpoint. Explore owners, devices,
 runners, agents, models and provider credentials, inspect downstream impact,
-and find governance gaps with links to existing management pages.
+and find governance gaps with links to existing management pages. The map
+shows resources active in the last 30 days by default (5 minutes, 1 hour, 24 hours,
+7, 30 or 90 days, or any time; `active_within_minutes` on the endpoint),
+refreshes itself so resources join and leave a short window live, lights the connections live model
+requests, tool calls and approvals travel, and gives instance administrators a
+draggable spatial arrangement, also as a Map alternative to the Overview
+inventory table.
 
 Highlights: **Bitbucket Cloud on Copilot host flows** publishes a managed
 branch and pull request from a native Copilot host profile and continues

@@ -521,6 +521,7 @@ export class DashboardView extends AuthedElement {
   @state() private computeFeatureEnabled = false;
   @state() private edition: Edition = 'oss';
   @state() private isAdmin = false;
+  @state() private profileUserId = '';
 
   @state() private budgetPolicies: BudgetPolicy[] = [];
   /**
@@ -1577,6 +1578,7 @@ export class DashboardView extends AuthedElement {
     try {
       const user = await getUserProfile();
       this.isAdmin = user?.is_superuser || false;
+      this.profileUserId = String(user?.id ?? '');
       this.permissions = user?.permissions ?? null;
     } catch (error) {
       console.error('Failed to fetch user profile:', error);
@@ -4786,6 +4788,8 @@ export class DashboardView extends AuthedElement {
         .deviceRows=${this.inventoryDeviceRows}
         .devicesTotal=${this.fleetDevicesTotal}
         ?showDevices=${this.canViewFleet}
+        ?instanceAdmin=${this.isAdmin}
+        .userId=${this.profileUserId}
         .unavailableTabs=${this.unavailableInventoryTabs}
         .agentsTotal=${this.totalAgentsCount}
         .flowsTotal=${this.totalFlowsCount}

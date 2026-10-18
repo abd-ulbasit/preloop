@@ -730,6 +730,13 @@ account, so one model offered by two providers does not join their blast radius.
 Omitted visible nodes are
 summarized by type, and source/output truncation and unavailable projections remain
 explicit so a partial graph never claims complete blast-radius coverage.
+`active_within_minutes` (1 to 527,040) narrows the graph to recent activity: agents, devices and
+runners count by their own last-seen evidence, what an active agent reaches stays,
+and people and devices stay when something they hold is active; the response echoes
+the window. The console defaults to 30 days, lights the line live gateway traffic and
+approvals travelled (throttled, a state change rather than an animation), and offers
+instance administrators a spatial arrangement, with positions stored per user, also
+as an alternative to the Overview inventory table.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 

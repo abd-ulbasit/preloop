@@ -33,6 +33,11 @@ import {
 import '../../components/view-header';
 import '../../components/fleet-map';
 import { getFleetMap, type FleetMapGraph } from '../../fleet-map-api';
+import {
+  loadFleetMapWindow,
+  windowMinutes,
+  type FleetMapWindow,
+} from '../../utils/fleet-map-activity';
 import { loadViewMode, saveViewMode } from '../../utils/view-mode';
 import consoleStyles from '../../styles/console-styles.css?inline';
 
@@ -158,6 +163,9 @@ export class DeviceFleetView extends LitElement {
   @state() private map: FleetMapGraph | null = null;
   @state() private mapLoading = false;
   @state() private mapError = '';
+  @state() private mapWindow: FleetMapWindow = loadFleetMapWindow();
+  @state() private instanceAdmin = false;
+  @state() private userId = '';
   private controller?: AbortController;
   private mapController?: AbortController;
   private routeSearch = location.search;
@@ -485,6 +493,8 @@ export class DeviceFleetView extends LitElement {
       }
       this.active = true;
       this.manage = access.manage;
+      this.instanceAdmin = access.instanceAdmin === true;
+      this.userId = access.userId ?? '';
       if (this.tab === 'settings' && !access.manage) this.tab = 'devices';
       const key = new URLSearchParams(this.routeSearch).get('device');
       if (!key && this.tab !== 'settings' && this.view === 'canvas') {
@@ -518,16 +528,20 @@ export class DeviceFleetView extends LitElement {
     }
   }
   /** The map is its own request, so a slow graph never holds the table. */
-  private async loadMap(): Promise<void> {
+  /** ``quiet``: a background refresh keeps the current map on failure. */
+  private async loadMap(quiet = false): Promise<void> {
     this.mapController?.abort();
     const controller = (this.mapController = new AbortController());
     this.mapLoading = true;
     this.mapError = '';
     try {
-      const map = await getFleetMap(controller.signal);
+      const map = await getFleetMap(
+        controller.signal,
+        windowMinutes(this.mapWindow)
+      );
       if (!controller.signal.aborted) this.map = map;
     } catch (error) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && !(quiet && this.map))
         this.mapError =
           error instanceof Error
             ? error.message
@@ -588,7 +602,20 @@ export class DeviceFleetView extends LitElement {
           >
         </div>
       </sl-alert>`;
-    return html`<fleet-map .graph=${this.map}></fleet-map>`;
+    return html`<fleet-map
+      .graph=${this.map}
+      .activityWindow=${this.mapWindow}
+      live
+      ?instance-admin=${this.instanceAdmin}
+      user-id=${this.userId}
+      @fleet-map-window-change=${(
+        event: CustomEvent<{ window: FleetMapWindow }>
+      ) => {
+        this.mapWindow = event.detail.window;
+        void this.loadMap();
+      }}
+      @fleet-map-stale=${() => void this.loadMap(true)}
+    ></fleet-map>`;
   }
 
   private async save(event: Event): Promise<void> {

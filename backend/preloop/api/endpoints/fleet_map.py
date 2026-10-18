@@ -20,7 +20,18 @@ router = APIRouter()
 def read_fleet_map(
     current_user: Annotated[models.User, Depends(get_current_active_user)],
     limit: int = Query(500, ge=50, le=1000),
+    active_within_minutes: int | None = Query(
+        None,
+        ge=1,
+        le=60 * 24 * 366,
+        description="Show only resources active in this many minutes.",
+    ),
     db: Session = Depends(get_db_session),
 ) -> FleetMapResponse:
     """Read the selected organization's visible fleet and model dependencies."""
-    return build_fleet_map(db, user=current_user, limit=limit)
+    return build_fleet_map(
+        db,
+        user=current_user,
+        limit=limit,
+        active_within_minutes=active_within_minutes,
+    )
