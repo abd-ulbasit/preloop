@@ -671,6 +671,29 @@ describe('AIModelDetailView', () => {
     }
   });
 
+  it('puts usage before the Settings section with budget and pricing (#1692)', async () => {
+    const element = (await fixture(
+      html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`
+    )) as AIModelDetailView;
+    await waitUntil(() => !(element as any).loading, 'did not load', {
+      timeout: 5000,
+    });
+    await element.updateComplete;
+    const root = element.shadowRoot!;
+    const settings = root.querySelector('[data-model-settings]');
+    expect(settings).to.exist;
+    expect(settings!.querySelector('budget-policy-editor')).to.exist;
+    expect(settings!.querySelector('#pricing')).to.exist;
+    const usage = Array.from(root.querySelectorAll('.model-title')).find(
+      (node) => node.textContent?.trim() === 'Usage summary'
+    );
+    expect(usage).to.exist;
+    expect(
+      usage!.compareDocumentPosition(settings!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).to.not.equal(0);
+  });
+
   it('renders model observability summary, sessions, and interactions', async () => {
     const element = (await fixture(
       html`<ai-model-detail-view .modelId=${'model-1'}></ai-model-detail-view>`

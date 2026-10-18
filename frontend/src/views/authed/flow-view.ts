@@ -269,6 +269,26 @@ export class FlowView extends LitElement {
           margin-bottom: 0;
         }
 
+        pre.prompt-template {
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          font-family: var(--sl-font-mono);
+          font-size: var(--sl-font-size-small);
+          line-height: 1.5;
+          padding: var(--sl-spacing-medium);
+          border-radius: var(--sl-border-radius-medium);
+          background: var(--console-page);
+          margin: 0;
+        }
+        /* #1692: the prompt shows its first 10 lines until expanded. */
+        pre.prompt-template.collapsed {
+          max-height: calc(10 * 1.5em + 2 * var(--sl-spacing-medium, 1rem));
+          overflow: hidden;
+        }
+        .prompt-toggle {
+          margin-top: var(--sl-spacing-x-small);
+        }
+
         sl-textarea.prompt {
           max-height: 50rem;
           overflow: auto;
@@ -315,6 +335,8 @@ export class FlowView extends LitElement {
     is_enabled: true,
   };
 
+  /** Whether the prompt template card shows the whole prompt (#1692). */
+  @state() private promptExpanded = false;
   @state() private longRunningAgents: any[] = [];
   /** Whether `longRunningAgents` is the server's answer, not a fallback. */
   private agentsLoaded = false;
@@ -1094,6 +1116,79 @@ export class FlowView extends LitElement {
             </div>
           </sl-card>
 
+          <!-- Recent executions come before the prompt (#1692): the runs are
+               why the page is opened, the prompt is reference. -->
+          <sl-card data-recent-executions>
+            <div slot="header">
+              <sl-icon name="clock-history"></sl-icon>
+              Recent executions
+            </div>
+            ${
+              this.recentExecutions.length === 0
+                ? html`<p>No executions yet. Run now starts one.</p>`
+                : html`
+                    <div class="table-scroll">
+                      <table class="styled-table executions-table">
+                        <thead>
+                          <tr>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${this.recentExecutions.map(
+                            (exec) => html`
+                              <!-- The Started cell is the anchor to the run and
+                                 the whole row is a convenience on top of it,
+                                 as on the executions list, so the keyboard
+                                 and cmd-click keep a route the View column
+                                 used to provide. -->
+                              <tr
+                                class="execution-row"
+                                @click=${(event: MouseEvent) =>
+                                  this.openExecution(event, exec.id)}
+                              >
+                                <!-- Every row on this page is the same flow, so
+                                   the subject is the only column that says
+                                   which run is which; it keeps its link to
+                                   the pull request or issue it came from. -->
+                                <td class="subject-cell">
+                                  ${renderExecutionSubject(exec)}
+                                </td>
+                                <td>
+                                  <sl-badge
+                                    class="chip"
+                                    pill
+                                    variant=${this.getStatusVariant(exec.status)}
+                                  >
+                                    ${executionStatusLabel(exec.status)}
+                                  </sl-badge>
+                                </td>
+                                <!-- Relative, absolute in the title, as every
+                                   other list in the console states a time. -->
+                                <td
+                                  title=${formatLocalDateTime(exec.start_time)}
+                                >
+                                  <a
+                                    class="row-link"
+                                    href=${`/console/flows/executions/${exec.id}`}
+                                    >${formatRelativeTime(exec.start_time)}</a
+                                  >
+                                </td>
+                                <td>${executionDurationText(exec) || 'n/a'}</td>
+                              </tr>
+                            `
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    ${this.renderAllExecutionsLink()}
+                  `
+            }
+          </sl-card>
+
           ${
             this.flow.prompt_template
               ? html`
@@ -1103,9 +1198,30 @@ export class FlowView extends LitElement {
                       Prompt Template
                     </div>
                     <pre
-                      style="white-space: pre-wrap; word-wrap: break-word; font-family: var(--sl-font-mono); font-size: var(--sl-font-size-small); background: var(--sl-color-neutral-50); padding: var(--sl-spacing-medium); border-radius: var(--sl-border-radius-medium); margin: 0; max-height: 300px; overflow-y: auto;"
+                      class="prompt-template ${this.promptExpanded ? '' : 'collapsed'}"
+                      data-prompt-template
                     >
 ${this.flow.prompt_template}</pre>
+                    ${
+                      this.flow.prompt_template.split('\n').length > 10 ||
+                      this.flow.prompt_template.length > 1200
+                        ? html`<sl-button
+                            class="prompt-toggle"
+                            size="small"
+                            variant="text"
+                            data-prompt-toggle
+                            aria-expanded=${this.promptExpanded ? 'true' : 'false'}
+                            @click=${() => {
+                              this.promptExpanded = !this.promptExpanded;
+                            }}
+                            >${
+                              this.promptExpanded
+                                ? 'Show less'
+                                : 'Show full prompt'
+                            }</sl-button
+                          >`
+                        : ''
+                    }
                   </sl-card>
                 `
               : ''
@@ -1280,78 +1396,6 @@ ${(this.flow.custom_commands.commands || []).join('\n')}</pre>
                 `
               : ''
           }
-
-          <!-- Recent executions -->
-          <sl-card>
-            <div slot="header">
-              <sl-icon name="clock-history"></sl-icon>
-              Recent executions
-            </div>
-            ${
-              this.recentExecutions.length === 0
-                ? html`<p>No executions yet. Run now starts one.</p>`
-                : html`
-                    <div class="table-scroll">
-                      <table class="styled-table executions-table">
-                        <thead>
-                          <tr>
-                            <th>Subject</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                            <th>Duration</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          ${this.recentExecutions.map(
-                            (exec) => html`
-                              <!-- The Started cell is the anchor to the run and
-                                 the whole row is a convenience on top of it,
-                                 as on the executions list, so the keyboard
-                                 and cmd-click keep a route the View column
-                                 used to provide. -->
-                              <tr
-                                class="execution-row"
-                                @click=${(event: MouseEvent) =>
-                                  this.openExecution(event, exec.id)}
-                              >
-                                <!-- Every row on this page is the same flow, so
-                                   the subject is the only column that says
-                                   which run is which; it keeps its link to
-                                   the pull request or issue it came from. -->
-                                <td class="subject-cell">
-                                  ${renderExecutionSubject(exec)}
-                                </td>
-                                <td>
-                                  <sl-badge
-                                    class="chip"
-                                    pill
-                                    variant=${this.getStatusVariant(exec.status)}
-                                  >
-                                    ${executionStatusLabel(exec.status)}
-                                  </sl-badge>
-                                </td>
-                                <!-- Relative, absolute in the title, as every
-                                   other list in the console states a time. -->
-                                <td
-                                  title=${formatLocalDateTime(exec.start_time)}
-                                >
-                                  <a
-                                    class="row-link"
-                                    href=${`/console/flows/executions/${exec.id}`}
-                                    >${formatRelativeTime(exec.start_time)}</a
-                                  >
-                                </td>
-                                <td>${executionDurationText(exec) || 'n/a'}</td>
-                              </tr>
-                            `
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    ${this.renderAllExecutionsLink()}
-                  `
-            }
-          </sl-card>
         </div>
       </div>
     `;
