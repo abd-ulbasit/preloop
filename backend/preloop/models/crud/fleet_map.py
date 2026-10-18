@@ -1,8 +1,9 @@
 """Stable, tenant-visible source windows for the Fleet Map."""
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
-from sqlalchemy import or_
+from sqlalchemy import Row, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from preloop.models import models
@@ -80,5 +81,191 @@ def list_decommissioned_agents(
         )
         .order_by(models.ManagedAgent.id)
         .limit(limit)
+        .all()
+    )
+
+
+#: Tool names that open, review, comment on or merge a pull or merge request.
+#: The partial index ``ix_runtime_session_activity_code_tools`` carries the
+#: same list; keep the two in step so the planner can use it.
+CODE_ACTIVITY_TOOLS: tuple[str, ...] = (
+    "add_comment",
+    "add_comment_to_pending_review",
+    "add_issue_comment",
+    "approve_merge_request",
+    "create_merge_request",
+    "create_merge_request_note",
+    "create_note",
+    "create_pull_request",
+    "create_pull_request_review",
+    "merge_merge_request",
+    "merge_pull_request",
+    "pull_request_review_write",
+    "submit_pending_pull_request_review",
+    "update_pull_request",
+)
+
+
+def list_code_tool_calls(
+    db: Session, *, account_id: str, since: datetime, limit: int
+) -> list[Row[Any]]:
+    """Read successful pull and merge request tool calls since ``since``.
+
+    Bounded by the account, the window and ``limit``, newest first, and
+    served by the partial index on code tool calls.
+
+    Args:
+        db: Request database session.
+        account_id: Selected membership's owning tenant.
+        since: Oldest call to read.
+        limit: Maximum rows, including a truncation sentinel.
+
+    Returns:
+        Rows of timestamp, tool name, arguments metadata, flow execution id and
+        the session's runtime principal type and id.
+    """
+    a, s = models.RuntimeSessionActivity, models.RuntimeSession
+    return list(
+        db.execute(
+            select(
+                a.id,
+                a.timestamp,
+                a.tool_name,
+                a.metadata_,
+                a.flow_execution_id,
+                s.runtime_principal_type,
+                s.runtime_principal_id,
+            )
+            .join(s, s.id == a.runtime_session_id)
+            .where(
+                a.account_id == account_id,
+                a.activity_type == "tool_call",
+                a.tool_name.in_(CODE_ACTIVITY_TOOLS),
+                a.timestamp >= since,
+                a.status == "succeeded",
+            )
+            .order_by(a.timestamp.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
+def agents_for_principals(
+    db: Session, *, account_id: str, principals: set[tuple[str, str]]
+) -> list[models.ManagedAgent]:
+    """Managed agents keyed by the runtime principals that made the calls.
+
+    Args:
+        db: Request database session.
+        account_id: Selected membership's owning tenant.
+        principals: ``(session_source_type, session_source_id)`` pairs.
+
+    Returns:
+        Non-decommissioned agents matching any pair.
+    """
+    if not principals:
+        return []
+    m = models.ManagedAgent
+    return (
+        db.query(m)
+        .filter(
+            m.account_id == account_id,
+            m.lifecycle_state != "decommissioned",
+            tuple_(m.session_source_type, m.session_source_id).in_(sorted(principals)),
+        )
+        .all()
+    )
+
+
+def flows_for_executions(
+    db: Session, *, account_id: str, execution_ids: set[Any]
+) -> list[Row[Any]]:
+    """Map flow executions to their account's flows.
+
+    Args:
+        db: Request database session.
+        account_id: Selected membership's owning tenant.
+        execution_ids: Flow execution ids, read by primary key.
+
+    Returns:
+        Rows of execution id, flow id, flow name and the flow's model id.
+    """
+    if not execution_ids:
+        return []
+    e, f = models.FlowExecution, models.Flow
+    return list(
+        db.execute(
+            select(e.id, f.id, f.name, f.ai_model_id)
+            .join(f, f.id == e.flow_id)
+            .where(e.id.in_(sorted(execution_ids, key=str)), f.account_id == account_id)
+        ).all()
+    )
+
+
+def flows_by_id(db: Session, *, account_id: str, flow_ids: set[Any]) -> list[Row[Any]]:
+    """Read flow names and model ids by primary key, within the account."""
+    if not flow_ids:
+        return []
+    f = models.Flow
+    return list(
+        db.execute(
+            select(f.id, f.name, f.ai_model_id).where(
+                f.id.in_(sorted(flow_ids, key=str)), f.account_id == account_id
+            )
+        ).all()
+    )
+
+
+def list_merged_pull_requests(
+    db: Session, *, account_id: str, since: datetime, limit: int
+) -> list[Row[Any]]:
+    """Pull requests merged since ``since`` and the flows that worked on them.
+
+    One row per pull request and contributing flow (flow id NULL when no flow
+    run is linked), newest merge first.
+
+    Args:
+        db: Request database session.
+        account_id: Selected membership's owning tenant.
+        since: Oldest merge to read.
+        limit: Maximum pull requests read.
+
+    Returns:
+        Rows of pr key, merged at and flow id.
+    """
+    p, x = models.IssueCostPullRequest, models.IssueCostExecution
+    merged = (
+        select(p.pr_key, p.merged_at)
+        .where(p.account_id == account_id, p.merged_at >= since)
+        .order_by(p.merged_at.desc())
+        .limit(limit)
+        .subquery()
+    )
+    return list(
+        db.execute(
+            select(merged.c.pr_key, merged.c.merged_at, x.flow_id)
+            .distinct()
+            .outerjoin(
+                x,
+                (x.account_id == account_id) & (x.pr_key == merged.c.pr_key),
+            )
+            .order_by(merged.c.merged_at.desc())
+        ).all()
+    )
+
+
+def models_by_id(
+    db: Session, *, account_id: str, model_ids: set[Any]
+) -> list[models.AIModel]:
+    """Read AI model rows by id: the account's own and global built-ins."""
+    if not model_ids:
+        return []
+    m = models.AIModel
+    return (
+        db.query(m)
+        .filter(
+            m.id.in_(sorted(model_ids, key=str)),
+            or_(m.account_id == account_id, m.account_id.is_(None)),
+        )
         .all()
     )

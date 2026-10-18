@@ -10,6 +10,7 @@ export type FleetMapResourceType =
   | 'device'
   | 'runner'
   | 'agent'
+  | 'flow'
   | 'model'
   | 'provider_account'
   | 'provider';
@@ -90,6 +91,7 @@ export const FLEET_MAP_TYPES: readonly FleetMapResourceType[] = [
   'device',
   'runner',
   'agent',
+  'flow',
   'model',
   'provider_account',
   'provider',
@@ -118,6 +120,7 @@ export const FLEET_MAP_COLUMN_LABEL: Record<
   device: 'Devices',
   runner: 'Runners',
   agent: 'Agents',
+  flow: 'Flows',
   model: 'Models',
   provider_account: 'Provider accounts',
   provider: 'Providers',
@@ -129,6 +132,7 @@ export const FLEET_MAP_TYPE_LABEL: Record<FleetMapNodeType, string> = {
   device: 'Device',
   runner: 'Runner',
   agent: 'Agent',
+  flow: 'Flow',
   model: 'Model',
   provider_account: 'Provider account',
   provider: 'Provider',
@@ -150,6 +154,7 @@ const COLUMN_OF: Record<FleetMapResourceType, FleetMapColumn> = {
   device: 'device',
   runner: 'device',
   agent: 'agent',
+  flow: 'agent',
   model: 'model',
   provider_account: 'provider',
   provider: 'provider',
@@ -548,4 +553,95 @@ export async function getFleetMap(
         : 'The fleet map could not be loaded. Retry to refresh it.'
     );
   return withClusters(await response.json());
+}
+
+export type FleetCodeAction = 'opened' | 'commented' | 'reviewed' | 'merged';
+export type FleetCodeCounts = Record<FleetCodeAction, number>;
+
+/** A flow with code activity in the window; the map places it. */
+export interface FleetCodeFlow {
+  id: string;
+  resource_id: string;
+  label: string;
+  href: string;
+  model_node_id: string | null;
+  last_active_at: string | null;
+}
+
+export interface FleetCodeEvent {
+  id: string;
+  at: string;
+  action: FleetCodeAction;
+  node_id: string;
+  owner_id?: string | null;
+  pr?: string | null;
+  url?: string | null;
+}
+
+/** Pull and merge requests per map node in the window (`/fleet/code-activity`). */
+export interface FleetCodeActivity {
+  active_within_minutes: number | null;
+  since: string;
+  truncated: boolean;
+  counts: Record<string, FleetCodeCounts>;
+  flows: FleetCodeFlow[];
+  events: FleetCodeEvent[];
+}
+
+export async function getFleetCodeActivity(
+  signal?: AbortSignal,
+  activeWithinMinutes: number | null = null
+): Promise<FleetCodeActivity> {
+  const url = activeWithinMinutes
+    ? `/api/v1/fleet/code-activity?active_within_minutes=${activeWithinMinutes}`
+    : '/api/v1/fleet/code-activity';
+  const response = await fetchWithAuth(url, { signal });
+  if (!response.ok) throw new Error('Code activity could not be loaded.');
+  return response.json();
+}
+
+/**
+ * Place the flows that did code work on the map: one node per flow, with a
+ * line to its model when that model is on the map. Flows already on the map
+ * are left as they are.
+ */
+export function withCodeFlows(
+  graph: FleetMapGraph,
+  activity: Pick<FleetCodeActivity, 'flows'> | null
+): FleetMapGraph {
+  if (!activity?.flows.length) return graph;
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const nodes = [...graph.nodes];
+  const edges = [...graph.edges];
+  for (const flow of activity.flows) {
+    if (ids.has(flow.id)) continue;
+    ids.add(flow.id);
+    nodes.push({
+      id: flow.id,
+      type: 'flow',
+      resource_id: flow.resource_id,
+      label: flow.label,
+      detail: 'Flow',
+      href: flow.href,
+      status: null,
+      owner_ids: [],
+      provider_ids: [],
+      gaps: [],
+      finding_count: 0,
+      actions: [],
+      last_seen_at: flow.last_active_at,
+    });
+    if (flow.model_node_id && ids.has(flow.model_node_id))
+      edges.push({
+        id: `${flow.id}>uses_model>${flow.model_node_id}`,
+        source: flow.id,
+        target: flow.model_node_id,
+        kind: 'uses_model',
+        provenance: 'observed',
+        impact_source: flow.model_node_id,
+        impact_target: flow.id,
+        gaps: [],
+      });
+  }
+  return { ...graph, nodes, edges };
 }

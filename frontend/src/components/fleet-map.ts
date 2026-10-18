@@ -23,6 +23,11 @@ import {
   type FleetMapLayout,
   type FleetMapNode,
   type FleetMapNodeType,
+  type FleetCodeAction,
+  type FleetCodeActivity,
+  type FleetMapPosition,
+  getFleetCodeActivity,
+  withCodeFlows,
 } from '../fleet-map-api';
 import { formatRelativeTime } from '../utils/date';
 import {
@@ -48,6 +53,24 @@ import {
   type FleetMapArrangement,
   type FleetMapPoints,
 } from '../utils/fleet-map-spatial';
+import {
+  FleetParticles,
+  PIP_MS,
+  clusterOf,
+  codeHitFromRealtime,
+  codeLabel,
+  countCode,
+  curveBetween,
+  messagesForRealtime,
+  nextPresence,
+  ownerOf,
+  particleProgress,
+  pointOnCurve,
+  presenceStyle,
+  type FleetMessage,
+  type FleetPip,
+  type FleetPresence,
+} from '../utils/fleet-map-motion';
 import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 import { getAgentKindPresentation } from '../utils/agent-kinds';
 import consoleStyles from '../styles/console-styles.css?inline';
@@ -57,6 +80,7 @@ const ICON: Record<FleetMapNodeType, string> = {
   device: 'laptop',
   runner: 'hdd-rack',
   agent: 'robot',
+  flow: 'diagram-2',
   model: 'stars',
   provider_account: 'key',
   provider: 'cloud',
@@ -75,6 +99,7 @@ const TYPE_TOGGLE_LABEL: Record<(typeof FLEET_MAP_TYPES)[number], string> = {
   device: 'Devices',
   runner: 'Runners',
   agent: 'Agents',
+  flow: 'Flows',
   model: 'Models',
   provider_account: 'Accounts',
   provider: 'Providers',
@@ -91,6 +116,16 @@ const EMPTY: FleetMapGraph = {
 };
 
 const MIN_FIT_SCALE = 0.6;
+/** Spatial maps fit both ways, so they may shrink further. */
+const MIN_SPATIAL_FIT_SCALE = 0.35;
+
+/** Counter order on a node: opened, reviewed, commented, merged. */
+const CODE_BADGES: readonly [FleetCodeAction, string, string][] = [
+  ['opened', 'plus-circle', 'opened'],
+  ['reviewed', 'eye', 'reviewed'],
+  ['commented', 'chat-left-text', 'commented on'],
+  ['merged', 'check2-circle', 'merged'],
+];
 
 /** "cursor_cli" reads as "Cursor CLI"; known kinds use their product name. */
 export function agentKindLabel(kind: string): string {
@@ -149,6 +184,16 @@ export class FleetMap extends LitElement {
   @property({ attribute: 'user-id' }) userId = '';
   /** Separates stored positions of different maps (fleet, inventory). */
   @property({ attribute: 'positions-scope' }) positionsScope = 'fleet';
+  /**
+   * Pull and merge requests per node in the window. A live map loads it
+   * itself from `/fleet/code-activity`; a host may set it instead.
+   */
+  @property({ attribute: false }) codeActivity: FleetCodeActivity | null = null;
+  /** Force the reduced-motion fallback (tests); the media query also does. */
+  @property({ type: Boolean, attribute: 'reduced-motion' })
+  reducedMotion = false;
+  @state() private pips: FleetPip[] = [];
+  @state() private toasts: FleetPip[] = [];
   @state() private arrangement: FleetMapArrangement = 'columns';
   @state() private points: FleetMapPoints = {};
   @state() private selected = '';
@@ -200,6 +245,12 @@ export class FleetMap extends LitElement {
    * refetch (debounced, so a burst costs one request).
    */
   recordActivity(topic: string, message: unknown): void {
+    if (topic === 'code_activity') {
+      this.recordCode(message);
+      return;
+    }
+    if (this.graph)
+      this.send(messagesForRealtime(this.shown(), topic, message));
     const hit = activityFromRealtime(topic, message);
     if (!hit || !this.graph) return;
     const edges = edgesForActivity(this.graph, hit);
@@ -212,6 +263,208 @@ export class FleetMap extends LitElement {
       !this.graph.nodes.some((node) => node.id === hit.agent)
     )
       this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
+  }
+
+  private readonly particles = new FleetParticles();
+  private presence: FleetPresence = {
+    entered: new Map(),
+    leaving: new Map(),
+  };
+  private shownNodes: FleetMapNode[] | null = null;
+  private frame = 0;
+  private nextPip = 1;
+  private codeController?: AbortController;
+  private codeTimer?: ReturnType<typeof setTimeout>;
+
+  /** True when nothing should travel or fade. */
+  get motionOff(): boolean {
+    return (
+      this.reducedMotion ||
+      (typeof window !== 'undefined' &&
+        !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+    );
+  }
+
+  /** Messages in flight, for tests and the demo harness. */
+  get inFlight(): number {
+    return this.particles.size;
+  }
+
+  /** The graph as drawn: the server graph plus flows that did code work. */
+  private shown(): FleetMapGraph {
+    return this.filtered();
+  }
+
+  /**
+   * Send messages along the map. Under reduced motion nothing travels; the
+   * line lights through the activity tracker instead.
+   */
+  private send(messages: FleetMessage[]): void {
+    if (!messages.length || this.motionOff || !this.spatial) return;
+    const now = Date.now();
+    let spawned = false;
+    for (const message of messages)
+      spawned = this.particles.spawn(message, now) || spawned;
+    if (spawned) {
+      this.requestUpdate();
+      this.startFrames();
+    }
+  }
+
+  /** A code event: count it, surface it on the node and in the corner. */
+  private recordCode(message: unknown): void {
+    const hit = codeHitFromRealtime(message);
+    if (!hit) return;
+    const view = this.shown();
+    const ids = new Set(view.nodes.map((node) => node.id));
+    const nodes = hit.nodes.filter((id) => ids.has(id));
+    const owners = nodes
+      .filter((id) => id.startsWith('agent:'))
+      .map((id) => ownerOf(view, id))
+      .filter((id): id is string => !!id);
+    const counts = countCode(
+      this.codeActivity?.counts ?? {},
+      [...nodes, ...owners],
+      hit.action
+    );
+    this.codeActivity = {
+      active_within_minutes: windowMinutes(this.activityWindow),
+      since: this.codeActivity?.since ?? new Date().toISOString(),
+      truncated: this.codeActivity?.truncated ?? false,
+      flows: this.codeActivity?.flows ?? [],
+      events: this.codeActivity?.events ?? [],
+      counts,
+    };
+    // A flow or agent the map lacks: its node arrives with the next read.
+    if (nodes.length < hit.nodes.length) this.scheduleCodeLoad(1500);
+    if (!nodes.length) return;
+    const now = Date.now();
+    const label = codeLabel(hit);
+    const fresh = nodes.map((node) => ({
+      id: this.nextPip++,
+      node,
+      action: hit.action,
+      label,
+      start: now,
+    }));
+    // Under reduced motion nothing rises off the node; the counter and the
+    // corner list still say what happened.
+    if (!this.motionOff) this.pips = [...this.pips, ...fresh].slice(-8);
+    this.toasts = [...fresh.slice(0, 1), ...this.toasts].slice(0, 4);
+    for (const node of nodes) {
+      const owner = owners.find((id) => ownerOf(view, node) === id);
+      if (owner) this.send([{ from: node, to: owner, kind: 'code', label }]);
+    }
+    this.startFrames();
+  }
+
+  /** Load the code activity for the window, debounced. */
+  private scheduleCodeLoad(delay = 0): void {
+    if (!this.live) return;
+    if (this.codeTimer !== undefined) clearTimeout(this.codeTimer);
+    this.codeTimer = setTimeout(() => {
+      this.codeTimer = undefined;
+      void this.loadCode();
+    }, delay);
+  }
+
+  private async loadCode(): Promise<void> {
+    this.codeController?.abort();
+    const controller = (this.codeController = new AbortController());
+    try {
+      const activity = await getFleetCodeActivity(
+        controller.signal,
+        windowMinutes(this.activityWindow)
+      );
+      if (!controller.signal.aborted) this.codeActivity = activity;
+    } catch {
+      // Code activity is a layer on the map; the map stands without it.
+    }
+  }
+
+  /** Run frames while anything moves; stop as soon as nothing does. */
+  private startFrames(): void {
+    if (this.frame || !this.isConnected) return;
+    this.frame = requestAnimationFrame(this.tick);
+  }
+
+  private tick = (): void => {
+    this.frame = 0;
+    const now = Date.now();
+    if (this.particles.prune(now)) this.requestUpdate();
+    const pips = this.pips.filter((pip) => now - pip.start < PIP_MS);
+    if (pips.length !== this.pips.length) this.pips = pips;
+    const toasts = this.toasts.filter((pip) => now - pip.start < PIP_MS * 2);
+    if (toasts.length !== this.toasts.length) this.toasts = toasts;
+    const before = this.presence.leaving.size + this.presence.entered.size;
+    this.presence = nextPresence(this.presence, null, [], now);
+    if (this.presence.leaving.size + this.presence.entered.size !== before)
+      this.requestUpdate();
+    this.paintFrame(now);
+    if (
+      this.particles.size ||
+      this.pips.length ||
+      this.toasts.length ||
+      this.presence.leaving.size ||
+      this.presence.entered.size
+    )
+      this.frame = requestAnimationFrame(this.tick);
+  };
+
+  /** Move messages and fade nodes for this instant, without a re-render. */
+  private paintFrame(now: number): void {
+    const root = this.shadowRoot;
+    const layout = this.lastLayout;
+    if (!root || !layout) return;
+    for (const el of root.querySelectorAll<SVGGElement>('[data-particle]')) {
+      const particle = this.particles.all.find(
+        (item) => String(item.id) === el.dataset.particle
+      );
+      const a = particle && this.positionOf(particle.from);
+      const b = particle && this.positionOf(particle.to);
+      const t = particle ? particleProgress(particle, now) : null;
+      if (!particle || !a || !b || t === null) {
+        el.setAttribute('opacity', '0');
+        continue;
+      }
+      const point = pointOnCurve(curveBetween(a, b), t);
+      // Fade in over the first tenth and out over the last.
+      const fade = Math.min(1, t / 0.1, (1 - t) / 0.1);
+      el.setAttribute(
+        'transform',
+        `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`
+      );
+      el.setAttribute('opacity', fade.toFixed(3));
+      // The label shows in mid-flight only, clear of the node it leaves and
+      // the one it reaches.
+      el.querySelector('text')?.setAttribute(
+        'opacity',
+        Math.max(0, Math.min(1, (t - 0.08) / 0.1, (0.72 - t) / 0.1)).toFixed(3)
+      );
+    }
+    for (const el of root.querySelectorAll<HTMLElement>('[data-presence]')) {
+      const style = presenceStyle(
+        this.presence,
+        el.dataset.presence || '',
+        now
+      );
+      el.style.opacity = style ? style.opacity.toFixed(3) : '';
+      el.style.transform = style ? `scale(${style.scale.toFixed(3)})` : '';
+    }
+    for (const el of root.querySelectorAll<HTMLElement>('[data-pip]')) {
+      const start = Number(el.dataset.start);
+      const t = Math.min(1, Math.max(0, (now - start) / PIP_MS));
+      // Slide 18px out from the node and hold, then fade over the last third.
+      const rise = 18 * (1 - Math.pow(1 - Math.min(1, t * 4), 3));
+      el.style.transform = `translate(${rise.toFixed(1)}px, 0)`;
+      el.style.opacity = (t < 0.66 ? 1 : 1 - (t - 0.66) / 0.34).toFixed(3);
+    }
+  }
+
+  private positionOf(id: string): FleetMapPosition | undefined {
+    const layout = this.lastLayout;
+    const anchor = layout?.anchor(id);
+    return anchor ? layout?.positions.get(anchor) : undefined;
   }
 
   /** Fire `fleet-map-stale` once after ``delay`` ms; repeat calls coalesce. */
@@ -242,7 +495,7 @@ export class FleetMap extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     if (this.live)
-      for (const topic of FLEET_ACTIVITY_TOPICS)
+      for (const topic of [...FLEET_ACTIVITY_TOPICS, 'code_activity'])
         this.unsubscribes.push(
           unifiedWebSocketManager.subscribe(topic, (message: unknown) =>
             this.recordActivity(topic, message)
@@ -302,6 +555,23 @@ export class FleetMap extends LitElement {
       this.points = loadPositions(this.userId, this.positionsScope);
     }
     this.dropHiddenSelection();
+    if (changed.has('graph') || changed.has('codeActivity')) {
+      const next = this.filtered().nodes;
+      const previous = this.shownNodes;
+      this.shownNodes = next;
+      if (this.spatial && !this.motionOff) {
+        this.presence = nextPresence(this.presence, previous, next, Date.now());
+        if (this.presence.entered.size || this.presence.leaving.size)
+          this.startFrames();
+      }
+    }
+    if (
+      this.live &&
+      (changed.has('graph') ||
+        changed.has('activityWindow') ||
+        changed.has('live'))
+    )
+      this.scheduleCodeLoad(changed.has('activityWindow') ? 0 : 400);
   }
 
   protected updated(changed: Map<string, unknown>): void {
@@ -334,6 +604,12 @@ export class FleetMap extends LitElement {
     this.unsubscribes.forEach((unsubscribe) => unsubscribe());
     this.unsubscribes = [];
     this.activity.stop();
+    this.particles.clear();
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.codeController?.abort();
+    if (this.codeTimer !== undefined) clearTimeout(this.codeTimer);
+    this.codeTimer = undefined;
     if (this.refreshTimer !== undefined) clearInterval(this.refreshTimer);
     if (this.staleTimer !== undefined) clearTimeout(this.staleTimer);
     this.refreshTimer = this.staleTimer = undefined;
@@ -374,6 +650,24 @@ export class FleetMap extends LitElement {
         ? 364
         : 0;
     const room = bounds.width - panel;
+    if (this.spatial && layout.height) {
+      // A spatial map has no column headers to pin: fit it whole and centre.
+      this.scale = Math.max(
+        MIN_SPATIAL_FIT_SCALE,
+        Math.min(
+          1,
+          (room - 48) / layout.width,
+          (bounds.height - 72) / layout.height
+        )
+      );
+      this.translateX = (room - layout.width * this.scale) / 2;
+      this.translateY = Math.max(
+        12,
+        (bounds.height - 40 - layout.height * this.scale) / 2
+      );
+      this.applyTransform();
+      return;
+    }
     this.scale = Math.max(
       MIN_FIT_SCALE,
       Math.min(1, (room - 48) / layout.width)
@@ -684,6 +978,10 @@ export class FleetMap extends LitElement {
         inset: 0;
         overflow: visible;
         pointer-events: none;
+      }
+      /* Messages travel above the nodes, so a label is never hidden. */
+      .plane svg.particles {
+        z-index: 2;
       }
       .edge {
         fill: none;
@@ -1111,6 +1409,122 @@ export class FleetMap extends LitElement {
           width: 180px;
         }
       }
+      /* Code activity: counters on a node and events rising off it. */
+      .code-badges {
+        position: absolute;
+        top: -10px;
+        right: 8px;
+        display: flex;
+        gap: 3px;
+        pointer-events: none;
+      }
+      .code-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        height: 18px;
+        padding: 0 6px;
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        color: var(--console-body-color);
+        background: var(--console-surface);
+        border: 1px solid var(--console-hairline);
+      }
+      .code-badge sl-icon {
+        font-size: 11px;
+      }
+      .code-badge.opened sl-icon,
+      .pip.opened,
+      .toast.opened sl-icon {
+        color: var(--sl-color-primary-600);
+      }
+      .code-badge.reviewed sl-icon,
+      .code-badge.commented sl-icon,
+      .pip.reviewed,
+      .pip.commented,
+      .toast.reviewed sl-icon,
+      .toast.commented sl-icon {
+        color: var(--console-meta-color);
+      }
+      .code-badge.merged sl-icon,
+      .pip.merged,
+      .toast.merged sl-icon {
+        color: var(--sl-color-success-600);
+      }
+      .pip {
+        position: absolute;
+        z-index: 3;
+        white-space: nowrap;
+        pointer-events: none;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: var(--console-surface);
+        border: 1px solid currentColor;
+      }
+      .node.ghost {
+        pointer-events: none;
+        cursor: default;
+      }
+      /* Messages in flight: a dot and a short label, travelling once. */
+      .particle circle {
+        stroke: var(--console-page);
+        stroke-width: 2;
+        fill: var(--sl-color-success-600);
+      }
+      .particle.response circle {
+        fill: var(--sl-color-primary-500);
+      }
+      .particle.tool circle {
+        fill: var(--sl-color-neutral-500);
+      }
+      .particle.approval circle {
+        fill: var(--sl-color-warning-500);
+      }
+      .particle.decision circle,
+      .particle.code circle {
+        fill: var(--sl-color-success-500);
+      }
+      .particle text {
+        font-size: 12px;
+        font-weight: 500;
+        fill: var(--console-body-color);
+        paint-order: stroke;
+        stroke: var(--console-page);
+        stroke-width: 3px;
+      }
+      /* With messages travelling, a lit line is context, not the news. */
+      .stage.travelling .edge.active {
+        stroke-width: 1.75;
+        opacity: 0.75;
+      }
+      .toasts {
+        top: 10px;
+        right: 12px;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+        pointer-events: none;
+      }
+      .stage.has-selection .toasts {
+        right: 364px;
+      }
+      .toast {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 320px;
+        font-size: var(--console-text-meta);
+        color: var(--console-body-color);
+        background: var(--console-surface-raised, var(--console-surface));
+        border: 1px solid var(--console-hairline);
+        border-radius: var(--sl-border-radius-medium);
+        padding: 4px 10px;
+      }
       @media (prefers-reduced-motion: reduce) {
         .edge,
         .activity-label,
@@ -1143,6 +1557,7 @@ export class FleetMap extends LitElement {
   private filtered(): FleetMapGraph {
     const key = [
       this.graph,
+      this.codeActivity?.flows,
       this.activityWindow,
       this.types,
       this.owner,
@@ -1159,7 +1574,7 @@ export class FleetMap extends LitElement {
       this.graph && minutes && this.graph.active_within_minutes === undefined
         ? activeGraph(this.graph, Date.now() - minutes * 60_000)
         : (this.graph ?? EMPTY);
-    const view = filterGraph(source, {
+    const view = filterGraph(withCodeFlows(source, this.codeActivity), {
       types: this.types,
       owner: this.owner,
       provider: this.provider,
@@ -1590,11 +2005,17 @@ export class FleetMap extends LitElement {
       : displayLabel(node);
     const sub = this.subtitle(node, context.view, layout.groups, context.byId);
     const height = isHeader ? FLEET_MAP_NODE_HEIGHT : position.h;
+    const entering = presenceStyle(this.presence, node.id, Date.now());
     const button = html`<button
       type="button"
       class=${classes}
       data-node=${node.id}
-      style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${height}px"
+      data-presence=${node.id}
+      style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${height}px${
+        entering
+          ? `;opacity:${entering.opacity.toFixed(3)};transform:scale(${entering.scale.toFixed(3)})`
+          : ''
+      }"
       aria-pressed=${node.id === this.selected ? 'true' : 'false'}
       aria-label="${FLEET_MAP_TYPE_LABEL[node.type]} ${node.label}${
         gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''
@@ -1611,6 +2032,7 @@ export class FleetMap extends LitElement {
       }}
     >
       <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
+      ${child ? nothing : this.renderCode(node)}
       <span class="text"
         ><span class="label">${label}</span>${
           child
@@ -1647,6 +2069,110 @@ export class FleetMap extends LitElement {
         <sl-icon name=${open ? 'chevron-up' : 'chevron-down'}></sl-icon>
       </button>`;
   }
+
+  /** Pull and merge request counters on an agent, flow or person. */
+  private renderCode(node: FleetMapNode) {
+    const counts = this.codeActivity?.counts[node.id];
+    if (!counts) return nothing;
+    const items = CODE_BADGES.filter(([action]) => counts[action] > 0);
+    if (!items.length) return nothing;
+    const title = items
+      .map(([action, , label]) => `${counts[action]} ${label}`)
+      .join(', ');
+    return html`<span
+      class="code-badges"
+      data-code=${node.id}
+      title="Pull and merge requests in this window: ${title}"
+      aria-label="Pull and merge requests: ${title}"
+      >${items.map(
+        ([action, icon]) =>
+          html`<span class="code-badge ${action}" data-action=${action}
+            ><sl-icon name=${icon} aria-hidden="true"></sl-icon
+            >${counts[action]}</span
+          >`
+      )}</span
+    >`;
+  }
+
+  /** Nodes that just left the window, fading where they stood. */
+  private renderLeaving(positions: Map<string, FleetMapPosition>) {
+    if (!this.presence.leaving.size) return nothing;
+    const now = Date.now();
+    return [...this.presence.leaving].map(([id, { node }]) => {
+      const position = positions.get(id) ?? this.lastPositions.get(id);
+      if (!position) return nothing;
+      const style = presenceStyle(this.presence, id, now);
+      return html`<div
+        class="node ghost"
+        data-presence=${id}
+        data-leaving=${id}
+        aria-hidden="true"
+        style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${position.h}px;opacity:${style?.opacity.toFixed(3) ?? 0}"
+      >
+        <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
+        <span class="text"
+          ><span class="label">${displayLabel(node)}</span></span
+        >
+      </div>`;
+    });
+  }
+
+  /** Messages in flight, drawn at their position for this instant. */
+  private renderParticles() {
+    if (!this.particles.size || !this.spatial) return nothing;
+    const now = Date.now();
+    return this.particles.all.map((particle) => {
+      const a = this.positionOf(particle.from);
+      const b = this.positionOf(particle.to);
+      const t = particleProgress(particle, now);
+      const point =
+        a && b && t !== null ? pointOnCurve(curveBetween(a, b), t) : null;
+      return svg`<g class="particle ${particle.kind}" data-particle=${particle.id} data-kind=${particle.kind} opacity=${point ? 1 : 0} transform=${point ? `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})` : 'translate(-999 -999)'}><circle r="6"></circle>${particle.label ? svg`<text y="-11" text-anchor="middle">${particle.label}</text>` : nothing}</g>`;
+    });
+  }
+
+  /** Code events rising off the node that made them. */
+  private renderPips(positions: Map<string, FleetMapPosition>) {
+    if (!this.pips.length) return nothing;
+    return this.pips.map((pip) => {
+      const position = positions.get(pip.node);
+      if (!position) return nothing;
+      return html`<div
+        class="pip ${pip.action}"
+        data-pip=${pip.id}
+        data-start=${pip.start}
+        aria-hidden="true"
+        style="left:${position.x + position.w + 10}px;top:${position.y + 14}px"
+      >
+        ${pip.label}
+      </div>`;
+    });
+  }
+
+  private renderToasts(byId: Map<string, FleetMapNode>) {
+    return html`<div
+      class="overlay toasts"
+      role="status"
+      aria-live="polite"
+      data-testid="fleet-map-toasts"
+    >
+      ${this.toasts.map((toast) => {
+        const node = byId.get(toast.node);
+        return html`<div class="toast ${toast.action}" data-toast=${toast.id}>
+          <sl-icon
+            name=${CODE_BADGES.find(([action]) => action === toast.action)?.[1] ?? 'git'}
+            aria-hidden="true"
+          ></sl-icon>
+          <span
+            ><strong>${node ? displayLabel(node) : 'An agent'}</strong>
+            ${toast.label}</span
+          >
+        </div>`;
+      })}
+    </div>`;
+  }
+
+  private lastPositions = new Map<string, FleetMapPosition>();
 
   /**
    * Which relationships are drawn. Containment replaces account-of-provider
@@ -1894,10 +2420,27 @@ export class FleetMap extends LitElement {
     if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.layout;
     const seed = layoutGraph(view).positions;
-    const layout = spatialLayout(view, seed, this.points);
+    // Nodes already on screen stay where they are when the graph refreshes;
+    // only arrivals are placed, beside what they link to.
+    const settled: FleetMapPoints = {};
+    for (const node of view.nodes) {
+      const at = this.settled.get(node.id);
+      if (at) settled[node.id] = at;
+    }
+    const layout = spatialLayout(
+      view,
+      seed,
+      { ...settled, ...this.points },
+      clusterOf(view)
+    );
+    for (const [id, position] of layout.positions)
+      this.settled.set(id, { x: position.x, y: position.y });
     this.spatialCache = { key, layout };
     return layout;
   }
+
+  /** Where each node was last placed this session, so refreshes keep it. */
+  private settled = new Map<string, { x: number; y: number }>();
 
   /** Lit relationships by drawn line, with the label of what travelled. */
   private activityByLine(
@@ -1920,7 +2463,7 @@ export class FleetMap extends LitElement {
   }
 
   render() {
-    const graph = this.graph;
+    const graph = this.graph && withCodeFlows(this.graph, this.codeActivity);
     if (!graph) return nothing;
     if (!graph.nodes.length) {
       this.lastLayout = null;
@@ -1974,6 +2517,10 @@ export class FleetMap extends LitElement {
           pinned,
         });
     this.lastLayout = layout;
+    for (const [id, position] of layout.positions)
+      this.lastPositions.set(id, position);
+    if (this.lastPositions.size > 2000)
+      this.lastPositions = new Map(layout.positions);
     const byId = new Map(graph.nodes.map((node) => [node.id, node]));
     const parentOf = new Map<string, string>();
     for (const [parent, kids] of layout.groups)
@@ -1988,6 +2535,7 @@ export class FleetMap extends LitElement {
     };
     const context = { view, layout, byId, lit, hits };
     const active = this.activityByLine(view, layout);
+    const travelling = this.spatial && !this.motionOff;
     return html`${this.renderToolbar(graph, filtered, hits)}
       ${this.renderGaps(filtered)}
       ${
@@ -2010,7 +2558,7 @@ export class FleetMap extends LitElement {
           : nothing
       }
       <div
-        class="stage ${lit ? 'has-selection' : ''}"
+        class="stage ${lit ? 'has-selection' : ''} ${travelling ? 'travelling' : ''}"
         tabindex="0"
         role="region"
         aria-label="Fleet dependency map"
@@ -2105,7 +2653,8 @@ export class FleetMap extends LitElement {
                         .filter(Boolean)
                         .join(', ');
                       const path = svg`<path class=${cls} data-edge=${edge.kind} data-edge-id=${edge.id} data-activity=${live || nothing} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}${live ? ` · ${live}` : ''}</title></path>`;
-                      if (!live) return path;
+                      // Messages in flight carry their own labels.
+                      if (!live || travelling) return path;
                       const mx = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
                       const my = (y1 + y2) / 2 - 6;
                       return svg`${path}<text class="activity-label" x=${mx} y=${my} text-anchor="middle">${live}</text>`;
@@ -2121,6 +2670,20 @@ export class FleetMap extends LitElement {
                     parent: parent ? byId.get(parent) : undefined,
                   });
                 })}
+                ${this.renderLeaving(layout.positions)}
+                ${
+                  this.particles.size && travelling
+                    ? html`<svg
+                        class="particles"
+                        width=${layout.width}
+                        height=${layout.height}
+                        aria-hidden="true"
+                      >
+                        ${this.renderParticles()}
+                      </svg>`
+                    : nothing
+                }
+                ${this.renderPips(layout.positions)}
                 ${layout.more.map(
                   (row) =>
                     html`<button
@@ -2203,6 +2766,7 @@ export class FleetMap extends LitElement {
             to zoom.</span
           >
         </div>
+        ${this.spatial ? this.renderToasts(new Map(view.nodes.map((node) => [node.id, node]))) : nothing}
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
   }

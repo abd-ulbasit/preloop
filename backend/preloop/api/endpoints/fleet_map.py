@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from preloop.api.auth import get_current_active_user
 from preloop.models import models
 from preloop.models.db.session import get_db_session
-from preloop.schemas.fleet_map import FleetMapResponse
+from preloop.schemas.fleet_map import FleetCodeActivityResponse, FleetMapResponse
+from preloop.services.fleet_code_activity import build_code_activity
 from preloop.services.fleet_map import build_fleet_map
 from preloop.utils.permissions import require_permission
 
@@ -34,4 +35,26 @@ def read_fleet_map(
         user=current_user,
         limit=limit,
         active_within_minutes=active_within_minutes,
+    )
+
+
+@router.get(
+    "/fleet/code-activity",
+    response_model=FleetCodeActivityResponse,
+    tags=["Fleet"],
+)
+@require_permission("view_device_fleet")
+def read_fleet_code_activity(
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
+    active_within_minutes: int | None = Query(
+        None,
+        ge=1,
+        le=60 * 24 * 366,
+        description="Window in minutes; omitted reads the last 90 days.",
+    ),
+    db: Session = Depends(get_db_session),
+) -> FleetCodeActivityResponse:
+    """Pull and merge requests opened, commented, reviewed and merged per node."""
+    return build_code_activity(
+        db, user=current_user, active_within_minutes=active_within_minutes
     )

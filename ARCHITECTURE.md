@@ -738,6 +738,22 @@ approvals travelled (throttled, a state change rather than an animation), and of
 instance administrators a spatial arrangement, with positions stored per user, also
 as an alternative to the Overview inventory table.
 
+`GET /api/v1/fleet/code-activity` is the map's code layer: pull and merge requests
+opened, commented on, reviewed and merged in the same window, counted per agent, flow
+and owning person, plus the flows to place and the 40 most recent events. It reads
+successful code tool calls (`runtime_session_activity`, served by the partial index
+`ix_runtime_session_activity_code_tools`, capped at 5,000 rows) attributing a call in
+a flow run to the flow and any other call to the managed agent whose runtime
+principal made it, and forge-reported merges (`issue_cost_pull_request.merged_at`,
+capped at 500) attributed to the flows whose runs touched the pull request. "Any time"
+reads 90 days. Live, the `code_activity` realtime topic carries each successful code
+tool call and each first merge. In the spatial arrangement people, their machines and
+agents form islands around the shared models and providers, nodes fade in and out as
+they join and leave the window (positions already on screen are kept), and live
+traffic travels along the map as short-lived messages (model request and response,
+tool call, approval request and decision, code event), capped at 24 in flight and one
+per line per 400 ms; with `prefers-reduced-motion` only the line lights.
+
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 
 ### Restricted external runtime authority

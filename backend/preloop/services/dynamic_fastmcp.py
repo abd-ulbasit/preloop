@@ -3304,6 +3304,23 @@ async def {internal_name}({params_str}):
                     execution_id=user_context.flow_execution_id,
                 )
             )
+            if status == TOOL_CALL_STATUS_SUCCEEDED:
+                from preloop.services.fleet_code_activity import (
+                    emit_code_tool_event,
+                )
+
+                emit_code_tool_event(
+                    account_id=user_context.account_id,
+                    tool_name=persisted_tool_name,
+                    metadata=metadata,
+                    managed_agent_id=str(managed_agent.id)
+                    if managed_agent is not None
+                    else getattr(user_context, "managed_agent_id", None),
+                    flow_id=getattr(user_context, "flow_id", None),
+                    execution_id=user_context.flow_execution_id,
+                    runtime_session_id=user_context.runtime_session_id,
+                    timestamp=activity_timestamp,
+                )
             if managed_agent is not None:
                 emit_account_event(
                     build_account_event(
