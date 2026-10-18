@@ -4843,6 +4843,8 @@ export class SessionReplayPanel extends LitElement {
     }
     if (this.focusJumpTarget !== focusId) {
       this.focusJumpTarget = focusId;
+      // Back to a note linked before (A, then B, then A again) lands again.
+      this.jumpedNoteFocusId = null;
       this.focusJumpPageRequests = 0;
       this.focusJumpRequestedForCount = null;
     }

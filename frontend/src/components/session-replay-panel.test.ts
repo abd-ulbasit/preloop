@@ -1312,6 +1312,48 @@ describe('SessionReplayPanel', () => {
     ).to.equal('note-9');
   });
 
+  it('lands on a note again after the focus moved away and back', async () => {
+    const events: FlowGatewayEvent[] = [
+      previewEvent('e1', '2026-06-07T12:00:00Z', [
+        { role: 'user', text: 'FIRST_TURN' },
+      ]),
+    ];
+    const activity = [
+      {
+        activity_type: 'agent_control_message',
+        timestamp: '2026-06-07T12:00:30Z',
+        title: 'Operator message',
+        summary: 'rebase first',
+        status: 'delivered',
+        metadata: { kind: 'operator_note', note_id: 'note-7', role: 'user' },
+      },
+    ] as unknown as RuntimeSessionActivityItem[];
+    const element = await fixture<SessionReplayPanel>(html`
+      <session-replay-panel
+        replayMode="timeline"
+        .session=${SESSION}
+        .events=${events}
+        .activity=${activity}
+        .focusEventId=${'note-7'}
+      ></session-replay-panel>
+    `);
+    const highlighted = () =>
+      element.shadowRoot?.querySelector('.chat-turn.jump-highlight') || null;
+    await waitUntil(() => highlighted(), 'first jump');
+    highlighted()!.classList.remove('jump-highlight');
+    element.focusEventId = 'e1';
+    await waitUntil(
+      () => highlighted()?.getAttribute('data-event-id') === 'e1',
+      'jump to the event'
+    );
+    highlighted()!.classList.remove('jump-highlight');
+    element.focusEventId = 'note-7';
+    await waitUntil(
+      () => highlighted()?.getAttribute('data-note-id') === 'note-7',
+      'Returning to the note did not land again'
+    );
+  });
+
   it('jumps to a deep linked turn named by its event id', async () => {
     // A tool_call snippet names the activity row id, which is also the
     // gateway event id the transcript already keys turns by.
