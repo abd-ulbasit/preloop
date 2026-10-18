@@ -10,13 +10,16 @@ import './licence-banner.ts';
 import type { LicenceBanner, LicenceStatus } from './licence-banner.ts';
 
 const original = window.fetch;
+let seen: string[] = [];
 
 function serve(status: number, body?: Partial<LicenceStatus>): void {
-  window.fetch = (async () =>
-    new Response(body ? JSON.stringify(body) : '', {
+  window.fetch = (async (input: RequestInfo | URL) => {
+    seen.push(String(input));
+    return new Response(body ? JSON.stringify(body) : '', {
       status,
       headers: { 'Content-Type': 'application/json' },
-    })) as typeof window.fetch;
+    });
+  }) as typeof window.fetch;
 }
 
 async function mount(): Promise<LicenceBanner> {
@@ -37,6 +40,7 @@ const GRACE: LicenceStatus = {
 
 describe('licence-banner', () => {
   beforeEach(() => {
+    seen = [];
     localStorage.setItem('accessToken', 'test-token');
     localStorage.removeItem('licenceBannerDismissed');
   });
@@ -54,6 +58,29 @@ describe('licence-banner', () => {
       expect(el.shadowRoot!.querySelector('.banner')).to.equal(null);
     });
   }
+
+  it('reads the Enterprise licence status endpoint', async () => {
+    serve(404);
+    await mount();
+    expect(
+      seen.map((url) => new URL(url, location.origin).pathname)
+    ).to.include('/api/v1/licence/status');
+  });
+
+  it('shows the banner again for a renewed licence after a dismissal', async () => {
+    localStorage.setItem('licenceBannerDismissed', 'lic_1:2026-11-01');
+    serve(200, GRACE);
+    const dismissed = await mount();
+    expect(dismissed.shadowRoot!.querySelector('.banner')).to.equal(null);
+    for (const changed of [
+      { ...GRACE, licence_id: 'lic_2' },
+      { ...GRACE, grace_ends: '2027-11-01' },
+    ]) {
+      serve(200, changed);
+      const el = await mount();
+      await waitUntil(() => el.shadowRoot!.querySelector('.banner'));
+    }
+  });
 
   it('renders nothing for a valid licence', async () => {
     serve(200, {

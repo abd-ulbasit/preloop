@@ -82,7 +82,10 @@ export class LicenceBanner extends LitElement {
       return;
     }
     try {
-      const response = await fetchWithAuth('/api/v1/licence/status');
+      // Passive: a background read must not raise the 429 toast or 402 modal.
+      const response = await fetchWithAuth('/api/v1/licence/status', {
+        passive: true,
+      });
       if (!response.ok) {
         // Non-superusers (403) and community builds (404) get no banner.
         this._status = null;
