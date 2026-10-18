@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 from datetime import UTC, datetime, timedelta
+from itertools import product
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -37,7 +38,7 @@ def _naive(offset_hours: float) -> datetime:
     return NAIVE_NOW + timedelta(hours=offset_hours)
 
 
-@pytest.fixture(params=[("oss", False), ("enterprise", True), ("cloud", False)])
+@pytest.fixture(params=list(product(("oss", "enterprise", "cloud"), (False, True))))
 def deployment_edition(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[str, bool]:
