@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import zip_longest
 from typing import Any
 from urllib.parse import quote
@@ -14,7 +15,11 @@ from sqlalchemy.orm import Session
 
 from preloop.api.auth.key_scopes import is_mcp_only_api_key, is_single_purpose_api_key
 from preloop.models import crud, models
-from preloop.models.crud.fleet_map import Source, list_resources
+from preloop.models.crud.fleet_map import (
+    Source,
+    count_decommissioned_agents,
+    list_resources,
+)
 from preloop.models.models.managed_agent_ai_model_binding import (
     AUTOREGISTER_CONFIG_KEY_PREFIX,
 )
@@ -45,6 +50,46 @@ BINDING_LIMIT = 10000
 EDGE_LIMIT = 10000
 FLEET_HREF = "/console/settings/device-fleet"
 MODELS_HREF = "/console/ai-models"
+# An onboarded agent not seen for this long is shown as inactive.
+ACTIVE_WINDOW = timedelta(days=14)
+_DATE_SUFFIX = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
+_UPPER_WORDS = {"gpt", "glm", "ai", "llm", "r1", "v3", "o1", "o3", "o4"}
+
+
+def canonical_model(identifier: str) -> tuple[str, str]:
+    """Reduce a provider model identifier to a shared reference and label.
+
+    Per-account model rows of the same model (for example an auto-registered
+    ``anthropic/claude-opus-5-5`` per agent) collapse into one reference.
+
+    Args:
+        identifier: Model identifier as configured on the model row.
+
+    Returns:
+        Stable lowercase key and a human label, such as ``Claude Opus 5.5``.
+    """
+    key = _DATE_SUFFIX.sub("", identifier.strip().rpartition("/")[2].lower())
+    key = key.removesuffix(":latest") or identifier.strip().lower()
+    words: list[str] = []
+    for part in re.split(r"[-_\s]+", key):
+        if not part:
+            continue
+        if part.isdigit() and words and re.fullmatch(r"[\d.]+", words[-1]):
+            words[-1] = f"{words[-1]}.{part}"
+        elif part in _UPPER_WORDS:
+            words.append(part.upper())
+        elif part[0].isdigit():
+            words.append(part)
+        else:
+            words.append(part[0].upper() + part[1:])
+    return key, " ".join(words) or identifier
+
+
+def _aware(value: Any) -> datetime | None:
+    """Return a timezone-aware timestamp, or None for missing values."""
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _allowed(db: Session, user: models.User, permission: str, owner: bool) -> bool:
@@ -187,6 +232,9 @@ def build_fleet_map(
         if source not in nodes or target not in nodes:
             return
         identifier = f"{kind}:{source}:{target}:{provenance}"
+        if kind == "uses_model" and kwargs.get("account_id"):
+            # Two accounts reaching one canonical model are two relationships.
+            identifier = f"{identifier}:{kwargs['account_id']}"
         edges[identifier] = FleetMapEdge(
             id=identifier,
             source=source,
@@ -203,10 +251,17 @@ def build_fleet_map(
             "user",
             row.id,
             row.full_name or row.username,
-            f"/console/settings/users?user={row.id}",
+            f"/console/settings/users/{quote(str(row.id), safe='')}",
+        )
+    now = datetime.now(UTC)
+    if permissions["view_agents"]:
+        result.decommissioned_agents = count_decommissioned_agents(
+            db, account_id=account_id
         )
     for row in agents:
         owners = [f"user:{row.owner_user_id}"] if row.owner_user_id else []
+        seen = _aware(getattr(row, "last_seen_at", None))
+        recent = seen is None or now - seen <= ACTIVE_WINDOW
         item = node(
             "agent",
             row.id,
@@ -216,6 +271,12 @@ def build_fleet_map(
             status=row.lifecycle_state,
             owner_ids=[uid for uid in owners if uid in nodes],
             gaps=["unknown_device"],
+            agent_state=(
+                "onboarded"
+                if row.lifecycle_state == "active" and recent
+                else "inactive"
+            ),
+            last_seen_at=seen,
         )
         if permissions["manage_agents"]:
             item.actions.append(
@@ -223,7 +284,6 @@ def build_fleet_map(
             )
         for uid in item.owner_ids:
             edge(uid, item.id, "owns")
-    now = datetime.now(UTC)
     for row in runners:
         owners = (
             [f"user:{row.registered_by_user_id}"] if row.registered_by_user_id else []
@@ -242,15 +302,30 @@ def build_fleet_map(
         for uid in item.owner_ids:
             edge(uid, item.id, "owns")
 
+    # Model rows are per-account (often per-agent) instances of one model.
+    # The map shows one node per canonical model and keeps the account each
+    # agent reaches it through on the agent's edge.
     model_accounts: dict[str, str] = {}
+    model_nodes: dict[str, str] = {}
+    model_rows: dict[str, list[Any]] = {}
     for row in ai_models:
         provider = node("provider", row.provider_name, row.provider_name, MODELS_HREF)
         provider.provider_ids = [provider.id]
         model_href = f"{MODELS_HREF}/{quote(str(row.id), safe='')}"
-        item = node("model", row.id, row.name, model_href, provider_ids=[provider.id])
-        edge(item.id, provider.id, "provided_by")
-        # Hosted model routing and operator credentials are not tenant resources.
+        key, label = canonical_model(
+            getattr(row, "model_identifier", None) or row.name or str(row.id)
+        )
+        item = node("model", key, label, model_href, detail=key)
+        model_rows.setdefault(item.id, []).append(row)
+        if provider.id not in item.provider_ids:
+            item.provider_ids = sorted(item.provider_ids + [provider.id])
+        model_nodes[str(row.id)] = item.id
+        # One canonical model can be reached through several providers, so a
+        # provider's impact flows through its accounts. Only a model row with
+        # no account links the model to its provider directly.
         if row.account_id is None:
+            # Hosted routing and operator credentials are not tenant resources.
+            edge(item.id, provider.id, "provided_by")
             continue
         if row.runner_id:
             edge(item.id, f"runner:{row.runner_id}", "runs_on")
@@ -261,6 +336,7 @@ def build_fleet_map(
             and not row.api_key
             and not row.uses_ambient_credentials
         ):
+            edge(item.id, provider.id, "provided_by")
             continue
         reference = (
             str(row.credentials_secret_id)
@@ -274,32 +350,39 @@ def build_fleet_map(
             model_href,
             detail="Credential reference",
             provider_ids=[provider.id],
+            parent_id=provider.id,
         )
         if provider.id not in account_node.provider_ids:
             account_node.provider_ids.append(provider.id)
         action = FleetMapAction(label="Manage credentials", href=model_href)
         if permissions["edit_ai_models"] and not account_node.actions:
             account_node.actions.append(action)
-        model_accounts[item.id] = account_node.id
-        edge(item.id, account_node.id, "uses_account")
+        model_accounts[str(row.id)] = account_node.id
         edge(account_node.id, provider.id, "account_of_provider")
+    for mid, rows in model_rows.items():
+        if len(rows) > 1:
+            nodes[mid].href = MODELS_HREF
+            nodes[mid].detail = f"{nodes[mid].detail} · {len(rows)} configurations"
 
     def model_link(
         agent_id: str, model_id: str, provenance: str, gaps: list[str]
     ) -> None:
-        aid, mid = f"agent:{agent_id}", f"model:{model_id}"
+        aid, mid = f"agent:{agent_id}", model_nodes.get(model_id, "")
         if aid not in nodes or mid not in nodes:
             return
-        edge(aid, mid, "uses_model", provenance, gaps=gaps)
-        if mid in model_accounts:
-            edge(aid, model_accounts[mid], "uses_account", provenance, gaps=gaps)
+        via = model_accounts.get(model_id)
+        edge(aid, mid, "uses_model", provenance, gaps=gaps, account_id=via)
         nodes[aid].gaps = sorted(set(nodes[aid].gaps + gaps))
         nodes[aid].provider_ids = sorted(
             set(nodes[aid].provider_ids + nodes[mid].provider_ids)
         )
-        if mid in model_accounts:
-            account_node = nodes[model_accounts[mid]]
+        if via:
+            edge(aid, via, "uses_account", provenance, gaps=gaps)
+            account_node = nodes[via]
             account_node.gaps = sorted(set(account_node.gaps + gaps))
+            nodes[aid].provider_ids = sorted(
+                set(nodes[aid].provider_ids + account_node.provider_ids)
+            )
 
     for row in bindings[:BINDING_LIMIT]:
         if row.status == "inactive":
@@ -384,6 +467,7 @@ def build_fleet_map(
         devices = projection["items"]
         result.truncated |= len(devices) > SOURCE_LIMIT
         discovered_count = 0
+        discovered_seen: set[tuple[str, str]] = set()
         for device in devices[:SOURCE_LIMIT]:
             key = device["device_key"]
             owners = [
@@ -420,6 +504,10 @@ def build_fleet_map(
                         gaps=["offline_runner"] if runner["state"] == "offline" else [],
                     )
             for discovered in device["agents"]:
+                linked = nodes.get(f"agent:{discovered.get('managed_agent_id')}")
+                if linked is not None:
+                    discovered_seen.add((key, str(linked.detail)))
+            for discovered in device["agents"]:
                 managed_id = discovered.get("managed_agent_id")
                 if managed_id:
                     aid = f"agent:{managed_id}"
@@ -429,6 +517,13 @@ def build_fleet_map(
                         gap for gap in nodes[aid].gaps if gap != "unknown_device"
                     ]
                 elif permissions["view_agents"]:
+                    # Inventory and discovery report the same harness; a
+                    # dismissed candidate is a decision, not a gap.
+                    if discovered.get("status") == "dismissed":
+                        continue
+                    if (key, discovered["kind"]) in discovered_seen:
+                        continue
+                    discovered_seen.add((key, discovered["kind"]))
                     discovered_count += 1
                     if discovered_count > SOURCE_LIMIT:
                         result.truncated = True
@@ -442,6 +537,8 @@ def build_fleet_map(
                         status=discovered["status"],
                         owner_ids=owners,
                         gaps=["discovered_agent"],
+                        agent_state="discovered",
+                        last_seen_at=_aware(discovered.get("last_seen_at")),
                     ).id
                 else:
                     continue

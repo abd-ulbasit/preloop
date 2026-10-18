@@ -52,7 +52,13 @@ export interface FleetMapNode {
   actions: FleetMapAction[];
   cluster_of?: FleetMapResourceType;
   count?: number;
+  /** Containing node, e.g. the provider of a provider account. */
+  parent_id?: string | null;
+  /** Agents only. Missing on older servers, read as onboarded. */
+  agent_state?: FleetMapAgentState | null;
+  last_seen_at?: string | null;
 }
+export type FleetMapAgentState = 'onboarded' | 'discovered' | 'inactive';
 export interface FleetMapEdge {
   id: string;
   source: string;
@@ -62,6 +68,8 @@ export interface FleetMapEdge {
   impact_source: string;
   impact_target: string;
   gaps: FleetMapGapCode[];
+  /** uses_model only: the provider account node the agent goes through. */
+  account_id?: string | null;
 }
 export interface FleetMapGraph {
   schema_version: 1;
@@ -71,19 +79,32 @@ export interface FleetMapGraph {
   limit: number;
   clusters: { type: FleetMapResourceType; count: number }[];
   unavailable: string[];
+  decommissioned_agents?: number;
 }
 
-/** Columns left to right: a person, then what they own, then what it calls. */
-export const FLEET_MAP_COLUMNS: readonly Exclude<
-  FleetMapNodeType,
-  'cluster'
->[] = [
+/** Every resource type, in reading order; each can be shown or hidden. */
+export const FLEET_MAP_TYPES: readonly FleetMapResourceType[] = [
   'user',
   'device',
   'runner',
   'agent',
   'model',
   'provider_account',
+  'provider',
+];
+
+export type FleetMapColumn = 'user' | 'device' | 'agent' | 'model' | 'provider';
+
+/**
+ * Columns left to right: a person, the machines they own (runners sit inside
+ * their machine), the agents on them, the models those agents call, and the
+ * providers (provider accounts sit inside their provider).
+ */
+export const FLEET_MAP_COLUMNS: readonly FleetMapColumn[] = [
+  'user',
+  'device',
+  'agent',
+  'model',
   'provider',
 ];
 
@@ -122,10 +143,27 @@ export const FLEET_MAP_EDGE_LABEL: Record<FleetMapEdgeType, string> = {
   provided_by: 'provided by',
 };
 
-export const nodeColumn = (
-  node: FleetMapNode
-): Exclude<FleetMapNodeType, 'cluster'> =>
+const COLUMN_OF: Record<FleetMapResourceType, FleetMapColumn> = {
+  user: 'user',
+  device: 'device',
+  runner: 'device',
+  agent: 'agent',
+  model: 'model',
+  provider_account: 'provider',
+  provider: 'provider',
+};
+
+/** The resource type a node stands for; summary groups stand for theirs. */
+export const nodeType = (node: FleetMapNode): FleetMapResourceType =>
   node.type === 'cluster' ? node.cluster_of || 'agent' : node.type;
+
+export const nodeColumn = (node: FleetMapNode): FleetMapColumn =>
+  COLUMN_OF[nodeType(node)];
+
+/** Agents without a server state predate it and were all onboarded. */
+export const agentState = (node: FleetMapNode): FleetMapAgentState =>
+  node.agent_state ??
+  (node.gaps.includes('discovered_agent') ? 'discovered' : 'onboarded');
 
 const GAP_LABEL: Record<FleetMapGapCode, string> = {
   discovered_agent: 'Not onboarded',
@@ -175,20 +213,45 @@ export function blastRadius(
   return { nodes };
 }
 
+/** What the selected node itself relies on: the reverse of blast radius. */
+export function dependencies(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
+  selectedId: string
+): Set<string> {
+  const reversed = graph.edges.map((edge) => ({
+    ...edge,
+    impact_source: edge.impact_target,
+    impact_target: edge.impact_source,
+  }));
+  return blastRadius({ nodes: graph.nodes, edges: reversed }, selectedId).nodes;
+}
+
 export interface FleetMapFilters {
   types: ReadonlySet<FleetMapNodeType>;
   owner: string;
   provider: string;
+  /** Agent states to show; omitted means all. */
+  states?: ReadonlySet<FleetMapAgentState>;
+  /** Keep only nodes with a gap and their direct neighbours. */
+  gapsOnly?: boolean;
 }
 
-/** Facets use permission-filtered server associations, not an undirected walk. */
+/**
+ * Facets use permission-filtered server associations, not an undirected walk.
+ * When agents are narrowed (by state or gaps), models, accounts and providers
+ * that no remaining agent reaches drop out too, so a filter shrinks the whole
+ * picture instead of leaving a column of orphans.
+ */
 export function filterGraph(
   graph: FleetMapGraph,
   filters: FleetMapFilters
 ): FleetMapGraph {
-  const nodes = graph.nodes.filter(
+  let nodes = graph.nodes.filter(
     (node) =>
-      filters.types.has(nodeColumn(node)) &&
+      filters.types.has(nodeType(node)) &&
+      (node.type !== 'agent' ||
+        !filters.states ||
+        filters.states.has(agentState(node))) &&
       (!filters.owner ||
         node.id === filters.owner ||
         node.owner_ids.includes(filters.owner)) &&
@@ -196,14 +259,83 @@ export function filterGraph(
         node.id === filters.provider ||
         node.provider_ids.includes(filters.provider))
   );
+  const edgesOf = (ids: Set<string>) =>
+    graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+  if (filters.gapsOnly) {
+    const ids = new Set(nodes.map((node) => node.id));
+    const keep = new Set(
+      nodes.filter((node) => node.gaps.length).map((node) => node.id)
+    );
+    for (const edge of edgesOf(ids))
+      if (keep.has(edge.source) || keep.has(edge.target)) {
+        keep.add(edge.source);
+        keep.add(edge.target);
+      }
+    // Keep the provider around a kept account so containment still reads.
+    for (const node of nodes)
+      if (keep.has(node.id) && node.parent_id && ids.has(node.parent_id))
+        keep.add(node.parent_id);
+    nodes = nodes.filter((node) => keep.has(node.id));
+  }
+  const narrowed =
+    filters.gapsOnly ||
+    (filters.states && filters.states.size < 3) ||
+    nodes.length < graph.nodes.length;
+  if (narrowed && nodes.some((node) => node.type === 'agent')) {
+    const ids = new Set(nodes.map((node) => node.id));
+    const edges = edgesOf(ids);
+    const reached = new Set<string>();
+    for (const edge of edges)
+      if (edge.source.startsWith('agent:')) reached.add(edge.target);
+    // A model reached by an agent keeps its providers; an account keeps its own.
+    for (const edge of edges)
+      if (edge.kind === 'provided_by' && reached.has(edge.source))
+        reached.add(edge.target);
+    for (const node of nodes)
+      if (node.type === 'provider_account' && reached.has(node.id))
+        for (const pid of node.parent_id ? [node.parent_id] : node.provider_ids)
+          reached.add(pid);
+    for (const edge of edges)
+      if (edge.kind === 'account_of_provider' && reached.has(edge.source))
+        reached.add(edge.target);
+    nodes = nodes.filter(
+      (node) =>
+        !['model', 'provider_account', 'provider'].includes(node.type) ||
+        reached.has(node.id)
+    );
+  }
   const ids = new Set(nodes.map((node) => node.id));
-  return {
-    ...graph,
-    nodes,
-    edges: graph.edges.filter(
-      (edge) => ids.has(edge.source) && ids.has(edge.target)
-    ),
-  };
+  return { ...graph, nodes, edges: edgesOf(ids) };
+}
+
+/**
+ * Which node visually contains which: a provider account sits inside its
+ * provider, a runner inside the device that hosts it.
+ */
+export function containers(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>
+): Map<string, string> {
+  const ids = new Map(graph.nodes.map((node) => [node.id, node]));
+  const parent = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.type !== 'provider_account') continue;
+    const candidate =
+      node.parent_id ??
+      graph.edges.find(
+        (edge) => edge.kind === 'account_of_provider' && edge.source === node.id
+      )?.target ??
+      node.provider_ids[0];
+    if (candidate && ids.has(candidate)) parent.set(node.id, candidate);
+  }
+  for (const edge of graph.edges)
+    if (
+      edge.kind === 'hosts' &&
+      ids.get(edge.source)?.type === 'device' &&
+      ids.get(edge.target)?.type === 'runner' &&
+      !parent.has(edge.target)
+    )
+      parent.set(edge.target, edge.source);
+  return parent;
 }
 
 /** Summary nodes represent omitted resources, never expanded by client filters. */
@@ -235,98 +367,167 @@ export function withClusters(graph: FleetMapGraph): FleetMapGraph {
 export interface FleetMapPosition {
   x: number;
   y: number;
+  w: number;
+  h: number;
 }
 
-export const FLEET_MAP_NODE_WIDTH = 176;
-export const FLEET_MAP_NODE_HEIGHT = 52;
-export const FLEET_MAP_COLUMN_GAP = 40;
-export const FLEET_MAP_ROW_GAP = 14;
-export const FLEET_MAP_HEADER = 40;
+export interface FleetMapLayoutOptions {
+  /** Rows shown per column before a "+N more" row. */
+  cap?: number;
+  /** Columns showing every row. */
+  expanded?: ReadonlySet<FleetMapColumn>;
+  /** Containers whose children are folded into the container row. */
+  collapsed?: ReadonlySet<string>;
+  /** Nodes that must stay visible past the cap (selection, search hits). */
+  pinned?: ReadonlySet<string>;
+}
 
-/**
- * A layered layout: one column per type, empty columns collapsed. Within a
- * column nodes are ordered by the mean row of their neighbours in the
- * column before, so edges between neighbouring columns cross as little as
- * a single sweep manages. Deterministic, so a screenshot is reproducible.
- */
-export function layoutGraph(graph: Pick<FleetMapGraph, 'nodes' | 'edges'>): {
+export interface FleetMapLayout {
   positions: Map<string, FleetMapPosition>;
-  columns: { type: Exclude<FleetMapNodeType, 'cluster'>; x: number }[];
+  /** Top-level nodes that hold children, with their child ids. */
+  groups: Map<string, string[]>;
+  columns: { type: FleetMapColumn; x: number; count: number }[];
+  more: { column: FleetMapColumn; hidden: number; x: number; y: number }[];
+  /** Where a node is drawn: itself, its folded container, or nowhere. */
+  anchor: (id: string) => string | undefined;
   width: number;
   height: number;
-} {
-  const groups = new Map<string, FleetMapNode[]>();
+}
+
+export const FLEET_MAP_NODE_WIDTH = 216;
+export const FLEET_MAP_NODE_HEIGHT = 48;
+export const FLEET_MAP_CHILD_HEIGHT = 36;
+export const FLEET_MAP_COLUMN_GAP = 88;
+export const FLEET_MAP_ROW_GAP = 10;
+export const FLEET_MAP_HEADER = 36;
+export const FLEET_MAP_CAP = 12;
+const CHILD_GAP = 6;
+const CHILD_INSET = 10;
+
+/**
+ * A layered, top-aligned layout: one column per present kind, each column
+ * starting directly under its header. Within a column rows are ordered by the
+ * mean height of their neighbours in the columns already placed, so edges
+ * cross as little as a single sweep manages. Containers stack their children
+ * inside them. Past `cap` rows a column ends in a "+N more" row unless it is
+ * expanded; pinned nodes always stay. Deterministic, so screenshots repeat.
+ */
+export function layoutGraph(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
+  options: FleetMapLayoutOptions = {}
+): FleetMapLayout {
+  const cap = options.cap ?? Number.POSITIVE_INFINITY;
+  const parentOf = containers(graph);
+  const children = new Map<string, FleetMapNode[]>();
   for (const node of graph.nodes) {
-    const list = groups.get(nodeColumn(node)) || [];
-    list.push(node);
-    groups.set(nodeColumn(node), list);
+    const parent = parentOf.get(node.id);
+    if (!parent) continue;
+    children.set(parent, [...(children.get(parent) || []), node]);
   }
+  const top = (id: string) => parentOf.get(id) ?? id;
   const adjacent = new Map<string, string[]>();
   for (const edge of graph.edges) {
-    adjacent.set(edge.source, [
-      ...(adjacent.get(edge.source) || []),
-      edge.target,
-    ]);
-    adjacent.set(edge.target, [
-      ...(adjacent.get(edge.target) || []),
-      edge.source,
-    ]);
+    const a = top(edge.source);
+    const b = top(edge.target);
+    if (a === b) continue;
+    adjacent.set(a, [...(adjacent.get(a) || []), edge.target]);
+    adjacent.set(b, [...(adjacent.get(b) || []), edge.source]);
   }
-  const row = new Map<string, number>();
-  const columnSize = new Map<string, number>();
+  const centre = new Map<string, number>();
   const positions = new Map<string, FleetMapPosition>();
-  const columns: { type: Exclude<FleetMapNodeType, 'cluster'>; x: number }[] =
-    [];
-  let tallest = 0;
+  const groups = new Map<string, string[]>();
+  const columns: FleetMapLayout['columns'] = [];
+  const more: FleetMapLayout['more'] = [];
+  let height = FLEET_MAP_HEADER;
   for (const type of FLEET_MAP_COLUMNS) {
-    const list = groups.get(type);
-    if (!list?.length) continue;
+    const list = graph.nodes.filter(
+      (node) => nodeColumn(node) === type && !parentOf.has(node.id)
+    );
+    if (!list.length) continue;
     const score = (node: FleetMapNode): number => {
-      const rows = (adjacent.get(node.id) || [])
-        .map((id) => row.get(id))
+      const ys = (adjacent.get(node.id) || [])
+        .map((id) => centre.get(id))
         .filter((value): value is number => value !== undefined);
-      return rows.length
-        ? rows.reduce((sum, value) => sum + value, 0) / rows.length
+      return ys.length
+        ? ys.reduce((sum, value) => sum + value, 0) / ys.length
         : Number.POSITIVE_INFINITY;
     };
+    const scores = new Map(list.map((node) => [node.id, score(node)]));
     const ordered = [...list].sort(
       (a, b) =>
-        score(a) - score(b) ||
         Number(a.type === 'cluster') - Number(b.type === 'cluster') ||
+        scores.get(a.id)! - scores.get(b.id)! ||
+        Number(b.gaps.length > 0) - Number(a.gaps.length > 0) ||
         a.label.localeCompare(b.label)
     );
+    const limit = options.expanded?.has(type) ? Number.POSITIVE_INFINITY : cap;
+    const shown = ordered.filter(
+      (node, index) =>
+        index < limit ||
+        node.type === 'cluster' ||
+        options.pinned?.has(node.id) ||
+        (children.get(node.id) || []).some((child) =>
+          options.pinned?.has(child.id)
+        )
+    );
     const x = columns.length * (FLEET_MAP_NODE_WIDTH + FLEET_MAP_COLUMN_GAP);
-    columns.push({ type, x });
-    ordered.forEach((node, index) => {
-      row.set(node.id, index);
-      columnSize.set(node.id, ordered.length);
-      positions.set(node.id, {
-        x,
-        y:
-          FLEET_MAP_HEADER +
-          index * (FLEET_MAP_NODE_HEIGHT + FLEET_MAP_ROW_GAP),
-      });
-    });
-    tallest = Math.max(tallest, ordered.length);
+    columns.push({ type, x, count: ordered.length });
+    let y = FLEET_MAP_HEADER;
+    for (const node of shown) {
+      const kids = (children.get(node.id) || []).sort((a, b) =>
+        a.label.localeCompare(b.label)
+      );
+      const open = kids.length && !options.collapsed?.has(node.id);
+      const h = open
+        ? FLEET_MAP_NODE_HEIGHT +
+          kids.length * (FLEET_MAP_CHILD_HEIGHT + CHILD_GAP) +
+          CHILD_INSET -
+          CHILD_GAP
+        : FLEET_MAP_NODE_HEIGHT;
+      positions.set(node.id, { x, y, w: FLEET_MAP_NODE_WIDTH, h });
+      centre.set(node.id, y + FLEET_MAP_NODE_HEIGHT / 2);
+      if (kids.length)
+        groups.set(
+          node.id,
+          kids.map((kid) => kid.id)
+        );
+      if (open)
+        kids.forEach((kid, index) => {
+          const ky =
+            y +
+            FLEET_MAP_NODE_HEIGHT +
+            index * (FLEET_MAP_CHILD_HEIGHT + CHILD_GAP);
+          positions.set(kid.id, {
+            x: x + CHILD_INSET,
+            y: ky,
+            w: FLEET_MAP_NODE_WIDTH - 2 * CHILD_INSET,
+            h: FLEET_MAP_CHILD_HEIGHT,
+          });
+          centre.set(kid.id, ky + FLEET_MAP_CHILD_HEIGHT / 2);
+        });
+      else
+        for (const kid of kids)
+          centre.set(kid.id, y + FLEET_MAP_NODE_HEIGHT / 2);
+      y += h + FLEET_MAP_ROW_GAP;
+    }
+    const hidden = ordered.length - shown.length;
+    if (hidden > 0) {
+      more.push({ column: type, hidden, x, y });
+      y += FLEET_MAP_CHILD_HEIGHT + FLEET_MAP_ROW_GAP;
+    }
+    height = Math.max(height, y - FLEET_MAP_ROW_GAP);
   }
-  // Centre each column on the tallest one, so a column of two providers
-  // sits beside the middle of the agents it serves, not above them.
-  const step = FLEET_MAP_NODE_HEIGHT + FLEET_MAP_ROW_GAP;
-  for (const [id, position] of positions) {
-    const size = columnSize.get(id) ?? tallest;
-    position.y += ((tallest - size) * step) / 2;
-  }
+  const anchor = (id: string): string | undefined =>
+    positions.has(id)
+      ? id
+      : positions.has(parentOf.get(id) ?? '')
+        ? parentOf.get(id)
+        : undefined;
   const width = columns.length
     ? columns.length * (FLEET_MAP_NODE_WIDTH + FLEET_MAP_COLUMN_GAP) -
       FLEET_MAP_COLUMN_GAP
     : 0;
-  const height =
-    FLEET_MAP_HEADER +
-    Math.max(
-      0,
-      tallest * (FLEET_MAP_NODE_HEIGHT + FLEET_MAP_ROW_GAP) - FLEET_MAP_ROW_GAP
-    );
-  return { positions, columns, width, height };
+  return { positions, groups, columns, more, anchor, width, height };
 }
 
 export async function getFleetMap(

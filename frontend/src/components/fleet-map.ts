@@ -3,22 +3,28 @@ import { customElement, property, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import {
-  FLEET_MAP_COLUMNS,
+  FLEET_MAP_CAP,
   FLEET_MAP_COLUMN_LABEL,
   FLEET_MAP_EDGE_LABEL,
   FLEET_MAP_NODE_HEIGHT,
-  FLEET_MAP_NODE_WIDTH,
+  FLEET_MAP_TYPES,
   FLEET_MAP_TYPE_LABEL,
+  agentState,
   blastRadius,
+  dependencies,
   filterGraph,
   layoutGraph,
-  nodeColumn,
   nodeGaps,
+  type FleetMapAgentState,
+  type FleetMapColumn,
+  type FleetMapEdge,
   type FleetMapGapCode,
   type FleetMapGraph,
+  type FleetMapLayout,
   type FleetMapNode,
   type FleetMapNodeType,
 } from '../fleet-map-api';
+import { formatRelativeTime } from '../utils/date';
 import consoleStyles from '../styles/console-styles.css?inline';
 
 const ICON: Record<FleetMapNodeType, string> = {
@@ -32,21 +38,64 @@ const ICON: Record<FleetMapNodeType, string> = {
   cluster: 'collection',
 };
 
+const STATES: { state: FleetMapAgentState; label: string }[] = [
+  { state: 'onboarded', label: 'Onboarded' },
+  { state: 'discovered', label: 'Discovered' },
+  { state: 'inactive', label: 'Inactive' },
+];
+
+/** Type toggles, in reading order; runners and accounts are nested rows. */
+const TYPE_TOGGLE_LABEL: Record<(typeof FLEET_MAP_TYPES)[number], string> = {
+  user: 'People',
+  device: 'Devices',
+  runner: 'Runners',
+  agent: 'Agents',
+  model: 'Models',
+  provider_account: 'Accounts',
+  provider: 'Providers',
+};
+
+const EMPTY: FleetMapGraph = {
+  schema_version: 1,
+  limit: 500,
+  clusters: [],
+  unavailable: [],
+  truncated: false,
+  nodes: [],
+  edges: [],
+};
+
+const MIN_FIT_SCALE = 0.6;
+
 /**
- * The fleet as one picture: people, their machines, the agents on them and
- * the models, provider accounts and providers those agents reach. Selecting
- * a node lights its blast radius and lists it beside the map; everything
- * else dims. Gaps (ungoverned agents, offline runners, accounts that bypass
- * the gateway, open findings) are marked on the node itself.
+ * The fleet as one picture: people, their machines (runners inside them),
+ * the agents on them, the models those agents call and the providers behind
+ * them (provider accounts inside). By default it shows onboarded agents that
+ * were active recently; filters bring in discovered and inactive ones.
+ * Selecting a node lights what depends on it and what it relies on, lists
+ * the blast radius beside the map, and can hide everything unrelated. Gaps
+ * (ungoverned agents, offline runners, accounts that bypass the gateway,
+ * open findings) are marked on the node itself.
+ *
+ * Public surface: `graph`, `fullscreen` (reflected), `hasSelection()`,
+ * `clearSelection()`. Fires `fleet-map-fullscreen` with `{ fullscreen }`.
  */
 @customElement('fleet-map')
 export class FleetMap extends LitElement {
   @property({ attribute: false }) graph: FleetMapGraph | null = null;
+  /** Covers the viewport. Toggled by the map's own button or by a host. */
+  @property({ type: Boolean, reflect: true }) fullscreen = false;
   @state() private selected = '';
-  @state() private types = new Set<FleetMapNodeType>(FLEET_MAP_COLUMNS);
+  @state() private types = new Set<FleetMapNodeType>(FLEET_MAP_TYPES);
   @state() private owner = '';
   @state() private provider = '';
+  @state() private states = new Set<FleetMapAgentState>(['onboarded']);
+  @state() private gapsOnly = false;
+  @state() private query = '';
   @state() private focusGap: FleetMapGapCode | '' = '';
+  @state() private focusOnly = false;
+  @state() private expanded = new Set<FleetMapColumn>();
+  @state() private collapsed = new Set<string>();
 
   /** Whether a node or a gap is selected, which Esc would clear. */
   hasSelection(): boolean {
@@ -57,21 +106,15 @@ export class FleetMap extends LitElement {
   clearSelection(): void {
     this.selected = '';
     this.focusGap = '';
+    this.focusOnly = false;
   }
 
   private scale = 1;
   private translateX = 24;
-  private translateY = 24;
+  private translateY = 12;
   private pan: { id: number; x: number; y: number } | null = null;
-
-  private viewCache?: {
-    graph: FleetMapGraph | null;
-    types: Set<FleetMapNodeType>;
-    owner: string;
-    provider: string;
-    view: FleetMapGraph;
-    layout: ReturnType<typeof layoutGraph>;
-  };
+  private lastLayout: FleetMapLayout | null = null;
+  private refit = true;
 
   /** Gestures change only the transform and zoom label, never graph templates. */
   private applyTransform(): void {
@@ -82,8 +125,24 @@ export class FleetMap extends LitElement {
     if (zoom) zoom.textContent = `${Math.round(this.scale * 100)}%`;
   }
 
-  protected updated(): void {
-    this.applyTransform();
+  protected updated(changed: Map<string, unknown>): void {
+    if (changed.has('fullscreen')) {
+      document.body.style.overflow = this.fullscreen ? 'hidden' : '';
+      if (this.fullscreen) window.addEventListener('keydown', this.onWindowKey);
+      else window.removeEventListener('keydown', this.onWindowKey);
+      this.refit = true;
+    }
+    if (changed.has('graph')) this.refit = true;
+    if (this.refit && this.lastLayout) {
+      this.refit = false;
+      this.fit();
+    } else this.applyTransform();
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener('keydown', this.onWindowKey);
+    if (this.fullscreen) document.body.style.overflow = '';
   }
 
   // The Agents canvas uses the same transformed Lit nodes, SVG links and
@@ -95,32 +154,31 @@ export class FleetMap extends LitElement {
     if (!bounds) return;
     const x = clientX === undefined ? bounds.width / 2 : clientX - bounds.left;
     const y = clientY === undefined ? bounds.height / 2 : clientY - bounds.top;
-    const next = Math.max(0.15, Math.min(2, this.scale * factor));
+    const next = Math.max(0.2, Math.min(2, this.scale * factor));
     this.translateX = x - ((x - this.translateX) * next) / this.scale;
     this.translateY = y - ((y - this.translateY) * next) / this.scale;
     this.scale = next;
     this.applyTransform();
   }
 
+  /**
+   * Fit the width at a legible size and pin the top: column headers sit at
+   * the top of the stage and long columns scroll, instead of shrinking the
+   * whole fleet into unreadable text.
+   */
   private fit(): void {
     const bounds = this.shadowRoot
       ?.querySelector('.stage')
       ?.getBoundingClientRect();
-    const layout = this.layout();
-    if (!bounds || !layout.width) return;
+    const layout = this.lastLayout;
+    if (!bounds || !layout?.width) return;
     this.scale = Math.max(
-      0.15,
-      Math.min(
-        1,
-        (bounds.width - 48) / layout.width,
-        (bounds.height - 96) / layout.height
-      )
+      MIN_FIT_SCALE,
+      Math.min(1, (bounds.width - 48) / layout.width)
     );
-    this.translateX = (bounds.width - layout.width * this.scale) / 2;
-    this.translateY = Math.max(
-      56,
-      (bounds.height - layout.height * this.scale) / 2
-    );
+    const width = layout.width * this.scale;
+    this.translateX = width < bounds.width ? (bounds.width - width) / 2 : 24;
+    this.translateY = 16;
     this.applyTransform();
   }
 
@@ -148,9 +206,38 @@ export class FleetMap extends LitElement {
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
   }
 
-  protected firstUpdated(): void {
-    this.fit();
+  /** Scroll pans, as on a page; pinch or Ctrl/Cmd + scroll zooms. */
+  private onWheel(event: WheelEvent): void {
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey) {
+      this.zoom(Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
+      return;
+    }
+    const dx = event.shiftKey ? event.deltaY : event.deltaX;
+    const dy = event.shiftKey ? 0 : event.deltaY;
+    this.translateX -= dx;
+    this.translateY -= dy;
+    this.applyTransform();
   }
+
+  private toggleFullscreen(): void {
+    this.fullscreen = !this.fullscreen;
+    this.dispatchEvent(
+      new CustomEvent('fleet-map-fullscreen', {
+        detail: { fullscreen: this.fullscreen },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  /** Esc anywhere first clears a selection, then leaves full screen. */
+  private onWindowKey = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (this.hasSelection()) this.clearSelection();
+    else this.toggleFullscreen();
+    event.preventDefault();
+  };
 
   static styles = [
     unsafeCSS(consoleStyles),
@@ -158,21 +245,37 @@ export class FleetMap extends LitElement {
       :host {
         display: block;
       }
-      .filters {
+      :host([fullscreen]) {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        padding: var(--sl-spacing-medium) var(--sl-spacing-large);
+        background: var(--console-page);
+      }
+      :host([fullscreen]) .stage {
+        flex: 1;
+        min-height: 0;
+        height: auto;
+      }
+      .toolbar {
         display: flex;
         flex-wrap: wrap;
-        gap: var(--sl-spacing-small) var(--sl-spacing-large);
+        gap: var(--sl-spacing-x-small) var(--sl-spacing-medium);
         align-items: center;
         margin-bottom: var(--sl-spacing-small);
       }
-      .filters label {
+      .toolbar label {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
       }
-      .filters select {
+      .toolbar select,
+      .search input {
         font: inherit;
         font-size: var(--console-text-body);
         color: var(--console-body-color);
@@ -181,20 +284,43 @@ export class FleetMap extends LitElement {
         border-radius: var(--sl-border-radius-medium);
         padding: 4px 8px;
         min-height: 32px;
+        box-sizing: border-box;
       }
-      .type-toggles {
+      .search {
+        position: relative;
         display: inline-flex;
-        flex-wrap: wrap;
-        gap: 4px;
+        align-items: center;
+      }
+      .search sl-icon {
+        position: absolute;
+        left: 9px;
+        color: var(--console-meta-color);
+        pointer-events: none;
+      }
+      .search input {
+        width: 240px;
+        padding-left: 30px;
+      }
+      .search .hits {
+        margin-left: 8px;
+        font-size: var(--console-text-meta);
+        color: var(--console-meta-color);
+        white-space: nowrap;
+      }
+      .seg {
+        display: inline-flex;
         border: 0;
         margin: 0;
         padding: 0;
+        gap: 4px;
       }
-      .type-toggles button,
-      .gap-chip {
+      .pill {
         font: inherit;
         font-size: var(--console-text-meta);
         font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         border: 1px solid var(--console-hairline);
         background: transparent;
         color: var(--console-meta-color);
@@ -203,19 +329,40 @@ export class FleetMap extends LitElement {
         min-height: 28px;
         cursor: pointer;
       }
-      .type-toggles button[aria-pressed='true'] {
+      .pill .n {
+        font-variant-numeric: tabular-nums;
+        opacity: 0.8;
+      }
+      .pill[aria-pressed='true'] {
         color: var(--console-body-color);
         border-color: var(--sl-color-neutral-400);
-      }
-      .type-toggles button:hover,
-      .gap-chip:hover {
         background: var(--console-hover-tint);
+      }
+      .pill:hover {
+        background: var(--console-hover-tint);
+      }
+      .pill:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+      .group-label {
+        font-size: var(--console-text-meta);
+        color: var(--console-meta-color);
       }
       .count {
         margin-left: auto;
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
         font-variant-numeric: tabular-nums;
+      }
+      .reset {
+        font: inherit;
+        font-size: var(--console-text-meta);
+        background: none;
+        border: 0;
+        padding: 0;
+        color: var(--console-link-color);
+        cursor: pointer;
       }
       .gaps {
         display: flex;
@@ -237,9 +384,6 @@ export class FleetMap extends LitElement {
         margin-right: 4px;
       }
       .gap-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
         color: var(--console-body-color);
         border-color: color-mix(
           in srgb,
@@ -249,7 +393,7 @@ export class FleetMap extends LitElement {
       }
       .gap-chip strong {
         font-variant-numeric: tabular-nums;
-        color: var(--sl-color-warning-700);
+        color: var(--sl-color-warning-800);
       }
       .gap-chip[aria-pressed='true'] {
         background: color-mix(
@@ -264,7 +408,7 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         touch-action: none;
         cursor: grab;
-        height: var(--fleet-map-stage-height, max(480px, calc(100vh - 340px)));
+        height: var(--fleet-map-stage-height, max(520px, calc(100vh - 300px)));
         background: var(--console-page);
         border: 1px solid var(--console-hairline);
         border-radius: var(--console-card-radius);
@@ -295,7 +439,7 @@ export class FleetMap extends LitElement {
         fill: none;
         stroke: color-mix(
           in srgb,
-          var(--sl-color-neutral-500) 70%,
+          var(--sl-color-neutral-500) 60%,
           transparent
         );
         stroke-width: 1.25;
@@ -314,12 +458,14 @@ export class FleetMap extends LitElement {
         stroke-width: 2;
       }
       .edge.dim {
-        opacity: 0.12;
+        opacity: 0.08;
       }
       .column-title {
         position: absolute;
         top: 0;
-        width: ${FLEET_MAP_NODE_WIDTH}px;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
         font-size: var(--console-text-eyebrow);
         font-weight: 600;
         text-transform: uppercase;
@@ -328,14 +474,36 @@ export class FleetMap extends LitElement {
       }
       .column-title .n {
         font-weight: 500;
-        margin-left: 4px;
         font-variant-numeric: tabular-nums;
+      }
+      .column-title .reset {
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 500;
+        margin-left: auto;
+      }
+      .box {
+        position: absolute;
+        box-sizing: border-box;
+        border-radius: var(--sl-border-radius-large);
+        border: 1px solid var(--console-hairline);
+        background: var(--console-surface);
+        transition: opacity 150ms;
+        z-index: 0;
+      }
+      .box.dim {
+        opacity: 0.35;
+      }
+      .node,
+      .fold,
+      .more {
+        z-index: 1;
       }
       .node {
         position: absolute;
         box-sizing: border-box;
         display: grid;
-        grid-template-columns: 30px minmax(0, 1fr) auto;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
         padding: 6px 10px 6px 8px;
@@ -349,6 +517,16 @@ export class FleetMap extends LitElement {
         transition:
           opacity 150ms,
           border-color 150ms;
+      }
+      .node.header {
+        border-color: transparent;
+        background: transparent;
+        padding-right: 36px;
+      }
+      .node.child {
+        grid-template-columns: 20px minmax(0, 1fr) auto;
+        padding: 4px 8px 4px 6px;
+        border-radius: var(--sl-border-radius-medium);
       }
       .node:hover {
         border-color: var(--sl-color-neutral-400);
@@ -364,6 +542,9 @@ export class FleetMap extends LitElement {
           transparent
         );
       }
+      .node.match {
+        border-color: var(--sl-color-primary-600);
+      }
       .node.selected {
         border-color: var(--sl-color-primary-600);
         box-shadow: 0 0 0 1px var(--sl-color-primary-600);
@@ -378,9 +559,12 @@ export class FleetMap extends LitElement {
       .node.cluster {
         border-style: dashed;
       }
+      .node.inactive .label {
+        color: var(--console-meta-color);
+      }
       .node .glyph {
-        width: 30px;
-        height: 30px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
         display: grid;
         place-items: center;
@@ -390,7 +574,14 @@ export class FleetMap extends LitElement {
           transparent
         );
         color: var(--console-body-color);
-        font-size: 15px;
+        font-size: 14px;
+      }
+      .node.child .glyph {
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+        background: none;
+        color: var(--console-meta-color);
       }
       .node.selected .glyph,
       .node.lit .glyph {
@@ -414,6 +605,10 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .node.child .label {
+        font-size: var(--console-text-meta);
+        font-weight: 500;
+      }
       .node .sub {
         font-size: 12px;
         color: var(--console-meta-color);
@@ -422,13 +617,43 @@ export class FleetMap extends LitElement {
         text-overflow: ellipsis;
       }
       .node .sub.warn {
-        color: var(--sl-color-warning-700);
+        color: var(--sl-color-warning-800);
       }
       .gap-dot {
         display: grid;
         place-items: center;
-        font-size: 14px;
+        font-size: 13px;
         color: var(--sl-color-warning-600);
+      }
+      .fold {
+        position: absolute;
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border: 0;
+        border-radius: var(--sl-border-radius-medium);
+        background: none;
+        color: var(--console-meta-color);
+        cursor: pointer;
+      }
+      .fold:hover {
+        background: var(--console-hover-tint);
+      }
+      .more {
+        position: absolute;
+        box-sizing: border-box;
+        font: inherit;
+        font-size: var(--console-text-meta);
+        font-weight: 500;
+        color: var(--console-link-color);
+        background: transparent;
+        border: 1px dashed var(--console-hairline);
+        border-radius: var(--sl-border-radius-large);
+        cursor: pointer;
+      }
+      .more:hover {
+        background: var(--console-hover-tint);
       }
       .overlay {
         position: absolute;
@@ -438,11 +663,11 @@ export class FleetMap extends LitElement {
         z-index: 2;
       }
       .canvas-tools {
-        top: 12px;
+        bottom: 10px;
         right: 12px;
       }
       .stage.has-selection .canvas-tools {
-        right: 344px;
+        right: 364px;
       }
       .canvas-tools button {
         font: inherit;
@@ -455,6 +680,8 @@ export class FleetMap extends LitElement {
         min-height: 32px;
         padding: 0 10px;
         cursor: pointer;
+        display: inline-grid;
+        place-items: center;
       }
       .canvas-tools .zoom {
         min-width: 44px;
@@ -470,6 +697,9 @@ export class FleetMap extends LitElement {
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
         pointer-events: none;
+        background: color-mix(in srgb, var(--console-page) 85%, transparent);
+        padding: 2px 6px;
+        border-radius: var(--sl-border-radius-medium);
       }
       .legend span {
         display: inline-flex;
@@ -485,7 +715,7 @@ export class FleetMap extends LitElement {
         top: 12px;
         right: 12px;
         bottom: 12px;
-        width: 320px;
+        width: 340px;
         z-index: 3;
         box-sizing: border-box;
         background: var(--console-surface-raised, var(--console-surface));
@@ -558,14 +788,17 @@ export class FleetMap extends LitElement {
       }
       .panel .actions {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
+        flex-wrap: wrap;
+        gap: 4px 12px;
         margin-top: var(--sl-spacing-small);
         font-size: var(--console-text-body);
       }
       .panel .reach {
         font-size: var(--console-text-body);
         margin: 2px 0 0;
+      }
+      .panel .pill {
+        margin-top: var(--sl-spacing-small);
       }
       .close {
         position: absolute;
@@ -595,6 +828,8 @@ export class FleetMap extends LitElement {
       @media (max-width: 900px) {
         .stage.has-selection .canvas-tools {
           right: 12px;
+          top: 12px;
+          bottom: auto;
         }
         .panel {
           left: 12px;
@@ -605,10 +840,14 @@ export class FleetMap extends LitElement {
         .legend {
           display: none;
         }
+        .search input {
+          width: 180px;
+        }
       }
       @media (prefers-reduced-motion: reduce) {
         .edge,
-        .node {
+        .node,
+        .box {
           transition: none;
         }
       }
@@ -617,9 +856,11 @@ export class FleetMap extends LitElement {
 
   /** Filters cannot leave a hidden selection or gap focus dimming the canvas. */
   willUpdate(): void {
-    const visible = this.visible().nodes;
-    if (this.selected && !visible.some((node) => node.id === this.selected))
+    const visible = this.filtered().nodes;
+    if (this.selected && !visible.some((node) => node.id === this.selected)) {
       this.selected = '';
+      this.focusOnly = false;
+    }
     if (
       this.focusGap &&
       !visible.some((node) =>
@@ -629,79 +870,91 @@ export class FleetMap extends LitElement {
       this.focusGap = '';
   }
 
-  private visible(): FleetMapGraph {
-    const cached = this.viewCache;
-    if (
-      cached &&
-      cached.graph === this.graph &&
-      cached.types === this.types &&
-      cached.owner === this.owner &&
-      cached.provider === this.provider
-    )
+  private filterCache?: { key: unknown[]; view: FleetMapGraph };
+
+  private filtered(): FleetMapGraph {
+    const key = [
+      this.graph,
+      this.types,
+      this.owner,
+      this.provider,
+      this.states,
+      this.gapsOnly,
+    ];
+    const cached = this.filterCache;
+    if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.view;
-    const graph = this.graph ?? {
-      schema_version: 1,
-      limit: 500,
-      clusters: [],
-      unavailable: [],
-      truncated: false,
-      nodes: [],
-      edges: [],
-    };
-    const view = filterGraph(graph, {
+    const view = filterGraph(this.graph ?? EMPTY, {
       types: this.types,
       owner: this.owner,
       provider: this.provider,
+      states: this.states,
+      gapsOnly: this.gapsOnly,
     });
-    this.viewCache = {
-      graph: this.graph,
-      types: this.types,
-      owner: this.owner,
-      provider: this.provider,
-      view,
-      layout: layoutGraph(view),
-    };
+    this.filterCache = { key, view };
     return view;
   }
 
-  private layout(): ReturnType<typeof layoutGraph> {
-    this.visible();
-    return this.viewCache!.layout;
+  private searchHits(view: FleetMapGraph): Set<string> {
+    const query = this.query.trim().toLowerCase();
+    if (!query) return new Set();
+    return new Set(
+      view.nodes
+        .filter(
+          (node) =>
+            node.type !== 'cluster' &&
+            `${node.label} ${node.detail ?? ''}`.toLowerCase().includes(query)
+        )
+        .map((node) => node.id)
+    );
   }
 
   private select(id: string): void {
     this.selected = this.selected === id ? '' : id;
-    if (!this.selected) return;
+    if (!this.selected) {
+      this.focusOnly = false;
+      return;
+    }
     this.focusGap = '';
-    // The panel covers the right of the stage; keep the selection in view.
+    void this.updateComplete.then(() => this.reveal(id));
+  }
+
+  /** The panel covers the right of the stage; keep the selection in view. */
+  private reveal(id: string): void {
     const stage = this.shadowRoot?.querySelector('.stage');
-    const position = this.layout().positions.get(id);
+    const anchor = this.lastLayout?.anchor(id);
+    const position = anchor && this.lastLayout?.positions.get(anchor);
     if (!stage || !position) return;
-    const right =
-      this.translateX + (position.x + FLEET_MAP_NODE_WIDTH) * this.scale;
-    // On narrow screens the panel sits below the selection, not to its right.
     const narrow = window.matchMedia('(max-width: 900px)').matches;
     const bounds = stage.getBoundingClientRect();
-    const limit = bounds.width - (narrow ? 24 : 356);
+    const right = this.translateX + (position.x + position.w) * this.scale;
+    const limit = bounds.width - (narrow ? 24 : 376);
     if (right > limit) this.translateX -= right - limit;
     const left = this.translateX + position.x * this.scale;
     if (left < 24) this.translateX += 24 - left;
-    if (narrow) this.translateY = 64 - position.y * this.scale;
+    const top = this.translateY + position.y * this.scale;
+    const bottom = narrow ? bounds.height * 0.4 : bounds.height - 48;
+    if (narrow || top < 24 || top > bottom)
+      this.translateY = 64 - position.y * this.scale;
     this.applyTransform();
   }
 
-  private toggleType(type: FleetMapNodeType): void {
-    const next = new Set(this.types);
-    if (next.has(type)) next.delete(type);
-    else next.add(type);
-    this.types = next;
+  private toggle<T>(set: Set<T>, value: T): Set<T> {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    return next;
   }
 
   private onKeydown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
-      this.selected = '';
-      this.focusGap = '';
+      if (this.hasSelection()) {
+        this.clearSelection();
+        event.preventDefault();
+      }
+      return;
     }
+    if ((event.target as Element)?.closest?.('input, select')) return;
     if (event.key === '+' || event.key === '=') this.zoom(1.25);
     if (event.key === '-') this.zoom(0.8);
     const step = 48;
@@ -715,61 +968,148 @@ export class FleetMap extends LitElement {
     }
   };
 
-  private renderFilters(graph: FleetMapGraph, shown: number) {
+  private renderToolbar(
+    graph: FleetMapGraph,
+    view: FleetMapGraph,
+    hits: Set<string>
+  ) {
     const total = graph.nodes.filter((node) => node.type !== 'cluster').length;
+    const shown = view.nodes.filter((node) => node.type !== 'cluster').length;
     const groups = graph.nodes.filter((node) => node.type === 'cluster').length;
     const people = graph.nodes.filter((node) => node.type === 'user');
     const providers = graph.nodes.filter((node) => node.type === 'provider');
-    const filtered =
-      this.owner || this.provider || this.types.size < FLEET_MAP_COLUMNS.length;
-    return html`<div class="filters">
-      <fieldset class="type-toggles" aria-label="Show">
-        ${FLEET_MAP_COLUMNS.map(
-          (type) =>
-            html`<button
-              type="button"
-              aria-pressed=${this.types.has(type) ? 'true' : 'false'}
-              @click=${() => this.toggleType(type)}
-            >
-              ${FLEET_MAP_COLUMN_LABEL[type]}
-            </button>`
-        )}
-      </fieldset>
-      <label
-        >Owner
-        <select
-          .value=${this.owner}
-          @change=${(e: Event) =>
-            (this.owner = (e.target as HTMLSelectElement).value)}
-        >
-          <option value="">Anyone</option>
-          ${people.map(
-            (node) => html`<option value=${node.id}>${node.label}</option>`
+    const agents = graph.nodes.filter((node) => node.type === 'agent');
+    const perState = new Map<FleetMapAgentState, number>();
+    for (const node of agents)
+      perState.set(agentState(node), (perState.get(agentState(node)) || 0) + 1);
+    const changed =
+      this.owner ||
+      this.provider ||
+      this.gapsOnly ||
+      this.query ||
+      this.types.size < FLEET_MAP_TYPES.length ||
+      this.states.size !== 1 ||
+      !this.states.has('onboarded');
+    const retired = graph.decommissioned_agents ?? 0;
+    return html`<div class="toolbar">
+        <span class="search">
+          <sl-icon name="search" aria-hidden="true"></sl-icon>
+          <input
+            type="search"
+            aria-label="Find in map"
+            placeholder="Find a person, device, agent, model"
+            .value=${this.query}
+            @input=${(e: Event) =>
+              (this.query = (e.target as HTMLInputElement).value)}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === 'Enter' && hits.size) this.select([...hits][0]);
+              if (e.key === 'Escape') this.query = '';
+            }}
+          />
+          ${
+            this.query
+              ? html`<span class="hits" aria-live="polite"
+                  >${hits.size} match${hits.size === 1 ? '' : 'es'}</span
+                >`
+              : nothing
+          }
+        </span>
+        <fieldset class="seg" aria-label="Agents">
+          ${STATES.map(
+            ({ state, label }) =>
+              html`<button
+                type="button"
+                class="pill"
+                data-state=${state}
+                aria-pressed=${this.states.has(state) ? 'true' : 'false'}
+                @click=${() => (this.states = this.toggle(this.states, state))}
+              >
+                ${label}<span class="n">${perState.get(state) ?? 0}</span>
+              </button>`
           )}
-        </select></label
-      >
-      <label
-        >Provider
-        <select
-          .value=${this.provider}
-          @change=${(e: Event) =>
-            (this.provider = (e.target as HTMLSelectElement).value)}
+        </fieldset>
+        <button
+          type="button"
+          class="pill"
+          data-testid="gaps-only"
+          aria-pressed=${this.gapsOnly ? 'true' : 'false'}
+          @click=${() => (this.gapsOnly = !this.gapsOnly)}
         >
-          <option value="">Any provider</option>
-          ${providers.map(
-            (node) => html`<option value=${node.id}>${node.label}</option>`
+          Gaps only
+        </button>
+        <label
+          >Owner
+          <select
+            .value=${this.owner}
+            @change=${(e: Event) =>
+              (this.owner = (e.target as HTMLSelectElement).value)}
+          >
+            <option value="">Anyone</option>
+            ${people.map(
+              (node) => html`<option value=${node.id}>${node.label}</option>`
+            )}
+          </select></label
+        >
+        <label
+          >Provider
+          <select
+            .value=${this.provider}
+            @change=${(e: Event) =>
+              (this.provider = (e.target as HTMLSelectElement).value)}
+          >
+            <option value="">Any provider</option>
+            ${providers.map(
+              (node) => html`<option value=${node.id}>${node.label}</option>`
+            )}
+          </select></label
+        >
+      </div>
+      <div class="toolbar">
+        <span class="group-label">Show</span>
+        <fieldset class="seg" aria-label="Show">
+          ${FLEET_MAP_TYPES.map(
+            (type) =>
+              html`<button
+                type="button"
+                class="pill"
+                aria-pressed=${this.types.has(type) ? 'true' : 'false'}
+                @click=${() => (this.types = this.toggle(this.types, type))}
+              >
+                ${TYPE_TOGGLE_LABEL[type]}
+              </button>`
           )}
-        </select></label
-      >
-      <span class="count" aria-live="polite"
-        >${filtered ? `${shown} of ${total}` : total}
-        node${total === 1 ? '' : 's'}${groups ? ` · ${groups} summary group${groups === 1 ? '' : 's'}` : ''}</span
-      >
-    </div>`;
+        </fieldset>
+        <span class="count" aria-live="polite"
+          >${shown === total ? total : `${shown} of ${total}`}
+          node${total === 1 ? '' : 's'}${groups ? ` · ${groups} summary group${groups === 1 ? '' : 's'}` : ''}${
+            retired
+              ? ` · ${retired} decommissioned agent${retired === 1 ? '' : 's'} not shown`
+              : ''
+          }</span
+        >
+        ${
+          changed
+            ? html`<button
+                type="button"
+                class="reset"
+                @click=${() => {
+                  this.owner = '';
+                  this.provider = '';
+                  this.gapsOnly = false;
+                  this.query = '';
+                  this.types = new Set(FLEET_MAP_TYPES);
+                  this.states = new Set(['onboarded']);
+                }}
+              >
+                Reset filters
+              </button>`
+            : nothing
+        }
+      </div>`;
   }
 
   /**
-   * One line naming every kind of gap in the loaded map with its count.
+   * One line naming every kind of gap in the shown map with its count.
    * A chip lights the nodes that carry that gap, so "1 runner offline" is
    * a way to find it, not a number to take on trust.
    */
@@ -783,7 +1123,7 @@ export class FleetMap extends LitElement {
       }
     if (!counts.size)
       return html`<div class="gaps" data-testid="fleet-map-gaps">
-        <span>No governance gaps in this map.</span>
+        <span>No governance gaps in this view.</span>
       </div>`;
     return html`<div
       class="gaps"
@@ -798,7 +1138,7 @@ export class FleetMap extends LitElement {
         ([code, { label, n }]) =>
           html`<button
             type="button"
-            class="gap-chip"
+            class="pill gap-chip"
             data-gap=${code}
             aria-pressed=${this.focusGap === code ? 'true' : 'false'}
             @click=${() => {
@@ -812,34 +1152,117 @@ export class FleetMap extends LitElement {
     </div>`;
   }
 
+  /** The second line of a node: its gap, else what it is in context. */
+  private subtitle(
+    node: FleetMapNode,
+    view: FleetMapGraph,
+    groups: FleetMapLayout['groups'],
+    byId: Map<string, FleetMapNode>
+  ): string {
+    const gaps = nodeGaps(node);
+    if (node.type === 'cluster') return node.detail || 'Outside this map';
+    if (gaps.length) {
+      const text = gaps
+        .map((gap) => GAP_CHIP_LABEL[gap.code] ?? gap.label)
+        .join(' · ');
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+    if (node.type === 'agent') {
+      const state = agentState(node);
+      const seen = node.last_seen_at
+        ? `seen ${formatRelativeTime(node.last_seen_at, new Date(), { maxRelativeDays: 365 })}`
+        : '';
+      if (state === 'inactive')
+        return ['Inactive', seen].filter(Boolean).join(' · ');
+      return node.detail || 'Agent';
+    }
+    if (node.type === 'model') {
+      const agents = new Set(
+        view.edges
+          .filter(
+            (edge) => edge.kind === 'uses_model' && edge.target === node.id
+          )
+          .map((edge) => edge.source)
+      ).size;
+      const providers = node.provider_ids
+        .map((id) => byId.get(id)?.label)
+        .filter(Boolean)
+        .join(', ');
+      return [
+        providers,
+        agents ? `${agents} agent${agents === 1 ? '' : 's'}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    }
+    const kids = groups.get(node.id)?.length;
+    if (node.type === 'provider')
+      return kids ? `${kids} account${kids === 1 ? '' : 's'}` : 'Provider';
+    if (node.type === 'device')
+      return (
+        [node.status, kids ? `${kids} runner${kids === 1 ? '' : 's'}` : '']
+          .filter(Boolean)
+          .join(' · ') || 'Device'
+      );
+    if (node.type === 'runner') return node.status || 'Runner';
+    return node.detail || FLEET_MAP_TYPE_LABEL[node.type];
+  }
+
+  /** Accounts sit inside their provider; the provider name need not repeat. */
+  private childLabel(node: FleetMapNode, parent?: FleetMapNode): string {
+    if (!parent) return node.label;
+    const prefix = `${parent.label} `;
+    const label = node.label.toLowerCase().startsWith(prefix.toLowerCase())
+      ? node.label.slice(prefix.length)
+      : node.label;
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
   private renderNode(
     node: FleetMapNode,
-    x: number,
-    y: number,
-    lit: Set<string> | null
+    position: { x: number; y: number; w: number; h: number },
+    context: {
+      view: FleetMapGraph;
+      layout: FleetMapLayout;
+      byId: Map<string, FleetMapNode>;
+      lit: Set<string> | null;
+      hits: Set<string>;
+      parent?: FleetMapNode;
+    }
   ) {
+    const { lit, hits, layout } = context;
     const gaps = nodeGaps(node);
     const focused = !!this.focusGap && node.gaps.includes(this.focusGap);
+    const kids = layout.groups.get(node.id);
+    const isHeader = !!kids && !this.collapsed.has(node.id);
+    const child = !!context.parent;
+    const dim =
+      (lit && !lit.has(node.id)) ||
+      (!lit && this.focusGap && !focused) ||
+      (!lit && !this.focusGap && hits.size > 0 && !hits.has(node.id));
     const classes = [
       'node',
       node.type === 'cluster' ? 'cluster' : '',
+      isHeader ? 'header' : '',
+      child ? 'child' : '',
+      node.type === 'agent' && agentState(node) === 'inactive'
+        ? 'inactive'
+        : '',
       gaps.length ? 'has-gap' : '',
+      hits.has(node.id) ? 'match' : '',
       node.id === this.selected ? 'selected' : '',
       focused ? 'focus' : '',
       lit && lit.has(node.id) && node.id !== this.selected ? 'lit' : '',
-      (lit && !lit.has(node.id)) || (this.focusGap && !focused) ? 'dim' : '',
+      dim ? 'dim' : '',
     ].join(' ');
-    const sub =
-      node.type === 'cluster'
-        ? `${node.count ?? ''} grouped`
-        : gaps.length
-          ? gaps.map((gap) => gap.label).join(' · ')
-          : node.detail || FLEET_MAP_TYPE_LABEL[node.type];
-    return html`<button
+    const label = child ? this.childLabel(node, context.parent) : node.label;
+    const sub = this.subtitle(node, context.view, layout.groups, context.byId);
+    const height = isHeader ? FLEET_MAP_NODE_HEIGHT : position.h;
+    const button = html`<button
       type="button"
       class=${classes}
       data-node=${node.id}
-      style="left:${x}px;top:${y}px;width:${FLEET_MAP_NODE_WIDTH}px;height:${FLEET_MAP_NODE_HEIGHT}px"
+      style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${height}px"
       aria-pressed=${node.id === this.selected ? 'true' : 'false'}
       aria-label="${FLEET_MAP_TYPE_LABEL[node.type]} ${node.label}${
         gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''
@@ -851,8 +1274,11 @@ export class FleetMap extends LitElement {
     >
       <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
       <span class="text"
-        ><span class="label">${node.label}</span
-        ><span class="sub ${gaps.length ? 'warn' : ''}">${sub}</span></span
+        ><span class="label">${label}</span>${
+          child
+            ? nothing
+            : html`<span class="sub ${gaps.length ? 'warn' : ''}">${sub}</span>`
+        }</span
       >
       ${
         gaps.length
@@ -864,9 +1290,93 @@ export class FleetMap extends LitElement {
           : nothing
       }
     </button>`;
+    if (!kids) return button;
+    const open = !this.collapsed.has(node.id);
+    return html`<div
+        class="box ${dim && !(lit && kids.some((id) => lit.has(id))) ? 'dim' : ''}"
+        style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${position.h}px"
+      ></div>
+      ${button}
+      <button
+        type="button"
+        class="fold"
+        data-fold=${node.id}
+        style="left:${position.x + position.w - 34}px;top:${position.y + 10}px"
+        aria-expanded=${open ? 'true' : 'false'}
+        aria-label="${open ? 'Collapse' : 'Expand'} ${node.label}"
+        @click=${() => (this.collapsed = this.toggle(this.collapsed, node.id))}
+      >
+        <sl-icon name=${open ? 'chevron-up' : 'chevron-down'}></sl-icon>
+      </button>`;
   }
 
-  private renderPanel(graph: FleetMapGraph, reach: Set<string>) {
+  /**
+   * Which relationships are drawn. Containment replaces account-of-provider
+   * and device-hosts-runner lines; an owner's line to an agent on their own
+   * device repeats the device's. Agent-to-account lines appear when lit:
+   * each agent-to-model line already names its account in its tooltip.
+   */
+  private drawnEdges(
+    view: FleetMapGraph,
+    layout: FleetMapLayout,
+    lit: Set<string> | null
+  ): { edge: FleetMapEdge; from: string; to: string; accounts: string[] }[] {
+    const owned = new Set(
+      view.edges
+        .filter(
+          (edge) => edge.kind === 'owns' && edge.target.startsWith('device:')
+        )
+        .map((edge) => `${edge.source}>${edge.target}`)
+    );
+    const hostedBy = new Map<string, string[]>();
+    for (const edge of view.edges)
+      if (edge.kind === 'hosts')
+        hostedBy.set(edge.target, [
+          ...(hostedBy.get(edge.target) || []),
+          edge.source,
+        ]);
+    const drawn = new Map<
+      string,
+      { edge: FleetMapEdge; from: string; to: string; accounts: string[] }
+    >();
+    for (const edge of view.edges) {
+      if (edge.kind === 'account_of_provider') continue;
+      if (
+        edge.kind === 'uses_account' &&
+        !(lit && lit.has(edge.source) && lit.has(edge.target))
+      )
+        continue;
+      if (
+        edge.kind === 'owns' &&
+        edge.target.startsWith('agent:') &&
+        (hostedBy.get(edge.target) || []).some((device) =>
+          owned.has(`${edge.source}>${device}`)
+        )
+      )
+        continue;
+      const from = layout.anchor(edge.source);
+      const to = layout.anchor(edge.target);
+      if (!from || !to || from === to) continue;
+      const key = `${from}>${to}`;
+      const existing = drawn.get(key);
+      const account = edge.account_id ?? '';
+      if (existing) {
+        if (account && !existing.accounts.includes(account))
+          existing.accounts.push(account);
+        if (edge.gaps.length && !existing.edge.gaps.length)
+          existing.edge = edge;
+        continue;
+      }
+      drawn.set(key, { edge, from, to, accounts: account ? [account] : [] });
+    }
+    return [...drawn.values()];
+  }
+
+  private renderPanel(
+    graph: FleetMapGraph,
+    reach: Set<string>,
+    uses: Set<string>
+  ) {
     const node = graph.nodes.find((item) => item.id === this.selected);
     if (!node) return nothing;
     const gaps = nodeGaps(node);
@@ -874,12 +1384,24 @@ export class FleetMap extends LitElement {
     const dependents = [...reach]
       .filter((id) => id !== node.id)
       .map((id) => byId.get(id) as FleetMapNode);
-    const groups = FLEET_MAP_COLUMNS.map((type) => ({
-      type,
-      items: dependents.filter((item) => nodeColumn(item) === type),
-    })).filter((group) => group.items.length);
+    const relied = [...uses]
+      .filter((id) => id !== node.id)
+      .map((id) => byId.get(id) as FleetMapNode);
+    const order = FLEET_MAP_TYPES;
+    const groups = order
+      .map((type) => ({
+        type,
+        items: dependents.filter((item) => item.type === type),
+      }))
+      .filter((group) => group.items.length);
     const people = groups.find((group) => group.type === 'user')?.items.length;
     const agents = groups.find((group) => group.type === 'agent')?.items.length;
+    const seen =
+      node.type === 'agent' && node.last_seen_at
+        ? formatRelativeTime(node.last_seen_at, new Date(), {
+            maxRelativeDays: 365,
+          })
+        : '';
     return html`<aside
       class="panel"
       aria-label="Blast radius"
@@ -891,7 +1413,7 @@ export class FleetMap extends LitElement {
         class="close"
         type="button"
         aria-label="Clear selection"
-        @click=${() => (this.selected = '')}
+        @click=${() => this.clearSelection()}
       >
         ×
       </button>
@@ -899,7 +1421,19 @@ export class FleetMap extends LitElement {
       <h3>
         ${node.href ? html`<a href=${node.href}>${node.label}</a>` : node.label}
       </h3>
-      ${node.detail ? html`<p class="meta">${node.detail}</p>` : nothing}
+      ${
+        node.detail || seen
+          ? html`<p class="meta">
+              ${[
+                node.detail,
+                node.type === 'agent' ? agentStateLabel(node) : '',
+                seen ? `last seen ${seen}` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>`
+          : nothing
+      }
       ${
         gaps.length
           ? html`<div class="chips">
@@ -919,6 +1453,34 @@ export class FleetMap extends LitElement {
                 (action) => html`<a href=${action.href}>${action.label}</a>`
               )}
             </div>`
+          : nothing
+      }
+      <button
+        type="button"
+        class="pill"
+        data-testid="focus-only"
+        aria-pressed=${this.focusOnly ? 'true' : 'false'}
+        @click=${() => {
+          this.focusOnly = !this.focusOnly;
+          this.refit = true;
+        }}
+      >
+        <sl-icon name="bullseye" aria-hidden="true"></sl-icon>Show only related
+      </button>
+      ${
+        relied.length
+          ? html`<h4>Relies on</h4>
+              <ul>
+                ${relied.map(
+                  (item) =>
+                    html`<li>
+                      <a href=${item.href}>${item.label}</a
+                      ><span class="meta"
+                        >${FLEET_MAP_TYPE_LABEL[item.type]}</span
+                      >
+                    </li>`
+                )}
+              </ul>`
           : nothing
       }
       <h4>Blast radius</h4>
@@ -943,7 +1505,8 @@ export class FleetMap extends LitElement {
         }
       </p>
       <p class="meta">
-        What depends on this in the loaded map, not an outage report.
+        What depends on this across the loaded map, including filtered-out
+        resources; not an outage report.
         ${
           graph.truncated || graph.unavailable.length
             ? html`<span role="status"
@@ -989,28 +1552,57 @@ export class FleetMap extends LitElement {
   render() {
     const graph = this.graph;
     if (!graph) return nothing;
-    if (!graph.nodes.length)
+    if (!graph.nodes.length) {
+      this.lastLayout = null;
       return html`<div class="empty-state" data-testid="fleet-map-empty">
         ${graph.unavailable.length ? html`<p>Device evidence is unavailable. Check fleet collection and refresh.</p>` : nothing}
         Nothing to map yet. Register a runner with
         <code>preloop runner fg</code> or onboard an agent, then configure its
         model to connect the map.
       </div>`;
-    const view = this.visible();
-    const layout = this.layout();
-    const radius =
+    }
+    const filtered = this.filtered();
+    const hits = this.searchHits(filtered);
+    const selected =
       this.selected && graph.nodes.some((node) => node.id === this.selected)
-        ? blastRadius(graph, this.selected)
-        : null;
-    const lit = radius ? radius.nodes : null;
-    const byId = new Map(view.nodes.map((node) => [node.id, node]));
-    const perColumn = new Map<string, number>();
-    for (const node of view.nodes)
-      if (node.type !== 'cluster')
-        perColumn.set(node.type, (perColumn.get(node.type) || 0) + 1);
+        ? this.selected
+        : '';
+    const reach = selected ? blastRadius(graph, selected).nodes : null;
+    const uses = selected ? dependencies(graph, selected) : null;
+    const lit = reach && uses ? new Set([...reach, ...uses]) : null;
+    const view =
+      lit && this.focusOnly
+        ? {
+            ...filtered,
+            nodes: filtered.nodes.filter((node) => lit.has(node.id)),
+            edges: filtered.edges.filter(
+              (edge) => lit.has(edge.source) && lit.has(edge.target)
+            ),
+          }
+        : filtered;
+    const pinned = new Set([...hits, ...(lit ?? [])]);
+    const layout = layoutGraph(view, {
+      cap: FLEET_MAP_CAP,
+      expanded: this.expanded,
+      collapsed: this.collapsed,
+      pinned,
+    });
+    this.lastLayout = layout;
+    const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+    const parentOf = new Map<string, string>();
+    for (const [parent, kids] of layout.groups)
+      for (const kid of kids) parentOf.set(kid, parent);
     const half = FLEET_MAP_NODE_HEIGHT / 2;
-    return html`${this.renderFilters(graph, view.nodes.filter((node) => node.type !== 'cluster').length)}
-      ${this.renderGaps(view)}
+    const centreY = (id: string) => {
+      const p = layout.positions.get(id)!;
+      return (
+        p.y +
+        Math.min(p.h, layout.groups.has(id) ? FLEET_MAP_NODE_HEIGHT : p.h) / 2
+      );
+    };
+    const context = { view, layout, byId, lit, hits };
+    return html`${this.renderToolbar(graph, filtered, hits)}
+      ${this.renderGaps(filtered)}
       ${
         graph.unavailable.length
           ? html`<p class="notice" role="status">
@@ -1031,19 +1623,12 @@ export class FleetMap extends LitElement {
           : nothing
       }
       <div
-        class="stage ${radius ? 'has-selection' : ''}"
+        class="stage ${lit ? 'has-selection' : ''}"
         tabindex="0"
         role="region"
         aria-label="Fleet dependency map"
         @keydown=${this.onKeydown}
-        @wheel=${(event: WheelEvent) => {
-          event.preventDefault();
-          this.zoom(
-            Math.exp(-event.deltaY * 0.001),
-            event.clientX,
-            event.clientY
-          );
-        }}
+        @wheel=${this.onWheel}
         @pointerdown=${this.pointerDown}
         @pointermove=${this.pointerMove}
         @pointerup=${this.pointerUp}
@@ -1058,10 +1643,29 @@ export class FleetMap extends LitElement {
               >
                 ${layout.columns.map(
                   (column) =>
-                    html`<div class="column-title" style="left:${column.x}px">
+                    html`<div
+                      class="column-title"
+                      style="left:${column.x}px;width:${216}px"
+                    >
                       ${FLEET_MAP_COLUMN_LABEL[column.type]}<span class="n"
-                        >${perColumn.get(column.type) ?? ''}</span
+                        >${column.count}</span
                       >
+                      ${
+                        this.expanded.has(column.type) &&
+                        column.count > FLEET_MAP_CAP
+                          ? html`<button
+                              type="button"
+                              class="reset"
+                              @click=${() =>
+                                (this.expanded = this.toggle(
+                                  this.expanded,
+                                  column.type
+                                ))}
+                            >
+                              Show fewer
+                            </button>`
+                          : nothing
+                      }
                     </div>`
                 )}
                 <svg
@@ -1069,46 +1673,86 @@ export class FleetMap extends LitElement {
                   height=${layout.height}
                   aria-hidden="true"
                 >
-                  ${view.edges.map((edge) => {
-                    const a = layout.positions.get(edge.source);
-                    const b = layout.positions.get(edge.target);
-                    const na = byId.get(edge.source);
-                    const nb = byId.get(edge.target);
-                    if (!a || !b || !na || !nb) return nothing;
-                    const [left, right] = a.x <= b.x ? [a, b] : [b, a];
-                    const x1 = left.x + FLEET_MAP_NODE_WIDTH;
-                    const y1 = left.y + half;
-                    const x2 = right.x;
-                    const y2 = right.y + half;
-                    const mid = (x1 + x2) / 2;
-                    const inRadius =
-                      radius?.nodes.has(edge.impact_source) &&
-                      radius.nodes.has(edge.impact_target);
-                    const focused =
-                      !!this.focusGap &&
-                      (na.gaps.includes(this.focusGap) ||
-                        nb.gaps.includes(this.focusGap));
-                    const cls = [
-                      'edge',
-                      edge.provenance,
-                      edge.gaps.length ? 'gap' : '',
-                      inRadius ? 'lit' : '',
-                      (radius && !inRadius) || (this.focusGap && !focused)
-                        ? 'dim'
-                        : '',
-                    ].join(' ');
-                    return svg`<path class=${cls} d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}</title></path>`;
-                  })}
+                  ${this.drawnEdges(view, layout, lit).map(
+                    ({ edge, from, to, accounts }) => {
+                      const a = layout.positions.get(from)!;
+                      const b = layout.positions.get(to)!;
+                      const na = byId.get(edge.source)!;
+                      const nb = byId.get(edge.target)!;
+                      const y1 = centreY(from);
+                      const y2 = centreY(to);
+                      let d: string;
+                      if (Math.abs(a.x - b.x) < 40) {
+                        const x = Math.max(a.x + a.w, b.x + b.w);
+                        d = `M${a.x + a.w} ${y1} C${x + 36} ${y1} ${x + 36} ${y2} ${b.x + b.w} ${y2}`;
+                      } else {
+                        const [l, ly, r, ry] =
+                          a.x <= b.x ? [a, y1, b, y2] : [b, y2, a, y1];
+                        const x1 = l.x + l.w;
+                        const x2 = r.x;
+                        const mid = (x1 + x2) / 2;
+                        d = `M${x1} ${ly} C${mid} ${ly} ${mid} ${ry} ${x2} ${ry}`;
+                      }
+                      const inRadius =
+                        !!lit &&
+                        lit.has(edge.impact_source) &&
+                        lit.has(edge.impact_target);
+                      const focused =
+                        !!this.focusGap &&
+                        (na.gaps.includes(this.focusGap) ||
+                          nb.gaps.includes(this.focusGap));
+                      const cls = [
+                        'edge',
+                        edge.provenance,
+                        edge.gaps.length ? 'gap' : '',
+                        inRadius ? 'lit' : '',
+                        (lit && !inRadius) ||
+                        (!lit && this.focusGap && !focused)
+                          ? 'dim'
+                          : '',
+                      ].join(' ');
+                      const via = accounts
+                        .map((id) => byId.get(id)?.label)
+                        .filter(Boolean)
+                        .join(', ');
+                      return svg`<path class=${cls} data-edge=${edge.kind} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}</title></path>`;
+                    }
+                  )}
                 </svg>
                 ${view.nodes.map((node) => {
                   const position = layout.positions.get(node.id);
-                  return position
-                    ? this.renderNode(node, position.x, position.y, lit)
-                    : nothing;
+                  if (!position) return nothing;
+                  const parent = parentOf.get(node.id);
+                  return this.renderNode(node, position, {
+                    ...context,
+                    parent: parent ? byId.get(parent) : undefined,
+                  });
                 })}
+                ${layout.more.map(
+                  (row) =>
+                    html`<button
+                      type="button"
+                      class="more"
+                      data-more=${row.column}
+                      style="left:${row.x}px;top:${row.y}px;width:216px;height:36px"
+                      @click=${() =>
+                        (this.expanded = this.toggle(
+                          this.expanded,
+                          row.column
+                        ))}
+                    >
+                      +${row.hidden} more
+                      ${FLEET_MAP_COLUMN_LABEL[row.column].toLowerCase()}
+                    </button>`
+                )}
               </div>`
             : html`<div class="empty-state">
-                No nodes match these filters. Clear a filter to see more.
+                No nodes match these filters.
+                ${
+                  this.states.size < 3
+                    ? 'Include discovered or inactive agents, or clear a filter.'
+                    : 'Clear a filter to see more.'
+                }
               </div>`
         }
         <div
@@ -1132,6 +1776,19 @@ export class FleetMap extends LitElement {
             +
           </button>
           <button type="button" @click=${this.fit}>Fit</button>
+          <button
+            type="button"
+            class="fullscreen-toggle"
+            data-testid="fleet-map-fullscreen"
+            aria-pressed=${this.fullscreen ? 'true' : 'false'}
+            aria-label=${this.fullscreen ? 'Exit full screen' : 'Full screen'}
+            title=${this.fullscreen ? 'Exit full screen (Esc)' : 'Full screen'}
+            @click=${this.toggleFullscreen}
+          >
+            <sl-icon
+              name=${this.fullscreen ? 'fullscreen-exit' : 'arrows-fullscreen'}
+            ></sl-icon>
+          </button>
         </div>
         <div class="overlay legend">
           <span
@@ -1148,12 +1805,22 @@ export class FleetMap extends LitElement {
             ><sl-icon class="gap-dot" name="exclamation-triangle-fill"></sl-icon
             >Gap</span
           >
-          <span>Select a node to see what depends on it. Esc clears.</span>
+          <span
+            >Select a node to see what depends on it. Scroll to pan, Ctrl+scroll
+            to zoom.</span
+          >
         </div>
-        ${radius ? this.renderPanel(graph, radius.nodes) : nothing}
+        ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
   }
 }
+
+const agentStateLabel = (node: FleetMapNode): string =>
+  ({
+    onboarded: 'Onboarded',
+    discovered: 'Discovered, not onboarded',
+    inactive: 'Inactive',
+  })[agentState(node)];
 
 /** Short chip wording; the node and the side panel keep the full label. */
 const GAP_CHIP_LABEL: Partial<Record<FleetMapGapCode, string>> = {

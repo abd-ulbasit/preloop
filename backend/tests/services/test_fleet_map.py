@@ -88,14 +88,17 @@ def sources() -> Iterator[tuple[MagicMock, MagicMock]]:
         crud.crud_flow_runner.get_multi.return_value = []
         crud.crud_user.get_multi.return_value = []
         manager.return_value.get_service.return_value = None
-        with patch(
-            f"{MODULE}.list_resources",
-            side_effect=lambda db, source, **kw: {
-                "agents": crud.crud_managed_agent,
-                "models": crud.crud_ai_model,
-                "runners": crud.crud_flow_runner,
-                "users": crud.crud_user,
-            }[source].get_multi(db, **kw),
+        with (
+            patch(f"{MODULE}.count_decommissioned_agents", return_value=0),
+            patch(
+                f"{MODULE}.list_resources",
+                side_effect=lambda db, source, **kw: {
+                    "agents": crud.crud_managed_agent,
+                    "models": crud.crud_ai_model,
+                    "runners": crud.crud_flow_runner,
+                    "users": crud.crud_user,
+                }[source].get_multi(db, **kw),
+            ),
         ):
             yield crud, manager
 
@@ -269,7 +272,7 @@ def test_fleet_projection_has_gaps_and_owner_impact(
                     dict(
                         id="candidate-a",
                         source="candidate",
-                        kind="codex",
+                        kind="cursor",
                         status="new",
                         managed_agent_id=None,
                     ),
@@ -641,3 +644,150 @@ def test_runner_model_edge_uses_server_impact_direction(
     link = next(e for e in graph.edges if e.kind == "runs_on")
     assert (link.source, link.target) == ("model:model-a", "runner:runner-a")
     assert (link.impact_source, link.impact_target) == (link.target, link.source)
+
+
+def test_agents_carry_onboarded_or_inactive_state(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    now = datetime.now(UTC)
+    crud.crud_managed_agent.get_multi.return_value = [
+        agent("fresh", last_seen_at=now),
+        agent("stale", last_seen_at=now - timedelta(days=30)),
+        agent("paused", lifecycle_state="suspended", last_seen_at=now),
+    ]
+    with patch(f"{MODULE}.count_decommissioned_agents", return_value=4):
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    states = {n.id: n.agent_state for n in graph.nodes if n.type == "agent"}
+    assert states == {
+        "agent:fresh": "onboarded",
+        "agent:stale": "inactive",
+        "agent:paused": "inactive",
+    }
+    assert graph.decommissioned_agents == 4
+
+
+def test_model_instances_collapse_to_one_canonical_model(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent.get_multi.return_value = [agent("a"), agent("b")]
+    crud.crud_ai_model.get_multi.return_value = [
+        model("m1", model_identifier="anthropic/claude-opus-5-5"),
+        model(
+            "m2",
+            model_identifier="claude-opus-5-5-20261001",
+            credentials_secret_id="secret-b",
+        ),
+    ]
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = [
+        binding(managed_agent_id="a", ai_model_id="m1"),
+        binding(managed_agent_id="b", ai_model_id="m2"),
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    model_nodes = [n for n in graph.nodes if n.type == "model"]
+    assert [(n.id, n.label) for n in model_nodes] == [
+        ("model:claude-opus-5-5", "Claude Opus 5.5")
+    ]
+    uses = {(e.source, e.account_id) for e in graph.edges if e.kind == "uses_model"}
+    assert uses == {
+        ("agent:a", "provider_account:secret-a"),
+        ("agent:b", "provider_account:secret-b"),
+    }
+    accounts = [n for n in graph.nodes if n.type == "provider_account"]
+    assert {n.parent_id for n in accounts} == {"provider:openai"}
+    # Blast radius from an account still reaches only its own agent.
+    impact = {
+        (e.impact_source, e.impact_target)
+        for e in graph.edges
+        if e.kind == "uses_account"
+    }
+    assert impact == {
+        ("provider_account:secret-a", "agent:a"),
+        ("provider_account:secret-b", "agent:b"),
+    }
+
+
+def test_provider_impact_goes_through_its_accounts_not_a_shared_model(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent.get_multi.return_value = [agent("a"), agent("b")]
+    crud.crud_ai_model.get_multi.return_value = [
+        model("m1", model_identifier="claude-opus-5-5", provider_name="anthropic"),
+        model(
+            "m2",
+            model_identifier="claude-opus-5-5",
+            provider_name="bedrock",
+            credentials_secret_id="secret-b",
+        ),
+    ]
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = [
+        binding(managed_agent_id="a", ai_model_id="m1"),
+        binding(managed_agent_id="b", ai_model_id="m2"),
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    assert not [e for e in graph.edges if e.kind == "provided_by"]
+    reach = {"provider:anthropic"}
+    for _ in range(4):
+        reach |= {e.impact_target for e in graph.edges if e.impact_source in reach}
+    assert "agent:a" in reach and "agent:b" not in reach
+
+
+@pytest.mark.parametrize(
+    ("identifier", "label"),
+    [
+        ("gpt-6.1-sol", "GPT 6.1 Sol"),
+        ("claude-fable-5-1", "Claude Fable 5.1"),
+        ("openrouter/deepseek-v4.1:latest", "Deepseek V4.1"),
+        ("glm-5.3", "GLM 5.3"),
+    ],
+)
+def test_canonical_model_labels(identifier: str, label: str) -> None:
+    from preloop.services.fleet_map import canonical_model
+
+    assert canonical_model(identifier)[1] == label
+
+
+def test_discovered_duplicates_and_dismissed_are_not_repeated(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, manager = sources
+    crud.crud_managed_agent.get_multi.return_value = [agent("agent-a")]
+    manager.return_value.get_service.return_value = MagicMock()
+    manager.return_value.get_service.return_value.read.return_value = dict(
+        truncated=False,
+        items=[
+            dict(
+                device_key="fp:example",
+                hostname="Example laptop",
+                runner_state="online",
+                users=[],
+                runners=[],
+                findings=[],
+                agents=[
+                    dict(id="i1", kind="cursor", status="pending"),
+                    dict(id="c1", kind="cursor", status="pending"),
+                    dict(id="c2", kind="gemini", status="dismissed"),
+                    dict(id="c3", kind="codex", status="pending"),
+                    dict(
+                        id="c4",
+                        kind="codex",
+                        status="onboarded",
+                        managed_agent_id="agent-a",
+                    ),
+                    dict(
+                        id="c5",
+                        kind="devin",
+                        status="onboarded",
+                        managed_agent_id="decommissioned-agent",
+                    ),
+                ],
+            )
+        ],
+    )
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    agents = sorted(n.id for n in graph.nodes if n.type == "agent")
+    assert agents == ["agent:agent-a", "agent:discovered:i1"]
+    nodes = {n.id: n for n in graph.nodes}
+    assert nodes["agent:discovered:i1"].agent_state == "discovered"

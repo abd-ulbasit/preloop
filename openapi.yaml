@@ -30490,6 +30490,13 @@ components:
             - open_finding
           type: array
           title: Gaps
+        account_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Id
+          description: 'For uses_model: the provider account node the agent reaches
+            it through.'
       type: object
       required:
       - id
@@ -30566,6 +30573,29 @@ components:
             $ref: '#/components/schemas/FleetMapAction'
           type: array
           title: Actions
+        parent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parent Id
+          description: Containing node, such as the provider of a provider account.
+        agent_state:
+          anyOf:
+          - type: string
+            enum:
+            - onboarded
+            - discovered
+            - inactive
+          - type: 'null'
+          title: Agent State
+          description: 'Agents only: onboarded and recently active, discovered on
+            a device but not onboarded, or onboarded but suspended or not seen recently.'
+        last_seen_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Seen At
       type: object
       required:
       - id
@@ -30610,6 +30640,11 @@ components:
             type: string
           type: array
           title: Unavailable
+        decommissioned_agents:
+          type: integer
+          title: Decommissioned Agents
+          description: Decommissioned agents left out of the map, counted for context.
+          default: 0
       type: object
       title: FleetMapResponse
       description: Bounded partial graph; incompleteness must stay visible to consumers.
