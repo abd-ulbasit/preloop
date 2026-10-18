@@ -4,7 +4,9 @@ import sinon from 'sinon';
 import {
   MAX_CONCURRENT_ARTIFACT_LOADS,
   acquireSessionArtifact,
+  MAX_EAGER_ARTIFACT_PREVIEWS,
   activeSessionArtifactLoads,
+  claimEagerArtifactPreview,
   releaseSessionArtifact,
 } from './session-artifacts';
 
@@ -71,5 +73,33 @@ describe('session artifact loads (#1690)', () => {
     expect(fetchStub.callCount).to.equal(2);
     releaseSessionArtifact('s-cancel', 'b1');
     releaseSessionArtifact('s-cancel', 'b2');
+  });
+
+  it('reuses the bytes when a preview is released and mounted again', async () => {
+    // A re-render that destroys and recreates a row released the last hold
+    // and fetched the same artifact again: 8 fetches of one screencast
+    // session on prod (#1690).
+    const first = acquireSessionArtifact('s-remount', 'r1');
+    await flush();
+    pending.shift()!();
+    const loaded = await first;
+    expect(loaded.status).to.equal('ok');
+    releaseSessionArtifact('s-remount', 'r1');
+
+    const again = await acquireSessionArtifact('s-remount', 'r1');
+    expect(again).to.deep.equal(loaded);
+    expect(fetchStub.callCount).to.equal(1);
+    releaseSessionArtifact('s-remount', 'r1');
+  });
+
+  it('allows two eager previews per session, then asks for a click', () => {
+    expect(MAX_EAGER_ARTIFACT_PREVIEWS).to.equal(2);
+    expect(claimEagerArtifactPreview('s-eager', 'e1')).to.equal(true);
+    expect(claimEagerArtifactPreview('s-eager', 'e2')).to.equal(true);
+    expect(claimEagerArtifactPreview('s-eager', 'e3')).to.equal(false);
+    // The same artifact keeps its claim across remounts.
+    expect(claimEagerArtifactPreview('s-eager', 'e1')).to.equal(true);
+    // Another session has its own budget.
+    expect(claimEagerArtifactPreview('s-eager-2', 'e3')).to.equal(true);
   });
 });

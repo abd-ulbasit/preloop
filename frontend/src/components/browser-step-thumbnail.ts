@@ -26,6 +26,16 @@ export class BrowserStepThumbnail extends LitElement {
   @property({ type: String }) label = 'Screenshot';
   /** Small strip variant: no link, shorter reason. */
   @property({ type: Boolean, reflect: true }) compact = false;
+  /**
+   * Show a placeholder and load only when clicked: large images and previews
+   * past the session's eager budget (#1690).
+   */
+  @property({ type: Boolean }) deferred = false;
+  /** Size shown on the deferred placeholder, e.g. "1.2 MB". */
+  @property({ type: String }) sizeLabel = '';
+
+  /** The user asked for a deferred preview. */
+  @state() private requested = false;
 
   @state() private load: SessionArtifactLoad | null = null;
   private held: { sessionId: string; artifactId: string } | null = null;
@@ -124,7 +134,8 @@ export class BrowserStepThumbnail extends LitElement {
     if (
       changed.has('sessionId') ||
       changed.has('artifactId') ||
-      changed.has('availability')
+      changed.has('availability') ||
+      changed.has('deferred')
     ) {
       this.sync();
     }
@@ -133,6 +144,7 @@ export class BrowserStepThumbnail extends LitElement {
   private sync(): void {
     const wanted =
       this.visible &&
+      (!this.deferred || this.requested) &&
       this.sessionId &&
       this.artifactId &&
       this.availability === 'available'
@@ -195,6 +207,20 @@ export class BrowserStepThumbnail extends LitElement {
               >`
         }
       </div>`;
+    }
+    if (this.deferred && !this.requested && !this.held) {
+      return html`<button
+        class="box muted"
+        type="button"
+        data-testid="preview-on-demand"
+        aria-label=${`Load preview of ${this.label}`}
+        @click=${() => {
+          this.requested = true;
+          this.sync();
+        }}
+      >
+        Load preview${this.sizeLabel ? html`<br />${this.sizeLabel}` : nothing}
+      </button>`;
     }
     if (this.load?.status === 'ok' && this.compact) {
       // The strip wraps the thumbnail in its own button; no nested control.
