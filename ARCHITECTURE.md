@@ -535,7 +535,9 @@ fixed read-tool registry and explicit human commands to existing authorized APIs
 and routes the account default model through the existing gateway. Protected
 replies revalidate actor, permissions, resource access, and scoped read snapshots
 before private provider delivery. Ambiguous writes become observable uncertain
-work rather than automatic duplicate operations. See
+work rather than automatic duplicate operations. Helm installs can enable the
+separate Deployment with `chatWorker.enabled`; it shares API credentials and
+operator network/CA settings, while provider health remains connection-specific. See
 [Chat connections](docs/chat-connections.md) for setup and operational limits.
 
 The public `/api/v1/features` payload reports an explicit `oss`, `cloud`, or
