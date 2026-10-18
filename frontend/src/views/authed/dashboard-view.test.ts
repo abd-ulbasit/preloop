@@ -59,6 +59,8 @@ describe('DashboardView', () => {
   let auditSecondaryGate: Promise<void> | null;
   /** null means RBAC is off, so every permission check passes. */
   let mePermissions: string[] | null;
+  /** URL prefix -> how many of its next requests answer 500. */
+  let failNext: Map<string, number>;
 
   beforeEach(() => {
     aiModelsGate = null;
@@ -73,6 +75,7 @@ describe('DashboardView', () => {
     auditCountGate = null;
     auditSecondaryGate = null;
     mePermissions = null;
+    failNext = new Map();
     localStorage.setItem('accessToken', 'test-access-token');
     localStorage.setItem('refreshToken', 'test-refresh-token');
 
@@ -303,6 +306,7 @@ describe('DashboardView', () => {
         is_enabled: true,
         approval_workflow_id: 'approval-1',
         has_approval_condition: true,
+        config_id: 'config-1',
       },
     ];
     flowsResponse = [{ id: 'flow-1', name: 'Refund Assistant' }];
@@ -435,6 +439,13 @@ describe('DashboardView', () => {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
+
+        for (const [prefix, left] of failNext) {
+          if (left > 0 && url.startsWith(prefix)) {
+            failNext.set(prefix, left - 1);
+            return new Response('', { status: 500 });
+          }
+        }
 
         if (url.startsWith('/api/v1/account/gateway-usage/summary')) {
           if (summaryGate) {
@@ -1576,6 +1587,114 @@ describe('DashboardView', () => {
       expect(
         steps[2].querySelector('a.next-step-link')?.getAttribute('href')
       ).to.equal('/console/policies');
+    });
+
+    it('does not tick "Restrict a tool" for a builtin that ships disabled', async () => {
+      // A brand new account: builtins with default_enabled false report
+      // is_enabled false, but nobody configured them (no config_id).
+      toolsResponse = [
+        {
+          ...toolsResponse[0],
+          name: 'get_issue',
+          is_enabled: false,
+          approval_workflow_id: null,
+          has_approval_condition: false,
+          config_id: null,
+          access_rules: [],
+        },
+      ];
+
+      const element = await mountLoaded();
+
+      const steps =
+        element.shadowRoot?.querySelectorAll('.next-steps-card .next-step') ||
+        [];
+      expect(steps.length, 'the checklist is open').to.equal(3);
+      expect(steps[2].textContent).to.contain('Restrict a tool');
+      expect(steps[2].classList.contains('done'), 'restrict step open').to.be
+        .false;
+    });
+
+    it('ticks "Restrict a tool" once somebody disables a tool', async () => {
+      toolsResponse = [
+        {
+          ...toolsResponse[0],
+          is_enabled: false,
+          approval_workflow_id: null,
+          has_approval_condition: false,
+          config_id: 'config-2',
+          access_rules: [],
+        },
+      ];
+
+      const element = await mountLoaded();
+
+      // Agent, budget and the restriction are all in: nothing left to do.
+      expect(element['hasToolPolicy']).to.be.true;
+      expect(element.shadowRoot?.querySelector('.next-steps-card')).to.not
+        .exist;
+    });
+
+    for (const failing of [
+      '/api/v1/agents',
+      '/api/v1/budget/policies',
+      '/api/v1/tools/summary',
+    ]) {
+      it(`does not prompt onboarding when ${failing} fails on a set-up account`, async () => {
+        failNext.set(failing, 1);
+
+        const element = await mountDashboard();
+        await waitUntil(
+          () =>
+            !element['loading'] &&
+            !element['fetchingAgents'] &&
+            !element['fetchingBudget'] &&
+            !element['fetchingTools'] &&
+            !element['fetchingFlows'] &&
+            !element['fetchingRecentExecutions'] &&
+            element['featuresResolved'],
+          'dashboard did not finish loading'
+        );
+        await element.updateComplete;
+
+        // The read failed: the account is unknown, not empty.
+        expect(element['unansweredInputs'].size).to.equal(1);
+        expect(
+          element.shadowRoot?.querySelector('.connect-first'),
+          'no "Connect your first agent" on an unknown fleet'
+        ).to.not.exist;
+        expect(
+          element.shadowRoot?.querySelector('.next-steps-card'),
+          'no checklist on unknown inputs'
+        ).to.not.exist;
+        expect(element.shadowRoot?.querySelector('.welcome-container')).to.not
+          .exist;
+
+        // The next answer settles it, and a set-up account stays quiet.
+        await element['refreshFleet']();
+        await element['fetchBudgetSummary']();
+        await element['fetchToolsList']();
+        await element.updateComplete;
+        expect(element['unansweredInputs'].size).to.equal(0);
+        expect(element['managedAgents'].length).to.be.greaterThan(0);
+        expect(element.shadowRoot?.querySelector('.connect-first')).to.not
+          .exist;
+        expect(element.shadowRoot?.querySelector('.next-steps-card')).to.not
+          .exist;
+      });
+    }
+
+    it('keeps the agents on screen when a refresh of them fails', async () => {
+      const element = await mountLoaded();
+      const before = element['managedAgents'].length;
+      expect(before).to.be.greaterThan(0);
+      failNext.set('/api/v1/agents', 1);
+
+      await element['refreshFleet']();
+      await element.updateComplete;
+
+      expect(element['managedAgents'].length).to.equal(before);
+      expect(element.shadowRoot?.querySelector('.connect-first')).to.not.exist;
     });
 
     it('adds the invite step only when user management is on', async () => {
