@@ -963,17 +963,17 @@ describe('artifact previews load on demand (#1690)', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(byteFetches()).to.have.length(2);
 
-    const third = thumbnail(found[2]);
-    // The budget is checked when the thumbnail becomes visible, so the
-    // placeholder appears after the observer fires, not on first render.
+    // All three are visible, so whichever observer fires last finds the
+    // budget spent; that one shows the click-to-load placeholder.
+    const placeholderOf = (row: SessionArtifactRow) =>
+      thumbnail(row).shadowRoot!.querySelector(
+        '[data-testid="preview-on-demand"]'
+      ) as HTMLButtonElement | null;
     await waitUntil(
-      () =>
-        third.shadowRoot!.querySelector('[data-testid="preview-on-demand"]'),
-      'click-to-load placeholder'
+      () => found.filter((row) => placeholderOf(row)).length === 1,
+      'one click-to-load placeholder'
     );
-    const placeholder = third.shadowRoot!.querySelector(
-      '[data-testid="preview-on-demand"]'
-    ) as HTMLButtonElement;
+    const placeholder = found.map(placeholderOf).find(Boolean)!;
     placeholder.click();
     await waitUntil(() => byteFetches().length === 3, 'loads on click');
   });
