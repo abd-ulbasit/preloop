@@ -621,10 +621,10 @@ export class AuditView extends AuthedElement {
         const entry: AuditLog = await res.json();
         return entry.timestamp || null;
       }
-      // A missing route on an older core (or a correlation id) still has a
-      // chance of resolving through the grouped timeline. Other failures,
-      // especially permission failures, must not fan out into more reads.
-      if (res.status !== 404) return null;
+      // Older cores return 404; non-UUID correlation ids fail path validation.
+      // Other failures, especially permissions, must not fan out into reads.
+      const correlationId = res.status === 422 && !this._isUuid(id);
+      if (res.status !== 404 && !correlationId) return null;
     } catch (e) {
       console.error('Failed to fetch a linked audit event:', e);
       return null;

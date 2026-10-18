@@ -1059,15 +1059,59 @@ describe('AuditView', () => {
       );
     });
 
-    it('does not walk the timeline after a focused-entry permission failure', async () => {
+    it('finds a non-UUID correlation id after detail validation returns 422', async () => {
       fetchStub.resetHistory();
-      fetchStub.resolves(new Response('{}', { status: 403 }));
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/audit-logs/correlation-example') {
+          return new Response('{}', { status: 422 });
+        }
+        return new Response(
+          JSON.stringify({
+            groups: [
+              {
+                correlation_id: 'correlation-example',
+                primary_event: {
+                  id: '11111111-1111-4111-8111-111111111111',
+                  timestamp: '2025-01-02T03:04:05Z',
+                },
+                sub_events: [],
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      });
       const element = document.createElement('audit-view') as AuditView;
-      expect(await (element as any)._findEventTime('private-event')).to.equal(
-        null
+      expect(
+        await (element as any)._findEventTime('correlation-example')
+      ).to.equal('2025-01-02T03:04:05Z');
+      expect(fetchStub.callCount).to.equal(2);
+      expect(String(fetchStub.secondCall.args[0])).to.contain(
+        '/audit-logs/grouped?'
       );
-      expect(fetchStub.callCount).to.equal(1);
     });
+
+    for (const status of [401, 403, 422]) {
+      it(`does not walk the timeline after detail status ${status} for a UUID`, async () => {
+        fetchStub.resetHistory();
+        fetchStub.resolves(new Response('{}', { status }));
+        const element = document.createElement('audit-view') as AuditView;
+        expect(
+          await (element as any)._findEventTime(
+            '11111111-1111-4111-8111-111111111111'
+          )
+        ).to.equal(null);
+        expect(
+          fetchStub
+            .getCalls()
+            .some((call) =>
+              String(call.args[0]).startsWith('/api/v1/audit-logs/grouped?')
+            )
+        ).to.equal(false);
+        // A 401 can attempt token refresh; neither refresh nor denial walks the corpus.
+        if (status !== 401) expect(fetchStub.callCount).to.equal(1);
+      });
+    }
 
     it('says so, once, when the event is nowhere in range', async () => {
       const element = openWith('?event=audit-missing');
