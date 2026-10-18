@@ -60,6 +60,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -289,6 +290,7 @@ def note_pruned(db: Session, *, account_id: Any, up_to_seq: int, now: Any) -> No
         state.pruned_below_seq = int(up_to_seq)
         state.pruned_at = now
         db.add(state)
+        invalidate_chain_status(account_id)
 
 
 def _write_checkpoint(
@@ -414,6 +416,7 @@ def seal_account(
         state.last_sealed_at = stamp
         db.add(state)
         db.flush()
+        invalidate_chain_status(account_id)
         for cp_seq, cp_hash, cp_count in pending_checkpoints:
             _write_checkpoint(
                 db,
@@ -523,6 +526,54 @@ def chain_status(db: Session, *, account_id: Any) -> dict[str, Any]:
         "latest_checkpoint": checkpoint_summary(latest) if latest else None,
         "active_key_id": active_key.key_id if active_key else None,
     }
+
+
+#: How long a computed chain status is served from memory. The two row counts
+#: behind it scan every audit row of the account (3.5 to 4.1 s on prod, #1693),
+#: and the seal pass only moves the head once a minute, so a short-lived copy
+#: is as current as the page needs.
+CHAIN_STATUS_TTL_SECONDS = 30.0
+
+_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_status_cache_lock = threading.Lock()
+
+
+def cached_chain_status(
+    db: Session, *, account_id: Any, ttl: float = CHAIN_STATUS_TTL_SECONDS
+) -> dict[str, Any]:
+    """Chain status, served from a per-process cache for ``ttl`` seconds.
+
+    Args:
+        db: Database session used when the cache misses.
+        account_id: Account whose chain is described.
+        ttl: Seconds a computed status stays fresh.
+
+    Returns:
+        The same payload as :func:`chain_status`.
+    """
+    key = str(account_id)
+    now = time.monotonic()
+    with _status_cache_lock:
+        hit = _status_cache.get(key)
+    if hit is not None and now - hit[0] < ttl:
+        return dict(hit[1])
+    status = chain_status(db, account_id=account_id)
+    with _status_cache_lock:
+        _status_cache[key] = (now, status)
+    return dict(status)
+
+
+def invalidate_chain_status(account_id: Any | None = None) -> None:
+    """Drop cached chain status for one account, or for all when ``None``.
+
+    Args:
+        account_id: Account to forget; ``None`` clears the whole cache.
+    """
+    with _status_cache_lock:
+        if account_id is None:
+            _status_cache.clear()
+        else:
+            _status_cache.pop(str(account_id), None)
 
 
 def checkpoint_summary(checkpoint: AuditChainCheckpoint) -> dict[str, Any]:

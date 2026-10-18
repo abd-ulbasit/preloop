@@ -73,7 +73,9 @@ def get_chain_status(
     db: Session = Depends(get_db_session),
 ):
     """Head, purge floor, sealing lag and the newest signed checkpoint."""
-    return audit_chain.chain_status(db, account_id=account.id)
+    # Cached briefly: the row counts scan the whole audit log and blocked the
+    # Audit and Records pages for seconds (#1693).
+    return audit_chain.cached_chain_status(db, account_id=account.id)
 
 
 @router.get("/chain/verify", response_model=ChainVerifyRead)

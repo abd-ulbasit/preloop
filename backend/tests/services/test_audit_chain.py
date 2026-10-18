@@ -358,3 +358,39 @@ def test_one_account_chain_ignores_another_accounts_rows(db_session, test_user):
     assert (
         audit_chain.chain_status(db_session, account_id=other.id)["unsealed_rows"] == 2
     )
+
+
+def test_cached_status_skips_the_row_counts_until_it_expires(
+    db_session, account_id, monkeypatch
+):
+    """#1693: chain/status must not rescan the audit log on every page load."""
+    audit_chain.invalidate_chain_status()
+    calls = []
+    real = audit_chain.chain_status
+
+    def counting(db, *, account_id):
+        calls.append(account_id)
+        return real(db, account_id=account_id)
+
+    monkeypatch.setattr(audit_chain, "chain_status", counting)
+
+    first = audit_chain.cached_chain_status(db_session, account_id=account_id)
+    second = audit_chain.cached_chain_status(db_session, account_id=account_id)
+    assert first == second
+    assert len(calls) == 1
+
+    audit_chain.cached_chain_status(db_session, account_id=account_id, ttl=0)
+    assert len(calls) == 2
+
+
+def test_sealing_invalidates_the_cached_status(db_session, account_id):
+    audit_chain.invalidate_chain_status()
+    _rows(db_session, account_id, 3)
+    before = audit_chain.cached_chain_status(db_session, account_id=account_id)
+    assert before["unsealed_rows"] == 3
+
+    _seal(db_session, account_id, batch_size=10, max_batches=1)
+
+    after = audit_chain.cached_chain_status(db_session, account_id=account_id)
+    assert after["unsealed_rows"] == 0
+    assert after["sealed_rows"] == 3
