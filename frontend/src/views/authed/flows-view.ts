@@ -839,6 +839,10 @@ export class FlowsView extends LitElement {
     super.disconnectedCallback();
     ++this.flowsLoadGeneration;
     ++this.statsLoadGeneration;
+    if (this.summaryRefreshTimer !== null) {
+      clearTimeout(this.summaryRefreshTimer);
+      this.summaryRefreshTimer = null;
+    }
     this.unsubscribe?.();
     window.removeEventListener('focus', this.refreshOnReturn);
     document.removeEventListener(
@@ -1068,7 +1072,51 @@ export class FlowsView extends LitElement {
     }
   }
 
+  /** Coalescing window for websocket-driven summary refreshes. */
+  static summaryRefreshDelayMs = 1000;
+
+  private summaryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Re-read the flow summaries after a run event, so the server-counted Last
+   * run, runs and spend do not go stale. A burst of events within the delay
+   * collapses into one request; presets and the 200-run sample are not
+   * re-fetched.
+   */
+  private scheduleSummaryRefresh(): void {
+    if (!this.countsFromServer || this.summaryRefreshTimer !== null) return;
+    this.summaryRefreshTimer = setTimeout(
+      () => {
+        this.summaryRefreshTimer = null;
+        if (this.isConnected) void this.refreshSummaryStats();
+      },
+      (this.constructor as typeof FlowsView).summaryRefreshDelayMs
+    );
+  }
+
+  private async refreshSummaryStats(): Promise<void> {
+    const stats = this.statsLoadGeneration;
+    const lifecycle = this.flowsLoadGeneration;
+    const range = this.range;
+    try {
+      const flows = await getFlowSummaries({
+        includeStats: true,
+        statsSince: this.rangeStartDate(),
+      });
+      if (
+        stats !== this.statsLoadGeneration ||
+        lifecycle !== this.flowsLoadGeneration ||
+        range !== this.range
+      )
+        return;
+      if (Array.isArray(flows)) this.flows = flows.map(flowSummaryRow);
+    } catch (error) {
+      console.error('Failed to refresh flow stats:', error);
+    }
+  }
+
   async refreshExecutions() {
+    this.scheduleSummaryRefresh();
     const [executions, activeExecutions] = await Promise.all([
       this.countsFromServer
         ? Promise.resolve(this.executions)

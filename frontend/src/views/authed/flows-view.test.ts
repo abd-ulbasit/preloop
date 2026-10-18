@@ -1051,6 +1051,68 @@ describe('FlowsView', () => {
       ]);
     });
 
+    it('advances the Last run cell when a run starts over the websocket', async () => {
+      const ctor = customElements.get('flows-view') as unknown as {
+        summaryRefreshDelayMs: number;
+      };
+      const delay = ctor.summaryRefreshDelayMs;
+      const original = FLOWS[0].execution_stats;
+      ctor.summaryRefreshDelayMs = 0;
+      try {
+        const element = await renderFlows();
+        const firstRowText = () =>
+          (
+            element.shadowRoot?.querySelector('tbody tr.flow-row')
+              ?.textContent || ''
+          ).replace(/\s+/g, ' ');
+        expect(firstRowText()).to.contain('Ran 10m ago');
+        const summaryCalls = () =>
+          fetchStub.getCalls().filter((call) => {
+            const url = String(call.args[0]);
+            return (
+              url.includes('/api/v1/flows') &&
+              !url.includes('/executions') &&
+              !url.includes('/presets')
+            );
+          }).length;
+        const before = summaryCalls();
+        const presetsBefore = fetchStub
+          .getCalls()
+          .filter((call) => String(call.args[0]).includes('/presets')).length;
+
+        // The server now reports a run that started just now.
+        FLOWS[0].execution_stats = windowStats(2, 0, 1.2345, minutesAgo(0));
+        const ws = element as unknown as {
+          handleWebSocketMessage: (m: unknown) => void;
+        };
+        // A burst of events collapses into one summary request.
+        ws.handleWebSocketMessage({
+          type: 'execution_started',
+          payload: { flow_id: 'flow-review' },
+        });
+        ws.handleWebSocketMessage({
+          type: 'status_update',
+          execution_id: 'exec-unknown',
+          payload: { status: 'RUNNING' },
+        });
+        await waitUntil(
+          () => !firstRowText().includes('Ran 10m ago'),
+          'Last run did not advance'
+        );
+        await element.updateComplete;
+        expect(firstRowText()).to.match(/Ran (just now|0m ago|<1m ago)/);
+        expect(summaryCalls() - before).to.equal(1);
+        expect(
+          fetchStub
+            .getCalls()
+            .filter((call) => String(call.args[0]).includes('/presets')).length
+        ).to.equal(presetsBefore);
+      } finally {
+        FLOWS[0].execution_stats = original;
+        ctor.summaryRefreshDelayMs = delay;
+      }
+    });
+
     it('shows the last run, the counts in range and the estimated spend', async () => {
       const element = await renderFlows();
       await waitUntil(
