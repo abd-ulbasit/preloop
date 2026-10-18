@@ -8,6 +8,7 @@ import {
   ATTENTION_SUMMARY_EVENT,
   readAttentionSummary,
 } from '../../utils/attention-summary';
+import { invalidateApiCaches } from '../../api';
 import './dashboard-control-plane-view';
 import type { DashboardView } from './dashboard-control-plane-view';
 
@@ -61,6 +62,9 @@ describe('DashboardView', () => {
   let mePermissions: string[] | null;
   /** URL prefix -> how many of its next requests answer 500. */
   let failNext: Map<string, number>;
+  /** Merged into `GET /api/v1/features`. */
+  let extraFeatures: Record<string, boolean>;
+  let fleetResponse: any;
 
   beforeEach(() => {
     aiModelsGate = null;
@@ -76,6 +80,8 @@ describe('DashboardView', () => {
     auditSecondaryGate = null;
     mePermissions = null;
     failNext = new Map();
+    extraFeatures = {};
+    fleetResponse = null;
     localStorage.setItem('accessToken', 'test-access-token');
     localStorage.setItem('refreshToken', 'test-refresh-token');
 
@@ -585,7 +591,11 @@ describe('DashboardView', () => {
         }
 
         if (url === '/api/v1/features') {
-          return json({ features: { billing: true } });
+          return json({ features: { billing: true, ...extraFeatures } });
+        }
+
+        if (url.startsWith('/api/v1/fleet/device-fleet') && fleetResponse) {
+          return json(fleetResponse);
         }
 
         return json({ detail: `Unhandled ${url}` });
@@ -1714,6 +1724,89 @@ describe('DashboardView', () => {
 
       expect(element['managedAgents'].length).to.equal(before);
       expect(element.shadowRoot?.querySelector('.connect-first')).to.not.exist;
+    });
+
+    it('fills the Devices tab from the fleet, only for a reader who may see it', async () => {
+      invalidateApiCaches();
+      const element = await mountLoaded();
+      await waitUntil(() => !element['fetchingDevices'], 'fleet never settled');
+      expect(element['canViewFleet'], 'no fleet feature, no tab').to.be.false;
+      expect(
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).startsWith('/api/v1/fleet')),
+        'no fleet request without the feature'
+      ).to.be.false;
+
+      extraFeatures = { fleet_coverage: true };
+      mePermissions = ['view_device_fleet'];
+      fleetResponse = {
+        items: [
+          {
+            device_key: 'fp:aaaa',
+            hostname: 'build-01',
+            os: 'linux',
+            runner_state: 'online',
+            collection_state: 'reporting',
+            inventory_state: 'complete',
+            roster_state: 'none',
+            verification: 'unverified',
+            last_seen_at: new Date().toISOString(),
+            agents_onboarded: 2,
+            agents_not_onboarded: 1,
+            users: [
+              { id: 'user-1', label: 'Jane Doe', source: 'runner_registrant' },
+              { id: 'user-1', label: 'Jane Doe', source: 'agent_owner' },
+            ],
+            runners: [],
+            agents: [],
+            sources: [],
+            possible_same_machine_as: [],
+            findings: [],
+          },
+        ],
+        total: 1,
+        truncated: false,
+        summary: {},
+        unassigned_agents: [],
+      };
+      invalidateApiCaches();
+      await element['fetchDevicesList']();
+      await element.updateComplete;
+
+      expect(element['canViewFleet']).to.be.true;
+      const rows = element['inventoryDeviceRows'];
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({
+        name: 'build-01',
+        os: 'Linux',
+        href: '/console/settings/device-fleet?device=fp%3Aaaaa',
+        runnerLabel: 'Runner online',
+        runnerLive: true,
+      });
+      // One person, listed once, linked to their page.
+      expect(rows[0].people).to.eql([
+        {
+          id: 'user-1',
+          label: 'Jane Doe',
+          href: '/console/settings/users/user-1',
+        },
+      ]);
+      const inventory = element.shadowRoot!.querySelector(
+        'inventory-card'
+      ) as any;
+      expect(inventory.showDevices).to.be.true;
+      expect(inventory.devicesTotal).to.equal(1);
+
+      failNext.set('/api/v1/fleet/device-fleet', 1);
+      await element['fetchDevicesList']();
+      await element.updateComplete;
+      expect(
+        element['inventoryDeviceRows'],
+        'kept on a failed read'
+      ).to.have.length(1);
+      expect(inventory.unavailableTabs).to.include('devices');
+      invalidateApiCaches();
     });
 
     it('adds the invite step only when user management is on', async () => {

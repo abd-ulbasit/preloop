@@ -4,6 +4,7 @@ import { INVENTORY_TAB_STORAGE_KEY } from './inventory-card';
 import type {
   InventoryAgentRow,
   InventoryCard,
+  InventoryDeviceRow,
   InventoryFlowRow,
   InventoryModelRow,
   InventoryToolRow,
@@ -79,8 +80,37 @@ function userRow(overrides: Partial<InventoryUserRow> = {}) {
   };
 }
 
+function deviceRow(overrides: Partial<InventoryDeviceRow> = {}) {
+  return {
+    key: 'fp:aaaa',
+    name: 'build-01',
+    os: 'Linux',
+    href: '/console/settings/device-fleet?device=fp%3Aaaaa',
+    people: [
+      {
+        id: 'user-1',
+        label: 'Jane Doe',
+        href: '/console/settings/users/user-1',
+      },
+      { id: null, label: 'jdoe@example.com', href: null },
+    ],
+    runnerState: 'online',
+    runnerLabel: 'Runner online',
+    runnerLive: true,
+    agentsGoverned: 2,
+    agentsUngoverned: 1,
+    lastSeenAt: new Date(Date.now() - 120000).toISOString(),
+    ...overrides,
+  };
+}
+
 async function card(
   props: Partial<{
+    deviceRows: InventoryDeviceRow[];
+    devicesTotal: number;
+    showDevices: boolean;
+    loadingDevices: boolean | null;
+    unavailableTabs: string[];
     agentRows: InventoryAgentRow[];
     flowRows: InventoryFlowRow[];
     modelRows: InventoryModelRow[];
@@ -107,6 +137,11 @@ async function card(
       .userRows=${props.userRows ?? []}
       .usersTotal=${props.usersTotal ?? 0}
       ?showUsers=${props.showUsers ?? false}
+      .deviceRows=${props.deviceRows ?? []}
+      .devicesTotal=${props.devicesTotal ?? 0}
+      ?showDevices=${props.showDevices ?? false}
+      .loadingDevices=${props.loadingDevices ?? null}
+      .unavailableTabs=${props.unavailableTabs ?? []}
       .agentsTotal=${10}
       .flowsTotal=${30}
       .modelsTotal=${16}
@@ -894,5 +929,131 @@ describe('inventory-card', () => {
       expect(el.shadowRoot?.querySelector('a[href="/console/agents/agent-1"]'))
         .to.exist;
     });
+  });
+
+  describe('devices tab', () => {
+    const withDevices = (props = {}) =>
+      card({
+        showDevices: true,
+        devicesTotal: 3,
+        deviceRows: [
+          deviceRow(),
+          deviceRow({
+            key: 'fp:bbbb',
+            name: 'maya-laptop',
+            os: 'macOS',
+            href: '/console/settings/device-fleet?device=fp%3Abbbb',
+            people: [],
+            runnerState: 'offline',
+            runnerLabel: 'Runner offline',
+            runnerLive: false,
+            agentsGoverned: 4,
+            agentsUngoverned: 0,
+            lastSeenAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+          }),
+        ],
+        ...props,
+      });
+
+    it('is absent without device fleet access', async () => {
+      const el = await card();
+      expect(tabText(el).some((label) => label.startsWith('Devices'))).to.be
+        .false;
+    });
+
+    it('sits next to Agents with its count', async () => {
+      const el = await withDevices();
+      expect(tabText(el).slice(0, 2)).to.eql(['Agents 10', 'Devices 3']);
+    });
+
+    it('links each device to its fleet page and each person to theirs', async () => {
+      const el = await withDevices();
+      await showTab(el, 'devices');
+      const root = el.shadowRoot!;
+      const headers = Array.from(root.querySelectorAll('th')).map((th) =>
+        th.textContent?.trim()
+      );
+      expect(headers).to.eql([
+        'Device',
+        'People',
+        'Runner',
+        'Agents',
+        'Last seen',
+      ]);
+      expect(
+        root.querySelector(
+          'a.row-name[href="/console/settings/device-fleet?device=fp%3Aaaaa"]'
+        )?.textContent
+      ).to.equal('build-01');
+      expect(
+        root.querySelector('a[href="/console/settings/users/user-1"]')
+          ?.textContent
+      ).to.equal('Jane Doe');
+      const people = root.querySelector('.device-people') as HTMLElement;
+      expect(people.textContent).to.contain('+1');
+      expect(people.title).to.equal('Jane Doe, jdoe@example.com');
+      // Most recently seen first, and no link for an unknown person.
+      const rows = root.querySelectorAll('tbody tr');
+      expect(rows[0].textContent).to.contain('build-01');
+      expect(rows[1].textContent).to.contain('Unknown');
+      expect(rows[1].textContent).to.contain('Runner offline');
+      expect(
+        (rows[0].querySelector('td[data-label="Agents"]') as HTMLElement).title
+      ).to.equal('2 governed, 1 not onboarded');
+      expect(root.querySelector('.footer a')?.getAttribute('href')).to.equal(
+        '/console/settings/device-fleet'
+      );
+    });
+
+    it('sorts by agent count on request', async () => {
+      const el = await withDevices();
+      await showTab(el, 'devices');
+      el['setSort']('agents');
+      await el.updateComplete;
+      const first = el.shadowRoot!.querySelector('tbody tr');
+      expect(first?.textContent).to.contain('maya-laptop');
+    });
+
+    it('skeletons while loading and says so when empty', async () => {
+      const loading = await withDevices({
+        deviceRows: [],
+        loadingDevices: true,
+      });
+      await showTab(loading, 'devices');
+      expect(loading.shadowRoot!.querySelector('.skeleton-row')).to.exist;
+
+      const empty = await withDevices({ deviceRows: [], devicesTotal: 0 });
+      await showTab(empty, 'devices');
+      expect(empty.shadowRoot!.querySelector('.empty')?.textContent).to.contain(
+        'No devices yet.'
+      );
+    });
+  });
+
+  it('says a tab could not be loaded instead of claiming zero', async () => {
+    const el = await card({ agentRows: [], unavailableTabs: ['agents'] });
+    const root = el.shadowRoot!;
+    expect(tabText(el)[0]).to.equal('Agents');
+    expect(root.querySelector('.empty')?.textContent).to.contain(
+      'Agents could not be loaded'
+    );
+    expect(root.querySelector('.empty')?.textContent).to.not.contain(
+      'No agents yet'
+    );
+    expect(root.querySelector('.footer')).to.not.exist;
+  });
+
+  it('links a teammate in the Users tab to their person page', async () => {
+    const el = await card({
+      showUsers: true,
+      usersTotal: 2,
+      userRows: [userRow()],
+    });
+    await showTab(el, 'users');
+    expect(
+      el.shadowRoot!.querySelector(
+        'a.row-name[href="/console/settings/users/user-1"]'
+      )?.textContent
+    ).to.equal('Ada Lovelace');
   });
 });

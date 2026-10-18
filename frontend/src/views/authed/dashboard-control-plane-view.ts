@@ -110,7 +110,19 @@ import type {
   InventoryModelRow,
   InventoryToolRow,
   InventoryUserRow,
+  InventoryDeviceRow,
+  InventoryTab,
 } from '../../components/inventory-card';
+import {
+  deviceLabel,
+  fleetAccess,
+  fleetHref,
+  getDeviceFleet,
+  osLabel,
+  runnerStateChip,
+  type DeviceFleetDevice,
+} from '../../device-fleet-api';
+import { userHref } from '../../utils/user-href';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import {
   normalizeTimeRangeKey,
@@ -465,6 +477,13 @@ export class DashboardView extends AuthedElement {
    * took them back.
    */
   @state() private unansweredInputs: ReadonlySet<OnboardingInput> = new Set();
+  /** Device fleet rows for the Inventory, when this reader may see them. */
+  @state() private fleetDevices: DeviceFleetDevice[] = [];
+  @state() private fleetDevicesTotal = 0;
+  @state() private fetchingDevices = true;
+  @state() private canViewFleet = false;
+  /** The last fleet read failed; the tab says so instead of "0". */
+  @state() private devicesUnavailable = false;
   /** Whether the profile, and with it the permissions, has answered. */
   @state() private profileResolved = false;
   /** The people list started with the fold, for the deferred pass to join. */
@@ -2871,9 +2890,36 @@ export class DashboardView extends AuthedElement {
    * waits for the fold (D32).
    */
   private startInventoryListFetches(): void {
+    void this.fetchDevicesList();
     void this.fetchFlowsList();
     void this.fetchModelsList();
     void this.fetchToolsList();
+  }
+
+  /**
+   * The device fleet, for the Inventory's Devices tab. Nothing is asked of
+   * the fleet API until the feature and the reader's permission allow it,
+   * the same rule the fleet page follows.
+   */
+  private async fetchDevicesList(): Promise<void> {
+    this.fetchingDevices = true;
+    try {
+      const access = await fleetAccess().catch(() => ({
+        view: false,
+        manage: false,
+      }));
+      this.canViewFleet = access.view;
+      if (!access.view) return;
+      const page = await getDeviceFleet();
+      this.fleetDevices = page.items || [];
+      this.fleetDevicesTotal = page.total ?? this.fleetDevices.length;
+      this.devicesUnavailable = false;
+    } catch (error) {
+      console.error('Failed to load the device fleet', error);
+      this.devicesUnavailable = true;
+    } finally {
+      this.fetchingDevices = false;
+    }
   }
 
   private async fetchFlowsList(): Promise<void> {
@@ -4549,6 +4595,45 @@ export class DashboardView extends AuthedElement {
    * they own, which is the only link the gateway records between a request
    * and a human; flows carry no owner at all, so there is no flows column.
    */
+  private get inventoryDeviceRows(): InventoryDeviceRow[] {
+    return this.fleetDevices.map((device) => {
+      const chip = runnerStateChip(device.runner_state);
+      const people = new Map<string, InventoryDeviceRow['people'][number]>();
+      for (const user of device.users) {
+        const key = user.id ? `id:${user.id}` : `label:${user.label}`;
+        if (people.has(key)) continue;
+        people.set(key, {
+          id: user.id,
+          label: user.label,
+          href: user.id ? userHref(user.id) : null,
+        });
+      }
+      return {
+        key: device.device_key,
+        name: deviceLabel(device),
+        os: osLabel(device.os),
+        href: fleetHref(device.device_key),
+        people: [...people.values()],
+        runnerState: device.runner_state,
+        runnerLabel: chip.label,
+        runnerLive: chip.variant === 'success',
+        agentsGoverned: device.agents_onboarded,
+        agentsUngoverned: device.agents_not_onboarded,
+        lastSeenAt: device.last_seen_at,
+      };
+    });
+  }
+
+  /** Tabs whose list could not be read, so they do not claim "0". */
+  private get unavailableInventoryTabs(): InventoryTab[] {
+    const tabs: InventoryTab[] = [];
+    if (this.unansweredInputs.has('agents')) tabs.push('agents');
+    if (this.unansweredInputs.has('flows')) tabs.push('flows');
+    if (this.unansweredInputs.has('tools')) tabs.push('tools');
+    if (this.devicesUnavailable) tabs.push('devices');
+    return tabs;
+  }
+
   private get inventoryUserRows(): InventoryUserRow[] {
     const perAgent = new Map<
       string,
@@ -4675,6 +4760,10 @@ export class DashboardView extends AuthedElement {
         .modelRows=${this.inventoryModelRows}
         .toolRows=${this.inventoryToolRows}
         .userRows=${this.inventoryUserRows}
+        .deviceRows=${this.inventoryDeviceRows}
+        .devicesTotal=${this.fleetDevicesTotal}
+        ?showDevices=${this.canViewFleet}
+        .unavailableTabs=${this.unavailableInventoryTabs}
         .agentsTotal=${this.totalAgentsCount}
         .flowsTotal=${this.totalFlowsCount}
         .modelsTotal=${this.aiModelsCount}
@@ -4689,6 +4778,7 @@ export class DashboardView extends AuthedElement {
         .loadingModels=${this.fetchingModels}
         .loadingTools=${this.fetchingTools}
         .loadingUsers=${this.fetchingUsers}
+        .loadingDevices=${this.fetchingDevices}
         .usageAvailable=${this.gatewayUsageRange === this.gatewayTimeRange}
         .modelUsageAvailable=${this.modelUsageRange === this.gatewayTimeRange}
         ?usageLoading=${this.usageColumnsPending}
