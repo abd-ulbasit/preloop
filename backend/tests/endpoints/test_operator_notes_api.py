@@ -1657,6 +1657,7 @@ def test_note_targets_exclude_identity_and_page_live_conversations(
     assert older.json()["sessions"][0]["alias"] == "test-worker"
     assert older.json()["sessions"][0]["session_source_type"] == "claude_code"
     assert older.json()["sessions"][0]["started_at"]
+    assert older.json()["sessions"][0]["started_at"].endswith("Z")
     first_run.ended_at = datetime.now(UTC)
     db_session.commit()
     live = client.get(target_url, params={"agent_id": str(agent.id)}).json()

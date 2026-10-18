@@ -423,7 +423,11 @@ def list_operator_note_session_targets(
                 id=session.id,
                 alias=session.alias,
                 session_source_type=session.session_source_type,
-                started_at=session.started_at,
+                started_at=(
+                    session.started_at
+                    if session.started_at.tzinfo is not None
+                    else session.started_at.replace(tzinfo=timezone.utc)
+                ),
                 session_reference=session.session_reference,
             )
             for session in sessions
