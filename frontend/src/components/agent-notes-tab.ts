@@ -78,8 +78,14 @@ export class AgentNotesTab extends LitElement {
   @state() private liveSessions: OperatorNoteSessionTarget[] = [];
   /** Every session read, by id, to name the session on each note. */
   @state() private sessionsById = new Map<string, NoteSessionRow>();
-  /** `auto`, `next`, a live session id, or '' while the operator must pick. */
-  @state() private target = TARGET_AUTO;
+  /**
+   * `auto`, `next`, a live session id, or '' while the operator must pick.
+   * Starts blocked: until the live sessions are known, "current or next"
+   * could land on any of several parallel conversations.
+   */
+  @state() private target = '';
+  /** Whether the live sessions are known yet, or could not be read. */
+  @state() private targetsState: 'loading' | 'ready' | 'failed' = 'loading';
   /** `all`, or the session id the list is narrowed to. */
   @state() private sessionFilter = FILTER_ALL;
 
@@ -310,6 +316,7 @@ export class AgentNotesTab extends LitElement {
   private async loadSessions(): Promise<void> {
     const agentId = this.agentId;
     if (!agentId) return;
+    this.targetsState = 'loading';
     const [live, recent] = await Promise.allSettled([
       listAllOperatorNoteSessionTargets(agentId),
       getAccountRuntimeSessions({
@@ -326,7 +333,16 @@ export class AgentNotesTab extends LitElement {
     for (const row of [...recentRows, ...liveRows]) byId.set(row.id, row);
     this.sessionsById = byId;
     this.liveSessions = liveRows;
-    this.target = defaultTarget(liveRows);
+    if (live.status === 'rejected') {
+      // Unknown is not "none live": keep the box blocked unless the operator
+      // already chose Next session, which needs no live session.
+      this.targetsState = 'failed';
+      if (this.target !== TARGET_NEXT) this.target = '';
+      return;
+    }
+    this.targetsState = 'ready';
+    // An explicit choice made while the read was in flight stands.
+    if (this.target === '') this.target = defaultTarget(liveRows);
   }
 
   private onTargetChange(value: string): void {
@@ -495,7 +511,7 @@ export class AgentNotesTab extends LitElement {
           this.onTargetChange((event.target as HTMLSelectElement).value)}
       >
         ${
-          live.length === 0
+          live.length === 0 && this.targetsState === 'ready'
             ? html`<sl-option value=${TARGET_AUTO}
                 >Current or next session</sl-option
               >`
@@ -510,7 +526,21 @@ export class AgentNotesTab extends LitElement {
         <sl-option value=${TARGET_NEXT}>Next session</sl-option>
       </sl-select>
       <div class="target-hint" data-testid="note-target-hint">
-        ${targetHint(this.target, live.length)}
+        ${
+          this.targetsState === 'failed' && this.target !== TARGET_NEXT
+            ? html`Could not load the live sessions.
+                <sl-button
+                  size="small"
+                  variant="text"
+                  data-testid="note-targets-retry"
+                  @click=${() => void this.loadSessions()}
+                  >Retry</sl-button
+                >
+                or choose Next session.`
+            : this.targetsState === 'loading' && this.target === ''
+              ? 'Loading live sessions.'
+              : targetHint(this.target, live.length)
+        }
       </div>
     </div>`;
   }

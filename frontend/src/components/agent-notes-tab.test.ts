@@ -228,6 +228,78 @@ describe('agent-notes-tab', () => {
       expect(pages[1]).to.contain('offset=100');
     });
 
+    it('blocks an untargeted note while live sessions load', async () => {
+      let release: (rows: unknown[]) => void = () => {};
+      const pending = new Promise<unknown[]>((resolve) => {
+        release = resolve;
+      });
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/session-targets')) {
+          const rows = await pending;
+          return jsonResponse({ sessions: rows, total: rows.length });
+        }
+        if (url.includes('/operator-notes'))
+          return jsonResponse({ notes: [], total: 0 });
+        return jsonResponse({ items: [] });
+      });
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await el.updateComplete;
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      expect(composer.agentId).to.equal('');
+      expect(
+        el.shadowRoot!.querySelector('[data-testid="note-target-hint"]')!
+          .textContent
+      ).to.contain('Loading live sessions');
+      const options = [...target(el).querySelectorAll('sl-option')].map(
+        (option) => option.getAttribute('value')
+      );
+      expect(options).to.deep.equal(['next']);
+
+      release([live('s-1', 'fixer'), live('s-2', 'reviewer')]);
+      await waitUntil(
+        () => target(el).querySelectorAll('sl-option').length === 3
+      );
+      // Two live: still the operator's pick, never current-or-next.
+      expect(composer.agentId).to.equal('');
+    });
+
+    it('says the live sessions failed to load and keeps Next session', async () => {
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/session-targets'))
+          return jsonResponse({ detail: 'boom' }, 500);
+        if (url.includes('/operator-notes'))
+          return jsonResponse({ notes: [], total: 0 });
+        return jsonResponse({ items: [] });
+      });
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await waitUntil(() =>
+        el.shadowRoot!.querySelector('[data-testid="note-targets-retry"]')
+      );
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      expect(composer.agentId).to.equal('');
+      expect(
+        el.shadowRoot!.querySelector('[data-testid="note-target-hint"]')!
+          .textContent
+      ).to.contain('Could not load the live sessions');
+      expect(
+        [...target(el).querySelectorAll('sl-option')].map((o) =>
+          o.getAttribute('value')
+        )
+      ).to.deep.equal(['next']);
+
+      target(el).value = 'next';
+      target(el).dispatchEvent(new CustomEvent('sl-change'));
+      await el.updateComplete;
+      expect(composer.agentId).to.equal('agent-1');
+      expect(composer.nextSession).to.equal(true);
+    });
+
     it('makes the operator choose between several live sessions', async () => {
       stubSessions([live('s-1', 'fixer'), live('s-2', 'reviewer')], []);
       const el = await fixture<AgentNotesTab>(
