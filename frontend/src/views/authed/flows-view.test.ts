@@ -1308,11 +1308,19 @@ describe('FlowsView', () => {
         () => !(element as any).isLoading,
         'Flows view did not finish loading'
       );
+      // Without server window stats the runs come from the executions
+      // sample, which can land after the list itself.
+      const reviewRow = () =>
+        element.rows.find(
+          (candidate: FlowListRow) => candidate.id === 'flow-review'
+        );
+      await waitUntil(
+        () => (reviewRow()?.runs ?? 0) > 0,
+        'executions sample did not load'
+      );
       await element.updateComplete;
 
-      const row = element.rows.find(
-        (candidate: FlowListRow) => candidate.id === 'flow-review'
-      );
+      const row = reviewRow();
       expect(row?.countsFromServer).to.equal(false);
       expect(row?.runs).to.be.greaterThan(0);
 
