@@ -928,7 +928,8 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("--all-users cannot be combined with --%s", name)
 			}
 		}
-		return runAllUsersInventory(cmd.OutOrStdout(), true)
+		deviceRef, _ := cmd.Flags().GetString("device-ref")
+		return runAllUsersInventory(cmd.OutOrStdout(), true, deviceRef)
 	}
 	asJSON, _ := cmd.Flags().GetBool("json")
 	addServers, _ := cmd.Flags().GetBool("add")

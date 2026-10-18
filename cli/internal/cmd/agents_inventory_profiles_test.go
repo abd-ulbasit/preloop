@@ -44,7 +44,7 @@ func TestAllUsersInventoryPlatformFixtures(t *testing.T) {
 			t.Setenv("OPENCLAW_CONFIG_PATH", filepath.Join(base, "secret-override"))
 			t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(base, "secret-override"))
 			pd := inventoryProfileDependencies{Profiles: func() ([]inventoryProfile, bool, error) {
-				return []inventoryProfile{{homes[0]}, {homes[1]}, {homes[2]}}, false, nil
+				return []inventoryProfile{{Home: homes[0]}, {Home: homes[1]}, {Home: homes[2]}}, false, nil
 			}, OpenRoot: func(home string) (*os.Root, error) {
 				if home == homes[2] {
 					return nil, os.ErrPermission
@@ -113,7 +113,7 @@ func TestAllUsersInventoryRejectsLinksAndSpecialFiles(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	deps := inventoryTestDependencies(t, home)
-	pd := inventoryProfileDependencies{Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{home}}, false, nil }, OpenRoot: os.OpenRoot}
+	pd := inventoryProfileDependencies{Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{Home: home}}, false, nil }, OpenRoot: os.OpenRoot}
 	result := collectAllUsersInventory(deps, pd, "salt", "context")
 	if result.Completeness != "partial" {
 		t.Fatal("link must mark partial")
@@ -221,7 +221,7 @@ func TestAllUsersInventoryCommandOfflineAndReport(t *testing.T) {
 			deps := inventoryTestDependencies(t, base)
 			oldProbes, oldProfiles := inventoryProbes, inventoryProfiles
 			inventoryProbes = deps
-			inventoryProfiles = inventoryProfileDependencies{Elevated: func() bool { return true }, Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{home}}, false, nil }, OpenRoot: os.OpenRoot}
+			inventoryProfiles = inventoryProfileDependencies{Elevated: func() bool { return true }, Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{Home: home}}, false, nil }, OpenRoot: os.OpenRoot}
 			oldRuntime := runtimeExecutableProbe
 			runtimeExecutableProbe = func(string) (string, error) { t.Fatal("ordinary discovery invoked"); return "", nil }
 			oldClaude, oldCodex := claudeKeychainPresenceProbe, codexKeychainPresenceProbe
@@ -254,9 +254,9 @@ func TestAllUsersInventoryCommandOfflineAndReport(t *testing.T) {
 						t.Errorf("offline command made %d requests", spy.calls)
 					}
 				})
-				oldMachineID := readMachineID
-				readMachineID = func() (string, error) { t.Fatal("offline machine identity probe"); return "", nil }
-				t.Cleanup(func() { readMachineID = oldMachineID })
+				oldMachineID := readInventoryMachineID
+				readInventoryMachineID = func() (string, error) { t.Fatal("offline machine identity probe"); return "", nil }
+				t.Cleanup(func() { readInventoryMachineID = oldMachineID })
 				args = append(args, "--inventory")
 			}
 			rootCmd.SetArgs(args)
@@ -319,7 +319,7 @@ func TestAllUsersInventoryParentLinksAndOversizedConfig(t *testing.T) {
 				}
 			}
 			deps := inventoryTestDependencies(t, base)
-			pd := inventoryProfileDependencies{Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{home}}, false, nil }, OpenRoot: os.OpenRoot}
+			pd := inventoryProfileDependencies{Profiles: func() ([]inventoryProfile, bool, error) { return []inventoryProfile{{Home: home}}, false, nil }, OpenRoot: os.OpenRoot}
 			result := collectAllUsersInventory(deps, pd, "salt", "context")
 			if result.Completeness != "partial" {
 				t.Fatal("unsafe path marked complete")
