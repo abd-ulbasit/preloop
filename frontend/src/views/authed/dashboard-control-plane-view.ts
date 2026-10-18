@@ -324,15 +324,25 @@ type GatewayFormat = '/openai/v1' | '/anthropic/v1' | '/google/v1';
  * A read the onboarding prompts are decided on. Until each has answered at
  * least once, nothing on the page asks the reader to set the account up.
  */
-type OnboardingInput = 'agents' | 'flows' | 'executions' | 'budget' | 'tools';
+type OnboardingInput =
+  'agents' | 'sessions' | 'flows' | 'executions' | 'budget' | 'tools';
 
-/** The permission each input's endpoint requires. */
-const ONBOARDING_INPUT_PERMISSION: Record<OnboardingInput, string> = {
+/**
+ * Every read whose failure is tracked: the onboarding inputs, plus the
+ * Inventory lists that would otherwise claim "0" after a failed read.
+ */
+type TrackedRead = OnboardingInput | 'models' | 'users';
+
+/** The permission each tracked read's endpoint requires. */
+const TRACKED_READ_PERMISSION: Record<TrackedRead, string> = {
   agents: 'view_agents',
+  sessions: 'view_runtime_sessions',
   flows: 'view_flows',
   executions: 'view_flows',
   budget: 'view_cost',
   tools: 'view_tools',
+  models: 'view_ai_models',
+  users: 'view_users',
 };
 
 interface NextStep {
@@ -476,7 +486,7 @@ export class DashboardView extends AuthedElement {
    * agent" and Next steps on a populated account until the next refresh
    * took them back.
    */
-  @state() private unansweredInputs: ReadonlySet<OnboardingInput> = new Set();
+  @state() private unansweredInputs: ReadonlySet<TrackedRead> = new Set();
   /** Device fleet rows for the Inventory, when this reader may see them. */
   @state() private fleetDevices: DeviceFleetDevice[] = [];
   @state() private fleetDevicesTotal = 0;
@@ -1890,6 +1900,7 @@ export class DashboardView extends AuthedElement {
       !this.fetchingFlows &&
       !this.fetchingRecentExecutions &&
       !this.unansweredInputs.has('agents') &&
+      !this.unansweredInputs.has('sessions') &&
       !this.unansweredInputs.has('flows') &&
       !this.unansweredInputs.has('executions')
     );
@@ -2159,7 +2170,8 @@ export class DashboardView extends AuthedElement {
   /** What a session or agent event can change. */
   private async refreshFleet(): Promise<void> {
     const [runtimeSessions, managedAgents] = await Promise.all([
-      this.catchWith403Handling(
+      this.readOnboardingInput(
+        'sessions',
         getAccountRuntimeSessions({
           status: 'all',
           limit: FOLD_SESSIONS_LIMIT,
@@ -2177,10 +2189,12 @@ export class DashboardView extends AuthedElement {
         >
       ),
     ]);
-    this.runtimeSessions = runtimeSessions.items || [];
-    this.totalRuntimeSessionsCount =
-      runtimeSessions.total ?? this.runtimeSessions.length;
-    // A failed read keeps the agents already on screen.
+    // A failed read keeps the sessions and agents already on screen.
+    if (runtimeSessions) {
+      this.runtimeSessions = runtimeSessions.items || [];
+      this.totalRuntimeSessionsCount =
+        runtimeSessions.total ?? this.runtimeSessions.length;
+    }
     if (managedAgents) this.applyAgentsList(managedAgents);
   }
 
@@ -2360,7 +2374,7 @@ export class DashboardView extends AuthedElement {
    * permissions once the profile has answered.
    */
   private async readOnboardingInput<T>(
-    input: OnboardingInput,
+    input: TrackedRead,
     promise: Promise<T>,
     forbidden: T
   ): Promise<T | undefined> {
@@ -2372,7 +2386,7 @@ export class DashboardView extends AuthedElement {
       await this.profileReady.catch(() => undefined);
       const refused =
         message.includes('403') ||
-        !hasPermission(this.permissions, ONBOARDING_INPUT_PERMISSION[input]);
+        !hasPermission(this.permissions, TRACKED_READ_PERMISSION[input]);
       if (!refused) {
         console.error(`Overview ${input} read failed:`, error);
         this.setInputAnswered(input, false);
@@ -2384,7 +2398,7 @@ export class DashboardView extends AuthedElement {
     return value;
   }
 
-  private setInputAnswered(input: OnboardingInput, answered: boolean): void {
+  private setInputAnswered(input: TrackedRead, answered: boolean): void {
     if (answered !== this.unansweredInputs.has(input)) return;
     const next = new Set(this.unansweredInputs);
     if (answered) next.delete(input);
@@ -2658,7 +2672,8 @@ export class DashboardView extends AuthedElement {
         // Above the fold a session answers one question - has anything ever
         // run on this account - so a short page is enough. The attention
         // loader asks for the window and the depth its rules need.
-        this.catchWith403Handling(
+        this.readOnboardingInput(
+          'sessions',
           getAccountRuntimeSessions({
             status: 'all',
             limit: FOLD_SESSIONS_LIMIT,
@@ -2674,9 +2689,11 @@ export class DashboardView extends AuthedElement {
             range !== this.gatewayTimeRange
           )
             return sessions;
-          this.runtimeSessions = sessions.items || [];
-          this.totalRuntimeSessionsCount =
-            sessions.total ?? this.runtimeSessions.length;
+          if (sessions) {
+            this.runtimeSessions = sessions.items || [];
+            this.totalRuntimeSessionsCount =
+              sessions.total ?? this.runtimeSessions.length;
+          }
           return sessions;
         }),
         this.readOnboardingInput(
@@ -2730,9 +2747,11 @@ export class DashboardView extends AuthedElement {
       );
       this.fetchingApprovals = false;
 
-      this.runtimeSessions = runtimeSessions.items || [];
-      this.totalRuntimeSessionsCount =
-        runtimeSessions.total ?? this.runtimeSessions.length;
+      if (runtimeSessions) {
+        this.runtimeSessions = runtimeSessions.items || [];
+        this.totalRuntimeSessionsCount =
+          runtimeSessions.total ?? this.runtimeSessions.length;
+      }
       if (managedAgents) this.applyAgentsList(managedAgents);
       this.fetchingAgents = false;
 
@@ -2941,8 +2960,12 @@ export class DashboardView extends AuthedElement {
   private async fetchModelsList(): Promise<void> {
     this.fetchingModels = true;
     try {
-      const aiModels = await this.catchWith403Handling(getAIModels(), []);
-      this.applyModelsList(aiModels);
+      const aiModels = await this.readOnboardingInput(
+        'models',
+        getAIModels(),
+        [] as AIModel[]
+      );
+      if (aiModels) this.applyModelsList(aiModels);
     } catch (error) {
       console.error('Failed to load the models list', error);
     } finally {
@@ -3062,7 +3085,8 @@ export class DashboardView extends AuthedElement {
   private async fetchUsersList(): Promise<void> {
     this.fetchingUsers = true;
     try {
-      const users = await this.catchWith403Handling(
+      const users = await this.readOnboardingInput(
+        'users',
         // User management is a licensed feature, not a hosting model:
         // a self-hosted Enterprise account has teammates too, and the
         // Inventory's Users tab is gated on the same flag and on
@@ -3084,6 +3108,8 @@ export class DashboardView extends AuthedElement {
           limit: 0,
         }
       );
+      // A failed read keeps the people already listed.
+      if (!users) return;
       this.accountUsers = Array.isArray(users.users)
         ? (users.users as AccountUser[]).filter(
             (user) => user.is_active !== false
@@ -4630,6 +4656,8 @@ export class DashboardView extends AuthedElement {
     if (this.unansweredInputs.has('agents')) tabs.push('agents');
     if (this.unansweredInputs.has('flows')) tabs.push('flows');
     if (this.unansweredInputs.has('tools')) tabs.push('tools');
+    if (this.unansweredInputs.has('models')) tabs.push('models');
+    if (this.unansweredInputs.has('users')) tabs.push('users');
     if (this.devicesUnavailable) tabs.push('devices');
     return tabs;
   }

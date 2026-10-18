@@ -1651,6 +1651,9 @@ describe('DashboardView', () => {
 
     for (const failing of [
       '/api/v1/agents',
+      '/api/v1/runtime-sessions',
+      '/api/v1/flows/summary',
+      '/api/v1/flows/executions',
       '/api/v1/budget/policies',
       '/api/v1/tools/summary',
     ]) {
@@ -1686,6 +1689,7 @@ describe('DashboardView', () => {
 
         // The next answer settles it, and a set-up account stays quiet.
         await element['refreshFleet']();
+        await element['refreshFlowRuns']();
         await element['fetchBudgetSummary']();
         await element['fetchToolsList']();
         await element.updateComplete;
@@ -1715,6 +1719,21 @@ describe('DashboardView', () => {
           element['onboardingResolved'],
         'a refused read never answered'
       );
+    });
+
+    it('says Models and Users could not load instead of claiming zero', async () => {
+      const element = await mountLoaded();
+      const models = element['aiModels'].length;
+      failNext.set('/api/v1/ai-models', 1);
+      await element['fetchModelsList']();
+      await element.updateComplete;
+      expect(element['aiModels'].length, 'kept on a failed read').to.equal(
+        models
+      );
+      expect(element['unavailableInventoryTabs']).to.include('models');
+
+      await element['fetchModelsList']();
+      expect(element['unavailableInventoryTabs']).to.not.include('models');
     });
 
     it('keeps the agents on screen when a refresh of them fails', async () => {

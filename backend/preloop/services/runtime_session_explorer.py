@@ -281,7 +281,10 @@ class RuntimeSessionExplorerService:
             (row.session_source_type, row.session_source_id) for row in agents
         ]
         source_types = None
-        if kind is not None and agent is None:
+        # Source-type matching reaches sessions no managed agent owns, so it
+        # never applies under an owner filter: that would widen the list back
+        # to every session of the kind, other people's included.
+        if kind is not None and agent is None and owner is None:
             source_types = sorted({kind, kind.replace("_", "-")})
         return principals, source_types
 
