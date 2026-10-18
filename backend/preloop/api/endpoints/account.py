@@ -3384,6 +3384,12 @@ async def get_account_session_activity_timeline(
             "console asks for the latest 50 when a session opens."
         ),
     ),
+    operator_note_id: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Include this delivered note even beyond the recent activity page.",
+    ),
 ):
     """Activity timeline overview for this session.
 
@@ -3399,6 +3405,7 @@ async def get_account_session_activity_timeline(
             account=account,
             runtime_session_id=runtime_session_id,
             interaction_limit=limit,
+            operator_note_id=operator_note_id,
         )
     )
 
