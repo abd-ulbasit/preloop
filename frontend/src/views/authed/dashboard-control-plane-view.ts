@@ -1923,7 +1923,8 @@ export class DashboardView extends AuthedElement {
       this.featuresResolved &&
       // The invite step reads the people list, so a checklist that offers it
       // waits for that list too rather than ticking the row a beat later.
-      (!this.userManagementEnabled || !this.fetchingUsers)
+      (!this.userManagementEnabled ||
+        (!this.fetchingUsers && !this.unansweredInputs.has('users')))
     );
   }
 

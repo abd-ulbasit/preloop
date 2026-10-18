@@ -1734,6 +1734,40 @@ describe('DashboardView', () => {
 
       await element['fetchModelsList']();
       expect(element['unavailableInventoryTabs']).to.not.include('models');
+
+      // Users: the people already listed stay, and the tab says it failed.
+      element['userManagementEnabled'] = true;
+      element['permissions'] = null;
+      await element['fetchUsersList']();
+      const people = element['accountUsers'].length;
+      const enabled = element['enabledUsersCount'];
+      expect(people, 'fixture lists people').to.be.greaterThan(0);
+      failNext.set('/api/v1/users', 1);
+      await element['fetchUsersList']();
+      expect(element['accountUsers'].length).to.equal(people);
+      expect(element['enabledUsersCount']).to.equal(enabled);
+      expect(element['unavailableInventoryTabs']).to.include('users');
+      await element['fetchUsersList']();
+      expect(element['unavailableInventoryTabs']).to.not.include('users');
+    });
+
+    it('holds Next steps while the people list is unanswered', async () => {
+      // Budget is still open, so the card would show; the invite step reads
+      // the people list and must not be drawn from a failed read.
+      budgetPoliciesResponse = [];
+      const element = await mountLoaded();
+      element['userManagementEnabled'] = true;
+      failNext.set('/api/v1/users', 1);
+      await element['fetchUsersList']();
+      await element.updateComplete;
+      expect(element['nextStepsInputsResolved']).to.be.false;
+      expect(element.shadowRoot?.querySelector('.next-steps-card')).to.not
+        .exist;
+
+      await element['fetchUsersList']();
+      await element.updateComplete;
+      expect(element['nextStepsInputsResolved']).to.be.true;
+      expect(element.shadowRoot?.querySelector('.next-steps-card')).to.exist;
     });
 
     it('keeps the agents on screen when a refresh of them fails', async () => {
