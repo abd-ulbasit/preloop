@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Callable
 from uuid import uuid4
+
+from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud.runtime_session_activity import (
@@ -13,6 +16,63 @@ from preloop.models.crud.runtime_session_activity import (
 )
 from preloop.models.models.managed_agent import ManagedAgent
 from preloop.models.models.runtime_session import RuntimeSession
+
+
+def test_timeline_hook_timestamps_do_not_displace_visible_activity(
+    db_session: Session, create_account: Callable[..., models.Account]
+) -> None:
+    """Hook rows stay queryable without consuming the visible timeline limit."""
+    account = create_account()
+    now = datetime.now(UTC)
+    runtime_session = models.RuntimeSession(
+        account_id=account.id,
+        session_source_type="claude_code",
+        session_source_id="timeline-hooks",
+        started_at=now - timedelta(minutes=5),
+    )
+    db_session.add(runtime_session)
+    db_session.flush()
+    note_id = str(uuid4())
+    note = models.RuntimeSessionActivity(
+        account_id=account.id,
+        runtime_session_id=runtime_session.id,
+        activity_type="agent_control_message",
+        timestamp=now - timedelta(minutes=1),
+        metadata_={"kind": "operator_note", "note_id": note_id},
+    )
+    tool = models.RuntimeSessionActivity(
+        account_id=account.id,
+        runtime_session_id=runtime_session.id,
+        activity_type="tool_call",
+        timestamp=now,
+        tool_name="get_issue",
+    )
+    hooks = [
+        models.RuntimeSessionActivity(
+            account_id=account.id,
+            runtime_session_id=runtime_session.id,
+            activity_type=kind,
+            timestamp=now + timedelta(minutes=index + 1),
+        )
+        for index, kind in enumerate(("user_prompt", "turn_end", "session_end"))
+    ]
+    db_session.add_all([note, tool, *hooks])
+    db_session.flush()
+    query = {
+        "account_id": str(account.id),
+        "runtime_session_id": str(runtime_session.id),
+    }
+
+    timeline = crud_runtime_session_activity.list_timeline_rows_for_runtime_session(
+        db_session, **query, limit=1
+    )
+    assert [row.id for row in timeline] == [tool.id]
+    focused = crud_runtime_session_activity.list_timeline_rows_for_runtime_session(
+        db_session, **query, limit=1, operator_note_id=note_id
+    )
+    assert [row.id for row in focused] == [tool.id, note.id]
+    raw = crud_runtime_session_activity.list_for_runtime_session(db_session, **query)
+    assert {row.id for row in raw} == {note.id, tool.id, *(row.id for row in hooks)}
 
 
 def test_log_agent_control_message_touches_managed_agent(

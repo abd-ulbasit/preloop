@@ -1041,3 +1041,16 @@ snapshot funding and purpose in usage metadata. Weekly email preferences include
 an audited account tracking switch, and the console renders it only when an
 extension advertises `report_engagement_tracking`. Core does not serve public
 tracking or cross-account analytics endpoints.
+
+### Optional live activity foundations
+
+Core accepts content-free prompt and turn timestamps through backend APIs and
+stores them alongside bounded activity rollups, presence transitions and worker
+watermarks through its CRUD layer. CLI and runtime-plugin hook producers are
+outside this foundation. Hook timestamps stay out of the session replay timeline
+and remain available to activity aggregation. Optional
+Cloud and Enterprise extensions own derivation and authenticated board APIs;
+core keeps the capability off by default. Presence realtime events require
+`view_users` for another person or device, with an own-subject exception.
+The Fleet Map remains the console visualization; this foundation adds no
+Activity page, navigation entry or frontend component.
