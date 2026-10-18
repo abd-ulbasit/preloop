@@ -1,4 +1,5 @@
 import { expect, fixture, html } from '@open-wc/testing';
+import { spy, stub } from 'sinon';
 import './fleet-map';
 import type { FleetMap } from './fleet-map';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
@@ -30,7 +31,7 @@ describe('fleet-map', () => {
     expect(node(el, 'account:dev').querySelector('.gap-dot')).to.exist;
     expect(
       el.shadowRoot!.querySelectorAll('path.edge.configured').length
-    ).to.equal(6);
+    ).to.equal(7);
   });
 
   it('selecting a node dims the rest and lists its blast radius with actions', async () => {
@@ -231,5 +232,58 @@ describe('fleet-map capped and narrow views', () => {
     expect(el.shadowRoot!.querySelector('[data-gap="discovered_agent"]')).to.not
       .exist;
     expect(node(el, 'agent:claude').classList.contains('dim')).to.equal(false);
+  });
+});
+
+describe('fleet-map gesture performance', () => {
+  it('pans and zooms without rendering the graph again', async () => {
+    const el = await fixture<FleetMap>(
+      html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
+    );
+    const stage = el.shadowRoot!.querySelector<HTMLElement>('.stage')!;
+    const plane = el.shadowRoot!.querySelector<HTMLElement>('.plane')!;
+    const before = plane.style.transform;
+    const render = spy(el, 'render');
+    const capture = stub(stage, 'setPointerCapture');
+    const release = stub(stage, 'releasePointerCapture');
+    try {
+      stage.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          pointerId: 1,
+          button: 0,
+          clientX: 10,
+          clientY: 10,
+        })
+      );
+      for (let i = 0; i < 20; i++) {
+        stage.dispatchEvent(
+          new PointerEvent('pointermove', {
+            pointerId: 1,
+            clientX: 20 + i,
+            clientY: 30 + i,
+          })
+        );
+        stage.dispatchEvent(
+          new WheelEvent('wheel', { deltaY: -1, cancelable: true })
+        );
+      }
+      stage.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1 }));
+      stage.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      await el.updateComplete;
+      expect(plane.style.transform).not.to.equal(before);
+      expect(render.callCount).to.equal(0);
+      expect(el.shadowRoot!.querySelector('.zoom')!.textContent).to.match(
+        /\d+%/
+      );
+      el.graph = { ...sampleFleetMap(), nodes: [], edges: [] };
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.plane')).not.to.exist;
+      expect(el.shadowRoot!.querySelector('[data-testid="fleet-map-empty"]')).to
+        .exist;
+    } finally {
+      render.restore();
+      capture.restore();
+      release.restore();
+    }
   });
 });

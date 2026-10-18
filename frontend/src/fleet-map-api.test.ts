@@ -60,7 +60,6 @@ describe('fleet map graph', () => {
       types: all,
       owner: '',
       provider: 'provider:anthropic',
-      gapsOnly: false,
     });
     expect(view.nodes.map((n) => n.id).sort()).to.deep.equal(
       [
@@ -77,24 +76,15 @@ describe('fleet map graph', () => {
     ).to.equal(true);
   });
 
-  it('hides types and keeps only flagged chains when asked', () => {
+  it('hides types and their incident edges', () => {
     const graph = sampleFleetMap();
     const noModels = filterGraph(graph, {
       types: new Set(FLEET_MAP_COLUMNS.filter((t) => t !== 'model')),
       owner: '',
       provider: '',
-      gapsOnly: false,
     });
     expect(noModels.nodes.some((n) => n.type === 'model')).to.equal(false);
     expect(noModels.edges.some((e) => e.kind === 'uses_model')).to.equal(false);
-    const gaps = filterGraph(graph, {
-      types: all,
-      owner: '',
-      provider: '',
-      gapsOnly: true,
-    });
-    expect(gaps.nodes.some((n) => n.id === 'agent:cursor')).to.equal(true);
-    expect(gaps.nodes.some((n) => n.id === 'model:sonnet')).to.equal(false);
   });
 
   it('lays out one column per present type, deterministically', () => {
@@ -123,6 +113,26 @@ describe('fleet map graph', () => {
 });
 
 describe('Fleet Map API contract', () => {
+  it('follows model-to-runner dependencies and device hosting in the server direction', () => {
+    const graph = sampleFleetMap();
+    const reach = blastRadius(graph, 'runner:r2').nodes;
+    expect([...reach].sort()).to.deep.equal(
+      [
+        'runner:r2',
+        'model:sonnet',
+        'agent:claude',
+        'device:mbp',
+        'device:build',
+        'user:maya',
+        'user:sam',
+      ].sort()
+    );
+    for (const edge of graph.edges) {
+      expect(edge.impact_source).to.equal(edge.target);
+      expect(edge.impact_target).to.equal(edge.source);
+    }
+  });
+
   it('does not include a provider or a sibling account in account impact', () => {
     const graph = sampleFleetMap();
     const reach = blastRadius(graph, 'account:prod').nodes;

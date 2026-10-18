@@ -132,3 +132,77 @@ def test_binding_and_latest_enrollment_windows_stay_in_tenant(
     )
     assert len(enrollments) == 1 and enrollments[0].managed_agent_id == agents[0].id
     assert enrollments[0].managed_config == {"model": "example-1"}
+
+
+def test_model_window_includes_only_available_built_ins_when_enabled(
+    db_session: Session,
+) -> None:
+    from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
+
+    accounts = [
+        crud.crud_account.create(
+            db_session, obj_in={"organization_name": f"Example models {i}"}
+        )
+        for i in range(2)
+    ]
+    own = models.AIModel(
+        account_id=accounts[0].id,
+        name="Own",
+        provider_name="openai",
+        model_identifier="example",
+    )
+    other = models.AIModel(
+        account_id=accounts[1].id,
+        name="Other",
+        provider_name="openai",
+        model_identifier="example",
+    )
+    globals_ = [
+        models.AIModel(
+            account_id=None,
+            name=f"System {i}",
+            provider_name="openai",
+            model_identifier="example",
+            meta_data=metadata,
+        )
+        for i, metadata in enumerate(
+            [
+                {"gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS}},
+                {"gateway": {"enabled": False, "model_alias": BUILT_IN_MODEL_ALIAS}},
+                {
+                    "gateway": {"enabled": True, "model_alias": BUILT_IN_MODEL_ALIAS},
+                    "retired": True,
+                },
+                {"gateway": {"enabled": True, "model_alias": "legacy"}},
+            ]
+        )
+    ]
+    db_session.add_all([own, other, *globals_])
+    db_session.flush()
+    account_id = str(accounts[0].id)
+    assert [
+        r.id
+        for r in list_resources(
+            db_session, source="models", account_id=account_id, limit=1000
+        )
+    ] == [own.id]
+    rows = list_resources(
+        db_session,
+        source="models",
+        account_id=account_id,
+        limit=1000,
+        include_built_in=True,
+    )
+    # The synthetic local stack can also contain unrelated active system rows.
+    ids = {r.id for r in rows}
+    assert {own.id, globals_[0].id} <= ids
+    assert not ids.intersection({other.id, *(r.id for r in globals_[1:])})
+    assert [r.id for r in rows] == sorted(r.id for r in rows)
+    bounded = list_resources(
+        db_session,
+        source="models",
+        account_id=account_id,
+        limit=1,
+        include_built_in=True,
+    )
+    assert [r.id for r in bounded] == [rows[0].id]

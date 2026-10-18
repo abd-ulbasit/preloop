@@ -708,8 +708,9 @@ separate from configuration. Consumer reads stay in the current account and appl
 both resource visibility and the permission to view each consumer kind.
 
 `GET /api/v1/fleet/map` combines the optional device projection with bounded,
-tenant-owned agent, runner, model and user reads. Each resource kind retains its
-read permission and account visibility checks. Credential references group model
+tenant-owned agent, runner, model and user reads, plus the available hosted model
+when enabled. Hosted operator credentials and routing stay private. Each resource
+kind retains its read permission and account visibility checks. Credential references group model
 accounts without resolving secrets. Configured and observed edges stay distinct;
 explicit impact directions support dependency and affected-owner traversal without
 crossing into unrelated accounts at the same provider. Omitted visible nodes are
