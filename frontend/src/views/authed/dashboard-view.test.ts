@@ -531,6 +531,10 @@ describe('DashboardView', () => {
           return json(apiKeysResponse);
         }
 
+        if (url === '/api/v1/auth/api-keys/count') {
+          return json({ active: 3 });
+        }
+
         if (url === '/api/v1/attention/extension-items') {
           return json([]);
         }
@@ -643,6 +647,19 @@ describe('DashboardView', () => {
     expect(element.shadowRoot?.querySelector('activity-feed')).to.exist;
     expect(element.shadowRoot?.textContent).to.contain('Failures and denials');
     expect(element.shadowRoot?.textContent).to.contain('need attention');
+  });
+
+  it('counts API keys without reading the key list (#1694)', async () => {
+    const element = await mountDashboard();
+    await waitUntil(
+      () => !element['fetchingMCPAndTools'] && element['apiKeysCount'] !== null,
+      'API key count never loaded'
+    );
+
+    expect(element['apiKeysCount']).to.equal(3);
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    expect(urls).to.include('/api/v1/auth/api-keys/count');
+    expect(urls).not.to.include('/api/v1/auth/api-keys');
   });
 
   it('lists failures and denials with their real reason, never "allow"', async () => {

@@ -4143,6 +4143,18 @@ export async function getApiKeys(): Promise<ApiKey[]> {
   return response.json();
 }
 
+/**
+ * How many of the user's API keys are usable (active, not expired). The
+ * Overview reads this instead of the whole key list (#1694).
+ */
+export async function getApiKeyCount(): Promise<{ active: number }> {
+  const response = await fetchWithAuth('/api/v1/auth/api-keys/count');
+  if (!response.ok) {
+    throw new Error('Failed to count API keys');
+  }
+  return response.json();
+}
+
 export async function createApiKey(
   name: string,
   expires_at: string | null
