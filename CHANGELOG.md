@@ -136,6 +136,14 @@ after the page scroller moved to the content area.
 
 ### Added
 
+- **`preloop agents pause` / `preloop agents resume`.** When the approval
+  service is unavailable, pause the native approval hooks locally for a
+  limited time (default 1h, maximum 24h; all agents or one) without editing
+  agent config files. Paused hooks skip Preloop and defer to the agent's own
+  permission prompts, and the pause expires on its own. Fail-closed deny
+  messages now lead with this command, and `preloop agents status` shows an
+  active pause.
+
 - **Unattended app enrollment.** `preloop agents onboard --unattended` exchanges
   a short-lived single-use authority for per-app MCP credentials and writes
   them into the selected Claude Code, Codex CLI, or Cursor config. Linux

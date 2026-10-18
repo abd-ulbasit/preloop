@@ -571,6 +571,21 @@ prompt, because it cannot enforce the central rule. The existing hook-command
 unavailability. Missing credentials, HTTP 4xx (including authentication and rate
 denials), malformed responses, and returned server/human/policy denials or
 approval expiry stay closed.
+
+#### Pausing approvals while Preloop is unavailable
+
+When the approval service is down, every fail-closed deny message starts with
+the way out: `preloop agents pause`. It pauses the approval hooks on this
+machine for 1h by default (`--for 30m`, maximum `24h`), for every agent or for
+one (`preloop agents pause "Codex CLI"`). While paused the hook does not call
+Preloop; it answers with no decision so the agent's own permission prompts
+apply, and prints `Preloop approvals are paused until <time>` to stderr.
+Agent config files are not touched. The pause is stored in
+`~/.preloop/approvals-pause.json`, ends on its own, and `preloop agents resume
+[agent]` ends it early. `preloop agents status <agent>` shows an active pause.
+Paused calls are not audited by Preloop. Flow runs with
+`--require-flow-credential` ignore the pause and stay governed.
+
 The server governance setting `native_tool_approvals=off` disables automatic
 human escalation, while matching native rules still apply. Offboarding removes
 the installed approval hooks and their credentials.
