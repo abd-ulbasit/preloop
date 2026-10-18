@@ -2286,6 +2286,28 @@ describe('DashboardView', () => {
       ).to.equal('—');
     });
 
+    it('lets the Inventory period select change the page range', async () => {
+      const element = await mountLoaded();
+      const inventory = element.shadowRoot!.querySelector(
+        'inventory-card'
+      ) as any;
+      inventory.shadowRoot!.querySelector('time-range-select')!.dispatchEvent(
+        new CustomEvent('range-change', {
+          detail: { value: 'today' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await element.updateComplete;
+      await inventory.updateComplete;
+      expect(element['gatewayTimeRange']).to.equal('today');
+      expect(inventory.timeRange).to.equal('today');
+      expect(
+        (element.shadowRoot!.querySelector('usage-card') as any).timeRange,
+        'the Usage card follows: one range on the page'
+      ).to.equal('today');
+    });
+
     it('ignores a breakdown and model overview completed after the range changes', async () => {
       const element = await mountLoaded();
       let release!: () => void;

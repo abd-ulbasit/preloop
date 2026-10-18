@@ -3892,6 +3892,19 @@ export class DashboardView extends AuthedElement {
       </sl-card>
     `;
   }
+  /** The page range, from the Usage card or the Inventory: one range. */
+  private onRangeChange = (event: CustomEvent<{ value: string }>) => {
+    event.stopPropagation();
+    this.gatewayTimeRange =
+      normalizeTimeRangeKey(event.detail.value) ?? DEFAULT_USAGE_RANGE;
+    try {
+      localStorage.setItem(USAGE_RANGE_STORAGE_KEY, this.gatewayTimeRange);
+    } catch {
+      // Non-fatal: the range still applies for this session.
+    }
+    this.changeUsageRange();
+  };
+
   private renderUsageCard() {
     return html`
       <usage-card
@@ -3910,20 +3923,7 @@ export class DashboardView extends AuthedElement {
         .seriesGranularity=${this.usageSeriesGranularity}
         ?seriesLoading=${this.usageSeriesRange !== this.gatewayTimeRange}
         .toolCallsCount=${this.toolCallsCount}
-        @range-change=${(event: CustomEvent<{ value: string }>) => {
-          event.stopPropagation();
-          this.gatewayTimeRange =
-            normalizeTimeRangeKey(event.detail.value) ?? DEFAULT_USAGE_RANGE;
-          try {
-            localStorage.setItem(
-              USAGE_RANGE_STORAGE_KEY,
-              this.gatewayTimeRange
-            );
-          } catch {
-            // Non-fatal: the range still applies for this session.
-          }
-          this.changeUsageRange();
-        }}
+        @range-change=${this.onRangeChange}
         @configure-limits=${() => (this.showBudgetDialog = true)}
       ></usage-card>
     `;
@@ -4792,7 +4792,6 @@ export class DashboardView extends AuthedElement {
         .deviceRows=${this.inventoryDeviceRows}
         .devicesTotal=${this.fleetDevicesTotal}
         ?showDevices=${this.canViewFleet}
-        ?showMap=${this.canViewFleet}
         .unavailableTabs=${this.unavailableInventoryTabs}
         .agentsTotal=${this.totalAgentsCount}
         .flowsTotal=${this.totalFlowsCount}
@@ -4801,6 +4800,8 @@ export class DashboardView extends AuthedElement {
         .usersTotal=${this.enabledUsersCount}
         ?showUsers=${this.canViewUsers}
         .rangeLabel=${this.gatewayRangeLabel}
+        .timeRange=${this.gatewayTimeRange}
+        @range-change=${this.onRangeChange}
         .flowRunsCapped=${this.flowRunsCapped}
         ?loading=${this.loading}
         .loadingAgents=${this.fetchingAgents}
