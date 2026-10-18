@@ -180,6 +180,9 @@ export class FleetMap extends LitElement {
   instanceAdmin = false;
   /** Always spatial, with no Columns choice (the Overview inventory map). */
   @property({ type: Boolean, attribute: 'spatial-only' }) spatialOnly = false;
+  /** Arrangement until the user picks one (stored per user and scope). */
+  @property({ attribute: 'default-arrangement' })
+  defaultArrangement: FleetMapArrangement = 'columns';
   /** Whose arrangement and dragged positions are stored. */
   @property({ attribute: 'user-id' }) userId = '';
   /** Separates stored positions of different maps (fleet, inventory). */
@@ -300,7 +303,7 @@ export class FleetMap extends LitElement {
    * line lights through the activity tracker instead.
    */
   private send(messages: FleetMessage[]): void {
-    if (!messages.length || this.motionOff || !this.spatial) return;
+    if (!messages.length || this.motionOff || !this.instanceAdmin) return;
     const now = Date.now();
     let spawned = false;
     for (const message of messages)
@@ -314,7 +317,7 @@ export class FleetMap extends LitElement {
   /** A code event: count it, surface it on the node and in the corner. */
   private recordCode(message: unknown): void {
     const hit = codeHitFromRealtime(message);
-    if (!hit) return;
+    if (!hit || !this.instanceAdmin) return;
     const view = this.shown();
     const ids = new Set(view.nodes.map((node) => node.id));
     const nodes = hit.nodes.filter((id) => ids.has(id));
@@ -371,7 +374,7 @@ export class FleetMap extends LitElement {
         now - new Date(event.at).getTime() < 120_000
     );
     for (const event of activity.events) this.seenEvents.add(event.id);
-    if (!fresh.length || !this.spatial) return;
+    if (!fresh.length || !this.instanceAdmin) return;
     const toasts = fresh.slice(0, 3).map((event) => ({
       id: this.nextPip++,
       node: event.node_id,
@@ -385,7 +388,8 @@ export class FleetMap extends LitElement {
 
   /** Load the code activity for the window, debounced. */
   private scheduleCodeLoad(delay = 0): void {
-    if (!this.live) return;
+    // The code layer is instance-admin only for now, like the spatial map.
+    if (!this.live || !this.instanceAdmin) return;
     if (this.codeTimer !== undefined) clearTimeout(this.codeTimer);
     this.codeTimer = setTimeout(() => {
       this.codeTimer = undefined;
@@ -577,8 +581,16 @@ export class FleetMap extends LitElement {
   }
 
   protected willUpdate(changed: Map<string, unknown>): void {
-    if (changed.has('userId') || changed.has('positionsScope')) {
-      this.arrangement = loadArrangement(this.userId, this.positionsScope);
+    if (
+      changed.has('userId') ||
+      changed.has('positionsScope') ||
+      changed.has('defaultArrangement')
+    ) {
+      this.arrangement = loadArrangement(
+        this.userId,
+        this.positionsScope,
+        this.defaultArrangement
+      );
       this.points = loadPositions(this.userId, this.positionsScope);
     }
     this.dropHiddenSelection();
@@ -1529,8 +1541,9 @@ export class FleetMap extends LitElement {
         stroke-width: 1.75;
         opacity: 0.75;
       }
+      /* Above the zoom controls, clear of the column headers. */
       .toasts {
-        top: 10px;
+        bottom: 52px;
         right: 12px;
         flex-direction: column;
         align-items: flex-end;
@@ -2099,6 +2112,7 @@ export class FleetMap extends LitElement {
 
   /** Pull and merge request counters on an agent, flow or person. */
   private renderCode(node: FleetMapNode) {
+    if (!this.instanceAdmin) return nothing;
     const counts = this.codeActivity?.counts[node.id];
     if (!counts) return nothing;
     const items = CODE_BADGES.filter(([action]) => counts[action] > 0);
@@ -2146,7 +2160,7 @@ export class FleetMap extends LitElement {
 
   /** Messages in flight, drawn at their position for this instant. */
   private renderParticles() {
-    if (!this.particles.size || !this.spatial) return nothing;
+    if (!this.particles.size) return nothing;
     const now = Date.now();
     return this.particles.all.map((particle) => {
       const a = this.positionOf(particle.from);
@@ -2565,7 +2579,7 @@ export class FleetMap extends LitElement {
     // Only while a message is actually in flight does it carry the label;
     // a line still lit after it landed keeps its own.
     const travelling =
-      this.spatial && !this.motionOff && this.particles.size > 0;
+      this.instanceAdmin && !this.motionOff && this.particles.size > 0;
     return html`${this.renderToolbar(graph, filtered, hits)}
       ${this.renderGaps(filtered)}
       ${
@@ -2804,7 +2818,7 @@ export class FleetMap extends LitElement {
             to zoom.</span
           >
         </div>
-        ${this.spatial ? this.renderToasts(new Map(view.nodes.map((node) => [node.id, node]))) : nothing}
+        ${this.instanceAdmin ? this.renderToasts(new Map(view.nodes.map((node) => [node.id, node]))) : nothing}
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
   }

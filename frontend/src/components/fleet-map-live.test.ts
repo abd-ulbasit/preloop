@@ -117,6 +117,32 @@ describe('fleet-map live canvas', () => {
     expect(el.shadowRoot!.querySelectorAll('[data-toast]').length).to.equal(1);
   });
 
+  it('sends messages in the columns arrangement too, for admins only', async () => {
+    const columns = await fixture<FleetMap>(
+      html`<fleet-map
+        .graph=${sampleFleetMap()}
+        instance-admin
+        user-id="u-columns"
+      ></fleet-map>`
+    );
+    expect(columns.shadowRoot!.querySelector('.column-title')).to.exist;
+    columns.recordActivity('gateway_activity', call);
+    await columns.updateComplete;
+    expect(columns.inFlight).to.equal(2);
+    expect(columns.shadowRoot!.querySelector('[data-particle]')).to.exist;
+    const viewer = await fixture<FleetMap>(
+      html`<fleet-map
+        .graph=${sampleFleetMap()}
+        user-id="u-viewer"
+      ></fleet-map>`
+    );
+    viewer.recordActivity('gateway_activity', call);
+    viewer.codeActivity = activity();
+    await viewer.updateComplete;
+    expect(viewer.inFlight).to.equal(0);
+    expect(viewer.shadowRoot!.querySelector('[data-code]')).to.not.exist;
+  });
+
   it('respects the cap on messages in flight', async () => {
     const el = await spatialMap();
     for (let i = 0; i < 60; i++)

@@ -24,15 +24,14 @@ const keyFor = (base: string, user: string, scope: string) =>
 
 export function loadArrangement(
   user: string,
-  scope = 'fleet'
+  scope = 'fleet',
+  fallback: FleetMapArrangement = 'columns'
 ): FleetMapArrangement {
   try {
-    return localStorage.getItem(keyFor(ARRANGEMENT_KEY, user, scope)) ===
-      'spatial'
-      ? 'spatial'
-      : 'columns';
+    const saved = localStorage.getItem(keyFor(ARRANGEMENT_KEY, user, scope));
+    return saved === 'spatial' || saved === 'columns' ? saved : fallback;
   } catch {
-    return 'columns';
+    return fallback;
   }
 }
 

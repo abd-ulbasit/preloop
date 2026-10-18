@@ -1269,8 +1269,18 @@ describe('inventory-card spatial map', () => {
     await map.updateComplete;
     expect(map.positionsScope).to.equal('inventory');
     expect(map.shadowRoot!.querySelector('[data-node="agent:codex"]')).to.exist;
+    // The live spatial canvas is the default; the columns are one click away.
     expect(map.shadowRoot!.querySelector('.column-title')).to.not.exist;
-    expect(map.shadowRoot!.querySelector('[data-arrangement]')).to.not.exist;
+    map
+      .shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-arrangement="columns"]'
+      )!
+      .click();
+    await map.updateComplete;
+    expect(map.shadowRoot!.querySelector('.column-title')).to.exist;
+    expect(
+      localStorage.getItem('preloop:fleet-map:arrangement:inventory:u1')
+    ).to.equal('columns');
     expect(el.shadowRoot!.querySelector('table')).to.not.exist;
     expect(localStorage.getItem('preloop:inventory:view:u1')).to.equal('map');
     expect(api.callsTo('/api/v1/fleet/map').length).to.equal(1);
