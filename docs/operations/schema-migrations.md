@@ -38,7 +38,9 @@ and snapshots while ordinary reads and writes can continue. Canceling every
 five seconds can leave an invalid index and repeatedly restart its repair.
 The longer budget applies only to these explicit blocks, including invalid-index
 cleanup; the previous lock and statement settings are restored on success or
-failure. Blocking schema changes keep the five-second lock timeout.
+failure. Blocking schema changes keep the five-second lock timeout. New
+migrations that build or drop concurrent indexes must use this context in
+both upgrade and downgrade; keep ordinary table DDL outside that scope.
 
 **A bounded retry loop** (`migrationJob.maxAttempts`, default 20, with
 `migrationJob.retryMinSeconds` to `migrationJob.retryMaxSeconds` of jittered

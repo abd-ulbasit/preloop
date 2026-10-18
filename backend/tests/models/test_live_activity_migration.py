@@ -20,7 +20,13 @@ MIGRATION = (
 )
 
 
-def test_index_timeout_can_be_retried_without_partial_tables(db_engine: Any) -> None:
+def test_index_timeout_can_be_retried_without_partial_tables(
+    db_engine: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exercise the helper's supported finite timeout pair; the short original
+    # blocking-DDL setting must still be restored after failure and success.
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS", "2")
     spec = spec_from_file_location("live_activity_migration", MIGRATION)
     assert spec is not None and spec.loader is not None
     migration = module_from_spec(spec)
