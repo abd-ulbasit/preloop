@@ -12,6 +12,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
+from preloop.models.migration_runtime import sqlstate_of
+
 MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "preloop/models/alembic/versions/20261031_live_activity.py"
@@ -54,7 +56,7 @@ def test_index_timeout_can_be_retried_without_partial_tables(db_engine: Any) -> 
                 with pytest.raises(OperationalError) as failure:
                     with context.begin_transaction(), Operations.context(context):
                         migration.upgrade()
-                assert getattr(failure.value.orig, "sqlstate", None) == "55P03"
+                assert sqlstate_of(failure.value) == "55P03"
                 writer.rollback()
                 assert (
                     connection.execute(
