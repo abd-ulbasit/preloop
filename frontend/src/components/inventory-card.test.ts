@@ -1230,8 +1230,14 @@ describe('inventory-card spatial map', () => {
     api?.restore();
     localStorage.removeItem('accessToken');
     for (const key of Object.keys(localStorage))
-      if (key.startsWith('preloop:inventory:')) localStorage.removeItem(key);
+      if (
+        key.startsWith('preloop:inventory:') ||
+        key.startsWith('preloop:fleet-map:')
+      )
+        localStorage.removeItem(key);
   });
+
+  beforeEach(() => localStorage.removeItem('preloop:fleet-map:window'));
 
   it('offers no map to anyone but an instance administrator', async () => {
     localStorage.setItem('preloop:inventory:view:u1', 'map');
@@ -1245,7 +1251,12 @@ describe('inventory-card spatial map', () => {
   it('swaps the table for the spatial fleet map and remembers it', async () => {
     localStorage.setItem('accessToken', 'test-token');
     api = mockApi({
-      routes: [{ path: '/api/v1/fleet/map', body: sampleFleetMap() }],
+      routes: [
+        {
+          path: '/api/v1/fleet/map',
+          body: { ...sampleFleetMap(), active_within_hours: 720 },
+        },
+      ],
     });
     const el = await fixture<InventoryCard>(
       html`<inventory-card instanceAdmin userId="u1"></inventory-card>`
@@ -1257,6 +1268,7 @@ describe('inventory-card spatial map', () => {
     const map = el.shadowRoot!.querySelector('fleet-map')!;
     await map.updateComplete;
     expect(map.positionsScope).to.equal('inventory');
+    expect(map.shadowRoot!.querySelector('[data-node="agent:codex"]')).to.exist;
     expect(map.shadowRoot!.querySelector('.column-title')).to.not.exist;
     expect(map.shadowRoot!.querySelector('[data-arrangement]')).to.not.exist;
     expect(el.shadowRoot!.querySelector('table')).to.not.exist;

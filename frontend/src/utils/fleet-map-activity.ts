@@ -1,4 +1,5 @@
 import type { FleetMapEdge, FleetMapGraph } from '../fleet-map-api';
+import { parseUTCDate } from './date';
 
 /**
  * Activity window and live traffic for the Fleet Map.
@@ -75,7 +76,7 @@ export function activeGraph(
           node.type === 'cluster' ||
           (['agent', 'device', 'runner'].includes(node.type) &&
             !!node.last_seen_at &&
-            Date.parse(node.last_seen_at) >= sinceMs)
+            parseUTCDate(node.last_seen_at).getTime() >= sinceMs)
       )
       .map((node) => node.id)
   );

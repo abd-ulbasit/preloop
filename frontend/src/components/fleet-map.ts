@@ -333,6 +333,7 @@ export class FleetMap extends LitElement {
 
   private pointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
+    this.suppressClick = false;
     const target = (event.target as Element).closest?.('[data-node]');
     if (this.spatial && target && this.lastLayout) {
       const id = target.getAttribute('data-node') || '';
@@ -392,7 +393,9 @@ export class FleetMap extends LitElement {
       capture(event, false);
       if (!drag.moved) return;
       savePositions(this.userId, this.points, this.positionsScope);
+      // Swallow only the click the drop itself produces.
       this.suppressClick = true;
+      setTimeout(() => (this.suppressClick = false), 0);
       return;
     }
     if (this.pan?.id !== event.pointerId) return;
@@ -1189,6 +1192,31 @@ export class FleetMap extends LitElement {
     }
   };
 
+  private renderWindowSelect() {
+    return html`<label
+      >Active
+      <select
+        data-testid="fleet-map-window"
+        aria-label="Show resources active in"
+        .value=${this.activityWindow}
+        @change=${(e: Event) =>
+          this.setWindow(
+            (e.target as HTMLSelectElement).value as FleetMapWindow
+          )}
+      >
+        ${FLEET_MAP_WINDOWS.map(
+          (item) =>
+            html`<option
+              value=${item.value}
+              ?selected=${item.value === this.activityWindow}
+            >
+              ${item.label}
+            </option>`
+        )}
+      </select></label
+    >`;
+  }
+
   private renderToolbar(
     graph: FleetMapGraph,
     view: FleetMapGraph,
@@ -1327,28 +1355,7 @@ export class FleetMap extends LitElement {
               </button>`
           )}
         </fieldset>
-        <label
-          >Active
-          <select
-            data-testid="fleet-map-window"
-            aria-label="Show resources active in"
-            .value=${this.activityWindow}
-            @change=${(e: Event) =>
-              this.setWindow(
-                (e.target as HTMLSelectElement).value as FleetMapWindow
-              )}
-          >
-            ${FLEET_MAP_WINDOWS.map(
-              (item) =>
-                html`<option
-                  value=${item.value}
-                  ?selected=${item.value === this.activityWindow}
-                >
-                  ${item.label}
-                </option>`
-            )}
-          </select></label
-        >
+        ${this.renderWindowSelect()}
         <span class="count" aria-live="polite"
           >${shown === total ? total : `${shown} of ${total}`}
           node${total === 1 ? '' : 's'}${groups ? ` · ${groups} summary group${groups === 1 ? '' : 's'}` : ''}${
@@ -1864,12 +1871,26 @@ export class FleetMap extends LitElement {
     if (!graph) return nothing;
     if (!graph.nodes.length) {
       this.lastLayout = null;
-      return html`<div class="empty-state" data-testid="fleet-map-empty">
-        ${graph.unavailable.length ? html`<p>Device evidence is unavailable. Check fleet collection and refresh.</p>` : nothing}
-        Nothing to map yet. Register a runner with
-        <code>preloop runner fg</code> or onboard an agent, then configure its
-        model to connect the map.
-      </div>`;
+      const windowLabel = FLEET_MAP_WINDOWS.find(
+        (item) => item.value === this.activityWindow
+      )?.label;
+      // Keep the window reachable: a narrow window must not strand the user.
+      return html`${
+          this.activityWindow === 'any'
+            ? nothing
+            : html`<div class="toolbar">${this.renderWindowSelect()}</div>`
+        }
+        <div class="empty-state" data-testid="fleet-map-empty">
+          ${graph.unavailable.length ? html`<p>Device evidence is unavailable. Check fleet collection and refresh.</p>` : nothing}
+          ${
+            this.activityWindow === 'any'
+              ? html`Nothing to map yet. Register a runner with
+                  <code>preloop runner fg</code> or onboard an agent, then
+                  configure its model to connect the map.`
+              : html`Nothing active in the ${windowLabel?.toLowerCase()}. Choose
+                a longer window or Any time.`
+          }
+        </div>`;
     }
     const filtered = this.filtered();
     const hits = this.searchHits(filtered);

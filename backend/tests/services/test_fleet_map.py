@@ -942,10 +942,53 @@ def test_conflicting_enrollment_hostnames_do_not_name_the_device(
     assert all(e.source in ids and e.target in ids for e in graph.edges)
 
 
-def test_activity_window_reads_device_and_runner_evidence() -> None:
+def test_activity_window_reads_device_and_runner_evidence(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
     from preloop.services.fleet_map import _seen_at
 
+    crud, manager = sources
     now = datetime.now(UTC)
+    crud.crud_managed_agent.get_multi.return_value = []
+    crud.crud_flow_runner.get_multi.return_value = [
+        Row(
+            id=name,
+            name=name,
+            registered_by_user_id=None,
+            last_heartbeat=seen,
+            is_active=True,
+            status="online",
+        )
+        for name, seen in (
+            ("runner-new", now),
+            ("runner-old", now - timedelta(days=60)),
+        )
+    ]
+    manager.return_value.get_service.return_value = MagicMock()
+    manager.return_value.get_service.return_value.read.return_value = dict(
+        truncated=False,
+        items=[
+            dict(
+                device_key=key,
+                hostname=key,
+                runner_state="online",
+                users=[],
+                runners=[],
+                agents=[],
+                findings=[],
+                last_seen_at=seen,
+            )
+            for key, seen in (
+                ("fp:new", (now - timedelta(hours=2)).isoformat()),
+                ("fp:old", now - timedelta(days=60)),
+            )
+        ],
+    )
+    graph = build_fleet_map(MagicMock(), user=viewer(), active_within_hours=24)
+    ids = {n.id for n in graph.nodes}
+    assert {"runner:runner-new", "device:fp:new"} <= ids
+    assert not ids & {"runner:runner-old", "device:fp:old"}
+
     assert _seen_at(now.isoformat().replace("+00:00", "Z")) == now
     assert _seen_at("not a date") is None
     assert _seen_at(None) is None

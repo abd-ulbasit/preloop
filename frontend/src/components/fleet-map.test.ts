@@ -513,6 +513,45 @@ describe('fleet-map labels', () => {
       expect(node(el, 'agent:claude')).to.exist;
     });
 
+    it('keeps the window reachable when nothing is active in it', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${{ ...sampleFleetMap(), nodes: [], edges: [], active_within_hours: 24 }}
+          .activityWindow=${'24h'}
+        ></fleet-map>`
+      );
+      const empty = el.shadowRoot!.querySelector(
+        '[data-testid="fleet-map-empty"]'
+      )!;
+      expect(empty.textContent).to.contain(
+        'Nothing active in the last 24 hours'
+      );
+      const changed = spy();
+      el.addEventListener('fleet-map-window-change', changed);
+      const select = el.shadowRoot!.querySelector<HTMLSelectElement>(
+        '[data-testid="fleet-map-window"]'
+      )!;
+      select.value = 'any';
+      select.dispatchEvent(new Event('change'));
+      expect(changed.firstCall.args[0].detail.hours).to.equal(null);
+    });
+
+    it('reads naive server timestamps as UTC, as the server does', async () => {
+      const { activeGraph } = await import('../utils/fleet-map-activity');
+      const graph = sampleFleetMap();
+      const codex = graph.nodes.find((n) => n.id === 'agent:codex')!;
+      codex.last_seen_at = '2026-10-01T12:00:00';
+      const since = Date.UTC(2026, 9, 1, 11, 59);
+      expect(
+        activeGraph(graph, since).nodes.some((n) => n.id === 'agent:codex')
+      ).to.equal(true);
+      expect(
+        activeGraph(graph, since + 2 * 60_000).nodes.some(
+          (n) => n.id === 'agent:codex'
+        )
+      ).to.equal(false);
+    });
+
     it('trusts a graph the server already filtered', async () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map
@@ -632,10 +671,19 @@ describe('fleet-map labels', () => {
         x: before.x + 60,
         y: before.y + 40,
       });
-      // The drop does not also select the node.
+      // The click the drop produces does not select; the next real one does.
       moved.click();
       await el.updateComplete;
       expect(el.hasSelection()).to.equal(false);
+      stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      target.dispatchEvent(new PointerEvent('pointerdown', at(160, 140)));
+      stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
+      node(el, 'agent:codex').click();
+      await el.updateComplete;
+      expect(el.hasSelection()).to.equal(true);
+      el.clearSelection();
+      await el.updateComplete;
 
       const again = await fixture<FleetMap>(
         html`<fleet-map
