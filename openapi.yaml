@@ -652,6 +652,32 @@ paths:
       security:
       - OAuth2PasswordBearer: []
       x-restricted-ci: deny
+  /api/v1/auth/api-keys/count:
+    get:
+      tags:
+      - Auth
+      summary: Count Api Keys
+      description: "Count the current user's usable API keys (active, not expired).\n\
+        \nDeclared before ``/api-keys/{key_id}`` so the literal path wins.\n\nArgs:\n\
+        \    current_user: The current authenticated user.\n    db: The database session.\n\
+        \nReturns:\n    The number of usable keys."
+      operationId: count_api_keys_api_v1_auth_api_keys_count_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCount'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - OAuth2PasswordBearer: []
+      x-restricted-ci: deny
   /api/v1/auth/api-keys/{key_id}:
     get:
       tags:
@@ -11804,6 +11830,19 @@ paths:
           in this window are newer than the timestamp. The console passes the moment
           an operator marked the model fixed, so a row can say ''2 failed since fix''
           instead of repeating the whole window''s total.'
+      - name: include_prior_period
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Also return prior_period_estimated_cost, the spend of the window
+            of equal length just before this one, so the page needs one request instead
+            of two.
+          default: false
+          title: Include Prior Period
+        description: Also return prior_period_estimated_cost, the spend of the window
+          of equal length just before this one, so the page needs one request instead
+          of two.
       responses:
         '200':
           description: Successful Response
@@ -22316,6 +22355,14 @@ components:
             $ref: '#/components/schemas/AIModelOverviewItem'
           type: array
           title: Models
+        prior_period_estimated_cost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Prior Period Estimated Cost
+          description: Estimated cost of the same models over the window of equal
+            length that ends where this one starts. Only set when the request asked
+            for it with include_prior_period.
       type: object
       required:
       - period_start
@@ -23918,6 +23965,17 @@ components:
       - user_id
       title: AnthropicUserMappingUpsert
       description: Map one imported actor (email, or ``key:<name>``) to one user.
+    ApiKeyCount:
+      properties:
+        active:
+          type: integer
+          title: Active
+          description: Keys that are active and not expired.
+      type: object
+      required:
+      - active
+      title: ApiKeyCount
+      description: How many of the current user's API keys are usable.
     ApiKeyCreate:
       properties:
         name:

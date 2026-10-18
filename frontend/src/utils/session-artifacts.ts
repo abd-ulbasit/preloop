@@ -38,7 +38,59 @@ export function sessionArtifactPath(
   )}/artifacts/${encodeURIComponent(artifactId)}`;
 }
 
+/**
+ * Most artifact downloads in flight at once.
+ *
+ * Browsers open about six connections per origin. A session page that started
+ * every screenshot and screencast at once left the console's own calls
+ * (kill-switch, approvals, the session list) queued for over 30 s (#1690).
+ * Two leaves the rest of the pool to the page.
+ */
+export const MAX_CONCURRENT_ARTIFACT_LOADS = 2;
+
+let activeLoads = 0;
+const waiting: Array<() => void> = [];
+
+async function acquireLoadSlot(): Promise<void> {
+  if (activeLoads < MAX_CONCURRENT_ARTIFACT_LOADS) {
+    activeLoads += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => waiting.push(resolve));
+}
+
+function releaseLoadSlot(): void {
+  const next = waiting.shift();
+  if (next) {
+    // The slot passes straight to the next waiter; the count is unchanged.
+    next();
+  } else {
+    activeLoads -= 1;
+  }
+}
+
+/** Artifact downloads currently running; for tests. */
+export function activeSessionArtifactLoads(): number {
+  return activeLoads;
+}
+
 async function loadArtifact(
+  sessionId: string,
+  artifactId: string
+): Promise<SessionArtifactLoad> {
+  await acquireLoadSlot();
+  try {
+    // Released while it waited (scrolled away, view closed): skip the bytes.
+    if (!cache.has(cacheKey(sessionId, artifactId))) {
+      return { status: 'error', message: 'Artifact load cancelled.' };
+    }
+    return await fetchArtifact(sessionId, artifactId);
+  } finally {
+    releaseLoadSlot();
+  }
+}
+
+async function fetchArtifact(
   sessionId: string,
   artifactId: string
 ): Promise<SessionArtifactLoad> {

@@ -4143,6 +4143,18 @@ export async function getApiKeys(): Promise<ApiKey[]> {
   return response.json();
 }
 
+/**
+ * How many of the user's API keys are usable (active, not expired). The
+ * Overview reads this instead of the whole key list (#1694).
+ */
+export async function getApiKeyCount(): Promise<{ active: number }> {
+  const response = await fetchWithAuth('/api/v1/auth/api-keys/count');
+  if (!response.ok) {
+    throw new Error('Failed to count API keys');
+  }
+  return response.json();
+}
+
 export async function createApiKey(
   name: string,
   expires_at: string | null
@@ -4462,11 +4474,17 @@ export async function getAvailableModelsForProvider(
  * detail page, where a person is looking at exactly one model.
  */
 export async function getAIModelsOverview(
-  params: GatewayUsageSummaryParams = {}
+  params: GatewayUsageSummaryParams & {
+    /** Also return the prior window's spend, in the same request (#1694). */
+    includePriorPeriod?: boolean;
+  } = {}
 ): Promise<AIModelsOverviewResponse> {
-  const response = await fetchWithAuth(
-    `/api/v1/ai-models/overview${buildGatewayUsageQuery(params)}`
-  );
+  const { includePriorPeriod, ...usageParams } = params;
+  let query = buildGatewayUsageQuery(usageParams);
+  if (includePriorPeriod) {
+    query += `${query ? '&' : '?'}include_prior_period=true`;
+  }
+  const response = await fetchWithAuth(`/api/v1/ai-models/overview${query}`);
   if (!response.ok) {
     throw new Error('Failed to fetch AI models overview');
   }

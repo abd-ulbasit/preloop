@@ -540,9 +540,18 @@ export class AIModelsView extends LitElement {
       // One request for the page, whatever the fleet size. The per-model
       // endpoints stay for the detail view: a burst of them is what emptied
       // the API connection pool on 2026-09-03.
+      // The prior window rides on the same request (#1694): it moves once a
+      // day, so realtime refreshes and reloads inside that day skip it.
+      const priorWindow = this.getOverviewParams(1).startDate.slice(0, 10);
+      const wantPrior =
+        !options.preserveLoadingState &&
+        this.priorFleetSpendWindow !== priorWindow;
       const [models, overview, dismissals] = await Promise.all([
         getAIModels(),
-        getAIModelsOverview(this.getOverviewParams()),
+        getAIModelsOverview({
+          ...this.getOverviewParams(),
+          includePriorPeriod: wantPrior,
+        }),
         // A console that cannot read dismissals still has a Models page; it
         // just flags everything, as it did before.
         getAttentionDismissals().catch(() => DISMISSALS_UNSUPPORTED),
@@ -557,8 +566,16 @@ export class AIModelsView extends LitElement {
       // Not on realtime refreshes: five subscriptions feed this method, and
       // the prior 30 day window changes at most once a day. A third request
       // per socket message is how the pool emptied on 2026-09-03.
-      if (!options.preserveLoadingState) {
-        void this.loadPriorFleetSpend();
+      if (wantPrior) {
+        const prior = overview.prior_period_estimated_cost;
+        if (typeof prior === 'number') {
+          this.priorFleetSpendWindow = priorWindow;
+          this.priorFleetSpend = prior;
+        } else {
+          // An API without the field: the delta line just does not render.
+          this.priorFleetSpendWindow = null;
+          this.priorFleetSpend = null;
+        }
       }
     } catch (error) {
       this.error =
@@ -702,27 +719,6 @@ export class AIModelsView extends LitElement {
   private unpricedStateForModel(modelId: string): UnpricedAttentionState {
     const model = this.models.find((m) => m.id === modelId);
     return this.unpricedStateFor(this.getModelOverview(modelId), model);
-  }
-
-  private async loadPriorFleetSpend(): Promise<void> {
-    const params = this.getOverviewParams(1);
-    const window = params.startDate.slice(0, 10);
-    if (this.priorFleetSpendWindow === window) {
-      return;
-    }
-    try {
-      const prior = await getAIModelsOverview(params);
-      this.priorFleetSpendWindow = window;
-      this.priorFleetSpend = prior.models.reduce(
-        (total, item) => total + item.estimated_cost,
-        0
-      );
-    } catch {
-      // A missing comparison is not an error worth a banner: the delta line
-      // just does not render, and the next load may still get it.
-      this.priorFleetSpendWindow = null;
-      this.priorFleetSpend = null;
-    }
   }
 
   /** "30d", the suffix the Overview and Cost put after a windowed label. */

@@ -394,6 +394,14 @@ def get_ai_models_overview(
             "whole window's total."
         ),
     ),
+    include_prior_period: bool = Query(
+        False,
+        description=(
+            "Also return prior_period_estimated_cost, the spend of the window "
+            "of equal length just before this one, so the page needs one "
+            "request instead of two."
+        ),
+    ),
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_active_user),
 ) -> AIModelsOverviewResponse:
@@ -433,7 +441,10 @@ def get_ai_models_overview(
     ]
     if not models:
         return AIModelsOverviewResponse(
-            period_start=period_start, period_end=period_end, models=[]
+            period_start=period_start,
+            period_end=period_end,
+            models=[],
+            prior_period_estimated_cost=0.0 if include_prior_period else None,
         )
 
     model_ids = [str(model.id) for model in models]
@@ -513,8 +524,28 @@ def get_ai_models_overview(
             )
         )
 
+    prior_cost: Optional[float] = None
+    if include_prior_period:
+        prior_rows = crud_api_usage.get_gateway_usage_by_model(
+            db,
+            account_id=account_id,
+            start_date=period_start - (period_end - period_start),
+            end_date=period_start,
+            ai_model_ids=model_ids,
+            limit=None,
+        )
+        prior_cost = float(
+            sum(
+                usage["estimated_cost"] or 0.0
+                for usage in _collapse_usage_by_model(prior_rows).values()
+            )
+        )
+
     return AIModelsOverviewResponse(
-        period_start=period_start, period_end=period_end, models=items
+        period_start=period_start,
+        period_end=period_end,
+        models=items,
+        prior_period_estimated_cost=prior_cost,
     )
 
 

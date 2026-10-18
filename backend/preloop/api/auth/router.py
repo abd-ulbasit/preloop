@@ -46,6 +46,7 @@ from preloop.config import settings
 from preloop.plugins import account_hooks
 from preloop.schemas.auth import (
     LogoutResponse,
+    ApiKeyCount,
     ApiKeyCreate,
     ApiKeyResponse,
     ApiKeySummary,
@@ -1967,6 +1968,27 @@ def list_api_keys(
         )
         for key in keys
     ]
+
+
+@router.get("/api-keys/count", response_model=ApiKeyCount)
+def count_api_keys(
+    current_user: AuthUserResponse = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> ApiKeyCount:
+    """Count the current user's usable API keys (active, not expired).
+
+    Declared before ``/api-keys/{key_id}`` so the literal path wins.
+
+    Args:
+        current_user: The current authenticated user.
+        db: The database session.
+
+    Returns:
+        The number of usable keys.
+    """
+    return ApiKeyCount(
+        active=crud_api_key.count_usable_by_user(db, username=current_user.username)
+    )
 
 
 @router.get("/api-keys/{key_id}", response_model=ApiKeySummary)

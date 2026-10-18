@@ -2055,6 +2055,8 @@ export interface AIModelsOverviewResponse {
   period_start: string;
   period_end: string;
   models: AIModelOverviewItem[];
+  /** Spend of the equal window just before; only with include_prior_period. */
+  prior_period_estimated_cost?: number | null;
 }
 
 export interface ApiKeyGatewayUsageSummaryResponse {

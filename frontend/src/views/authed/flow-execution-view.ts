@@ -102,6 +102,7 @@ import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import '@shoelace-style/shoelace/dist/components/details/details.js';
 import '@shoelace-style/shoelace/dist/components/copy-button/copy-button.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
+import { billingAttribution } from '../../utils/billing-attribution';
 
 interface FlowExecutionUpdate {
   execution_id: string;
@@ -2589,11 +2590,12 @@ export class FlowExecutionView extends LitElement {
       });
   }
 
-  private renderGatewayEvent(event: FlowGatewayEvent) {
+  private renderGatewayEvent(event: FlowGatewayEvent, hideBilling = false) {
     return html`
       <preloop-gateway-event
         .event=${{ ...event }}
         hide-timestamp
+        ?hide-billing=${hideBilling}
         @gateway-event-expand=${(e: CustomEvent) => {
           if (e.detail.expanded) {
             this.handleGatewayEventExpand(event.id);
@@ -2919,7 +2921,28 @@ export class FlowExecutionView extends LitElement {
     >`;
   }
 
-  private renderTimelineRow(row: TimelineRow) {
+  /**
+   * Gateway rows whose billing line repeats the gateway row shown above them.
+   *
+   * Only the first row of a run of same-billed calls prints "Billed to"; the
+   * rest would repeat it word for word (#1692).
+   */
+  private repeatedBillingKeys(rows: TimelineRow[]): Set<string> {
+    const repeated = new Set<string>();
+    let previous: string | null = null;
+    for (const row of rows) {
+      if (row.kind !== 'event') continue;
+      const event =
+        row.item.kind === 'gateway' ? row.item.gatewayEvent : undefined;
+      if (!event) continue;
+      const billing = billingAttribution(event.payload || {});
+      if (billing === previous) repeated.add(row.key);
+      previous = billing;
+    }
+    return repeated;
+  }
+
+  private renderTimelineRow(row: TimelineRow, hideBilling = false) {
     if (row.kind === 'logs') {
       const expanded = this.expandedLogGroups.has(row.key);
       const count = row.logs.length;
@@ -2956,7 +2979,7 @@ export class FlowExecutionView extends LitElement {
         <div class="timeline-row timeline-gateway">
           ${this.renderTimelineTime(row.timestamp)}
           <div class="timeline-body">
-            ${this.renderGatewayEvent(item.gatewayEvent)}
+            ${this.renderGatewayEvent(item.gatewayEvent, hideBilling)}
           </div>
         </div>
       `;
@@ -3023,6 +3046,7 @@ export class FlowExecutionView extends LitElement {
     // before anyone scrolled (#1586).
     const hiddenRows = Math.max(0, rows.length - this.timelineRowsShown);
     const visibleRows = hiddenRows > 0 ? rows.slice(hiddenRows) : rows;
+    const repeatedBilling = this.repeatedBillingKeys(visibleRows);
     // The first reads only. Status rows from the detail row can already be
     // showing, so this is a line under them, not a replacement for them.
     const timelineLoading =
@@ -3115,7 +3139,9 @@ export class FlowExecutionView extends LitElement {
               ? html`<div class="panel-empty">
                   Nothing recorded for this run yet.
                 </div>`
-              : visibleRows.map((row) => this.renderTimelineRow(row))
+              : visibleRows.map((row) =>
+                  this.renderTimelineRow(row, repeatedBilling.has(row.key))
+                )
           }
           ${
             timelineLoading

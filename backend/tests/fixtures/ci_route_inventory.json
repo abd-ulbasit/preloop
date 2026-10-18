@@ -98,6 +98,7 @@
   "GET /api/v1/audit/chain/status": "deny",
   "GET /api/v1/audit/chain/verify": "deny",
   "GET /api/v1/auth/api-keys": "deny",
+  "GET /api/v1/auth/api-keys/count": "deny",
   "GET /api/v1/auth/api-keys/{key_id}": "deny",
   "GET /api/v1/auth/api-keys/{key_id}/activity": "deny",
   "GET /api/v1/auth/api-keys/{key_id}/gateway-usage/summary": "deny",

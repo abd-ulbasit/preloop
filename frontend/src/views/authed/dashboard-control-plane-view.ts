@@ -43,7 +43,7 @@ import {
   getAccountGatewayUsageSummary,
   getAccountRateLimitReport,
   getAccountRuntimeSessions,
-  getApiKeys,
+  getApiKeyCount,
   getBudgetPolicies,
   getCostTimeseries,
   BudgetPolicy,
@@ -3184,18 +3184,12 @@ export class DashboardView extends AuthedElement {
         // pass is only the companions the Gateway card reads.
         const [mcpServers, apiKeys] = await Promise.all([
           this.catchWith403Handling(getMCPServers(), [] as MCPServer[]),
-          // Already the api-keys page's endpoint; here it is only a count.
-          this.catchWith403Handling(getApiKeys(), null),
+          // Only a count is shown, so ask for one: the key list with its
+          // activity stats took about two seconds on a busy account (#1694).
+          // "Active" means usable: not revoked, not past its expiry.
+          this.catchWith403Handling(getApiKeyCount(), null),
         ]);
-        // "Active" means usable: not revoked, not past its expiry.
-        this.apiKeysCount = apiKeys
-          ? apiKeys.filter(
-              (key) =>
-                key.activity_status !== 'revoked' &&
-                (!key.expires_at ||
-                  parseUTCDate(key.expires_at).getTime() > Date.now())
-            ).length
-          : null;
+        this.apiKeysCount = apiKeys ? apiKeys.active : null;
         this.mcpServers = mcpServers;
       } catch (error) {
         console.error('Failed to load MCP and tools data', error);

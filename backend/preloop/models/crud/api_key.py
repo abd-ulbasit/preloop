@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from ..models.api_key import ApiKey
@@ -612,6 +612,36 @@ class CRUDApiKey(CRUDBase[ApiKey]):
         if account_id:
             query = query.filter(User.account_id == account_id)
         return query.order_by(ApiKey.created_at.desc()).all()
+
+    def count_usable_by_user(
+        self, db: Session, *, username: str, account_id: Optional[str] = None
+    ) -> int:
+        """Count a user's keys that still work: active and not past expiry.
+
+        The console Overview shows this number; reading the full key list for
+        it cost about two seconds on a busy account (#1694).
+
+        Args:
+            db: Database session.
+            username: Owner of the keys.
+            account_id: Optional account the owner must belong to.
+
+        Returns:
+            Number of usable keys.
+        """
+        # ``expires_at`` is naive UTC; compare against a naive UTC cutoff, not
+        # func.now(), which depends on the session TimeZone.
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        query = (
+            db.query(func.count(ApiKey.id))
+            .join(User, ApiKey.user_id == User.id)
+            .filter(User.username == username, ApiKey.is_active.is_(True))
+            .filter(or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > now_naive))
+        )
+        query = self._legacy_only(query)
+        if account_id:
+            query = query.filter(User.account_id == account_id)
+        return int(query.scalar() or 0)
 
     def get_by_id_and_user(
         self,
