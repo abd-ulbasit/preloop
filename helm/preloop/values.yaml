@@ -22,6 +22,13 @@ migrationJob:
   # a minute. An integer with an optional unit (us, ms, s, min, h); a bare
   # number is milliseconds. Anything else falls back to the default.
   lockTimeout: "5s"
+  # -- Only concurrent index DDL may wait longer for old writers/snapshots.
+  # Ordinary blocking DDL keeps lockTimeout above. Positive integer seconds.
+  concurrentLockTimeoutSeconds: 60
+  concurrentStatementTimeoutSeconds: 300
+  # -- Whole Job deadline, including every container attempt and pod retry.
+  # Helm's --timeout must exceed this deadline (deployment default: 16m).
+  activeDeadlineSeconds: 900
   # -- How many times the whole `upgrade head` is retried when a revision
   # loses a lock race. A retry resumes at the first revision that did not
   # commit, so retrying is cheap.

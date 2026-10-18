@@ -1,6 +1,8 @@
 """Index purpose-tagged governance spend without scanning account traffic."""
 
 from alembic import op
+
+from preloop.models.concurrent_index_ddl import concurrent_index_ddl
 import sqlalchemy as sa
 
 revision = "20261018_gov_spend_idx"
@@ -14,7 +16,7 @@ INDEX = "ix_api_usage_governance_spend"
 
 def upgrade() -> None:
     """Build without blocking gateway writes; repair an invalid prior attempt."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         valid = (
             op.get_bind()
             .execute(
@@ -38,5 +40,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove only the governance spend index."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}"))
