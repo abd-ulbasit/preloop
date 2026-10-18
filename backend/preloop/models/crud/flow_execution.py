@@ -2144,8 +2144,9 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
 
         Returns:
             A map of flow id (as a string) to ``id``, ``status``,
-            ``start_time``, ``end_time``, ``trigger_subject`` and
-            ``trigger_subject_url``. Flows that never ran are absent.
+            ``start_time``, ``end_time``, ``trigger_subject``,
+            ``trigger_subject_url``, ``trigger_subject_ci`` and
+            ``trigger_subject_ci_url``. Flows that never ran are absent.
         """
         if not flow_ids:
             return {}
@@ -2159,6 +2160,8 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
                 FlowExecution.end_time,
                 subject["text"].astext.label("trigger_subject"),
                 subject["url"].astext.label("trigger_subject_url"),
+                subject["ci"].astext.label("trigger_subject_ci"),
+                subject["ci_url"].astext.label("trigger_subject_ci_url"),
             )
             .where(FlowExecution.flow_id.in_(flow_ids))
             .distinct(FlowExecution.flow_id)
@@ -2176,6 +2179,8 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
                 "end_time": row.end_time.isoformat() if row.end_time else None,
                 "trigger_subject": row.trigger_subject,
                 "trigger_subject_url": row.trigger_subject_url,
+                "trigger_subject_ci": row.trigger_subject_ci,
+                "trigger_subject_ci_url": row.trigger_subject_ci_url,
             }
             for row in rows
         }

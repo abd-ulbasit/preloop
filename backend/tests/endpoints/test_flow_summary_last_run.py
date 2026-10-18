@@ -42,7 +42,12 @@ def _run(db_session: Any, flow: Any, *, status: str, started: datetime, text: st
             flow_id=flow.id,
             status=status,
             trigger_event_details={
-                "_subject": {"text": text, "url": "https://example.com/pr/1"}
+                "_subject": {
+                    "text": text,
+                    "url": "https://example.com/pr/1",
+                    "ci": "GitHub Actions",
+                    "ci_url": "https://example.com/actions/1",
+                }
             },
         ),
     )
@@ -79,6 +84,8 @@ def test_last_runs_pick_the_latest_start_per_flow(db_session, test_user) -> None
     assert last["status"] == "FAILED"
     assert last["trigger_subject"] == "PR #9"
     assert last["trigger_subject_url"] == "https://example.com/pr/1"
+    assert last["trigger_subject_ci"] == "GitHub Actions"
+    assert last["trigger_subject_ci_url"] == "https://example.com/actions/1"
     assert last["start_time"] == now.isoformat()
     assert crud_flow_execution.get_last_runs_for_flows(db_session, []) == {}
 

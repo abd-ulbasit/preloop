@@ -1124,6 +1124,8 @@ describe('FlowsView', () => {
           end_time: minutesAgo(9),
           trigger_subject: 'PR #77 Tighten the lexer',
           trigger_subject_url: null,
+          trigger_subject_ci: 'GitHub Actions',
+          trigger_subject_ci_url: null,
         },
       };
       try {
@@ -1137,6 +1139,10 @@ describe('FlowsView', () => {
         const text = (link?.textContent || '').replace(/\s+/g, ' ');
         expect(text).to.contain('PR #77 Tighten the lexer');
         expect(link?.querySelector('sl-badge')).to.exist;
+        const row = element.shadowRoot?.querySelector('tbody tr.flow-row');
+        expect((row?.textContent || '').replace(/\s+/g, ' ')).to.contain(
+          'GitHub Actions'
+        );
         expect(
           fetchStub
             .getCalls()

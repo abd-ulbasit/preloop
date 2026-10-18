@@ -135,6 +135,8 @@ export function serverLastRun(
     end_time: last.end_time || undefined,
     trigger_subject: last.trigger_subject ?? null,
     trigger_subject_url: last.trigger_subject_url ?? null,
+    trigger_subject_ci: last.trigger_subject_ci ?? null,
+    trigger_subject_ci_url: last.trigger_subject_ci_url ?? null,
   };
 }
 
