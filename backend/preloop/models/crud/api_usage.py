@@ -3129,11 +3129,14 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         return db.query(self.model).filter(
             self.model.account_id == account_id,
             self.model.timestamp >= start,
-            self.model.action_type == "model_gateway",
-            self.model.meta_data["purpose"].astext.in_(
-                ("governance_session_digest", "governance_review")
+            # Keep the partial-index predicate and expression key literal so
+            # PostgreSQL can use it even with a generic prepared statement plan.
+            text(
+                "api_usage.action_type = 'model_gateway' AND "
+                "(api_usage.meta_data ->> 'purpose') IN "
+                "('governance_session_digest', 'governance_review') AND "
+                "(api_usage.meta_data ->> 'funding') = 'platform'"
             ),
-            self.model.meta_data["funding"].astext == "platform",
         )
 
     def snapshot_governance_spend(
