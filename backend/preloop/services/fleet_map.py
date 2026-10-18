@@ -17,7 +17,7 @@ from preloop.api.auth.key_scopes import is_mcp_only_api_key, is_single_purpose_a
 from preloop.models import crud, models
 from preloop.models.crud.fleet_map import (
     Source,
-    count_decommissioned_agents,
+    list_decommissioned_agents,
     list_resources,
 )
 from preloop.models.models.managed_agent_ai_model_binding import (
@@ -255,8 +255,12 @@ def build_fleet_map(
         )
     now = datetime.now(UTC)
     if permissions["view_agents"]:
-        result.decommissioned_agents = count_decommissioned_agents(
-            db, account_id=account_id
+        # Count only what the caller could see, as the agent source does.
+        retired = list_decommissioned_agents(
+            db, account_id=account_id, limit=SOURCE_LIMIT
+        )
+        result.decommissioned_agents = len(
+            filter_viewable(db, user, VISIBLE_MANAGED_AGENT, retired)
         )
     for row in agents:
         owners = [f"user:{row.owner_user_id}"] if row.owner_user_id else []
@@ -373,15 +377,18 @@ def build_fleet_map(
         via = model_accounts.get(model_id)
         edge(aid, mid, "uses_model", provenance, gaps=gaps, account_id=via)
         nodes[aid].gaps = sorted(set(nodes[aid].gaps + gaps))
-        nodes[aid].provider_ids = sorted(
-            set(nodes[aid].provider_ids + nodes[mid].provider_ids)
-        )
+        # A canonical model lists every provider exposing it; the account is
+        # the provider this agent actually reaches.
         if via:
             edge(aid, via, "uses_account", provenance, gaps=gaps)
             account_node = nodes[via]
             account_node.gaps = sorted(set(account_node.gaps + gaps))
             nodes[aid].provider_ids = sorted(
                 set(nodes[aid].provider_ids + account_node.provider_ids)
+            )
+        else:
+            nodes[aid].provider_ids = sorted(
+                set(nodes[aid].provider_ids + nodes[mid].provider_ids)
             )
 
     for row in bindings[:BINDING_LIMIT]:
@@ -519,7 +526,7 @@ def build_fleet_map(
                 elif permissions["view_agents"]:
                     # Inventory and discovery report the same harness; a
                     # dismissed candidate is a decision, not a gap.
-                    if discovered.get("status") == "dismissed":
+                    if discovered.get("status") in {"ignored", "dismissed"}:
                         continue
                     if (key, discovered["kind"]) in discovered_seen:
                         continue

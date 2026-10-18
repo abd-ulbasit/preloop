@@ -211,7 +211,7 @@ def test_model_window_includes_only_available_built_ins_when_enabled(
 def test_decommissioned_agents_are_excluded_and_counted(
     db_session: Session,
 ) -> None:
-    from preloop.models.crud.fleet_map import count_decommissioned_agents
+    from preloop.models.crud.fleet_map import list_decommissioned_agents
 
     account = crud.crud_account.create(
         db_session, obj_in={"organization_name": "Example lifecycle"}
@@ -235,4 +235,7 @@ def test_decommissioned_agents_are_excluded_and_counted(
         db_session, source="agents", account_id=str(account.id), limit=10
     )
     assert sorted(row.lifecycle_state for row in rows) == ["active", "suspended"]
-    assert count_decommissioned_agents(db_session, account_id=str(account.id)) == 2
+    retired = list_decommissioned_agents(
+        db_session, account_id=str(account.id), limit=10
+    )
+    assert len(retired) == 2

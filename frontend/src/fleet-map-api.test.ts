@@ -150,3 +150,22 @@ describe('server summary groups', () => {
     expect(summary.detail).to.equal('Outside this map');
   });
 });
+
+describe('gaps only', () => {
+  it('keeps direct neighbours of gap nodes in any edge order', () => {
+    const graph = sampleFleetMap();
+    const ids = (edges: typeof graph.edges) =>
+      filterGraph(
+        { ...graph, edges },
+        { types: all, owner: '', provider: '', gapsOnly: true }
+      )
+        .nodes.map((n) => n.id)
+        .sort();
+    const forward = ids(graph.edges);
+    expect(forward).to.deep.equal(ids([...graph.edges].reverse()));
+    // The offline runner keeps the device hosting it; an agent that only
+    // shares a model with that runner is two hops away and drops out.
+    expect(forward).to.include('device:build');
+    expect(forward).not.to.include('agent:claude');
+  });
+});

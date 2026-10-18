@@ -89,7 +89,7 @@ def sources() -> Iterator[tuple[MagicMock, MagicMock]]:
         crud.crud_user.get_multi.return_value = []
         manager.return_value.get_service.return_value = None
         with (
-            patch(f"{MODULE}.count_decommissioned_agents", return_value=0),
+            patch(f"{MODULE}.list_decommissioned_agents", return_value=[]),
             patch(
                 f"{MODULE}.list_resources",
                 side_effect=lambda db, source, **kw: {
@@ -656,7 +656,16 @@ def test_agents_carry_onboarded_or_inactive_state(
         agent("stale", last_seen_at=now - timedelta(days=30)),
         agent("paused", lifecycle_state="suspended", last_seen_at=now),
     ]
-    with patch(f"{MODULE}.count_decommissioned_agents", return_value=4):
+    retired = [agent(f"old-{i}", lifecycle_state="decommissioned") for i in range(4)]
+    with (
+        patch(f"{MODULE}.list_decommissioned_agents", return_value=retired),
+        patch(
+            f"{MODULE}.filter_viewable",
+            side_effect=lambda db, user, kind, rows: [
+                row for row in rows if row.id != "old-3"
+            ],
+        ),
+    ):
         graph = build_fleet_map(MagicMock(), user=viewer())
     states = {n.id: n.agent_state for n in graph.nodes if n.type == "agent"}
     assert states == {
@@ -664,7 +673,8 @@ def test_agents_carry_onboarded_or_inactive_state(
         "agent:stale": "inactive",
         "agent:paused": "inactive",
     }
-    assert graph.decommissioned_agents == 4
+    # A decommissioned agent hidden from the caller is not counted either.
+    assert graph.decommissioned_agents == 3
 
 
 def test_model_instances_collapse_to_one_canonical_model(
@@ -769,6 +779,7 @@ def test_discovered_duplicates_and_dismissed_are_not_repeated(
                     dict(id="i1", kind="cursor", status="pending"),
                     dict(id="c1", kind="cursor", status="pending"),
                     dict(id="c2", kind="gemini", status="dismissed"),
+                    dict(id="c6", kind="windsurf", status="ignored"),
                     dict(id="c3", kind="codex", status="pending"),
                     dict(
                         id="c4",
@@ -791,3 +802,27 @@ def test_discovered_duplicates_and_dismissed_are_not_repeated(
     assert agents == ["agent:agent-a", "agent:discovered:i1"]
     nodes = {n.id: n for n in graph.nodes}
     assert nodes["agent:discovered:i1"].agent_state == "discovered"
+
+
+def test_agent_providers_follow_its_account_not_the_shared_model(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent.get_multi.return_value = [agent("a"), agent("b")]
+    crud.crud_ai_model.get_multi.return_value = [
+        model("m1", model_identifier="claude-opus-5-5", provider_name="anthropic"),
+        model(
+            "m2",
+            model_identifier="claude-opus-5-5",
+            provider_name="bedrock",
+            credentials_secret_id="secret-b",
+        ),
+    ]
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = [
+        binding(managed_agent_id="a", ai_model_id="m1"),
+        binding(managed_agent_id="b", ai_model_id="m2"),
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    nodes = {n.id: n for n in graph.nodes}
+    assert nodes["agent:a"].provider_ids == ["provider:anthropic"]
+    assert nodes["agent:b"].provider_ids == ["provider:bedrock"]

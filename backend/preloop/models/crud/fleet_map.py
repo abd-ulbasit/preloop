@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from preloop.models import models
@@ -58,22 +58,27 @@ def list_resources(
     return db.query(model).filter(visible).order_by(model.id).limit(limit).all()
 
 
-def count_decommissioned_agents(db: Session, *, account_id: str) -> int:
-    """Count the account's decommissioned agents that the map leaves out.
+def list_decommissioned_agents(
+    db: Session, *, account_id: str, limit: int
+) -> list[models.ManagedAgent]:
+    """List the account's decommissioned agents that the map leaves out.
 
     Args:
         db: Request database session.
         account_id: Selected membership's owning tenant.
+        limit: Maximum rows to read.
 
     Returns:
-        Number of decommissioned managed agents in the account.
+        Decommissioned managed agents in stable ID order, for counting after
+        the caller's visibility filter.
     """
     return (
-        db.query(func.count(models.ManagedAgent.id))
+        db.query(models.ManagedAgent)
         .filter(
             models.ManagedAgent.account_id == account_id,
             models.ManagedAgent.lifecycle_state == "decommissioned",
         )
-        .scalar()
-        or 0
+        .order_by(models.ManagedAgent.id)
+        .limit(limit)
+        .all()
     )

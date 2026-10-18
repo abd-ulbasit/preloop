@@ -263,14 +263,15 @@ export function filterGraph(
     graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
   if (filters.gapsOnly) {
     const ids = new Set(nodes.map((node) => node.id));
-    const keep = new Set(
+    const gapIds = new Set(
       nodes.filter((node) => node.gaps.length).map((node) => node.id)
     );
-    for (const edge of edgesOf(ids))
-      if (keep.has(edge.source) || keep.has(edge.target)) {
-        keep.add(edge.source);
-        keep.add(edge.target);
-      }
+    // One hop only, from the gap nodes themselves, whatever the edge order.
+    const keep = new Set(gapIds);
+    for (const edge of edgesOf(ids)) {
+      if (gapIds.has(edge.source)) keep.add(edge.target);
+      if (gapIds.has(edge.target)) keep.add(edge.source);
+    }
     // Keep the provider around a kept account so containment still reads.
     for (const node of nodes)
       if (keep.has(node.id) && node.parent_id && ids.has(node.parent_id))
