@@ -2444,6 +2444,13 @@ export class FleetMap extends LitElement {
   private renderLeaving(positions: Map<string, FleetMapPosition>) {
     if (!this.presence.leaving.size) return nothing;
     const now = Date.now();
+    // Providers of fading models are still on the map (or fading too).
+    const byId = new Map(
+      [
+        ...this.shown().nodes,
+        ...[...this.presence.leaving.values()].map((item) => item.node),
+      ].map((node) => [node.id, node])
+    );
     return [...this.presence.leaving].map(([id, { node }]) => {
       const position = positions.get(id) ?? this.lastPositions.get(id);
       if (!position) return nothing;
@@ -2455,7 +2462,7 @@ export class FleetMap extends LitElement {
         aria-hidden="true"
         style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${position.h}px;opacity:${style?.opacity.toFixed(3) ?? 0}"
       >
-        ${this.renderGlyph(node, new Map())}
+        ${this.renderGlyph(node, byId)}
         <span class="text"
           ><span class="label">${displayLabel(node)}</span></span
         >

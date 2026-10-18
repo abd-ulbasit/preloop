@@ -109,6 +109,25 @@ describe('fleet-map canvas: machines hold their agents', () => {
   });
 });
 
+describe('fleet-map canvas: folding a machine', () => {
+  it('keeps the fold control on the spatial canvas, so a folded machine opens again', async () => {
+    const el = await spatial(sampleFleetMap(), '-fold');
+    const fold = () =>
+      el.shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-fold="device:mbp"]'
+      );
+    fold()!.click();
+    await el.updateComplete;
+    expect(fold(), 'still there when folded').to.exist;
+    expect(fold()!.getAttribute('aria-expanded')).to.equal('false');
+    expect(el.shadowRoot!.querySelector('[data-node="agent:codex"]')).to.not
+      .exist;
+    fold()!.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-node="agent:codex"]')).to.exist;
+  });
+});
+
 describe('fleet-map canvas: marks', () => {
   it('shows product logos for known agent kinds and the generic icon otherwise', async () => {
     const graph = sampleFleetMap();
@@ -188,6 +207,28 @@ describe('fleet-map canvas: marks', () => {
     expect(mark('model:flash')).to.equal('DeepSeek');
     expect(mark('provider:openrouter')).to.equal('OpenRouter');
     expect(mark('provider:openai')).to.equal('OpenAI');
+    // A fading model keeps its provider's mark.
+    const unknown = {
+      ...routed,
+      nodes: routed.nodes.map((n) =>
+        n.id === 'model:flash'
+          ? { ...n, label: 'Mystery', detail: 'mystery-1' }
+          : n
+      ),
+    };
+    el.graph = unknown;
+    await el.updateComplete;
+    expect(mark('model:flash')).to.equal('OpenRouter');
+    el.graph = {
+      ...unknown,
+      nodes: unknown.nodes.filter((n) => n.id !== 'model:flash'),
+    };
+    await el.updateComplete;
+    expect(
+      el
+        .shadowRoot!.querySelector('[data-leaving="model:flash"] .glyph')!
+        .getAttribute('data-mark')
+    ).to.equal('OpenRouter');
   });
 
   it('labels each pull request counter', async () => {

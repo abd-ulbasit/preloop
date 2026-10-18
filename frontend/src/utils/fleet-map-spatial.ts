@@ -438,8 +438,10 @@ export function spatialLayout(
     width = Math.max(width, x + FLEET_MAP_NODE_WIDTH + 24);
     height = Math.max(height, y + h + 24);
     const kids = contained.get(id);
-    if (!kids || collapsed.has(id)) return;
+    if (!kids) return;
+    // A folded machine still owns its group, so it keeps its fold control.
     groups.set(id, kids);
+    if (collapsed.has(id)) return;
     kids.forEach((kid, k) =>
       positions.set(kid, {
         x: x + CHILD_INSET,
