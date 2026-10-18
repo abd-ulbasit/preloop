@@ -633,10 +633,20 @@ describe('fleet-map labels', () => {
     });
 
     it('does not refetch for a mapped agent without a matching line, or under Any time', async () => {
+      // Codex stays on the map but loses every line, so activity from it
+      // yields no edge and only the mapped-agent guard keeps it quiet.
+      const sample = sampleFleetMap();
+      const lineless = {
+        ...sample,
+        active_within_minutes: 43200,
+        edges: sample.edges.filter(
+          (e) => e.source !== 'agent:codex' && e.target !== 'agent:codex'
+        ),
+      };
       for (const window of ['30d', 'any'] as const) {
         const el = await fixture<FleetMap>(
           html`<fleet-map
-            .graph=${{ ...sampleFleetMap(), active_within_minutes: 43200 }}
+            .graph=${lineless}
             .activityWindow=${window}
             live
           ></fleet-map>`
