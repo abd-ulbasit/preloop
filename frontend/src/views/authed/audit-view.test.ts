@@ -33,7 +33,7 @@ describe('AuditView', () => {
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
 
-      if (url === '/api/v1/users') {
+      if (url === '/api/v1/audit-logs/actors') {
         return new Response(
           JSON.stringify([
             {
@@ -557,7 +557,7 @@ describe('AuditView', () => {
     const executionId = '99999999-8888-4777-8666-555555555555';
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url === '/api/v1/users') {
+      if (url === '/api/v1/audit-logs/actors') {
         return new Response(JSON.stringify([]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -980,7 +980,7 @@ describe('AuditView', () => {
       };
       fetchStub.callsFake(async (input: RequestInfo | URL) => {
         const url = typeof input === 'string' ? input : input.toString();
-        if (url === '/api/v1/users') {
+        if (url === '/api/v1/audit-logs/actors') {
           return new Response('[]', { status: 200 });
         }
         const body = (groups: unknown[]) =>
@@ -993,8 +993,12 @@ describe('AuditView', () => {
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
-        // The walk back through the timeline finds when it happened.
-        if (url.includes('limit=200')) return body([older]);
+        if (url === '/api/v1/audit-logs/audit-old') {
+          return new Response(JSON.stringify(older.primary_event), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
         // The reload, once the day is known, puts it on the first page.
         if (url.includes('start_date=')) return body([older]);
         return body([]);
@@ -1013,8 +1017,101 @@ describe('AuditView', () => {
         '[data-group-key="audit-old"]'
       ) as HTMLElement;
       expect(group.classList.contains('linked')).to.equal(true);
+      expect(
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('limit=200')),
+        'the focused endpoint should avoid the bounded page walk'
+      ).to.equal(false);
       element.remove();
     });
+
+    it('falls back to the grouped timeline when an older core returns 404', async () => {
+      fetchStub.resetHistory();
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/audit-logs/old-event') {
+          return new Response('{}', { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            groups: [
+              {
+                correlation_id: null,
+                primary_event: {
+                  id: 'old-event',
+                  timestamp: '2025-01-02T03:04:05Z',
+                },
+                sub_events: [],
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      });
+      const element = document.createElement('audit-view') as AuditView;
+      expect(await (element as any)._findEventTime('old-event')).to.equal(
+        '2025-01-02T03:04:05Z'
+      );
+      expect(fetchStub.callCount).to.equal(2);
+      expect(String(fetchStub.secondCall.args[0])).to.contain(
+        '/audit-logs/grouped?'
+      );
+    });
+
+    it('finds a non-UUID correlation id after detail validation returns 422', async () => {
+      fetchStub.resetHistory();
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/audit-logs/correlation-example') {
+          return new Response('{}', { status: 422 });
+        }
+        return new Response(
+          JSON.stringify({
+            groups: [
+              {
+                correlation_id: 'correlation-example',
+                primary_event: {
+                  id: '11111111-1111-4111-8111-111111111111',
+                  timestamp: '2025-01-02T03:04:05Z',
+                },
+                sub_events: [],
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      });
+      const element = document.createElement('audit-view') as AuditView;
+      expect(
+        await (element as any)._findEventTime('correlation-example')
+      ).to.equal('2025-01-02T03:04:05Z');
+      expect(fetchStub.callCount).to.equal(2);
+      expect(String(fetchStub.secondCall.args[0])).to.contain(
+        '/audit-logs/grouped?'
+      );
+    });
+
+    for (const status of [401, 403, 422]) {
+      it(`does not walk the timeline after detail status ${status} for a UUID`, async () => {
+        fetchStub.resetHistory();
+        fetchStub.resolves(new Response('{}', { status }));
+        const element = document.createElement('audit-view') as AuditView;
+        expect(
+          await (element as any)._findEventTime(
+            '11111111-1111-4111-8111-111111111111'
+          )
+        ).to.equal(null);
+        expect(
+          fetchStub
+            .getCalls()
+            .some((call) =>
+              String(call.args[0]).startsWith('/api/v1/audit-logs/grouped?')
+            )
+        ).to.equal(false);
+        // A 401 can attempt token refresh; neither refresh nor denial walks the corpus.
+        if (status !== 401) expect(fetchStub.callCount).to.equal(1);
+      });
+    }
 
     it('says so, once, when the event is nowhere in range', async () => {
       const element = openWith('?event=audit-missing');

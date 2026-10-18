@@ -9,8 +9,10 @@ enables it, store through the #1080 deposit service, and answer with an MCP
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 import contextlib
 import types
+from typing import Any
 import uuid
 
 import httpx
@@ -33,6 +35,27 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 @pytest.fixture
 def shared_db(db_session, monkeypatch):
     """Every get_db the MCP stack opens joins the test transaction."""
+    from preloop.services.audit import get_audit_service
+
+    monkeypatch.setattr(get_audit_service(), "enabled", True)
+
+    def _write_audit(
+        db_factory: Callable[[], Session],
+        operation: Callable[..., None],
+        *,
+        priority: bool = False,
+        allow_without_loop: bool = False,
+        **fields: Any,
+    ) -> None:
+        # The protocol fixture owns one uncommitted Connection. Real audit
+        # workers own independent connections; sharing this one across threads
+        # races its savepoints, while independent workers cannot see its rows.
+        # Keep real audit persistence, serialized inside the test transaction.
+        operation(db=db_session, **fields)
+
+    monkeypatch.setattr(
+        "preloop.services.audit.service.schedule_audit_write", _write_audit
+    )
 
     def _factory():
         session = Session(bind=db_session.connection())

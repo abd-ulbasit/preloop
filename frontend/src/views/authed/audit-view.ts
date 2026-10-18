@@ -97,7 +97,6 @@ interface GroupedResponse {
 interface User {
   id: string;
   username: string;
-  email: string;
   full_name: string | null;
 }
 
@@ -120,6 +119,9 @@ const APPROVAL_DECISION_ACTIONS = [
 // Sentence case throughout: one dropdown, one dialect.
 const EVENT_TYPE_OPTIONS = [
   { value: 'tool_call', label: 'Tool calls' },
+  { value: 'query', label: 'Session searches' },
+  { value: 'user.login', label: 'Sign-ins' },
+  { value: 'audit_chain_verified', label: 'Integrity verifications' },
   { value: APPROVAL_DECISION_FILTER, label: 'Approval decisions' },
   { value: 'model_gateway_request', label: 'Gateway requests' },
   { value: 'runtime_session_created', label: 'Sessions started' },
@@ -134,13 +136,10 @@ const EVENT_TYPE_OPTIONS = [
 ];
 
 /**
- * How far back a `?event=` link is allowed to look for its event.
- *
- * There is no endpoint that fetches one audit event by id, so the only way
- * to find out when an event happened is to walk the timeline. Four pages of
- * 200 is a thousand events: minutes on a busy account, weeks on a quiet one.
- * Once the event is found, its day becomes the date filter, so the operator
- * lands on a page whose filter bar explains itself.
+ * Older cores without the focused-entry endpoint fall back to at most four
+ * pages of 200 groups to locate a `?event=` link. Current cores fetch the
+ * entry directly, so its age does not limit lookup. Its day then becomes the
+ * date filter, keeping the filter bar consistent with the focused event.
  */
 // Typing in the tool-name search refetches once the user pauses.
 const TOOL_SEARCH_DEBOUNCE_MS = 300;
@@ -443,7 +442,7 @@ export class AuditView extends AuthedElement {
 
   private async _loadUsers() {
     try {
-      const res = await fetchWithAuth('/api/v1/users');
+      const res = await fetchWithAuth('/api/v1/audit-logs/actors');
       if (res.ok) {
         const data = await res.json();
         this._users = data.users || data || [];
@@ -577,8 +576,8 @@ export class AuditView extends AuthedElement {
   /**
    * Open the event a link asked for, wherever it is.
    *
-   * On the page in front of us: expand, scroll, mark. Older than that: walk
-   * back through the timeline to find when it happened, set that day as the
+   * On the page in front of us: expand, scroll, mark. Older than that: fetch
+   * the entry to find when it happened, set that day as the
    * date filter and load again, so the event is on the first page and the
    * filter bar says why. Not there at all: one toast, and the page stays a
    * normal audit page rather than an error.
@@ -612,8 +611,24 @@ export class AuditView extends AuthedElement {
     }
   }
 
-  /** Walks the timeline for an id and answers with when it happened. */
+  /** Fetch an entry's time, with a bounded timeline fallback for older cores. */
   private async _findEventTime(id: string): Promise<string | null> {
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/audit-logs/${encodeURIComponent(id)}`
+      );
+      if (res.ok) {
+        const entry: AuditLog = await res.json();
+        return entry.timestamp || null;
+      }
+      // Older cores return 404; non-UUID correlation ids fail path validation.
+      // Other failures, especially permissions, must not fan out into reads.
+      const correlationId = res.status === 422 && !this._isUuid(id);
+      if (res.status !== 404 && !correlationId) return null;
+    } catch (e) {
+      console.error('Failed to fetch a linked audit event:', e);
+      return null;
+    }
     for (let page = 0; page < DEEP_LINK_PAGES; page += 1) {
       try {
         const params = this._timelineParams(
@@ -1368,6 +1383,12 @@ export class AuditView extends AuthedElement {
             : '';
         return `${pretty} ${act}${name ? `: ${name}` : ''}`;
       }
+      case 'query':
+        return 'Session content search';
+      case 'user.login':
+        return 'User signed in';
+      case 'audit_chain_verified':
+        return 'Audit integrity verified';
       case 'permission_check':
         return `Permission: ${event.details?.permission || event.resource_id || 'check'}`;
       case 'runtime_session_created':

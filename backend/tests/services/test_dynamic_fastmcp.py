@@ -1319,6 +1319,7 @@ class TestMCPCallTool:
                 return_value=[disabled_config],
             ),
             patch("preloop.services.dynamic_fastmcp.crud_account.get") as get_account,
+            patch.object(dynamic_mcp, "_audit_refused_tool_call") as audit_refused,
             patch.object(
                 dynamic_mcp.__class__.__bases__[0],
                 "call_tool",
@@ -1333,6 +1334,7 @@ class TestMCPCallTool:
 
         mock_super.assert_not_called()
         get_account.assert_not_called()
+        audit_refused.assert_called_once()
         assert isinstance(result, ToolResult)
         assert result.is_error
         assert "disabled" in result.content[0].text.lower()
@@ -1364,6 +1366,7 @@ class TestMCPCallTool:
                 patch(
                     "preloop.services.dynamic_fastmcp.crud_account.get",
                 ) as get_account,
+                patch.object(dynamic_mcp, "_audit_refused_tool_call") as audit_refused,
                 patch.object(
                     dynamic_mcp.__class__.__bases__[0],
                     "call_tool",
@@ -1375,6 +1378,7 @@ class TestMCPCallTool:
                 result = await dynamic_mcp.call_tool(called, {"query": "auth"})
             mock_super.assert_not_called()
             get_account.assert_not_called()
+            audit_refused.assert_called_once()
             assert isinstance(result, ToolResult)
             return result
 

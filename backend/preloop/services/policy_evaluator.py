@@ -315,14 +315,10 @@ def _storage_scope_identity(
 
 
 def _get_audit_service():
-    """Get the audit service instance (lazy import to avoid circular deps)."""
-    try:
-        from plugins.audit.service import get_audit_service
+    """Resolve the core audit singleton lazily to avoid circular imports."""
+    from preloop.services.audit import get_audit_service
 
-        return get_audit_service()
-    except ImportError:
-        logger.debug("Audit service not available")
-        return None
+    return get_audit_service()
 
 
 def _get_db_factory():
@@ -373,8 +369,7 @@ def _log_policy_decision_async(
     # Outbound webhooks share this chokepoint so every deny path reaches
     # subscribers, including the ones that reach it through
     # model_content_policy. Emitted before the audit branch below, which
-    # returns early when no audit plugin is installed: OSS has no audit
-    # service and would otherwise never fire policy.denied.
+    # must not affect policy.denied delivery when audit collection fails.
     if action == "deny":
         # Do not enqueue on this thread: enqueue_event_detached opens a
         # session and runs select + count + insert + commit, which would

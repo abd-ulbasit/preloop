@@ -477,6 +477,9 @@ def scheduler_cmd(reload_interval: int, max_workers: int, log_level: str):
         executors=executors, job_defaults=job_defaults, timezone="UTC"
     )
 
+    from preloop.services.audit import start_audit, stop_audit
+
+    start_audit()
     try:
         # Run the scheduler in an asyncio event loop
         asyncio.run(run_scheduler_async(scheduler, reload_interval, db, max_workers))
@@ -485,6 +488,7 @@ def scheduler_cmd(reload_interval: int, max_workers: int, log_level: str):
     finally:
         # Explicitly attempt scheduler shutdown here
         shutdown_scheduler()
+        stop_audit()
 
         # Close DB session
         # Use db.is_active check instead of is_closed

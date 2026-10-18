@@ -578,7 +578,7 @@ async def _prepare_grant_dispatch(
 def _audit_grant_kwargs(
     audit_service: Any, grant: Optional[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Keep older optional audit plugins compatible until their paired upgrade."""
+    """Keep audit call signatures compatible during rolling upgrades."""
     if grant is None:
         return {}
     try:

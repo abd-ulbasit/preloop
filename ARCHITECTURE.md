@@ -57,6 +57,11 @@ documented host; workspace routes can use reviewed regional prices without a
 cross-host credential transfer. Weekly review produces a PR with source evidence
 and verification gates. Feed ingestion never rewrites historical usage.
 
+Audit collection, the account-scoped query API, and the console are core features
+available in every edition. Core owns the audit service, bounded writer and
+optional durable outbox; Enterprise uses the same implementation and adds its
+RBAC permission checks and events from organizational features.
+
 Audit rows are sealed into a per-account hash chain with signed checkpoints.
 Period exports and evidence packs carry detached Ed25519 signatures.
 `preloop audit verify` and `preloop evidence verify` recompute both on the
@@ -441,6 +446,14 @@ the history backfill, who may search) and
 Saved searches: [Saved session searches](docs/guide/session-saved-searches.md).
 Search auditing: [Auditing session content search](docs/guide/session-search-audit.md).
 The agent-facing tool: [search_sessions](docs/guide/agent-session-search.md).
+
+Audit collection also offers a durable delivery path behind the default-off
+`PRELOOP_AUDIT_OUTBOX_ENABLED` flag. Committed sanitized intents are relayed into
+audit rows transactionally; failed deliveries back off and park after a finite
+retry budget. Local operators can preview and replay a bounded failed batch for
+one account with `python -m preloop.services.audit.replay`. See
+[Audit outbox operations](docs/operations/audit-outbox.md) for activation,
+admission limits, metrics and recovery.
 
 
 ### Pi and DeepSeek Harness adapters

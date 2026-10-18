@@ -662,7 +662,7 @@ Monitor all external tool calls:
 - Approved or declined
 - Result or error
 
-Tool calls are recorded in each runtime session's timeline (**Audit > Sessions**). On Cloud and Enterprise, **Audit > All events** lists them account-wide.
+Tool calls are recorded in each runtime session's timeline (**Audit > Sessions**). **Audit > All events** lists them account-wide in every edition.
 
 ### 5. Rotate Credentials
 

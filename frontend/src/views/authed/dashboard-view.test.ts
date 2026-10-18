@@ -1291,12 +1291,12 @@ describe('DashboardView', () => {
         () => element.shadowRoot?.querySelector('.welcome-container'),
         'get-started card never rendered'
       );
-      // Decorative: a screen reader must not read out the file name.
+      // The theme-aware badge is decorative for screen readers.
       expect(
         element
-          .shadowRoot!.querySelector('.welcome-container img')!
-          .getAttribute('alt')
-      ).to.equal('');
+          .shadowRoot!.querySelector('.welcome-container .welcome-badge')!
+          .getAttribute('aria-hidden')
+      ).to.equal('true');
 
       element
         .shadowRoot!.querySelector<HTMLElement>(

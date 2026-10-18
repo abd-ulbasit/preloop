@@ -569,7 +569,8 @@ sl-dialog.large::part(panel) {
     text-align: center;
 }
 
-.empty-state sl-icon {
+/* Decorative icons have spacing; button slots inherit their button foreground. */
+.empty-state sl-icon:not([slot]) {
     font-size: 1.5rem;
     color: var(--console-meta-color);
     margin-bottom: var(--sl-spacing-2x-small);
