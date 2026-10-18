@@ -25,6 +25,26 @@ Deferred to 0.18.0: system versus user service split (#1488), runner sharing
 to teams (EE #183), MDM enrollment and device credential (#1344 track), more
 session harnesses (#1489, #1490).
 
+## Workstation correlation
+
+Persistent runners report the same account-salted HMAC-SHA256 workstation
+fingerprint as `preloop agents discover --report`. This self-reported correlation
+key can link a runner to discovery evidence on the same machine and account.
+It is not verified device identity or attestation. Different account salts
+produce different fingerprints. Ephemeral runners omit this key.
+
+Both commands use the platform machine ID, falling back to a random ID saved
+in the CLI configuration directory. To use an administrative reference instead,
+pass the same `--device-ref` to `preloop runner fg` and
+`preloop agents discover --report`. The runner saves that reference locally in
+`runner.json` for service restarts; only its salted hash is reported. Pass a new
+reference to replace it. The runner refreshes the account salt every five minutes
+and sends the refreshed fingerprint on subsequent heartbeats.
+
+Runner API responses expose the fingerprint only to the registrant and
+same-account users with `manage_agents`. Older clients can still register without
+it, and older servers without the discovery salt endpoint remain usable.
+
 ## Assets and actors
 
 | Asset | Where it lives |
