@@ -306,7 +306,11 @@ export class FleetMap extends LitElement {
     if (!messages.length || this.motionOff || !this.instanceAdmin) return;
     const now = Date.now();
     let spawned = false;
-    for (const message of messages)
+    // A message needs both ends on screen: nothing travels to a node folded
+    // into a "+N more" row or hidden by a filter.
+    for (const message of messages.filter(
+      (item) => this.positionOf(item.from) && this.positionOf(item.to)
+    ))
       spawned = this.particles.spawn(message, now) || spawned;
     if (spawned) {
       this.requestUpdate();
@@ -526,12 +530,32 @@ export class FleetMap extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     if (this.live)
-      for (const topic of [...FLEET_ACTIVITY_TOPICS, 'code_activity'])
+      for (const topic of FLEET_ACTIVITY_TOPICS)
         this.unsubscribes.push(
           unifiedWebSocketManager.subscribe(topic, (message: unknown) =>
             this.recordActivity(topic, message)
           )
         );
+    this.syncCodeSubscription();
+  }
+
+  private codeUnsubscribe?: () => void;
+
+  /**
+   * Only an instance administrator's live map listens to `code_activity`;
+   * nobody else is sent events the map would not show them.
+   */
+  private syncCodeSubscription(): void {
+    const want = this.live && this.instanceAdmin && this.isConnected;
+    if (want && !this.codeUnsubscribe)
+      this.codeUnsubscribe = unifiedWebSocketManager.subscribe(
+        'code_activity',
+        (message: unknown) => this.recordActivity('code_activity', message)
+      );
+    else if (!want && this.codeUnsubscribe) {
+      this.codeUnsubscribe();
+      this.codeUnsubscribe = undefined;
+    }
   }
 
   private get spatial(): boolean {
@@ -632,6 +656,8 @@ export class FleetMap extends LitElement {
     }
     if (changed.has('activityWindow') || changed.has('live'))
       this.scheduleRefresh();
+    if (changed.has('live') || changed.has('instanceAdmin'))
+      this.syncCodeSubscription();
     if (this.refit && this.lastLayout) {
       this.refit = false;
       this.fit();
@@ -642,6 +668,8 @@ export class FleetMap extends LitElement {
     super.disconnectedCallback();
     this.unsubscribes.forEach((unsubscribe) => unsubscribe());
     this.unsubscribes = [];
+    this.codeUnsubscribe?.();
+    this.codeUnsubscribe = undefined;
     this.activity.stop();
     this.particles.clear();
     if (this.frame) cancelAnimationFrame(this.frame);

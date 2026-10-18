@@ -1,5 +1,7 @@
 import { expect, fixture, html } from '@open-wc/testing';
+import { stub } from 'sinon';
 import './fleet-map';
+import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 import type { FleetMap } from './fleet-map';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 import type { FleetCodeActivity } from '../fleet-map-api';
@@ -129,7 +131,12 @@ describe('fleet-map live canvas', () => {
     columns.recordActivity('gateway_activity', call);
     await columns.updateComplete;
     expect(columns.inFlight).to.equal(2);
-    expect(columns.shadowRoot!.querySelector('[data-particle]')).to.exist;
+    // Drawn on the line, not parked off screen.
+    const request = columns.shadowRoot!.querySelector<SVGGElement>(
+      '[data-particle][data-kind="request"]'
+    )!;
+    expect(request.getAttribute('opacity')).to.not.equal('0');
+    expect(request.getAttribute('transform')).to.not.contain('-999');
     const viewer = await fixture<FleetMap>(
       html`<fleet-map
         .graph=${sampleFleetMap()}
@@ -141,6 +148,75 @@ describe('fleet-map live canvas', () => {
     await viewer.updateComplete;
     expect(viewer.inFlight).to.equal(0);
     expect(viewer.shadowRoot!.querySelector('[data-code]')).to.not.exist;
+  });
+
+  it('sends nothing to a node folded past the column cap', async () => {
+    const base = sampleFleetMap();
+    const extra = Array.from({ length: 14 }, (_, i) => ({
+      ...base.nodes.find((n) => n.id === 'agent:codex')!,
+      id: `agent:x${i}`,
+      resource_id: `x${i}`,
+      label: `Extra ${String(i).padStart(2, '0')}`,
+    }));
+    const graph = {
+      ...base,
+      nodes: [...base.nodes, ...extra],
+      edges: [
+        ...base.edges,
+        ...extra.flatMap((n) => [
+          {
+            ...base.edges[4],
+            id: `h-${n.id}`,
+            source: 'device:mbp',
+            target: n.id,
+          },
+          {
+            ...base.edges[8],
+            id: `m-${n.id}`,
+            source: n.id,
+            target: 'model:gpt',
+            kind: 'uses_model' as const,
+          },
+        ]),
+      ],
+    };
+    const el = await fixture<FleetMap>(
+      html`<fleet-map
+        .graph=${graph}
+        instance-admin
+        user-id="u-cap"
+      ></fleet-map>`
+    );
+    const hidden = extra.find(
+      (n) => !el.shadowRoot!.querySelector(`[data-node="${n.id}"]`)
+    )!;
+    expect(hidden, 'the cap folds some agents').to.exist;
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: { managed_agent_id: hidden.resource_id, model_alias: 'gpt-6.1' },
+    });
+    expect(el.inFlight).to.equal(0);
+  });
+
+  it("listens to code activity only on an administrator's live map", async () => {
+    const subscribe = stub(unifiedWebSocketManager, 'subscribe').returns(
+      () => {}
+    );
+    try {
+      await fixture<FleetMap>(
+        html`<fleet-map .graph=${sampleFleetMap()} live></fleet-map>`
+      );
+      expect(subscribe.args.map((a) => a[0])).to.not.include('code_activity');
+      subscribe.resetHistory();
+      const admin = await fixture<FleetMap>(
+        html`<fleet-map .graph=${sampleFleetMap()} live></fleet-map>`
+      );
+      admin.instanceAdmin = true;
+      await admin.updateComplete;
+      expect(subscribe.args.map((a) => a[0])).to.include('code_activity');
+    } finally {
+      subscribe.restore();
+    }
   });
 
   it('respects the cap on messages in flight', async () => {
