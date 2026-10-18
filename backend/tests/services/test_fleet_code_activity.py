@@ -30,7 +30,13 @@ NOW = datetime.now(UTC).replace(microsecond=0)
 def test_code_action_classifies_tools() -> None:
     assert code_action("create_pull_request") == "opened"
     assert code_action("create_merge_request") == "opened"
-    assert code_action("add_comment") == "commented"
+    pr_comment = {"code_target": "pull_request"}
+    assert code_action("add_comment", pr_comment) == "commented"
+    # An issue or untargeted comment is not pull request activity.
+    assert code_action("add_comment") is None
+    assert code_action("add_comment", {"code_target": "issue"}) is None
+    assert code_action("add_issue_comment") is None
+    assert code_action("create_note") is None
     assert code_action("merge_pull_request") == "merged"
     assert code_action("create_pull_request_review") == "reviewed"
     review = {"arguments_summary": {"pull_request": 20, "review_action": 9}}
@@ -47,7 +53,10 @@ def test_every_classified_tool_is_in_the_indexed_list() -> None:
     classified = {
         name
         for name in CODE_ACTIVITY_TOOLS
-        if code_action(name, {"arguments_summary": {"review_action": 1}})
+        if code_action(
+            name,
+            {"arguments_summary": {"review_action": 1}, "code_target": "pull_request"},
+        )
     }
     assert classified == set(CODE_ACTIVITY_TOOLS)
 
@@ -169,7 +178,14 @@ def fleet(db_session: Session, test_user: Any) -> dict[str, Any]:
         )
     )
     _call(db_session, session, "create_pull_request", 2)
-    _call(db_session, session, "add_comment", 4)
+    _call(
+        db_session,
+        session,
+        "add_comment",
+        4,
+        metadata={"code_target": "pull_request"},
+    )
+    _call(db_session, session, "add_comment", 3)  # an issue comment
     _call(db_session, session, "create_pull_request", 300)  # outside 1h
     _call(db_session, session, "create_pull_request", 1, status="refused")
     _call(db_session, session, "get_pull_request", 1)
@@ -368,3 +384,68 @@ def test_a_flow_is_linked_to_its_model_node(
             db_session, user=fleet["user"], active_within_minutes=60
         )
     assert result.flows[0].model_node_id == "model:claude-sonnet-4-5"
+
+
+def test_pull_request_target_reads_only_what_identifies_a_pr() -> None:
+    from preloop.services.fleet_code_activity import pull_request_target
+
+    assert pull_request_target({"target": "https://github.com/a/b/pull/3"})
+    assert pull_request_target({"target": "https://gitlab.com/a/b/-/merge_requests/9"})
+    assert pull_request_target({"target": "group/project!12"})
+    assert pull_request_target({"target": "a/b#3", "path": "x.py", "line": 4})
+    assert not pull_request_target({"target": "https://github.com/a/b/issues/3"})
+    assert not pull_request_target({"target": "PROJ-12"})
+    assert not pull_request_target(None)
+
+
+def test_a_flow_merge_is_counted_once_with_the_forge_webhook(
+    db_session: Session, fleet: dict[str, Any]
+) -> None:
+    execution_id = (
+        db_session.execute(
+            text(
+                "SELECT execution_id FROM issue_cost_execution "
+                "WHERE flow_id = :f LIMIT 1"
+            ),
+            {"f": fleet["flow"].id},
+        )
+    ).scalar_one()
+    session = _session(db_session, fleet["user"].account_id, f"m-{uuid4().hex[:6]}")
+    _call(db_session, session, "merge_pull_request", 3, execution_id=execution_id)
+    db_session.flush()
+    result = build_code_activity(
+        db_session, user=fleet["user"], active_within_minutes=60
+    )
+    assert result.counts[f"flow:{fleet['flow'].id}"].merged == 1
+    merged = [e for e in result.events if e.action == "merged"]
+    assert len(merged) == 1
+    assert merged[0].pr == "acme/api#42"
+
+
+def test_a_flow_tool_merge_is_not_announced_twice() -> None:
+    with patch("preloop.services.account_realtime.emit_account_event") as emit:
+        fleet_code_activity.emit_code_tool_event(
+            account_id="acct",
+            tool_name="merge_pull_request",
+            metadata={},
+            flow_id="flow-1",
+        )
+        fleet_code_activity.emit_code_tool_event(
+            account_id="acct",
+            tool_name="merge_pull_request",
+            metadata={},
+            managed_agent_id="agent-1",
+        )
+    assert emit.call_count == 1
+    assert emit.call_args.args[0]["payload"]["managed_agent_id"] == "agent-1"
+
+
+def test_the_pr_key_index_covers_the_merge_join(db_session: Session) -> None:
+    definition = db_session.execute(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'ix_issue_cost_execution_account_pr_key'"
+        )
+    ).scalar_one()
+    assert "(account_id, pr_key)" in definition
+    assert "pr_key IS NOT NULL" in definition

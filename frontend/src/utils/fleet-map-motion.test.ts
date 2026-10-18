@@ -97,6 +97,70 @@ describe('fleet-map-motion', () => {
     expect(messages[0]).to.include({ from: 'flow:f1', to: 'model:sonnet' });
   });
 
+  it("gives a flow run's model call to the flow, its approvals to the agent", () => {
+    const base = sampleFleetMap();
+    const graph = {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        { ...base.nodes[5], id: 'flow:f1', type: 'flow' as const },
+      ],
+      edges: [
+        ...base.edges,
+        {
+          ...base.edges[0],
+          id: 'fm',
+          source: 'flow:f1',
+          target: 'model:sonnet',
+          kind: 'uses_model' as const,
+        },
+      ],
+    };
+    const call = messagesForRealtime(graph, 'gateway_activity', {
+      type: 'model_gateway_call',
+      flow_id: 'f1',
+      payload: { managed_agent_id: 'claude', model_alias: 'x' },
+    });
+    expect(call[0].from).to.equal('flow:f1');
+    const asked = messagesForRealtime(graph, 'approvals', {
+      type: 'approval_created',
+      managed_agent_id: 'claude',
+      flow_id: 'f1',
+    });
+    expect(asked[0].from).to.equal('agent:claude');
+  });
+
+  it('never places an arrival off the top or left of a settled map', () => {
+    const graph = sampleFleetMap();
+    const first = spatialLayout(
+      graph,
+      layoutGraph(graph).positions,
+      {},
+      clusterOf(graph)
+    );
+    const pinned: Record<string, { x: number; y: number }> = {};
+    for (const [id, p] of first.positions) pinned[id] = { x: p.x, y: p.y };
+    const withFlow = {
+      ...graph,
+      nodes: [
+        ...graph.nodes,
+        { ...graph.nodes[5], id: 'flow:lonely', type: 'flow' as const },
+      ],
+    };
+    const next = spatialLayout(
+      withFlow,
+      layoutGraph(withFlow).positions,
+      pinned,
+      clusterOf(withFlow)
+    );
+    const placed = next.positions.get('flow:lonely')!;
+    expect(placed.x).to.be.at.least(24);
+    expect(placed.y).to.be.at.least(24);
+    expect(next.positions.get('agent:codex')).to.deep.include(
+      pinned['agent:codex']
+    );
+  });
+
   it('caps messages in flight and throttles each line', () => {
     const particles = new FleetParticles({ max: 3, perLineMs: 400 });
     const message = {

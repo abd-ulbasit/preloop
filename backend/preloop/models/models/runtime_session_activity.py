@@ -33,9 +33,9 @@ class RuntimeSessionActivity(Base):
             postgresql_where=text(
                 "activity_type = 'tool_call' AND status = 'succeeded' AND "
                 "tool_name IN ('add_comment', 'add_comment_to_pending_review', "
-                "'add_issue_comment', 'approve_merge_request', "
+                "'approve_merge_request', "
                 "'create_merge_request', 'create_merge_request_note', "
-                "'create_note', 'create_pull_request', "
+                "'create_pull_request', "
                 "'create_pull_request_review', 'merge_merge_request', "
                 "'merge_pull_request', 'pull_request_review_write', "
                 "'submit_pending_pull_request_review', 'update_pull_request')"

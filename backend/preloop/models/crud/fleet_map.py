@@ -91,11 +91,9 @@ def list_decommissioned_agents(
 CODE_ACTIVITY_TOOLS: tuple[str, ...] = (
     "add_comment",
     "add_comment_to_pending_review",
-    "add_issue_comment",
     "approve_merge_request",
     "create_merge_request",
     "create_merge_request_note",
-    "create_note",
     "create_pull_request",
     "create_pull_request_review",
     "merge_merge_request",

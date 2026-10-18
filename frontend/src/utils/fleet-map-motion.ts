@@ -277,13 +277,14 @@ export function messagesForRealtime(
   const agentId =
     text(payload.managed_agent_id) || text(record.managed_agent_id);
   const flowId = text(record.flow_id) || text(payload.flow_id);
-  // A flow run's traffic belongs to the flow when the map shows it.
+  const flow = flowId && ids.has(`flow:${flowId}`) ? `flow:${flowId}` : '';
+  const mappedAgent =
+    agentId && ids.has(`agent:${agentId}`) ? `agent:${agentId}` : '';
+  // A flow run's model calls belong to the flow, as the server counts them,
+  // even when the run also carries an employee agent's id. Tool calls and
+  // approvals stay with the agent, which is the one acting.
   const agent =
-    agentId && ids.has(`agent:${agentId}`)
-      ? `agent:${agentId}`
-      : flowId && ids.has(`flow:${flowId}`)
-        ? `flow:${flowId}`
-        : '';
+    type === 'model_gateway_call' ? flow || mappedAgent : mappedAgent || flow;
   if (!agent) return [];
   const out: FleetMessage[] = [];
   if (topic === 'gateway_activity' && type === 'model_gateway_call') {

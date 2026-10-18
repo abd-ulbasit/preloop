@@ -66,6 +66,57 @@ describe('fleet-map live canvas', () => {
     ).to.equal('gpt-6.1');
   });
 
+  it('keeps the line label once its message has landed', async () => {
+    const el = await spatialMap();
+    el.recordActivity('gateway_activity', call);
+    el.flushActivity();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.activity-label')).to.not.exist;
+    (el as unknown as { particles: { clear(): void } }).particles.clear();
+    el.requestUpdate();
+    await el.updateComplete;
+    expect(
+      el.shadowRoot!.querySelector('.activity-label')!.textContent
+    ).to.contain('model request');
+  });
+
+  it('lists recent events from the endpoint on load and says when counts are capped', async () => {
+    const el = await spatialMap();
+    const now = Date.now();
+    const loaded = {
+      ...activity(),
+      truncated: true,
+      events: [
+        {
+          id: 'e1',
+          at: new Date(now - 30_000).toISOString(),
+          action: 'merged' as const,
+          node_id: 'flow:reviewer',
+          pr: 'acme/api#7',
+        },
+        {
+          id: 'e2',
+          at: new Date(now - 600_000).toISOString(),
+          action: 'opened' as const,
+          node_id: 'agent:codex',
+        },
+      ],
+    };
+    el.codeActivity = loaded;
+    el.seedToasts(loaded, now);
+    await el.updateComplete;
+    const toasts = [...el.shadowRoot!.querySelectorAll('[data-toast]')].map(
+      (t) => t.textContent!.replace(/\s+/g, ' ').trim()
+    );
+    expect(toasts).to.deep.equal(['PR Reviewer merged acme/api#7']);
+    expect(el.shadowRoot!.querySelector('[data-testid="code-truncated"]')).to
+      .exist;
+    // The same events on the next refresh are not listed again.
+    el.seedToasts(loaded, now + 1000);
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelectorAll('[data-toast]').length).to.equal(1);
+  });
+
   it('respects the cap on messages in flight', async () => {
     const el = await spatialMap();
     for (let i = 0; i < 60; i++)

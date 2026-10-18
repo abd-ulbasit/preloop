@@ -3195,6 +3195,12 @@ async def {internal_name}({params_str}):
             "arguments_summary": arguments_summary,
             "arguments_hash": arguments_hash,
         }
+        if client_tool_name == "add_comment":
+            from preloop.services.fleet_code_activity import pull_request_target
+
+            # A boolean, not the target: lets the Fleet Map count PR comments.
+            if pull_request_target(arguments):
+                metadata["code_target"] = "pull_request"
         if elapsed_ms is not None:
             # Parsed "detected" markers are stamped at call start; this row
             # is stamped at call end. started_at lets the timeline match

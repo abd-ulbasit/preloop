@@ -51,13 +51,14 @@ _REVIEWED = {
     "pull_request_review_write",
     "submit_pending_pull_request_review",
 }
+# Comment tools that only ever target a pull or merge request. The generic
+# ``add_comment`` counts only when the call recorded a pull request target
+# (``code_target`` in the activity metadata, set by the tool wrapper).
 _COMMENTED = {
-    "add_comment",
     "add_comment_to_pending_review",
-    "add_issue_comment",
     "create_merge_request_note",
-    "create_note",
 }
+_TARGETED_COMMENT = "add_comment"
 _PR_PATH = re.compile(
     r"^/(?P<repo>.+?)/(?:-/)?(?:pull|pulls|merge_requests|pull-requests)/(?P<n>\d+)"
 )
@@ -85,6 +86,9 @@ def code_action(tool_name: str | None, metadata: Any = None) -> CodeAction | Non
         return "reviewed"
     if name in _COMMENTED:
         return "commented"
+    if name == _TARGETED_COMMENT:
+        target = metadata.get("code_target") if isinstance(metadata, dict) else None
+        return "commented" if target == "pull_request" else None
     if name == "update_pull_request":
         summary = (
             metadata.get("arguments_summary") if isinstance(metadata, dict) else None
@@ -92,6 +96,26 @@ def code_action(tool_name: str | None, metadata: Any = None) -> CodeAction | Non
         if isinstance(summary, dict) and "review_action" in summary:
             return "reviewed"
     return None
+
+
+_PR_URL = re.compile(r"/(?:pull|pulls|merge_requests|pull-requests)/\d+")
+
+
+def pull_request_target(arguments: Any) -> bool:
+    """Whether a generic comment call is aimed at a pull or merge request.
+
+    True for a ``target`` naming a pull or merge request URL, or a GitLab
+    ``!N`` reference, and for an inline comment (``path``/``line`` only exist
+    on a diff). Only this boolean is kept, never the target itself.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    if arguments.get("path") and arguments.get("line") is not None:
+        return True
+    target = arguments.get("target")
+    if not isinstance(target, str):
+        return False
+    return bool(_PR_URL.search(target)) or bool(re.search(r"![0-9]+$", target))
 
 
 def short_pr(url: str | None) -> str | None:
@@ -188,6 +212,8 @@ def build_code_activity(
             ] = agent
 
     counts: dict[str, FleetCodeCounts] = defaultdict(FleetCodeCounts)
+    flow_tool_merges: dict[str, list[FleetCodeEvent]] = defaultdict(list)
+    flow_forge_merges: dict[str, int] = defaultdict(int)
     events: list[FleetCodeEvent] = []
     last_flow: dict[str, datetime] = {}
 
@@ -215,17 +241,16 @@ def build_code_activity(
             if see_users and actor.owner_user_id:
                 owner_id = f"user:{actor.owner_user_id}"
                 count(owner_id, action)
+        event = FleetCodeEvent(
+            id=str(call.id), at=at, action=action, node_id=node_id, owner_id=owner_id
+        )
+        if flow_id and action == "merged":
+            # The forge reports the same merge; settled after the webhooks.
+            flow_tool_merges[flow_id].append(event)
+            continue
         count(node_id, action)
         if len(events) < EVENT_LIMIT:
-            events.append(
-                FleetCodeEvent(
-                    id=str(call.id),
-                    at=at,
-                    action=action,
-                    node_id=node_id,
-                    owner_id=owner_id,
-                )
-            )
+            events.append(event)
 
     if see_flows:
         merges = fleet_crud.list_merged_pull_requests(
@@ -247,6 +272,7 @@ def build_code_activity(
             if flow_id not in flow_rows:
                 continue
             at = _aware(row.merged_at)
+            flow_forge_merges[flow_id] += 1
             count(f"flow:{flow_id}", "merged")
             last_flow[flow_id] = max(last_flow.get(flow_id, at), at)
             events.append(
@@ -259,6 +285,13 @@ def build_code_activity(
                     url=row.pr_key if row.pr_key.startswith("https://") else None,
                 )
             )
+
+    # A flow that merged through a tool call is also credited by the forge's
+    # merge webhook. Count the larger of the two, never both.
+    for flow_id, merged in flow_tool_merges.items():
+        for event in merged[flow_forge_merges.get(flow_id, 0) :]:
+            count(event.node_id, "merged")
+            events.append(event)
 
     model_nodes: dict[str, str] = {}
     for model_row in fleet_crud.models_by_id(
@@ -307,7 +340,10 @@ def emit_code_tool_event(
     fail the tool call that caused it.
     """
     action = code_action(tool_name, metadata)
-    if action is None:
+    # A merge inside a flow run is announced by the forge's merge webhook,
+    # which names the pull request; announcing the tool call too would show
+    # one merge twice.
+    if action is None or (action == "merged" and flow_id):
         return
     try:
         from preloop.services.account_realtime import (

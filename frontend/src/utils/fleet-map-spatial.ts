@@ -356,6 +356,15 @@ export function spatialLayout(
   if (!Object.keys(pinned).some((id) => index.has(id))) {
     minX = Math.min(...xs) - 24;
     minY = Math.min(...ys) - 24;
+  } else {
+    // Arrivals beside a pinned picture never land off its top or left edge,
+    // where the stage would clip them.
+    for (let i = 0; i < n; i++) {
+      if (fixed[i]) continue;
+      xs[i] = Math.max(24, xs[i]);
+      ys[i] = Math.max(24, ys[i]);
+    }
+    if (clusters) separate(xs, ys, fixed);
   }
   const positions = new Map<string, FleetMapPosition>();
   let width = 0;

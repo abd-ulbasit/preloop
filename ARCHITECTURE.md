@@ -745,8 +745,11 @@ successful code tool calls (`runtime_session_activity`, served by the partial in
 `ix_runtime_session_activity_code_tools`, capped at 5,000 rows) attributing a call in
 a flow run to the flow and any other call to the managed agent whose runtime
 principal made it, and forge-reported merges (`issue_cost_pull_request.merged_at`,
-capped at 500) attributed to the flows whose runs touched the pull request. "Any time"
-reads 90 days. Live, the `code_activity` realtime topic carries each successful code
+capped at 500, joined through `ix_issue_cost_execution_account_pr_key`) attributed to
+the flows whose runs touched the pull request. A flow's tool-call merge and the forge's
+webhook for it count once. The generic `add_comment` counts only when the wrapper
+recorded a pull request target (`code_target`, a boolean kept instead of the target);
+issue comments and operator notes never count. "Any time" reads 90 days. Live, the `code_activity` realtime topic carries each successful code
 tool call and each first merge. In the spatial arrangement people, their machines and
 agents form islands around the shared models and providers, nodes fade in and out as
 they join and leave the window (positions already on screen are kept), and live

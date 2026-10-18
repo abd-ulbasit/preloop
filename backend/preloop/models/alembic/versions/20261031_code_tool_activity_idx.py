@@ -1,4 +1,4 @@
-"""Index the pull and merge request tool calls the Fleet Map counts.
+"""Index the pull and merge request reads the Fleet Map makes.
 
 Revision ID: 20261031_code_tool_idx
 Revises: 20261030_gateway_model_idx
@@ -9,6 +9,10 @@ Revises: 20261030_gateway_model_idx
 would intersect the account and timestamp indexes over every tool call the
 account ever made. This partial index holds just the code tool calls, keyed
 by account and newest first, so the read is a short range scan.
+
+The merge read joins ``issue_cost_execution`` to a pull request by
+``(account_id, pr_key)``, which had no index; ``ix_issue_cost_execution_account_pr_key``
+covers it.
 
 The tool list must match ``CODE_ACTIVITY_TOOLS`` in
 ``preloop.models.crud.fleet_map``. Created CONCURRENTLY and IF NOT EXISTS,
@@ -26,14 +30,14 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 INDEX = "ix_runtime_session_activity_code_tools"
+PR_INDEX = "ix_issue_cost_execution_account_pr_key"
+PR_DEFINITION = "ON issue_cost_execution (account_id, pr_key) WHERE pr_key IS NOT NULL"
 TOOLS = (
     "add_comment",
     "add_comment_to_pending_review",
-    "add_issue_comment",
     "approve_merge_request",
     "create_merge_request",
     "create_merge_request_note",
-    "create_note",
     "create_pull_request",
     "create_pull_request_review",
     "merge_merge_request",
@@ -53,28 +57,32 @@ DEFINITION = (
 )
 
 
+def _build(name: str, definition: str) -> None:
+    valid = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT i.indisvalid FROM pg_index i JOIN pg_class c "
+                "ON c.oid = i.indexrelid WHERE c.relname = :name"
+            ),
+            {"name": name},
+        )
+        .scalar()
+    )
+    if valid is False:
+        op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
+    op.execute(sa.text(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} {definition}"))
+
+
 def upgrade() -> None:
-    """Build without blocking tool-call writes; repair an invalid prior attempt."""
+    """Build without blocking writes; repair an invalid prior attempt."""
     with op.get_context().autocommit_block():
-        valid = (
-            op.get_bind()
-            .execute(
-                sa.text(
-                    "SELECT i.indisvalid FROM pg_index i JOIN pg_class c "
-                    "ON c.oid = i.indexrelid WHERE c.relname = :name"
-                ),
-                {"name": INDEX},
-            )
-            .scalar()
-        )
-        if valid is False:
-            op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}"))
-        op.execute(
-            sa.text(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {INDEX} {DEFINITION}")
-        )
+        _build(INDEX, DEFINITION)
+        _build(PR_INDEX, PR_DEFINITION)
 
 
 def downgrade() -> None:
-    """Remove only the code tool-call index."""
+    """Remove only the two Fleet Map indexes."""
     with op.get_context().autocommit_block():
+        op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {PR_INDEX}"))
         op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}"))

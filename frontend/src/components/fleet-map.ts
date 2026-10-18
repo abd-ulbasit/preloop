@@ -358,6 +358,31 @@ export class FleetMap extends LitElement {
     this.startFrames();
   }
 
+  private seenEvents = new Set<string>();
+
+  /**
+   * List what just happened on load too: events from the last two minutes
+   * that the corner has not shown yet, newest first, at most three.
+   */
+  seedToasts(activity: FleetCodeActivity, now = Date.now()): void {
+    const fresh = activity.events.filter(
+      (event) =>
+        !this.seenEvents.has(event.id) &&
+        now - new Date(event.at).getTime() < 120_000
+    );
+    for (const event of activity.events) this.seenEvents.add(event.id);
+    if (!fresh.length || !this.spatial) return;
+    const toasts = fresh.slice(0, 3).map((event) => ({
+      id: this.nextPip++,
+      node: event.node_id,
+      action: event.action,
+      label: codeLabel({ action: event.action, pr: event.pr ?? '' }),
+      start: now,
+    }));
+    this.toasts = [...toasts, ...this.toasts].slice(0, 4);
+    this.startFrames();
+  }
+
   /** Load the code activity for the window, debounced. */
   private scheduleCodeLoad(delay = 0): void {
     if (!this.live) return;
@@ -376,7 +401,9 @@ export class FleetMap extends LitElement {
         controller.signal,
         windowMinutes(this.activityWindow)
       );
-      if (!controller.signal.aborted) this.codeActivity = activity;
+      if (controller.signal.aborted) return;
+      this.codeActivity = activity;
+      this.seedToasts(activity);
     } catch {
       // Code activity is a layer on the map; the map stands without it.
     }
@@ -2535,7 +2562,10 @@ export class FleetMap extends LitElement {
     };
     const context = { view, layout, byId, lit, hits };
     const active = this.activityByLine(view, layout);
-    const travelling = this.spatial && !this.motionOff;
+    // Only while a message is actually in flight does it carry the label;
+    // a line still lit after it landed keeps its own.
+    const travelling =
+      this.spatial && !this.motionOff && this.particles.size > 0;
     return html`${this.renderToolbar(graph, filtered, hits)}
       ${this.renderGaps(filtered)}
       ${
@@ -2554,6 +2584,14 @@ export class FleetMap extends LitElement {
               show omitted resources; filters only narrow the loaded map. Blast
               radius is incomplete. Use the table or resource pages to inspect
               the rest.
+            </p>`
+          : nothing
+      }
+      ${
+        this.codeActivity?.truncated
+          ? html`<p class="notice" role="status" data-testid="code-truncated">
+              Pull request counts are capped for this window and may be low.
+              Choose a shorter window for exact counts.
             </p>`
           : nothing
       }
