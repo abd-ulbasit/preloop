@@ -323,6 +323,26 @@ class ApiUsage(Base):
                 "(meta_data ->> 'purpose') <> 'replay_validation')"
             ),
         ),
+        # Per-model gateway aggregate (Models overview) for the models on the
+        # page: same key shape as ix_api_usage_account_model_ts, which the
+        # planner picks for ``ai_model_id IN (...)``, but covering, so that
+        # path is an index-only scan rather than a heap read per row.
+        Index(
+            "ix_api_usage_gateway_model_totals",
+            "account_id",
+            "ai_model_id",
+            "timestamp",
+            postgresql_include=[
+                column
+                for column in GATEWAY_TOTALS_INCLUDE
+                if column not in ("ai_model_id", "flow_id")
+            ],
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND "
+                "((meta_data ->> 'purpose') IS NULL OR "
+                "(meta_data ->> 'purpose') <> 'replay_validation')"
+            ),
+        ),
         # Subscription-billed gateway rows (Spend subscription block). Few
         # rows, and without it the block was a sequential scan of the table.
         Index(

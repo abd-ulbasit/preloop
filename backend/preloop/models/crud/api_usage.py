@@ -120,14 +120,33 @@ def exclude_replay_usage_condition():
     NULL; only rows explicitly tagged ``replay_validation`` are excluded.
     Mirrors ``crud/runtime_session.py``'s internal-usage exclusion style.
 
+    The key and the excluded purpose are SQL literals, not bound parameters.
+    The gateway covering indexes carry this exact predicate, and PostgreSQL
+    can only prove a partial-index predicate against constants: with bound
+    parameters a generic prepared plan (psycopg prepares a statement after a
+    few executions) cannot use those indexes and reads the heap instead.
+
     Returns:
         A SQLAlchemy boolean expression suitable for a WHERE clause.
     """
-    purpose_expr = ApiUsage.meta_data["purpose"].astext
+    purpose_expr = ApiUsage.meta_data.op("->>")(literal_column("'purpose'"))
     return or_(
         purpose_expr.is_(None),
-        purpose_expr != REPLAY_VALIDATION_PURPOSE,
+        purpose_expr != literal_column(f"'{REPLAY_VALIDATION_PURPOSE}'"),
     )
+
+
+def gateway_action_condition() -> Any:
+    """Return ``action_type = 'model_gateway'`` with a literal, not a parameter.
+
+    Same reason as :func:`exclude_replay_usage_condition`: the gateway partial
+    indexes are only usable by a generic prepared plan when the predicate
+    they were built with appears as constants.
+
+    Returns:
+        A SQLAlchemy boolean expression suitable for a WHERE clause.
+    """
+    return ApiUsage.action_type == literal_column("'model_gateway'")
 
 
 def cache_covered_condition(usage_model: Any = ApiUsage) -> Any:
@@ -1777,7 +1796,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             # Aggregate by model identity; aliases that share ai_model_id still
             # appear as separate groups when model_alias differs (intentional —
             # callers often filter/sort by the client-visible alias).
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
             exclude_replay_usage_condition(),
         )
