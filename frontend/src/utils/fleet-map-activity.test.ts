@@ -4,9 +4,22 @@ import {
   FleetActivityTracker,
   activityFromRealtime,
   modelKey,
+  windowMinutes,
+  windowRefreshMs,
 } from './fleet-map-activity';
 
 describe('fleet map activity', () => {
+  it('offers short windows and polls faster for them', () => {
+    expect(windowMinutes('5m')).to.equal(5);
+    expect(windowMinutes('1h')).to.equal(60);
+    expect(windowMinutes('30d')).to.equal(60 * 24 * 30);
+    expect(windowMinutes('any')).to.equal(null);
+    expect(windowRefreshMs('5m')).to.equal(30_000);
+    expect(windowRefreshMs('1h')).to.equal(60_000);
+    expect(windowRefreshMs('7d')).to.equal(300_000);
+    expect(windowRefreshMs('any')).to.equal(null);
+  });
+
   it('repaints at most once per interval and drops the stalest lines', () => {
     const clock = useFakeTimers({ now: 0 });
     try {

@@ -35,7 +35,7 @@ import '../../components/fleet-map';
 import { getFleetMap, type FleetMapGraph } from '../../fleet-map-api';
 import {
   loadFleetMapWindow,
-  windowHours,
+  windowMinutes,
   type FleetMapWindow,
 } from '../../utils/fleet-map-activity';
 import { loadViewMode, saveViewMode } from '../../utils/view-mode';
@@ -528,7 +528,8 @@ export class DeviceFleetView extends LitElement {
     }
   }
   /** The map is its own request, so a slow graph never holds the table. */
-  private async loadMap(): Promise<void> {
+  /** ``quiet``: a background refresh keeps the current map on failure. */
+  private async loadMap(quiet = false): Promise<void> {
     this.mapController?.abort();
     const controller = (this.mapController = new AbortController());
     this.mapLoading = true;
@@ -536,11 +537,11 @@ export class DeviceFleetView extends LitElement {
     try {
       const map = await getFleetMap(
         controller.signal,
-        windowHours(this.mapWindow)
+        windowMinutes(this.mapWindow)
       );
       if (!controller.signal.aborted) this.map = map;
     } catch (error) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && !(quiet && this.map))
         this.mapError =
           error instanceof Error
             ? error.message
@@ -613,6 +614,7 @@ export class DeviceFleetView extends LitElement {
         this.mapWindow = event.detail.window;
         void this.loadMap();
       }}
+      @fleet-map-stale=${() => void this.loadMap(true)}
     ></fleet-map>`;
   }
 

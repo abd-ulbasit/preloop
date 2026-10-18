@@ -31,10 +31,12 @@ import {
   FleetActivityTracker,
   activeGraph,
   activityFromRealtime,
+  FLEET_MAP_STALE_DEBOUNCE_MS,
+  windowRefreshMs,
   activityLabel,
   edgesForActivity,
   saveFleetMapWindow,
-  windowHours,
+  windowMinutes,
   type FleetMapWindow,
 } from '../utils/fleet-map-activity';
 import {
@@ -188,11 +190,40 @@ export class FleetMap extends LitElement {
   private suppressClick = false;
   private spatialCache?: { key: unknown[]; layout: FleetMapLayout };
 
-  /** Place one realtime message on the map, if it concerns a mapped agent. */
+  private refreshTimer?: ReturnType<typeof setInterval>;
+  private staleTimer?: ReturnType<typeof setTimeout>;
+
+  /**
+   * Place one realtime message on the map. Activity from an agent the map
+   * doesn't show means it just became active, so the host is asked to
+   * refetch (debounced, so a burst costs one request).
+   */
   recordActivity(topic: string, message: unknown): void {
     const hit = activityFromRealtime(topic, message);
     if (!hit || !this.graph) return;
-    this.activity.add(edgesForActivity(this.graph, hit), hit.kind);
+    const edges = edgesForActivity(this.graph, hit);
+    if (edges.length) this.activity.add(edges, hit.kind);
+    else this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
+  }
+
+  /** Fire `fleet-map-stale` once after ``delay`` ms; repeat calls coalesce. */
+  private requestRefresh(delay = 0): void {
+    if (!this.live || this.staleTimer !== undefined) return;
+    this.staleTimer = setTimeout(() => {
+      this.staleTimer = undefined;
+      this.dispatchEvent(
+        new CustomEvent('fleet-map-stale', { bubbles: true, composed: true })
+      );
+    }, delay);
+  }
+
+  /** Poll on the window's cadence so quiet resources leave a short window. */
+  private scheduleRefresh(): void {
+    if (this.refreshTimer !== undefined) clearInterval(this.refreshTimer);
+    this.refreshTimer = undefined;
+    const every = this.live ? windowRefreshMs(this.activityWindow) : null;
+    if (every !== null && this.isConnected)
+      this.refreshTimer = setInterval(() => this.requestRefresh(), every);
   }
 
   /** Repaint pending activity now rather than at the next throttle tick. */
@@ -234,7 +265,7 @@ export class FleetMap extends LitElement {
     saveFleetMapWindow(value);
     this.dispatchEvent(
       new CustomEvent('fleet-map-window-change', {
-        detail: { window: value, hours: windowHours(value) },
+        detail: { window: value, minutes: windowMinutes(value) },
         bubbles: true,
         composed: true,
       })
@@ -272,7 +303,15 @@ export class FleetMap extends LitElement {
       else window.removeEventListener('keydown', this.onWindowKey);
       this.refit = true;
     }
-    if (changed.has('graph')) this.refit = true;
+    // A background refresh replaces the graph; only the first graph or a new
+    // window re-fits, so polling never resets the user's zoom and pan.
+    if (
+      (changed.has('graph') && !changed.get('graph')) ||
+      (changed.has('activityWindow') && changed.get('activityWindow'))
+    )
+      this.refit = true;
+    if (changed.has('activityWindow') || changed.has('live'))
+      this.scheduleRefresh();
     if (this.refit && this.lastLayout) {
       this.refit = false;
       this.fit();
@@ -284,6 +323,9 @@ export class FleetMap extends LitElement {
     this.unsubscribes.forEach((unsubscribe) => unsubscribe());
     this.unsubscribes = [];
     this.activity.stop();
+    if (this.refreshTimer !== undefined) clearInterval(this.refreshTimer);
+    if (this.staleTimer !== undefined) clearTimeout(this.staleTimer);
+    this.refreshTimer = this.staleTimer = undefined;
     window.removeEventListener('keydown', this.onWindowKey);
     if (this.fullscreen) document.body.style.overflow = '';
   }
@@ -1100,11 +1142,11 @@ export class FleetMap extends LitElement {
     const cached = this.filterCache;
     if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.view;
-    const hours = windowHours(this.activityWindow);
+    const minutes = windowMinutes(this.activityWindow);
     // A server that applied the window says so; otherwise apply it here.
     const source =
-      this.graph && hours && this.graph.active_within_hours === undefined
-        ? activeGraph(this.graph, Date.now() - hours * 3_600_000)
+      this.graph && minutes && this.graph.active_within_minutes === undefined
+        ? activeGraph(this.graph, Date.now() - minutes * 60_000)
         : (this.graph ?? EMPTY);
     const view = filterGraph(source, {
       types: this.types,

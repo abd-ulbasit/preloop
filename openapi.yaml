@@ -8300,18 +8300,18 @@ paths:
           minimum: 50
           default: 500
           title: Limit
-      - name: active_within_hours
+      - name: active_within_minutes
         in: query
         required: false
         schema:
           anyOf:
           - type: integer
-            maximum: 8784
+            maximum: 527040
             minimum: 1
           - type: 'null'
-          description: Show only resources active in this many hours.
-          title: Active Within Hours
-        description: Show only resources active in this many hours.
+          description: Show only resources active in this many minutes.
+          title: Active Within Minutes
+        description: Show only resources active in this many minutes.
       responses:
         '200':
           description: Successful Response
@@ -30833,11 +30833,11 @@ components:
             type: string
           type: array
           title: Unavailable
-        active_within_hours:
+        active_within_minutes:
           anyOf:
           - type: integer
           - type: 'null'
-          title: Active Within Hours
+          title: Active Within Minutes
           description: Activity window applied to the graph; null means any time.
         decommissioned_agents:
           type: integer

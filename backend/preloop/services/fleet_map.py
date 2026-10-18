@@ -194,7 +194,7 @@ def build_fleet_map(
     *,
     user: models.User,
     limit: int = 500,
-    active_within_hours: int | None = None,
+    active_within_minutes: int | None = None,
 ) -> FleetMapResponse:
     """Load each source once, filter before linking, and cap the final graph.
 
@@ -202,7 +202,7 @@ def build_fleet_map(
         db: Request database session.
         user: Authenticated user in the selected account.
         limit: Maximum visible resource nodes, between 50 and 1000.
-        active_within_hours: Keep only resources active in this many hours;
+        active_within_minutes: Keep only resources active in this many minutes;
             None keeps every resource.
 
     Returns:
@@ -220,7 +220,7 @@ def build_fleet_map(
         raise HTTPException(
             403, "Insufficient permissions. Required: view_device_fleet"
         )
-    result = FleetMapResponse(limit=limit, active_within_hours=active_within_hours)
+    result = FleetMapResponse(limit=limit, active_within_minutes=active_within_minutes)
     account_id = str(user.account_id)
     permissions = {
         name: _allowed(db, user, name, owner)
@@ -664,8 +664,10 @@ def build_fleet_map(
                 )
             )
 
-    if active_within_hours is not None:
-        keep = active_node_ids(nodes, edges, now - timedelta(hours=active_within_hours))
+    if active_within_minutes is not None:
+        keep = active_node_ids(
+            nodes, edges, now - timedelta(minutes=active_within_minutes)
+        )
         nodes = {key: item for key, item in nodes.items() if key in keep}
         edges = {
             key: relation

@@ -1254,7 +1254,7 @@ describe('inventory-card spatial map', () => {
       routes: [
         {
           path: '/api/v1/fleet/map',
-          body: { ...sampleFleetMap(), active_within_hours: 720 },
+          body: { ...sampleFleetMap(), active_within_minutes: 43200 },
         },
       ],
     });

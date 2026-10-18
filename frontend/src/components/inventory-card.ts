@@ -19,7 +19,7 @@ import './fleet-map';
 import { getFleetMap, type FleetMapGraph } from '../fleet-map-api';
 import {
   loadFleetMapWindow,
-  windowHours,
+  windowMinutes,
   type FleetMapWindow,
 } from '../utils/fleet-map-activity';
 import { DEFAULT_USAGE_RANGE, USAGE_RANGE_OPTIONS } from './usage-card';
@@ -1090,18 +1090,19 @@ export class InventoryCard extends LitElement {
     if (view === 'map' && !this.map) void this.loadMap();
   }
 
-  private async loadMap(): Promise<void> {
+  /** ``quiet``: a background refresh keeps the current map on failure. */
+  private async loadMap(quiet = false): Promise<void> {
     this.mapController?.abort();
     const controller = (this.mapController = new AbortController());
     this.mapError = '';
     try {
       const map = await getFleetMap(
         controller.signal,
-        windowHours(this.mapWindow)
+        windowMinutes(this.mapWindow)
       );
       if (!controller.signal.aborted) this.map = map;
     } catch (error) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && !(quiet && this.map))
         this.mapError =
           error instanceof Error
             ? error.message
@@ -1155,6 +1156,7 @@ export class InventoryCard extends LitElement {
         this.mapWindow = event.detail.window;
         void this.loadMap();
       }}
+      @fleet-map-stale=${() => void this.loadMap(true)}
     ></fleet-map>`;
   }
 

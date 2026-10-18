@@ -1,5 +1,5 @@
 import { expect, fixture, html } from '@open-wc/testing';
-import { spy, stub } from 'sinon';
+import { spy, stub, useFakeTimers } from 'sinon';
 import './fleet-map';
 import type { FleetMap } from './fleet-map';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
@@ -507,7 +507,7 @@ describe('fleet-map labels', () => {
       await el.updateComplete;
       expect(changed.firstCall.args[0].detail).to.deep.equal({
         window: 'any',
-        hours: null,
+        minutes: null,
       });
       expect(localStorage.getItem('preloop:fleet-map:window')).to.equal('any');
       expect(node(el, 'agent:claude')).to.exist;
@@ -516,7 +516,7 @@ describe('fleet-map labels', () => {
     it('keeps the window reachable when nothing is active in it', async () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map
-          .graph=${{ ...sampleFleetMap(), nodes: [], edges: [], active_within_hours: 24 }}
+          .graph=${{ ...sampleFleetMap(), nodes: [], edges: [], active_within_minutes: 24 }}
           .activityWindow=${'24h'}
         ></fleet-map>`
       );
@@ -533,7 +533,7 @@ describe('fleet-map labels', () => {
       )!;
       select.value = 'any';
       select.dispatchEvent(new Event('change'));
-      expect(changed.firstCall.args[0].detail.hours).to.equal(null);
+      expect(changed.firstCall.args[0].detail.minutes).to.equal(null);
     });
 
     it('reads naive server timestamps as UTC, as the server does', async () => {
@@ -555,7 +555,7 @@ describe('fleet-map labels', () => {
     it('trusts a graph the server already filtered', async () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map
-          .graph=${{ ...sampleFleetMap(), active_within_hours: 24 }}
+          .graph=${{ ...sampleFleetMap(), active_within_minutes: 24 }}
           .activityWindow=${'24h'}
         ></fleet-map>`
       );
@@ -601,6 +601,59 @@ describe('fleet-map labels', () => {
       expect(
         el.shadowRoot!.querySelectorAll('path.edge.active').length
       ).to.equal(2);
+    });
+  });
+
+  describe('live refresh', () => {
+    it('asks the host to refetch when an unmapped agent becomes active', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'any'}
+        ></fleet-map>`
+      );
+      el.live = true;
+      const stale = spy();
+      el.addEventListener('fleet-map-stale', stale);
+      const clock = useFakeTimers();
+      try {
+        const call = {
+          type: 'model_gateway_call',
+          payload: { managed_agent_id: 'not-on-the-map', model_alias: 'x' },
+        };
+        el.recordActivity('gateway_activity', call);
+        el.recordActivity('gateway_activity', call);
+        clock.tick(2_999);
+        expect(stale.callCount).to.equal(0);
+        clock.tick(1);
+        expect(stale.callCount).to.equal(1);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it('polls on the window cadence so quiet resources drop out', async () => {
+      const clock = useFakeTimers();
+      try {
+        const el = await fixture<FleetMap>(
+          html`<fleet-map
+            .graph=${sampleFleetMap()}
+            .activityWindow=${'5m'}
+            live
+          ></fleet-map>`
+        );
+        const stale = spy();
+        el.addEventListener('fleet-map-stale', stale);
+        clock.tick(30_001);
+        expect(stale.callCount).to.equal(1);
+        el.activityWindow = 'any';
+        await el.updateComplete;
+        clock.tick(600_000);
+        expect(stale.callCount).to.equal(1);
+        el.remove();
+      } finally {
+        clock.restore();
+      }
     });
   });
 

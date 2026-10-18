@@ -11,25 +11,27 @@ import { parseUTCDate } from './date';
  * animation (DESIGN.md, Console > Motion).
  */
 
-export type FleetMapWindow = '24h' | '7d' | '30d' | '90d' | 'any';
+export type FleetMapWindow = '5m' | '1h' | '24h' | '7d' | '30d' | '90d' | 'any';
 
 export const FLEET_MAP_WINDOWS: readonly {
   value: FleetMapWindow;
   label: string;
-  hours: number | null;
+  minutes: number | null;
 }[] = [
-  { value: '24h', label: 'Last 24 hours', hours: 24 },
-  { value: '7d', label: 'Last 7 days', hours: 24 * 7 },
-  { value: '30d', label: 'Last 30 days', hours: 24 * 30 },
-  { value: '90d', label: 'Last 90 days', hours: 24 * 90 },
-  { value: 'any', label: 'Any time', hours: null },
+  { value: '5m', label: 'Last 5 minutes', minutes: 5 },
+  { value: '1h', label: 'Last hour', minutes: 60 },
+  { value: '24h', label: 'Last 24 hours', minutes: 60 * 24 },
+  { value: '7d', label: 'Last 7 days', minutes: 60 * 24 * 7 },
+  { value: '30d', label: 'Last 30 days', minutes: 60 * 24 * 30 },
+  { value: '90d', label: 'Last 90 days', minutes: 60 * 24 * 90 },
+  { value: 'any', label: 'Any time', minutes: null },
 ];
 
 export const DEFAULT_FLEET_MAP_WINDOW: FleetMapWindow = '30d';
 export const FLEET_MAP_WINDOW_KEY = 'preloop:fleet-map:window';
 
-export const windowHours = (value: FleetMapWindow): number | null =>
-  FLEET_MAP_WINDOWS.find((item) => item.value === value)?.hours ?? null;
+export const windowMinutes = (value: FleetMapWindow): number | null =>
+  FLEET_MAP_WINDOWS.find((item) => item.value === value)?.minutes ?? null;
 
 /** The stored window, or 30 days. Storage failures are a preference miss. */
 export function loadFleetMapWindow(): FleetMapWindow {
@@ -42,6 +44,21 @@ export function loadFleetMapWindow(): FleetMapWindow {
   }
   return DEFAULT_FLEET_MAP_WINDOW;
 }
+
+/**
+ * How often a host refetches the map so resources that went quiet drop out
+ * of a short window. Any time never expires anything, so it never polls.
+ */
+export function windowRefreshMs(value: FleetMapWindow): number | null {
+  const minutes = windowMinutes(value);
+  if (minutes === null) return null;
+  if (minutes <= 5) return 30_000;
+  if (minutes <= 60) return 60_000;
+  return 300_000;
+}
+
+/** Wait after activity from an unmapped agent before asking for a refetch. */
+export const FLEET_MAP_STALE_DEBOUNCE_MS = 3_000;
 
 export function saveFleetMapWindow(value: FleetMapWindow): void {
   try {

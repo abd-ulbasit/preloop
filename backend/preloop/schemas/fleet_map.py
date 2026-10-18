@@ -96,7 +96,7 @@ class FleetMapResponse(BaseModel):
     limit: int = 500
     clusters: list[FleetMapCluster] = Field(default_factory=list)
     unavailable: list[str] = Field(default_factory=list)
-    active_within_hours: int | None = Field(
+    active_within_minutes: int | None = Field(
         default=None,
         description="Activity window applied to the graph; null means any time.",
     )

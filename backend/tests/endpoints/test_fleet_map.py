@@ -46,10 +46,11 @@ def test_route_forwards_the_activity_window() -> None:
     ) as build:
         with TestClient(app) as client:
             assert (
-                client.get("/api/v1/fleet/map?active_within_hours=0").status_code == 422
+                client.get("/api/v1/fleet/map?active_within_minutes=0").status_code
+                == 422
             )
             assert client.get("/api/v1/fleet/map").status_code == 200
-            assert build.call_args.kwargs["active_within_hours"] is None
-            response = client.get("/api/v1/fleet/map?active_within_hours=168")
+            assert build.call_args.kwargs["active_within_minutes"] is None
+            response = client.get("/api/v1/fleet/map?active_within_minutes=168")
             assert response.status_code == 200
-            assert build.call_args.kwargs["active_within_hours"] == 168
+            assert build.call_args.kwargs["active_within_minutes"] == 168

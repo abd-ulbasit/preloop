@@ -899,6 +899,9 @@ def test_conflicting_enrollment_hostnames_do_not_name_the_device(
     nodes = {n.id: n for n in build_fleet_map(MagicMock(), user=viewer()).nodes}
     assert nodes["device:fp:example"].label == "Unknown device"
     assert "unknown_device" in nodes["device:fp:example"].gaps
+
+
+def test_activity_window_keeps_only_active_dependencies(
     sources: tuple[MagicMock, MagicMock],
 ) -> None:
     crud, _ = sources
@@ -926,11 +929,13 @@ def test_conflicting_enrollment_hostnames_do_not_name_the_device(
     ]
     everything = build_fleet_map(MagicMock(), user=viewer())
     assert "agent:agent-b" in {n.id for n in everything.nodes}
-    assert everything.active_within_hours is None
+    assert everything.active_within_minutes is None
 
-    graph = build_fleet_map(MagicMock(), user=viewer(), active_within_hours=24 * 30)
+    graph = build_fleet_map(
+        MagicMock(), user=viewer(), active_within_minutes=60 * 24 * 30
+    )
     ids = {n.id for n in graph.nodes}
-    assert graph.active_within_hours == 720
+    assert graph.active_within_minutes == 43200
     assert {"agent:agent-a", "user:owner-a", "provider:openai"} <= ids
     assert not ids & {
         "agent:agent-b",
@@ -984,7 +989,7 @@ def test_activity_window_reads_device_and_runner_evidence(
             )
         ],
     )
-    graph = build_fleet_map(MagicMock(), user=viewer(), active_within_hours=24)
+    graph = build_fleet_map(MagicMock(), user=viewer(), active_within_minutes=60 * 24)
     ids = {n.id for n in graph.nodes}
     assert {"runner:runner-new", "device:fp:new"} <= ids
     assert not ids & {"runner:runner-old", "device:fp:old"}
