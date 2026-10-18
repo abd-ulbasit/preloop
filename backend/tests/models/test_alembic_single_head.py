@@ -439,4 +439,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
         "20261027_chat_support",
         "20261027_admin_analytics",
     }
-    assert script.get_heads() == ["20261028_chat_admin_merge"]
+    verification = script.get_revision("20261028_obs_verification")
+    assert verification.down_revision == "20261028_chat_admin_merge"
+    assert script.get_heads() == ["20261028_obs_verification"]
