@@ -180,6 +180,7 @@
   "GET /api/v1/openapi.json": "deny",
   "GET /api/v1/openapi.yaml": "deny",
   "GET /api/v1/operator-notes": "deny",
+  "GET /api/v1/operator-notes/session-targets": "deny",
   "GET /api/v1/operator-notes/{note_id}": "deny",
   "GET /api/v1/organizations": "deny",
   "GET /api/v1/organizations/by-identifier/{identifier}": "deny",
