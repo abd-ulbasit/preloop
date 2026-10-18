@@ -486,7 +486,7 @@ describe('fleet-map live canvas', () => {
     expect((el as unknown as Glide).tween).to.equal(undefined);
   });
 
-  it('stores only the dragged node, so the fleet can still rearrange', async () => {
+  it('stores only the dragged machine, so the fleet can still rearrange', async () => {
     const el = await spatialMap();
     const target = el.shadowRoot!.querySelector<HTMLElement>(
       '[data-node="agent:codex"]'
@@ -507,7 +507,7 @@ describe('fleet-map live canvas', () => {
     const stored = JSON.parse(
       localStorage.getItem('preloop:fleet-map:positions:live-test:u-live')!
     );
-    expect(Object.keys(stored)).to.deep.equal(['agent:codex']);
+    expect(Object.keys(stored)).to.deep.equal(['device:mbp']);
     el.graph = withAna();
     await el.updateComplete;
     expect(movedIn(el), 'islands are dealt round again').to.be.greaterThan(0);

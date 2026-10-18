@@ -68,6 +68,7 @@ import {
   type FleetPip,
   type FleetPresence,
 } from '../utils/fleet-map-motion';
+import { nodeMark } from '../utils/fleet-map-icons';
 import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 import { getAgentKindPresentation } from '../utils/agent-kinds';
 import consoleStyles from '../styles/console-styles.css?inline';
@@ -199,6 +200,12 @@ export class FleetMap extends LitElement {
   /** Force the reduced-motion fallback (tests); the media query also does. */
   @property({ type: Boolean, attribute: 'reduced-motion' })
   reducedMotion = false;
+  /**
+   * Only the map: no toolbar, gap strip or legend (presentations, the demo).
+   * An empty map is a blank stage rather than the empty-state help.
+   */
+  @property({ type: Boolean, reflect: true }) bare = false;
+  @state() private bubbles = false;
   @state() private pips: FleetPip[] = [];
   @state() private toasts: FleetPip[] = [];
   @state() private arrangement: FleetMapArrangement = 'columns';
@@ -275,7 +282,8 @@ export class FleetMap extends LitElement {
       this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
   }
 
-  private readonly lights = new FleetLights();
+  // Calm by default: at most eight nodes lit at once.
+  private readonly lights = new FleetLights(1600, 8);
   private presence: FleetPresence = {
     entered: new Map(),
     leaving: new Map(),
@@ -316,9 +324,13 @@ export class FleetMap extends LitElement {
     if (!messages.length || !this.instanceAdmin) return;
     const now = Date.now();
     let lit = false;
+    const byId = new Map(this.shown().nodes.map((node) => [node.id, node]));
     for (const message of messages)
       if (this.positionOf(message.from)) {
-        this.lights.light(message, now);
+        this.lights.light(
+          { ...message, label: bubbleText(message, byId) },
+          now
+        );
         lit = true;
       }
     if (lit) {
@@ -366,11 +378,14 @@ export class FleetMap extends LitElement {
     }));
     // Under reduced motion nothing rises off the node; the counter and the
     // corner list still say what happened.
-    if (!this.motionOff) this.pips = [...this.pips, ...fresh].slice(-8);
+    // With Bubbles on, the bubble already says it beside the node.
+    if (!this.motionOff && !this.bubbles)
+      this.pips = [...this.pips, ...fresh].slice(-8);
     this.toasts = [...fresh.slice(0, 1), ...this.toasts].slice(0, 4);
+    // The agent or flow that acted lights up, and says what it did.
     for (const node of nodes) {
       const owner = owners.find((id) => ownerOf(view, node) === id);
-      if (owner) this.send([{ from: node, to: owner, kind: 'code', label }]);
+      this.send([{ from: node, to: owner ?? node, kind: 'code', label }]);
     }
     this.startFrames();
   }
@@ -607,6 +622,7 @@ export class FleetMap extends LitElement {
         this.defaultArrangement
       );
       this.points = loadPositions(this.userId, this.positionsScope);
+      this.bubbles = loadBubbles(this.userId, this.positionsScope);
     }
     this.dropHiddenSelection();
     if (changed.has('graph') || changed.has('codeActivity')) {
@@ -872,6 +888,8 @@ export class FleetMap extends LitElement {
               ...to,
               x: Math.round(from.x + (to.x - from.x) * e),
               y: Math.round(from.y + (to.y - from.y) * e),
+              // A machine box grows and shrinks as agents come and go.
+              h: Math.round(from.h + (to.h - from.h) * e),
             }
           : to
       );
@@ -884,7 +902,10 @@ export class FleetMap extends LitElement {
     this.suppressClick = false;
     const target = (event.target as Element).closest?.('[data-node]');
     if (this.spatial && target && this.lastLayout) {
-      const id = target.getAttribute('data-node') || '';
+      let id = target.getAttribute('data-node') || '';
+      // Dragging an agent inside a machine moves the machine with it.
+      for (const [host, kids] of this.lastLayout.groups)
+        if (kids.includes(id)) id = host;
       const position = this.lastLayout.positions.get(id);
       if (!position) return;
       this.drag = {
@@ -1722,6 +1743,53 @@ export class FleetMap extends LitElement {
         );
         color: var(--console-body-color);
       }
+      /* The node's mark: a product, model-family or provider logo. */
+      .glyph .mark {
+        width: 16px;
+        height: 16px;
+        object-fit: contain;
+      }
+      .node.child .glyph .mark {
+        width: 14px;
+        height: 14px;
+      }
+      .glyph .mark.mask {
+        display: block;
+        background: currentColor;
+        -webkit-mask: var(--mark) center / contain no-repeat;
+        mask: var(--mark) center / contain no-repeat;
+      }
+      /* A short note beside a node where traffic started (Bubbles on). */
+      .bubble {
+        position: absolute;
+        z-index: 3;
+        pointer-events: none;
+        white-space: nowrap;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: var(--console-text-meta);
+        color: var(--console-body-color);
+        background: var(--console-surface-raised, var(--console-surface));
+        border: 1px solid var(--sl-color-success-600);
+        border-radius: 2px 10px 10px 10px;
+        padding: 2px 8px;
+      }
+      .bubble.speak-response {
+        border-color: var(--sl-color-primary-600);
+      }
+      .bubble.speak-approval {
+        border-color: var(--sl-color-warning-600);
+      }
+      .bubble.speak-tool {
+        border-color: var(--console-hairline);
+      }
+      .overlay[hidden] {
+        display: none;
+      }
+      :host([bare]) .stage {
+        border: none;
+      }
       /* Above the zoom controls, clear of the column headers. */
       .toasts {
         bottom: 52px;
@@ -1958,6 +2026,23 @@ export class FleetMap extends LitElement {
               </fieldset>`
             : nothing
         }
+        ${
+          this.instanceAdmin
+            ? html`<button
+                type="button"
+                class="pill"
+                data-testid="fleet-map-bubbles"
+                aria-pressed=${this.bubbles ? 'true' : 'false'}
+                title="Show a short note beside a node when traffic starts there"
+                @click=${() => {
+                  this.bubbles = !this.bubbles;
+                  saveBubbles(this.userId, this.bubbles, this.positionsScope);
+                }}
+              >
+                Bubbles
+              </button>`
+            : nothing
+        }
         <span class="search">
           <sl-icon name="search" aria-hidden="true"></sl-icon>
           <input
@@ -2165,12 +2250,20 @@ export class FleetMap extends LitElement {
     const kids = groups.get(node.id)?.length;
     if (node.type === 'provider')
       return kids ? `${kids} account${kids === 1 ? '' : 's'}` : 'Provider';
-    if (node.type === 'device')
+    if (node.type === 'device') {
+      // A machine holds runners (both arrangements) and, on the spatial
+      // canvas, agents too: count each kind by its own name.
+      const held = groups.get(node.id) ?? [];
+      const count = (type: string, word: string) => {
+        const n = held.filter((id) => byId.get(id)?.type === type).length;
+        return n ? `${n} ${word}${n === 1 ? '' : 's'}` : '';
+      };
       return (
-        [node.status, kids ? `${kids} runner${kids === 1 ? '' : 's'}` : '']
+        [node.status, count('agent', 'agent'), count('runner', 'runner')]
           .filter(Boolean)
           .join(' · ') || 'Device'
       );
+    }
     if (node.type === 'runner') return node.status || 'Runner';
     return node.detail || FLEET_MAP_TYPE_LABEL[node.type];
   }
@@ -2257,8 +2350,8 @@ export class FleetMap extends LitElement {
         this.select(node.id);
       }}
     >
-      <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
-      ${child ? nothing : this.renderCode(node)}
+      ${this.renderGlyph(node, context.byId)}
+      ${child && node.type !== 'agent' ? nothing : this.renderCode(node)}
       <span class="text"
         ><span class="label">${label}</span>${
           child
@@ -2296,6 +2389,29 @@ export class FleetMap extends LitElement {
       </button>`;
   }
 
+  /**
+   * The node's mark: an agent's product logo, a model's family mark, a
+   * provider's own mark, or the type icon.
+   */
+  private renderGlyph(node: FleetMapNode, byId: Map<string, FleetMapNode>) {
+    const provider = node.provider_ids
+      .map((id) => byId.get(id)?.label)
+      .find(Boolean);
+    const mark = nodeMark(node, ICON[node.type], provider ?? '');
+    return html`<span class="glyph" data-mark=${mark.name}
+      >${
+        mark.kind === 'img'
+          ? html`<img class="mark" src=${mark.src!} alt="" />`
+          : mark.kind === 'mask'
+            ? html`<span
+                class="mark mask"
+                style="--mark:url('${mark.src}')"
+              ></span>`
+            : html`<sl-icon name=${mark.icon!}></sl-icon>`
+      }</span
+    >`;
+  }
+
   /** Pull and merge request counters on an agent, flow or person. */
   private renderCode(node: FleetMapNode) {
     if (!this.instanceAdmin) return nothing;
@@ -2313,7 +2429,10 @@ export class FleetMap extends LitElement {
       aria-label="Pull and merge requests: ${title}"
       >${items.map(
         ([action, icon]) =>
-          html`<span class="code-badge ${action}" data-action=${action}
+          html`<span
+            class="code-badge ${action}"
+            data-action=${action}
+            title="${counts[action]} ${CODE_BADGES.find(([a]) => a === action)?.[2] ?? action}"
             ><sl-icon name=${icon} aria-hidden="true"></sl-icon
             >${counts[action]}</span
           >`
@@ -2336,10 +2455,33 @@ export class FleetMap extends LitElement {
         aria-hidden="true"
         style="left:${position.x}px;top:${position.y}px;width:${position.w}px;height:${position.h}px;opacity:${style?.opacity.toFixed(3) ?? 0}"
       >
-        <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
+        ${this.renderGlyph(node, new Map())}
         <span class="text"
           ><span class="label">${displayLabel(node)}</span></span
         >
+      </div>`;
+    });
+  }
+
+  /**
+   * Short notes beside the nodes where traffic just started: what was asked,
+   * answered or decided, never the text of a prompt. Off unless the viewer
+   * turned Bubbles on; at most six at once, newest kept.
+   */
+  private renderBubbles(positions: Map<string, FleetMapPosition>) {
+    if (!this.bubbles || !this.instanceAdmin) return nothing;
+    const lit = this.lights
+      .active(Date.now())
+      .filter((item) => item.label && positions.has(item.node))
+      .slice(-6);
+    return lit.map((item) => {
+      const p = positions.get(item.node)!;
+      return html`<div
+        class="bubble speak-${item.kind}"
+        data-bubble=${item.node}
+        style="left:${p.x + p.w + 8}px;top:${p.y + p.h / 2 - 12}px"
+      >
+        ${item.label}
       </div>`;
     });
   }
@@ -2418,6 +2560,13 @@ export class FleetMap extends LitElement {
     >();
     for (const edge of view.edges) {
       if (edge.kind === 'account_of_provider' && !this.spatial) continue;
+      // A machine box already says what runs on it.
+      if (
+        this.spatial &&
+        edge.kind === 'hosts' &&
+        layout.groups.get(edge.source)?.includes(edge.target)
+      )
+        continue;
       if (
         edge.kind === 'uses_account' &&
         !(lit && lit.has(edge.source) && lit.has(edge.target))
@@ -2634,7 +2783,7 @@ export class FleetMap extends LitElement {
       view.nodes.map((node) => node.id).join(',') +
       '|' +
       view.edges.map((edge) => edge.id).join(',');
-    const key = [shape, this.points, this.dragSnapshot];
+    const key = [shape, this.points, this.dragSnapshot, this.collapsed];
     const cached = this.spatialCache;
     if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.layout;
@@ -2659,7 +2808,8 @@ export class FleetMap extends LitElement {
       view,
       seed,
       { ...settled, ...(this.dragSnapshot ?? {}), ...this.points },
-      clusters
+      clusters,
+      this.collapsed
     );
     for (const [id, position] of layout.positions)
       this.settled.set(id, { x: position.x, y: position.y });
@@ -2694,6 +2844,10 @@ export class FleetMap extends LitElement {
   render() {
     const graph = this.graph && withCodeFlows(this.graph, this.codeActivity);
     if (!graph) return nothing;
+    if (!graph.nodes.length && this.bare) {
+      this.lastLayout = null;
+      return html`<div class="stage" data-testid="fleet-map"></div>`;
+    }
     if (!graph.nodes.length) {
       this.lastLayout = null;
       const windowLabel = FLEET_MAP_WINDOWS.find(
@@ -2768,8 +2922,8 @@ export class FleetMap extends LitElement {
     // On an administrator's spatial canvas the lit node says where traffic
     // started; the line lights without a label, so a busy map stays legible.
     const quiet = this.instanceAdmin && this.spatial;
-    return html`${this.renderToolbar(graph, filtered, hits)}
-      ${this.renderGaps(filtered)}
+    return html`${this.bare ? nothing : this.renderToolbar(graph, filtered, hits)}
+      ${this.bare ? nothing : this.renderGaps(filtered)}
       ${
         graph.unavailable.length
           ? html`<p class="notice" role="status">
@@ -2911,6 +3065,7 @@ export class FleetMap extends LitElement {
                 })}
                 ${this.renderLeaving(layout.positions)}
                 ${this.renderPips(layout.positions)}
+                ${this.renderBubbles(layout.positions)}
                 ${layout.more.map(
                   (row) =>
                     html`<button
@@ -2973,7 +3128,7 @@ export class FleetMap extends LitElement {
             ></sl-icon>
           </button>
         </div>
-        <div class="overlay legend">
+        <div class="overlay legend" ?hidden=${this.bare}>
           <span
             ><svg viewBox="0 0 24 8" aria-hidden="true">
               <line x1="0" y1="4" x2="24" y2="4" class="edge" /></svg
@@ -2996,6 +3151,57 @@ export class FleetMap extends LitElement {
         ${this.instanceAdmin ? this.renderToasts(new Map(view.nodes.map((node) => [node.id, node]))) : nothing}
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
+  }
+}
+
+const BUBBLES_KEY = 'preloop:fleet-map:bubbles';
+
+function loadBubbles(user: string, scope: string): boolean {
+  try {
+    return (
+      localStorage.getItem(`${BUBBLES_KEY}:${scope}:${user || 'anonymous'}`) ===
+      'on'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function saveBubbles(user: string, on: boolean, scope: string): void {
+  try {
+    localStorage.setItem(
+      `${BUBBLES_KEY}:${scope}:${user || 'anonymous'}`,
+      on ? 'on' : 'off'
+    );
+  } catch {
+    // A preference, not a requirement.
+  }
+}
+
+/**
+ * What a bubble says. Short and from fields the event already carries:
+ * which model was asked, that it answered, which tool ran, what was decided.
+ * Never a prompt or a reply's text.
+ */
+function bubbleText(
+  message: FleetMessage,
+  byId: Map<string, FleetMapNode>
+): string {
+  const to = byId.get(message.to)?.label ?? '';
+  switch (message.kind) {
+    case 'request':
+      return to ? `asks ${to}` : 'model request';
+    case 'response':
+      return 'answers';
+    case 'tool':
+      return message.label ? `runs ${message.label}` : 'tool call';
+    case 'approval':
+      return (
+        message.label.replace(/^approve (.+)\?$/, 'asks to run $1') ||
+        'asks for approval'
+      );
+    default:
+      return message.label;
   }
 }
 

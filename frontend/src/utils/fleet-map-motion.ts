@@ -70,23 +70,35 @@ export class FleetLights {
           : start,
       until: start + this.holdMs,
     });
-    // The cap counts lights on screen now; a reply still waiting for its
-    // delay never pushes out a node that is lit.
+    this.trim(now);
+  }
+
+  /**
+   * Drop expired lights and keep at most `max` on screen, the ones lit
+   * longest going dark first. Runs whenever lights are read, so a delayed
+   * reply that comes on is held to the cap too; a reply still waiting
+   * never pushes out a node that is lit.
+   */
+  private trim(now: number): void {
     for (const [id, item] of this.items)
       if (item.until <= now) this.items.delete(id);
-    const lit = [...this.items.values()].filter((item) => item.start <= now);
+    const lit = [...this.items.values()]
+      .filter((item) => item.start <= now)
+      .sort((a, b) => a.start - b.start);
     for (const item of lit.slice(0, Math.max(0, lit.length - this.max)))
       this.items.delete(item.node);
   }
 
   /** The light on `node` at `now`, if any. */
   at(node: string, now: number): FleetLight | undefined {
+    this.trim(now);
     const item = this.items.get(node);
     return item && item.start <= now && now < item.until ? item : undefined;
   }
 
   /** Lit nodes at `now`. */
   active(now: number): FleetLight[] {
+    this.trim(now);
     return [...this.items.values()].filter(
       (item) => item.start <= now && now < item.until
     );
@@ -94,8 +106,6 @@ export class FleetLights {
 
   /** Drop expired lights; true when what is lit changed since last asked. */
   changed(now: number): boolean {
-    for (const [id, item] of this.items)
-      if (item.until <= now) this.items.delete(id);
     const key = this.active(now)
       .map((item) => `${item.node}:${item.kind}`)
       .sort()

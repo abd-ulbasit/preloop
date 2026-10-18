@@ -214,6 +214,28 @@ describe('fleet-map-motion', () => {
     expect(lights.size, 'the pending reply is kept').to.equal(3);
   });
 
+  it('holds delayed replies to the cap when they come on', () => {
+    const lights = new FleetLights(2000, 2);
+    for (const [agent, model] of [
+      ['agent:a', 'model:x'],
+      ['agent:b', 'model:y'],
+    ]) {
+      lights.light({ from: agent, to: model, kind: 'request', label: '' }, 0);
+      lights.light(
+        { from: model, to: agent, kind: 'response', label: '', delay: 900 },
+        0
+      );
+    }
+    expect(lights.active(100).length).to.equal(2);
+    // At 900 ms both replies come on; still two lit, the replies win.
+    expect(
+      lights
+        .active(1000)
+        .map((l) => l.node)
+        .sort()
+    ).to.deep.equal(['model:x', 'model:y']);
+  });
+
   it('enters new nodes and fades out the ones that left the window', () => {
     const graph = sampleFleetMap();
     const before = graph.nodes.slice(0, 5);
