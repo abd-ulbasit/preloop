@@ -24,6 +24,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from preloop.models.concurrent_index_ddl import concurrent_index_ddl
+
 revision: str = "20261031_code_tool_idx"
 down_revision: Union[str, None] = "20261030_gateway_model_idx"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -76,13 +78,13 @@ def _build(name: str, definition: str) -> None:
 
 def upgrade() -> None:
     """Build without blocking writes; repair an invalid prior attempt."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         _build(INDEX, DEFINITION)
         _build(PR_INDEX, PR_DEFINITION)
 
 
 def downgrade() -> None:
     """Remove only the two Fleet Map indexes."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {PR_INDEX}"))
         op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}"))

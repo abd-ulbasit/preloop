@@ -34,6 +34,10 @@ spec:
           env:
             - name: PRELOOP_MIGRATION_LOCK_TIMEOUT
               value: {{ .Values.migrationJob.lockTimeout | quote }}
+            - name: PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS
+              value: {{ .Values.migrationJob.concurrentLockTimeoutSeconds | default 60 | quote }}
+            - name: PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS
+              value: {{ .Values.migrationJob.concurrentStatementTimeoutSeconds | default 120 | quote }}
             - name: PRELOOP_MIGRATION_MAX_ATTEMPTS
               value: {{ .Values.migrationJob.maxAttempts | quote }}
             - name: PRELOOP_MIGRATION_RETRY_MIN_SECONDS

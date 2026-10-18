@@ -58,6 +58,8 @@ def test_the_job_carries_the_lock_and_retry_settings() -> None:
     env = _env(_container(_job()))
     assert env["PRELOOP_MIGRATION_LOCK_TIMEOUT"] == "5s"
     assert env["PRELOOP_MIGRATION_MAX_ATTEMPTS"] == "20"
+    assert env["PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS"] == "60"
+    assert env["PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS"] == "120"
     assert env["PRELOOP_MIGRATION_RETRY_MIN_SECONDS"] == "3"
     assert env["PRELOOP_MIGRATION_RETRY_MAX_SECONDS"] == "15"
 
@@ -89,3 +91,19 @@ def test_the_job_keeps_its_pre_upgrade_hook_and_bounds_pod_retries() -> None:
     # only has to cover a crash.
     assert job["spec"]["backoffLimit"] == 2
     assert _job(["migrationJob.backoffLimit=5"])["spec"]["backoffLimit"] == 5
+
+
+def test_concurrent_index_budgets_can_be_tuned_without_relaxing_blocking_ddl() -> None:
+    env = _env(
+        _container(
+            _job(
+                [
+                    "migrationJob.concurrentLockTimeoutSeconds=45",
+                    "migrationJob.concurrentStatementTimeoutSeconds=180",
+                ]
+            )
+        )
+    )
+    assert env["PRELOOP_MIGRATION_LOCK_TIMEOUT"] == "5s"
+    assert env["PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS"] == "45"
+    assert env["PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS"] == "180"

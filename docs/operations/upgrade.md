@@ -57,9 +57,12 @@ helm upgrade preloop ./helm/preloop \
   --set image.tag=<new-version>
 ```
 
-Database migrations run automatically: the chart ships a `post-upgrade` Job
-(`migration-job`) that executes `alembic upgrade head` against the configured
-database after each `helm upgrade`, so no manual migration step is needed.
+Database migrations run automatically: the chart ships a `pre-upgrade` Job
+(`migration-job`) that executes `python -m preloop.models.migrate` against the
+configured database before each `helm upgrade`. It commits each revision and
+retries transient lock contention; explicit concurrent-index statements have
+separate finite waits while blocking DDL retains its short lock timeout. No
+manual migration step is needed. See [schema migration diagnostics](schema-migrations.md).
 
 ## CLI
 

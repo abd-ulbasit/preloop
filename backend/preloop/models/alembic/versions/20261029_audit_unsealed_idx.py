@@ -5,6 +5,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from preloop.models.concurrent_index_ddl import concurrent_index_ddl
+
 revision: str = "20261029_audit_unsealed_idx"
 down_revision: Union[str, None] = "20261018_gov_spend_idx"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -18,7 +20,7 @@ NAME = "ix_audit_log_account_unsealed"
 
 def upgrade() -> None:
     """Build the partial index concurrently, repairing an interrupted build."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         invalid = (
             op.get_bind()
             .execute(
@@ -43,5 +45,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove the index without blocking audit writes."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {NAME}")

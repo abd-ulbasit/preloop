@@ -398,6 +398,8 @@ The `pre-upgrade` hook runs against the pods that are still serving. See
 | Name                               | Description                                           | Value       |
 |------------------------------------|-------------------------------------------------------|-------------|
 | `migrationJob.lockTimeout`         | Per-session lock_timeout for the migration connection | `5s`        |
+| `migrationJob.concurrentLockTimeoutSeconds` | Lock wait for explicit concurrent-index blocks only | `60` |
+| `migrationJob.concurrentStatementTimeoutSeconds` | Whole-statement limit for concurrent-index blocks | `120` |
 | `migrationJob.maxAttempts`         | Attempts at `upgrade head` before the Job fails       | `20`        |
 | `migrationJob.retryMinSeconds`     | Lower bound of the jittered backoff between attempts  | `3`         |
 | `migrationJob.retryMaxSeconds`     | Upper bound of the jittered backoff between attempts  | `15`        |
@@ -958,6 +960,9 @@ traffic, so the Job runs `python -m preloop.models.migrate` rather than bare
   change `database.cnpg.resilience.lock_timeout`. Short on purpose: a pending
   ACCESS EXCLUSIVE request blocks every query queued behind it, so a long wait
   stalls reads of that table for just as long;
+- explicit concurrent-index blocks use separate bounded lock/statement budgets
+  (60/120 seconds). They can wait for older writers and snapshots while normal
+  writes continue; both session settings are restored before ordinary DDL;
 - lock contention (deadlock, lock timeout, serialization failure) is retried up
   to `migrationJob.maxAttempts` times with `migrationJob.retryMinSeconds` to
   `migrationJob.retryMaxSeconds` of jittered backoff. Any other error fails on

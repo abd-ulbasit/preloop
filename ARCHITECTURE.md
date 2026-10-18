@@ -91,6 +91,10 @@ needing only totals set `include_breakdown=false`, which skips the unused
 aggregations. The grouped audit timeline resolves correlations and approval
 lifecycle through account-scoped partial JSON-expression indexes. Their
 migration builds indexes concurrently and repairs interrupted invalid builds.
+Explicit concurrent-index blocks have bounded lock and statement budgets and
+restore the migration session's short blocking-DDL timeout afterwards. Operation
+durations and cancellation diagnostics identify contention without extending
+the deployment deadline. See [schema migrations](docs/operations/schema-migrations.md).
 Cost and cycle time per tracker issue are rolled up across flows into their own
 tables. Each issue row, summary and unassigned bucket also states `cost_coverage`
 (`complete`, `partial`, `unknown`) and how many of its runs carry a cost, so an
