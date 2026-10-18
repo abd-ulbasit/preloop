@@ -173,3 +173,63 @@ describe('fleet-map completeness and navigation', () => {
     ).not.to.equal(initial);
   });
 });
+
+describe('fleet-map capped and narrow views', () => {
+  it('counts loaded resources separately from omitted summary groups', async () => {
+    const { withClusters } = await import('../fleet-map-api');
+    const graph = withClusters({
+      ...sampleFleetMap(),
+      truncated: true,
+      clusters: [{ type: 'agent', count: 80 }],
+    });
+    const el = await fixture<FleetMap>(
+      html`<fleet-map .graph=${graph}></fleet-map>`
+    );
+    const count = el
+      .shadowRoot!.querySelector('.count')!
+      .textContent!.replace(/\s+/g, ' ')
+      .trim();
+    expect(count).to.equal('15 nodes · 1 summary group');
+  });
+
+  it('keeps zoom controls and selection on screen when the panel is below the map', async () => {
+    const { setViewport } = await import('@web/test-runner-commands');
+    await setViewport({ width: 390, height: 844 });
+    try {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
+      );
+      node(el, 'account:prod').click();
+      await el.updateComplete;
+      const stage = el
+        .shadowRoot!.querySelector('.stage')!
+        .getBoundingClientRect();
+      const controls = el
+        .shadowRoot!.querySelector('.canvas-tools')!
+        .getBoundingClientRect();
+      const selection = node(el, 'account:prod').getBoundingClientRect();
+      expect(controls.left).to.be.at.least(stage.left);
+      expect(controls.right).to.be.at.most(stage.right);
+      expect(selection.left).to.be.at.least(stage.left);
+      expect(selection.right).to.be.at.most(stage.right);
+    } finally {
+      await setViewport({ width: 1280, height: 800 });
+    }
+  });
+
+  it('shows gaps for the active filters and clears a focus that becomes hidden', async () => {
+    const el = await fixture<FleetMap>(
+      html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
+    );
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      '[data-gap="discovered_agent"]'
+    )!.click();
+    const owner = el.shadowRoot!.querySelector('select')!;
+    owner.value = 'user:maya';
+    owner.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-gap="discovered_agent"]')).to.not
+      .exist;
+    expect(node(el, 'agent:claude').classList.contains('dim')).to.equal(false);
+  });
+});

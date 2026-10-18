@@ -404,6 +404,9 @@ export class FleetMap extends LitElement {
         top: 12px;
         right: 12px;
       }
+      .stage.has-selection .canvas-tools {
+        right: 344px;
+      }
       .canvas-tools button {
         font: inherit;
         font-size: var(--console-text-meta);
@@ -553,6 +556,9 @@ export class FleetMap extends LitElement {
         color: var(--console-meta-color);
       }
       @media (max-width: 900px) {
+        .stage.has-selection .canvas-tools {
+          right: 12px;
+        }
         .panel {
           left: 12px;
           width: auto;
@@ -572,14 +578,18 @@ export class FleetMap extends LitElement {
     `,
   ];
 
-  /** Clearing a selection that a filter just hid keeps the panel honest. */
+  /** Filters cannot leave a hidden selection or gap focus dimming the canvas. */
   willUpdate(): void {
-    if (
-      this.selected &&
-      this.graph &&
-      !this.visible().nodes.some((node) => node.id === this.selected)
-    )
+    const visible = this.visible().nodes;
+    if (this.selected && !visible.some((node) => node.id === this.selected))
       this.selected = '';
+    if (
+      this.focusGap &&
+      !visible.some((node) =>
+        node.gaps.includes(this.focusGap as FleetMapGapCode)
+      )
+    )
+      this.focusGap = '';
   }
 
   private visible(): FleetMapGraph {
@@ -611,8 +621,14 @@ export class FleetMap extends LitElement {
     if (!stage || !position) return;
     const right =
       this.translateX + (position.x + FLEET_MAP_NODE_WIDTH) * this.scale;
-    const limit = stage.getBoundingClientRect().width - 356;
+    // On narrow screens the panel sits below the selection, not to its right.
+    const narrow = window.matchMedia('(max-width: 900px)').matches;
+    const bounds = stage.getBoundingClientRect();
+    const limit = bounds.width - (narrow ? 24 : 356);
     if (right > limit) this.translateX -= right - limit;
+    const left = this.translateX + position.x * this.scale;
+    if (left < 24) this.translateX += 24 - left;
+    if (narrow) this.translateY = 64 - position.y * this.scale;
   }
 
   private toggleType(type: FleetMapNodeType): void {
@@ -638,6 +654,8 @@ export class FleetMap extends LitElement {
   };
 
   private renderFilters(graph: FleetMapGraph, shown: number) {
+    const total = graph.nodes.filter((node) => node.type !== 'cluster').length;
+    const groups = graph.nodes.filter((node) => node.type === 'cluster').length;
     const people = graph.nodes.filter((node) => node.type === 'user');
     const providers = graph.nodes.filter((node) => node.type === 'provider');
     const filtered =
@@ -682,8 +700,8 @@ export class FleetMap extends LitElement {
         </select></label
       >
       <span class="count" aria-live="polite"
-        >${filtered ? `${shown} of ${graph.nodes.length}` : graph.nodes.length}
-        node${graph.nodes.length === 1 ? '' : 's'}</span
+        >${filtered ? `${shown} of ${total}` : total}
+        node${total === 1 ? '' : 's'}${groups ? ` · ${groups} summary group${groups === 1 ? '' : 's'}` : ''}</span
       >
     </div>`;
   }
@@ -929,8 +947,8 @@ export class FleetMap extends LitElement {
       if (node.type !== 'cluster')
         perColumn.set(node.type, (perColumn.get(node.type) || 0) + 1);
     const half = FLEET_MAP_NODE_HEIGHT / 2;
-    return html`${this.renderFilters(graph, view.nodes.length)}
-      ${this.renderGaps(graph)}
+    return html`${this.renderFilters(graph, view.nodes.filter((node) => node.type !== 'cluster').length)}
+      ${this.renderGaps(view)}
       ${
         graph.unavailable.length
           ? html`<p class="notice" role="status">
@@ -951,7 +969,7 @@ export class FleetMap extends LitElement {
           : nothing
       }
       <div
-        class="stage"
+        class="stage ${radius ? 'has-selection' : ''}"
         tabindex="0"
         role="region"
         aria-label="Fleet dependency map"
@@ -1035,7 +1053,6 @@ export class FleetMap extends LitElement {
           class="overlay canvas-tools"
           role="group"
           aria-label="Map navigation"
-          style=${radius ? 'right:344px' : ''}
         >
           <button
             type="button"
