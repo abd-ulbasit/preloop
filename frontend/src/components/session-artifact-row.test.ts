@@ -964,11 +964,16 @@ describe('artifact previews load on demand (#1690)', () => {
     expect(byteFetches()).to.have.length(2);
 
     const third = thumbnail(found[2]);
-    await third.updateComplete;
+    // The budget is checked when the thumbnail becomes visible, so the
+    // placeholder appears after the observer fires, not on first render.
+    await waitUntil(
+      () =>
+        third.shadowRoot!.querySelector('[data-testid="preview-on-demand"]'),
+      'click-to-load placeholder'
+    );
     const placeholder = third.shadowRoot!.querySelector(
       '[data-testid="preview-on-demand"]'
     ) as HTMLButtonElement;
-    expect(placeholder, 'click-to-load placeholder').to.exist;
     placeholder.click();
     await waitUntil(() => byteFetches().length === 3, 'loads on click');
   });
