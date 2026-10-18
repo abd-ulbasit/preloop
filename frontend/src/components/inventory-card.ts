@@ -17,8 +17,9 @@ import '@shoelace-style/shoelace/dist/components/tab-group/tab-group.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import './user-avatar';
 import { userHref } from '../utils/user-href';
-import './fleet-map';
-import { getFleetMap, type FleetMapGraph } from '../fleet-map-api';
+// The map component and its API load on first use, not with the Overview:
+// most readers never open the map and many may not see the fleet at all.
+import type { FleetMapGraph } from '../fleet-map-api';
 
 import consoleStyles from '../styles/console-styles.css?inline';
 import { parseUTCDate, formatRelativeTime } from '../utils/date';
@@ -389,17 +390,52 @@ export class InventoryCard extends LitElement {
   private mapController?: AbortController;
 
   /**
-   * Esc leaves full screen, except when the map has a selection to clear:
-   * the map uses Esc for that, and one key press should undo one thing.
-   * Registered in the capture phase, so the selection is read before the
-   * map's own handler clears it.
+   * Whether the map had a selection when this Esc was pressed. Read in the
+   * capture phase, before the map's own handler clears it, so the dialog's
+   * `cancel` (which fires after the keydown) knows what the key undid.
    */
-  private onKeydown = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape' || !this.mapFullscreen) return;
-    const map = this.shadowRoot?.querySelector('.map-overlay fleet-map') as
-      (Element & { selected?: string; focusGap?: string }) | null;
-    const fromMap = map != null && event.composedPath().includes(map);
-    if (fromMap && (map.selected || map.focusGap)) return;
+  private escHadSelection = false;
+
+  private mapInOverlay():
+    | (Element & {
+        selected?: string;
+        focusGap?: string;
+      })
+    | null {
+    return this.shadowRoot?.querySelector('.map-overlay fleet-map') ?? null;
+  }
+
+  private onOverlayKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    const map = this.mapInOverlay();
+    this.escHadSelection = Boolean(map?.selected || map?.focusGap);
+  };
+
+  /**
+   * Esc on the modal: one key press undoes one thing. With a map selection
+   * it clears the selection (wherever focus is, the map's own handler only
+   * hears keys from inside the canvas), and only without one does it leave
+   * full screen.
+   */
+  /**
+   * The browser may close the modal itself: after a cancelled `cancel`, the
+   * next Esc without user activation closes it without asking. Follow it.
+   */
+  private onOverlayClose = () => {
+    if (this.mapFullscreen) void this.setFullscreen(false);
+  };
+
+  private onOverlayCancel = (event: Event) => {
+    event.preventDefault();
+    if (this.escHadSelection) {
+      this.escHadSelection = false;
+      const map = this.mapInOverlay();
+      if (map && (map.selected || map.focusGap)) {
+        map.selected = '';
+        map.focusGap = '';
+      }
+      return;
+    }
     void this.setFullscreen(false);
   };
 
@@ -509,15 +545,21 @@ export class InventoryCard extends LitElement {
           padding: var(--sl-spacing-medium);
         }
 
+        /* A native modal dialog: the top layer, an inert page behind it and
+           a focus trap come with showModal(). */
         .map-overlay {
           --fleet-map-stage-height: calc(100dvh - 150px);
           background: var(--console-page);
+          border: 0;
           box-sizing: border-box;
-          inset: 0;
+          color: inherit;
+          height: 100dvh;
+          margin: 0;
+          max-height: none;
+          max-width: none;
           overflow: auto;
           padding: var(--sl-spacing-medium) var(--sl-spacing-large);
-          position: fixed;
-          z-index: 900;
+          width: 100vw;
         }
 
         .map-overlay-head {
@@ -846,17 +888,19 @@ export class InventoryCard extends LitElement {
     }
     this.onResize();
     window.addEventListener('resize', this.onResize);
-    window.addEventListener('keydown', this.onKeydown, true);
   }
 
   disconnectedCallback(): void {
     window.removeEventListener('resize', this.onResize);
-    window.removeEventListener('keydown', this.onKeydown, true);
     this.mapController?.abort();
+    this.lockPageScroll(false);
     super.disconnectedCallback();
   }
 
   protected updated(): void {
+    const overlay =
+      this.shadowRoot?.querySelector<HTMLDialogElement>('dialog.map-overlay');
+    if (overlay && !overlay.open) overlay.showModal();
     // A remembered Map view loads once the host says the map is allowed.
     if (
       this.activeView === 'map' &&
@@ -876,7 +920,19 @@ export class InventoryCard extends LitElement {
   private setView(view: InventoryView): void {
     if (view === this.view) return;
     this.view = view;
-    if (view === 'table') this.mapFullscreen = false;
+    if (view === 'table' && this.mapFullscreen) {
+      this.mapFullscreen = false;
+      this.lockPageScroll(false);
+      // Leaving the modal by its Table button lands on the same control in
+      // the card, not on the document.
+      void this.updateComplete.then(() =>
+        this.shadowRoot
+          ?.querySelector<HTMLElement>(
+            '.card-head .view-switch button[aria-pressed="true"]'
+          )
+          ?.focus()
+      );
+    }
     try {
       localStorage.setItem(INVENTORY_VIEW_STORAGE_KEY, view);
     } catch {
@@ -891,6 +947,10 @@ export class InventoryCard extends LitElement {
     this.mapLoading = true;
     this.mapError = '';
     try {
+      const [{ getFleetMap }] = await Promise.all([
+        import('../fleet-map-api'),
+        import('./fleet-map'),
+      ]);
       const map = await getFleetMap(controller.signal);
       if (!controller.signal.aborted) this.map = map;
     } catch (error) {
@@ -905,8 +965,14 @@ export class InventoryCard extends LitElement {
     }
   }
 
+  /** The page behind a full-screen map does not scroll under it. */
+  private lockPageScroll(lock: boolean): void {
+    document.documentElement.style.overflow = lock ? 'hidden' : '';
+  }
+
   private async setFullscreen(open: boolean): Promise<void> {
     this.mapFullscreen = open;
+    this.lockPageScroll(open);
     await this.updateComplete;
     // Focus follows the toggle, so a keyboard reader lands on the control
     // that undoes it.
@@ -2004,18 +2070,19 @@ export class InventoryCard extends LitElement {
       </sl-card>
       ${
         this.mapFullscreen
-          ? html`<div
+          ? html`<dialog
               class="map-overlay"
-              role="dialog"
-              aria-modal="true"
               aria-label="Fleet map"
+              @keydown=${{ handleEvent: this.onOverlayKeydown, capture: true }}
+              @cancel=${this.onOverlayCancel}
+              @close=${this.onOverlayClose}
             >
               <div class="map-overlay-head">
                 <span class="title">Fleet map</span>
                 ${this.renderViewSwitch()} ${this.renderFullscreenToggle()}
               </div>
               ${this.renderMapBody()}
-            </div>`
+            </dialog>`
           : nothing
       }
     `;

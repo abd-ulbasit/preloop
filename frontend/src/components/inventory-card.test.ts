@@ -1,5 +1,6 @@
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
+import { sendKeys, sendMouse } from '@web/test-runner-commands';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 import './inventory-card.ts';
 import {
@@ -1167,40 +1168,7 @@ describe('inventory-card', () => {
       expect(mapCalls()).to.equal(2);
     });
 
-    it('opens full screen and leaves it with the toggle or Esc', async () => {
-      const el = await card({ showMap: true });
-      await switchTo(el, 'Map');
-      await waitUntil(() => el.shadowRoot!.querySelector('fleet-map'));
-      const root = el.shadowRoot!;
-      (
-        root.querySelector('.card-head .fullscreen-toggle') as HTMLElement
-      ).click();
-      await waitUntil(() => root.querySelector('.map-overlay fleet-map'));
-      const overlay = root.querySelector('.map-overlay')!;
-      expect(overlay.getAttribute('role')).to.equal('dialog');
-      expect(overlay.getAttribute('aria-modal')).to.equal('true');
-      expect(root.querySelector('.map-body'), 'one map at a time').to.not.exist;
-      await el.updateComplete;
-      expect(root.activeElement?.classList.contains('fullscreen-toggle')).to.be
-        .true;
-
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-      await el.updateComplete;
-      expect(root.querySelector('.map-overlay')).to.not.exist;
-      expect(root.querySelector('.map-body fleet-map')).to.exist;
-
-      (
-        root.querySelector('.card-head .fullscreen-toggle') as HTMLElement
-      ).click();
-      await waitUntil(() => root.querySelector('.map-overlay'));
-      (
-        root.querySelector('.map-overlay .fullscreen-toggle') as HTMLElement
-      ).click();
-      await waitUntil(() => !root.querySelector('.map-overlay'));
-    });
-
-    it('lets Esc clear a map selection before it leaves full screen', async () => {
-      const el = await card({ showMap: true });
+    const openFullscreen = async (el: InventoryCard) => {
       await switchTo(el, 'Map');
       await waitUntil(() => el.shadowRoot!.querySelector('fleet-map'));
       (
@@ -1209,22 +1177,93 @@ describe('inventory-card', () => {
         ) as HTMLElement
       ).click();
       await waitUntil(() =>
-        el.shadowRoot!.querySelector('.map-overlay fleet-map')
-      );
-      const map = el.shadowRoot!.querySelector('.map-overlay fleet-map') as any;
-      map.selected = map.graph.nodes[0].id;
-      await map.updateComplete;
-
-      map.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Escape',
-          bubbles: true,
-          composed: true,
-        })
+        el.shadowRoot!.querySelector('dialog.map-overlay fleet-map')
       );
       await el.updateComplete;
-      expect(el.shadowRoot!.querySelector('.map-overlay'), 'still full screen')
-        .to.exist;
+      return el.shadowRoot!.querySelector(
+        'dialog.map-overlay'
+      ) as HTMLDialogElement;
+    };
+
+    afterEach(() => {
+      document.documentElement.style.overflow = '';
+    });
+
+    it('opens full screen as a modal and leaves it with the toggle or Esc', async () => {
+      const el = await card({ showMap: true });
+      const root = el.shadowRoot!;
+      const overlay = await openFullscreen(el);
+      // A native modal: top layer, inert page behind, focus kept inside.
+      expect(overlay.open).to.be.true;
+      expect(overlay.matches(':modal')).to.be.true;
+      expect(overlay.getAttribute('aria-label')).to.equal('Fleet map');
+      expect(root.querySelector('.map-body'), 'one map at a time').to.not.exist;
+      expect(document.documentElement.style.overflow).to.equal('hidden');
+      expect(root.activeElement?.closest('dialog')).to.equal(overlay);
+
+      await sendKeys({ press: 'Escape' });
+      await waitUntil(() => !root.querySelector('dialog.map-overlay'));
+      expect(root.querySelector('.map-body fleet-map')).to.exist;
+      expect(document.documentElement.style.overflow).to.equal('');
+      expect(
+        root.activeElement?.matches('.card-head .fullscreen-toggle'),
+        'focus returns to the control that opened it'
+      ).to.be.true;
+
+      const again = await openFullscreen(el);
+      (again.querySelector('.fullscreen-toggle') as HTMLElement).click();
+      await waitUntil(() => !root.querySelector('dialog.map-overlay'));
+    });
+
+    it('lets Esc clear a map selection before it leaves full screen, wherever focus is', async () => {
+      const el = await card({ showMap: true });
+      const root = el.shadowRoot!;
+      const overlay = await openFullscreen(el);
+      const map = overlay.querySelector('fleet-map') as any;
+      await map.updateComplete;
+      // A real click on a node, as a person selects one (and the browser
+      // counts it as the activation a cancellable Esc needs).
+      const node = map.shadowRoot.querySelector(
+        'button[data-node]'
+      ) as HTMLElement;
+      node.scrollIntoView({ block: 'center', inline: 'center' });
+      const box = node.getBoundingClientRect();
+      await sendMouse({
+        type: 'click',
+        position: [
+          Math.round(box.left + box.width / 2),
+          Math.round(box.top + box.height / 2),
+        ],
+      });
+      await map.updateComplete;
+      expect(map.selected, 'the click selected the node').to.not.equal('');
+      // Focus on the overlay's own toggle, outside the canvas.
+      (overlay.querySelector('.fullscreen-toggle') as HTMLElement).focus();
+
+      await sendKeys({ press: 'Escape' });
+      await el.updateComplete;
+      expect(map.selected, 'the selection is what Esc undid').to.equal('');
+      expect(root.querySelector('dialog.map-overlay'), 'still full screen').to
+        .exist;
+
+      await sendKeys({ press: 'Escape' });
+      await waitUntil(() => !root.querySelector('dialog.map-overlay'));
+    });
+
+    it('returns focus to the card when the modal is left through Table', async () => {
+      const el = await card({ showMap: true });
+      const root = el.shadowRoot!;
+      const overlay = await openFullscreen(el);
+      const table = Array.from(
+        overlay.querySelectorAll<HTMLButtonElement>('.view-switch button')
+      ).find((button) => button.textContent?.trim() === 'Table')!;
+      table.click();
+      await waitUntil(() => !root.querySelector('dialog.map-overlay'));
+      await el.updateComplete;
+      await el.updateComplete;
+      expect(root.querySelector('sl-tab-group')).to.exist;
+      expect(document.documentElement.style.overflow).to.equal('');
+      expect(root.activeElement?.textContent?.trim()).to.equal('Table');
     });
   });
 });
