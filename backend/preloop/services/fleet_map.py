@@ -105,6 +105,9 @@ def build_fleet_map(
         )
     }
 
+    source_rows: dict[str, list[Any]] = {}
+    partial_sources: set[str] = set()
+
     def read(
         name: Source, permission: str, resource_type: str | None = None
     ) -> list[Any]:
@@ -114,7 +117,10 @@ def build_fleet_map(
             db, source=name, account_id=account_id, limit=SOURCE_LIMIT + 1
         )
         result.truncated |= len(rows) > SOURCE_LIMIT
+        if len(rows) > SOURCE_LIMIT:
+            partial_sources.add(name)
         rows = rows[:SOURCE_LIMIT]
+        source_rows[name] = rows
         return filter_viewable(db, user, resource_type, rows) if resource_type else rows
 
     agents = read("agents", "view_agents", VISIBLE_MANAGED_AGENT)
@@ -299,7 +305,12 @@ def build_fleet_map(
     # suppresses fallback, and an incomplete binding window cannot prove absence.
     bound_agents = {str(row.managed_agent_id) for row in bindings}
     legacy_ids = [str(row.id) for row in agents if str(row.id) not in bound_agents]
-    if legacy_ids and ai_models and len(bindings) <= BINDING_LIMIT:
+    if (
+        legacy_ids
+        and ai_models
+        and len(bindings) <= BINDING_LIMIT
+        and "models" not in partial_sources
+    ):
         from preloop.api.endpoints.account import (
             _ai_model_meta_lookup,
             _managed_agent_configured_model_alias,
@@ -314,7 +325,10 @@ def build_fleet_map(
         latest: dict[str, Any] = {}
         for enrollment in sorted(
             enrollments[:BINDING_LIMIT],
-            key=lambda row: priority.get(row.enrollment_type, 2),
+            key=lambda row: (
+                priority.get(row.enrollment_type, 2),
+                -row.created_at.timestamp(),
+            ),
         ):
             latest.setdefault(str(enrollment.managed_agent_id), enrollment)
         for aid, enrollment in latest.items():
@@ -325,7 +339,7 @@ def build_fleet_map(
                 continue
             matches = [
                 row
-                for row in ai_models
+                for row in source_rows["models"]
                 if _normalize_gateway_model_alias(
                     _ai_model_meta_lookup(row, "gateway", "model_alias")
                 )

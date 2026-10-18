@@ -1,6 +1,7 @@
 """Fleet graph isolation, provenance, impact direction and bounded reads."""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace as Row
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -335,6 +336,7 @@ def test_legacy_configuration_is_linked_without_resurrecting_inactive_binding(
         Row(
             managed_agent_id="agent-a",
             enrollment_type="cli_managed_config",
+            created_at=datetime.now(UTC),
             managed_config={"model": "example-model"},
         )
     ]
@@ -406,8 +408,6 @@ def test_fleet_projection_does_not_restore_permission_hidden_agents(
 def test_stale_online_runner_is_offline_without_device_extension(
     sources: tuple[MagicMock, MagicMock],
 ) -> None:
-    from datetime import UTC, datetime, timedelta
-
     crud, _ = sources
     crud.crud_flow_runner.get_multi.return_value = [
         Row(
@@ -421,3 +421,82 @@ def test_stale_online_runner_is_offline_without_device_extension(
     graph = build_fleet_map(MagicMock(), user=viewer())
     node = next(node for node in graph.nodes if node.type == "runner")
     assert node.status == "offline" and node.gaps == ["offline_runner"]
+
+
+def test_hidden_duplicate_alias_does_not_make_legacy_selection_unique(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = []
+    crud.crud_ai_model.get_multi.return_value = [
+        model("visible", meta_data={"gateway": {"model_alias": "shared"}}),
+        model("hidden", meta_data={"gateway": {"model_alias": "shared"}}),
+    ]
+    crud.crud_managed_agent_enrollment.list_latest_for_fleet_map.return_value = [
+        Row(
+            managed_agent_id="agent-a",
+            enrollment_type="cli_managed_config",
+            created_at=datetime.now(UTC),
+            managed_config={"model": "shared"},
+        )
+    ]
+    with patch(
+        f"{MODULE}.filter_viewable",
+        side_effect=lambda db, user, kind, rows: [r for r in rows if r.id != "hidden"],
+    ):
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    assert not any(edge.kind == "uses_model" for edge in graph.edges)
+    assert "hidden" not in graph.model_dump_json()
+
+
+def test_partial_model_catalog_does_not_claim_unique_legacy_alias(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = []
+    crud.crud_ai_model.get_multi.return_value = [
+        model("visible", meta_data={"gateway": {"model_alias": "shared"}}),
+        model("omitted", meta_data={"gateway": {"model_alias": "shared"}}),
+    ]
+    crud.crud_managed_agent_enrollment.list_latest_for_fleet_map.return_value = [
+        Row(
+            managed_agent_id="agent-a",
+            enrollment_type="cli_managed_config",
+            created_at=datetime.now(UTC),
+            managed_config={"model": "shared"},
+        )
+    ]
+    with patch(f"{MODULE}.SOURCE_LIMIT", 1):
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    assert graph.truncated
+    assert not any(edge.kind == "uses_model" for edge in graph.edges)
+
+
+def test_legacy_fallback_uses_latest_enrollment_when_no_preferred_type_exists(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = []
+    crud.crud_ai_model.get_multi.return_value = [
+        model("older", meta_data={"gateway": {"model_alias": "older"}}),
+        model("latest", meta_data={"gateway": {"model_alias": "latest"}}),
+    ]
+    now = datetime.now(UTC)
+    crud.crud_managed_agent_enrollment.list_latest_for_fleet_map.return_value = [
+        Row(
+            managed_agent_id="agent-a",
+            enrollment_type="a_legacy",
+            created_at=now - timedelta(days=1),
+            managed_config={"model": "older"},
+        ),
+        Row(
+            managed_agent_id="agent-a",
+            enrollment_type="z_legacy",
+            created_at=now,
+            managed_config={"model": "latest"},
+        ),
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    assert [edge.target for edge in graph.edges if edge.kind == "uses_model"] == [
+        "model:latest"
+    ]
