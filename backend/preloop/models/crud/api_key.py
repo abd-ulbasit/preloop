@@ -629,11 +629,14 @@ class CRUDApiKey(CRUDBase[ApiKey]):
         Returns:
             Number of usable keys.
         """
+        # ``expires_at`` is naive UTC; compare against a naive UTC cutoff, not
+        # func.now(), which depends on the session TimeZone.
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
         query = (
             db.query(func.count(ApiKey.id))
             .join(User, ApiKey.user_id == User.id)
             .filter(User.username == username, ApiKey.is_active.is_(True))
-            .filter(or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > func.now()))
+            .filter(or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > now_naive))
         )
         query = self._legacy_only(query)
         if account_id:

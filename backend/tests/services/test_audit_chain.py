@@ -394,3 +394,25 @@ def test_sealing_invalidates_the_cached_status(db_session, account_id):
     after = audit_chain.cached_chain_status(db_session, account_id=account_id)
     assert after["unsealed_rows"] == 0
     assert after["sealed_rows"] == 3
+
+
+def test_a_fill_that_overlaps_an_invalidation_is_not_stored(
+    db_session, account_id, monkeypatch
+):
+    """A slow status read racing a seal must not cache the pre-seal head."""
+    audit_chain.invalidate_chain_status()
+    real = audit_chain.chain_status
+    calls = []
+
+    def racing(db, *, account_id):
+        calls.append(account_id)
+        status = real(db, account_id=account_id)
+        # A seal commits and invalidates while this read is still computing.
+        audit_chain.invalidate_chain_status(account_id)
+        return status
+
+    monkeypatch.setattr(audit_chain, "chain_status", racing)
+    audit_chain.cached_chain_status(db_session, account_id=account_id)
+    audit_chain.cached_chain_status(db_session, account_id=account_id)
+
+    assert len(calls) == 2

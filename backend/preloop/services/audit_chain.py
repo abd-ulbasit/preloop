@@ -416,7 +416,6 @@ def seal_account(
         state.last_sealed_at = stamp
         db.add(state)
         db.flush()
-        invalidate_chain_status(account_id)
         for cp_seq, cp_hash, cp_count in pending_checkpoints:
             _write_checkpoint(
                 db,
@@ -428,6 +427,8 @@ def seal_account(
             )
             result.checkpoints += 1
         db.commit()
+        # After the commit: a status read that starts now sees the new head.
+        invalidate_chain_status(account_id)
         result.sealed += len(rows)
         result.batches += 1
         if last_timestamp is not None:
@@ -536,6 +537,9 @@ CHAIN_STATUS_TTL_SECONDS = 30.0
 
 _status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _status_cache_lock = threading.Lock()
+#: Bumped by every invalidation. A fill that started before one is dropped, so
+#: a slow read that overlaps a seal cannot store the pre-seal snapshot.
+_status_generation = 0
 
 
 def cached_chain_status(
@@ -555,11 +559,13 @@ def cached_chain_status(
     now = time.monotonic()
     with _status_cache_lock:
         hit = _status_cache.get(key)
+        generation = _status_generation
     if hit is not None and now - hit[0] < ttl:
         return dict(hit[1])
     status = chain_status(db, account_id=account_id)
     with _status_cache_lock:
-        _status_cache[key] = (now, status)
+        if _status_generation == generation:
+            _status_cache[key] = (now, status)
     return dict(status)
 
 
@@ -569,7 +575,9 @@ def invalidate_chain_status(account_id: Any | None = None) -> None:
     Args:
         account_id: Account to forget; ``None`` clears the whole cache.
     """
+    global _status_generation
     with _status_cache_lock:
+        _status_generation += 1
         if account_id is None:
             _status_cache.clear()
         else:

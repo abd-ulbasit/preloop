@@ -47,3 +47,22 @@ def test_count_reports_only_usable_keys(client, db_session, test_user) -> None:
     response = client.get("/api/v1/auth/api-keys/count")
     assert response.status_code == 200, response.text
     assert response.json() == {"active": baseline + 2}
+
+
+def test_count_does_not_depend_on_the_session_timezone(
+    client, db_session, test_user
+) -> None:
+    """A key that expired an hour ago is not usable on a non-UTC session."""
+    from sqlalchemy import text
+
+    baseline = client.get("/api/v1/auth/api-keys/count").json()["active"]
+    _key(
+        db_session,
+        test_user,
+        expires_at=(datetime.now(UTC) - timedelta(hours=1)).replace(tzinfo=None),
+    )
+    db_session.commit()
+    db_session.execute(text("SET TIME ZONE 'America/New_York'"))
+
+    count = crud_api_key.count_usable_by_user(db_session, username=test_user.username)
+    assert count == baseline
