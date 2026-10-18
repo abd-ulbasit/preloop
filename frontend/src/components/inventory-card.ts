@@ -20,6 +20,7 @@ import { userHref } from '../utils/user-href';
 // The map component and its API load on first use, not with the Overview:
 // most readers never open the map and many may not see the fleet at all.
 import type { FleetMapGraph } from '../fleet-map-api';
+import type { FleetMap } from './fleet-map';
 
 import consoleStyles from '../styles/console-styles.css?inline';
 import { parseUTCDate, formatRelativeTime } from '../utils/date';
@@ -396,27 +397,15 @@ export class InventoryCard extends LitElement {
    */
   private escHadSelection = false;
 
-  private mapInOverlay():
-    | (Element & {
-        selected?: string;
-        focusGap?: string;
-      })
-    | null {
+  private mapInOverlay(): FleetMap | null {
     return this.shadowRoot?.querySelector('.map-overlay fleet-map') ?? null;
   }
 
   private onOverlayKeydown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return;
-    const map = this.mapInOverlay();
-    this.escHadSelection = Boolean(map?.selected || map?.focusGap);
+    this.escHadSelection = this.mapInOverlay()?.hasSelection() ?? false;
   };
 
-  /**
-   * Esc on the modal: one key press undoes one thing. With a map selection
-   * it clears the selection (wherever focus is, the map's own handler only
-   * hears keys from inside the canvas), and only without one does it leave
-   * full screen.
-   */
   /**
    * The browser may close the modal itself: after a cancelled `cancel`, the
    * next Esc without user activation closes it without asking. Follow it.
@@ -425,15 +414,17 @@ export class InventoryCard extends LitElement {
     if (this.mapFullscreen) void this.setFullscreen(false);
   };
 
+  /**
+   * Esc on the modal: one key press undoes one thing. With a map selection
+   * it clears the selection (wherever focus is, the map's own handler only
+   * hears keys from inside the canvas), and only without one does it leave
+   * full screen.
+   */
   private onOverlayCancel = (event: Event) => {
     event.preventDefault();
     if (this.escHadSelection) {
       this.escHadSelection = false;
-      const map = this.mapInOverlay();
-      if (map && (map.selected || map.focusGap)) {
-        map.selected = '';
-        map.focusGap = '';
-      }
+      this.mapInOverlay()?.clearSelection();
       return;
     }
     void this.setFullscreen(false);

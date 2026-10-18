@@ -1236,13 +1236,13 @@ describe('inventory-card', () => {
         ],
       });
       await map.updateComplete;
-      expect(map.selected, 'the click selected the node').to.not.equal('');
+      expect(map.hasSelection(), 'the click selected the node').to.be.true;
       // Focus on the overlay's own toggle, outside the canvas.
       (overlay.querySelector('.fullscreen-toggle') as HTMLElement).focus();
 
       await sendKeys({ press: 'Escape' });
       await el.updateComplete;
-      expect(map.selected, 'the selection is what Esc undid').to.equal('');
+      expect(map.hasSelection(), 'the selection is what Esc undid').to.be.false;
       expect(root.querySelector('dialog.map-overlay'), 'still full screen').to
         .exist;
 
