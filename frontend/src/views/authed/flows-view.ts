@@ -103,13 +103,39 @@ function flowSummaryRow(summary: FlowSummary): FlowListItem {
   };
 }
 
-interface FlowExecution extends ExecutionSubjectSource {
+export interface FlowExecution extends ExecutionSubjectSource {
   id: string;
   flow_id: string;
   flow_name?: string | null;
   status: string;
   start_time: string;
   end_time?: string;
+}
+
+/**
+ * The last run `flows/summary` states for a flow, as a list row's run.
+ *
+ * The list no longer reads a sample of recent executions (#1695), so the Last
+ * run cell's status chip and run link come from the summary's `last_run`.
+ * Returns null when the server sent none (the flow never ran, or an older
+ * server), and the cell falls back to "Ran <when>" from `last_run_at`.
+ */
+export function serverLastRun(
+  stats: Record<string, any> | null | undefined
+): FlowExecution | null {
+  const last = stats?.last_run;
+  if (!last || typeof last.id !== 'string' || !last.start_time) {
+    return null;
+  }
+  return {
+    id: last.id,
+    flow_id: '',
+    status: String(last.status || ''),
+    start_time: String(last.start_time),
+    end_time: last.end_time || undefined,
+    trigger_subject: last.trigger_subject ?? null,
+    trigger_subject_url: last.trigger_subject_url ?? null,
+  };
 }
 
 export type FlowsViewMode = 'list' | 'cards';
@@ -1283,7 +1309,7 @@ export class FlowsView extends LitElement {
         triggerTitle: trigger.title,
         status,
         statusLabel: FLOW_STATUS_LABELS[status],
-        lastRun: entry?.last || null,
+        lastRun: entry?.last || serverLastRun(stats),
         lastRunAt:
           entry?.last?.start_time ||
           (countsFromServer ? stats?.last_run_at : null) ||

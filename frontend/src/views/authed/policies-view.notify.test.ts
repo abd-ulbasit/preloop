@@ -27,7 +27,7 @@ describe('PoliciesView notify action', () => {
       .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
-        if (url.endsWith('/api/v1/tools') && method === 'GET') {
+        if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
           return json([
             {
               name: 'search_issues',

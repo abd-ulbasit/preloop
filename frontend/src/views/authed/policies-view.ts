@@ -4,7 +4,8 @@ import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import {
-  getTools,
+  getToolRules,
+  type ToolRuleIndexRow,
   getAccountAgents,
   getMCPServers,
   getApprovalWorkflows,
@@ -35,7 +36,7 @@ import type {
 } from '../../api';
 import { confirmDialog, showToast } from '../../components/confirm-dialog';
 import { hasPermission } from '../../permissions';
-import type { Tool, ApprovalWorkflow } from '../../components/tool-card';
+import type { ApprovalWorkflow } from '../../components/tool-card';
 import '../../components/policy-generate-dialog';
 import '../../components/sensitive-data-panel';
 import '../../components/policy-simulator';
@@ -249,7 +250,7 @@ export class PoliciesView extends LitElement {
   @state() private _sensitiveServers: string[] = [];
   @state() private _sensitiveOptionsError = '';
   private _sensitiveOptionsLoaded = false;
-  @state() private _tools: Tool[] = [];
+  @state() private _tools: ToolRuleIndexRow[] = [];
   @state() private _approvalPolicies: ApprovalWorkflow[] = [];
   @state() private _loading = false;
   @state() private _error: string | null = null;
@@ -954,7 +955,7 @@ export class PoliciesView extends LitElement {
     try {
       const [tools, policies, featuresResponse, modelIORules] =
         await Promise.all([
-          getTools(),
+          getToolRules(),
           getApprovalWorkflows(),
           getFeatures(),
           listModelIORules(),

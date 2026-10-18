@@ -266,6 +266,23 @@ describe('ToolsView (approvals + conditions)', () => {
     ).to.have.length(1);
   });
 
+  it('asks tools/stats for per-tool totals only on first view (#1695)', async () => {
+    const el = await fixture<ToolsView>(html`<tools-view></tools-view>`);
+    await waitUntil(
+      () =>
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('/api/v1/tools/stats')),
+      'tools/stats was not requested'
+    );
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    const stats = urls.find((url) => url.includes('/api/v1/tools/stats'))!;
+    expect(stats).to.contain('include_agents=false');
+    // Input schemas stay on the full catalogue until a tool is expanded.
+    expect(urls.some((url) => url.endsWith('/api/v1/tools'))).to.equal(false);
+    el.remove();
+  });
+
   it('hydrates same-name native and builtin tools from their own source', async () => {
     const el = await fixture<ToolsView>(html`<tools-view></tools-view>`);
     await waitUntil(() => !(el as any).toolsContextLoading);

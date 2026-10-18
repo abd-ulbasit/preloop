@@ -1849,11 +1849,20 @@ export async function exportIssueCosts(
 }
 
 export async function getToolUsageStats(
-  params: GatewayUsageSummaryParams = {}
+  params: GatewayUsageSummaryParams = {},
+  options: {
+    /**
+     * False drops `usage_by_agent` from every row: the Tools list prints
+     * per-tool totals only, and the breakdown is most of the payload (#1695).
+     */
+    includeAgents?: boolean;
+  } = {}
 ): Promise<ToolUsageStatsResponse> {
-  const response = await fetchWithAuth(
-    `/api/v1/tools/stats${buildGatewayUsageQuery(params)}`
-  );
+  let query = buildGatewayUsageQuery(params);
+  if (options.includeAgents === false) {
+    query += `${query ? '&' : '?'}include_agents=false`;
+  }
+  const response = await fetchWithAuth(`/api/v1/tools/stats${query}`);
   if (!response.ok) {
     throw new Error('Failed to fetch tool usage stats');
   }
@@ -6286,6 +6295,31 @@ export async function getToolsSummary(): Promise<ToolSummary[]> {
   const response = await fetchWithAuth('/api/v1/tools/summary');
   if (!response.ok) {
     throw new Error('Failed to fetch tool summaries');
+  }
+  return response.json();
+}
+
+/** One tool's identity and policy state, as the Policies page needs it. */
+export interface ToolRuleIndexRow {
+  name: string;
+  source: 'builtin' | 'mcp' | 'agent';
+  source_id: string | null;
+  source_name: string;
+  is_enabled: boolean;
+  approval_workflow_id: string | null;
+  config_id: string | null;
+  has_approval_condition: boolean;
+  access_rules: AccessRule[];
+}
+
+/**
+ * The rules index behind Policies: every tool without descriptions or input
+ * schemas, a fraction of the full `/tools` catalogue (#1695).
+ */
+export async function getToolRules(): Promise<ToolRuleIndexRow[]> {
+  const response = await fetchWithAuth('/api/v1/tools/rules');
+  if (!response.ok) {
+    throw new Error('Failed to fetch tool rules');
   }
   return response.json();
 }

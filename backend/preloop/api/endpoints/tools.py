@@ -6,10 +6,10 @@ preloop/services/initialize_mcp.py to ensure consistency between REST API and MC
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -51,7 +51,7 @@ from preloop.services.policy_evaluator import evaluate_cel_expression
 from preloop.services.tool_schema_tokens import estimate_tool_schema_tokens
 from preloop.services.tool_usage_stats import ToolUsageStatsService
 from preloop.schemas.gateway_usage import GatewayUsageByTool
-from preloop.schemas.tool_summary import ToolSummaryResponse
+from preloop.schemas.tool_summary import ToolRuleIndexRow, ToolSummaryResponse
 from preloop.utils.audit import log_config_change
 from preloop.utils.permissions import require_permission
 
@@ -484,6 +484,15 @@ class ToolUsageStatsResponse(BaseModel):
 def get_tool_usage_stats(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    include_agents: Annotated[
+        bool,
+        Query(
+            description=(
+                "Include the per-agent breakdown (usage_by_agent). Lists that "
+                "show per-tool totals only pass false for a smaller response."
+            )
+        ),
+    ] = True,
     account: Account = Depends(get_account_for_user),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
@@ -496,6 +505,7 @@ def get_tool_usage_stats(
         account_id=str(account.id),
         start_date=start,
         end_date=end,
+        include_agents=include_agents,
     )
     return ToolUsageStatsResponse(
         period_start=start,
@@ -578,6 +588,30 @@ def list_tool_summaries(
     input definitions. Estimates are calculated from those same full definitions.
     """
     return [ToolSummaryResponse.model_validate(row) for row in _list_tools(account, db)]
+
+
+@router.get("/tools/rules", response_model=List[ToolRuleIndexRow])
+@require_permission("view_tools")
+def list_tool_rules(
+    account: Account = Depends(get_account_for_user),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db_session),
+) -> List[ToolRuleIndexRow]:
+    """Return each tool's identity and policy state, for the Policies page.
+
+    Args:
+        account: Current user's account.
+        current_user: The authenticated user.
+        db: Database session.
+
+    Returns:
+        One row per catalogue tool, without descriptions or input schemas.
+    """
+    fields = ToolRuleIndexRow.model_fields
+    return [
+        ToolRuleIndexRow.model_validate({key: row.get(key) for key in fields})
+        for row in _list_tools(account, db)
+    ]
 
 
 def _list_tools(account: Account, db: Session) -> List[Dict]:

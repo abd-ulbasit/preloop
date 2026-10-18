@@ -237,6 +237,7 @@
   "GET /api/v1/tool-configurations/{config_id}/access-rules": "deny",
   "GET /api/v1/tool-configurations/{config_id}/approval-condition": "deny",
   "GET /api/v1/tools": "deny",
+  "GET /api/v1/tools/rules": "deny",
   "GET /api/v1/tools/stats": "deny",
   "GET /api/v1/tools/summary": "deny",
   "GET /api/v1/trackers": "deny",

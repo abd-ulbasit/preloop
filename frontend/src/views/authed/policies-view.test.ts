@@ -51,7 +51,7 @@ describe('PoliciesView', () => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
 
-        if (url.endsWith('/api/v1/tools') && method === 'GET') {
+        if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
           if (opts.toolsFail) {
             return json({ detail: 'boom' }, 500);
           }
@@ -245,6 +245,48 @@ describe('PoliciesView', () => {
 
     expect((element as any)._permissionDenied).to.equal(false);
     expect(element.shadowRoot?.querySelector('sl-tab-group')).to.exist;
+  });
+
+  it('builds its rules from the rules index, not the full catalogue (#1695)', async () => {
+    fetchStub = createFetchStub({
+      tools: [
+        {
+          name: 'create_issue',
+          source: 'builtin',
+          source_id: null,
+          source_name: 'Built-in',
+          is_enabled: true,
+          approval_workflow_id: null,
+          config_id: 'cfg-1',
+          has_approval_condition: false,
+          access_rules: [
+            {
+              id: 'rule-1',
+              action: 'deny',
+              condition_expression: 'args.x == 1',
+              condition_type: 'simple',
+              priority: 0,
+              description: null,
+              is_enabled: true,
+              approval_workflow_id: null,
+            },
+          ],
+        },
+      ],
+    });
+    const element = (await fixture(
+      html`<policies-view></policies-view>`
+    )) as PoliciesView;
+    await waitUntil(() => !(element as any)._loading, 'still loading');
+    const urls = fetchStub.getCalls().map((call) => String(call.args[0]));
+    expect(urls.some((url) => url.endsWith('/api/v1/tools/rules'))).to.equal(
+      true
+    );
+    expect(urls.some((url) => url.endsWith('/api/v1/tools'))).to.equal(false);
+    expect((element as any)._toolAccessRules).to.have.length(1);
+    expect((element as any)._toolAccessRules[0].toolName).to.equal(
+      'create_issue'
+    );
   });
 
   async function mountWithProfile(
@@ -560,7 +602,7 @@ describe('PoliciesView', () => {
       .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
-        if (url.endsWith('/api/v1/tools') && method === 'GET') {
+        if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
           return json([]);
         }
         if (url.endsWith('/api/v1/approval-workflows') && method === 'GET') {
@@ -642,7 +684,7 @@ describe('PoliciesView', () => {
       .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
-        if (url.endsWith('/api/v1/tools') && method === 'GET') {
+        if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
           return json([]);
         }
         if (url.endsWith('/api/v1/approval-workflows') && method === 'GET') {
@@ -717,7 +759,7 @@ describe('PoliciesView', () => {
       .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
-        if (url.endsWith('/api/v1/tools') && method === 'GET') {
+        if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
           return json([]);
         }
         if (url.endsWith('/api/v1/approval-workflows') && method === 'GET') {
@@ -811,7 +853,7 @@ describe('PoliciesView', () => {
         const url = typeof input === 'string' ? input : input.toString();
         const method = (init?.method || 'GET').toUpperCase();
         if (
-          url.endsWith('/api/v1/tools') ||
+          url.endsWith('/api/v1/tools/rules') ||
           url.endsWith('/api/v1/approval-workflows')
         ) {
           return json([]);
@@ -955,7 +997,7 @@ describe('PoliciesView', () => {
         .callsFake(async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = typeof input === 'string' ? input : input.toString();
           const method = (init?.method || 'GET').toUpperCase();
-          if (url.endsWith('/api/v1/tools') && method === 'GET') {
+          if (url.endsWith('/api/v1/tools/rules') && method === 'GET') {
             return json([]);
           }
           if (url.endsWith('/api/v1/approval-workflows') && method === 'GET') {

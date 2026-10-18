@@ -2128,6 +2128,58 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
 
         return [FlowStatResponse(row) for row in exec_stats]
 
+    def get_last_runs_for_flows(
+        self, db: Session, flow_ids: List[Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return the most recent execution of each flow, in list-row form.
+
+        The flows list prints the last run's outcome, subject and a link to
+        it. It used to find that run in a sample of the 200 most recent
+        executions across the account, which also cost the page a second,
+        larger call; this answers it per flow from the database.
+
+        Args:
+            db: Database session.
+            flow_ids: Flows to look up.
+
+        Returns:
+            A map of flow id (as a string) to ``id``, ``status``,
+            ``start_time``, ``end_time``, ``trigger_subject`` and
+            ``trigger_subject_url``. Flows that never ran are absent.
+        """
+        if not flow_ids:
+            return {}
+        subject = FlowExecution.trigger_event_details[TRIGGER_SUBJECT_KEY]
+        rows = db.execute(
+            select(
+                FlowExecution.flow_id,
+                FlowExecution.id,
+                FlowExecution.status,
+                FlowExecution.start_time,
+                FlowExecution.end_time,
+                subject["text"].astext.label("trigger_subject"),
+                subject["url"].astext.label("trigger_subject_url"),
+            )
+            .where(FlowExecution.flow_id.in_(flow_ids))
+            .distinct(FlowExecution.flow_id)
+            .order_by(
+                FlowExecution.flow_id,
+                FlowExecution.start_time.desc(),
+                FlowExecution.id.desc(),
+            )
+        ).all()
+        return {
+            str(row.flow_id): {
+                "id": str(row.id),
+                "status": row.status,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "trigger_subject": row.trigger_subject,
+                "trigger_subject_url": row.trigger_subject_url,
+            }
+            for row in rows
+        }
+
     def append_log(
         self, db: Session, execution_id: str, log_data: dict, *, commit: bool = True
     ) -> None:

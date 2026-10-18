@@ -1113,6 +1113,40 @@ describe('FlowsView', () => {
       }
     });
 
+    it('links the last run with its status from the summary (#1695)', async () => {
+      const original = FLOWS[0].execution_stats;
+      (FLOWS[0] as any).execution_stats = {
+        ...windowStats(1, 0, 1.2345, minutesAgo(10)),
+        last_run: {
+          id: 'exec-from-summary',
+          status: 'FAILED',
+          start_time: minutesAgo(10),
+          end_time: minutesAgo(9),
+          trigger_subject: 'PR #77 Tighten the lexer',
+          trigger_subject_url: null,
+        },
+      };
+      try {
+        const element = await renderFlows();
+        const link = element.shadowRoot?.querySelector<HTMLAnchorElement>(
+          'tbody tr.flow-row a.last-run'
+        );
+        expect(link?.getAttribute('href')).to.equal(
+          '/console/flows/executions/exec-from-summary'
+        );
+        const text = (link?.textContent || '').replace(/\s+/g, ' ');
+        expect(text).to.contain('PR #77 Tighten the lexer');
+        expect(link?.querySelector('sl-badge')).to.exist;
+        expect(
+          fetchStub
+            .getCalls()
+            .some((call) => String(call.args[0]).includes('limit=200'))
+        ).to.equal(false);
+      } finally {
+        FLOWS[0].execution_stats = original;
+      }
+    });
+
     it('shows the last run, the counts in range and the estimated spend', async () => {
       const element = await renderFlows();
       await waitUntil(

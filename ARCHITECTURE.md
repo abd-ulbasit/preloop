@@ -75,7 +75,12 @@ Console catalogue lists use typed `/tools/summary` and `/flows/summary` views
 instead of downloading tool schemas and flow prompts/configuration. Full
 `/tools` and `/flows` responses retain their existing defaults for editors and
 API clients. Flow summary statistics are opt-in (`include_stats=true`) and use
-the same period and owned-flow aggregates as the full list. Both account gateway
+the same period and owned-flow aggregates as the full list, plus each flow's
+`last_run` (id, status, times, subject) so the Flows list links the run without
+fetching executions. Policies reads `/tools/rules`, each tool's identity and
+access rules without descriptions or schemas, and the Tools list asks
+`/tools/stats?include_agents=false`, which skips the per-agent breakdown and
+its query. Both account gateway
 and Cost summaries support selecting repeated `breakdown` sections; callers
 needing only totals set `include_breakdown=false`, which skips the unused
 aggregations. The grouped audit timeline resolves correlations and approval

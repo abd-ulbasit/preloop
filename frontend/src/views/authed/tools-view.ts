@@ -748,10 +748,13 @@ export class ToolsView extends LitElement {
       const end = new Date();
       const start = new Date(end);
       start.setDate(start.getDate() - 30);
-      const stats = await getToolUsageStats({
-        startDate: start.toISOString(),
-        endDate: end.toISOString(),
-      });
+      const stats = await getToolUsageStats(
+        {
+          startDate: start.toISOString(),
+          endDate: end.toISOString(),
+        },
+        { includeAgents: false }
+      );
       this.toolUsageStats = stats.tools || [];
     } catch {
       this.toolUsageStats = [];

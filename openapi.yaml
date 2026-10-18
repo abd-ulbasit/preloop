@@ -5413,6 +5413,17 @@ paths:
             format: date-time
           - type: 'null'
           title: End Date
+      - name: include_agents
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Include the per-agent breakdown (usage_by_agent). Lists that
+            show per-tool totals only pass false for a smaller response.
+          default: true
+          title: Include Agents
+        description: Include the per-agent breakdown (usage_by_agent). Lists that
+          show per-tool totals only pass false for a smaller response.
       responses:
         '200':
           description: Successful Response
@@ -5482,6 +5493,35 @@ paths:
                   $ref: '#/components/schemas/ToolSummaryResponse'
                 type: array
                 title: Response List Tool Summaries Api V1 Tools Summary Get
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/tools/rules:
+    get:
+      tags:
+      - Tools
+      summary: List Tool Rules
+      description: "Return each tool's identity and policy state, for the Policies\
+        \ page.\n\nArgs:\n    account: Current user's account.\n    current_user:\
+        \ The authenticated user.\n    db: Database session.\n\nReturns:\n    One\
+        \ row per catalogue tool, without descriptions or input schemas."
+      operationId: list_tool_rules_api_v1_tools_rules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ToolRuleIndexRow'
+                type: array
+                title: Response List Tool Rules Api V1 Tools Rules Get
         '401':
           description: Invalid or expired credential
         '403':
@@ -46448,6 +46488,69 @@ components:
       type: object
       title: ToolConfigurationUpdate
       description: Schema for updating tool configuration.
+    ToolRuleIndexRow:
+      properties:
+        name:
+          type: string
+          title: Name
+        source:
+          type: string
+          enum:
+          - builtin
+          - mcp
+          - agent
+          title: Source
+        source_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Id
+        source_name:
+          type: string
+          title: Source Name
+        is_enabled:
+          type: boolean
+          title: Is Enabled
+        approval_workflow_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Approval Workflow Id
+        config_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Config Id
+        has_approval_condition:
+          type: boolean
+          title: Has Approval Condition
+        access_rules:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Access Rules
+      type: object
+      required:
+      - name
+      - source
+      - source_id
+      - source_name
+      - is_enabled
+      - approval_workflow_id
+      - config_id
+      - has_approval_condition
+      - access_rules
+      title: ToolRuleIndexRow
+      description: 'The policy state of one tool, for building the Policies rules
+        list.
+
+
+        Carries no description, schema or token estimate: the rules list and the
+
+        rule editor''s tool picker need the tool''s identity and its configuration
+
+        only, and the full catalogue is several times larger.'
     ToolSummaryResponse:
       properties:
         name:
