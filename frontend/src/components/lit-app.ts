@@ -35,6 +35,7 @@ import '../views/public/static-view';
 import './app-header';
 import './app-footer';
 import './update-banner';
+import './licence-banner';
 import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 
 @customElement('lit-app')
@@ -678,9 +679,11 @@ export class LitApp extends LitElement {
   }
 
   render() {
-    // The banner renders empty except for superusers on outdated
-    // self-hosted instances (see update-banner.ts).
+    // The banners render empty except for superusers on outdated
+    // self-hosted instances (update-banner.ts) or on an Enterprise install
+    // whose licence needs attention (licence-banner.ts).
     return html`<update-banner></update-banner>
+      <licence-banner></licence-banner>
       <main></main> `;
   }
 
