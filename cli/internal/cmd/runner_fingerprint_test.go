@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +15,7 @@ func TestRunnerFingerprintMatchesDiscovery(t *testing.T) {
 	original := readMachineID
 	readMachineID = func() (string, error) { return testMachineID, nil }
 	t.Cleanup(func() { readMachineID = original })
-	server, _ := newDiscoveryServer(t)
+	server, recorder := newDiscoveryServer(t)
 	defer server.Close()
 	client, err := api.NewClient("tok", server.URL)
 	if err != nil {
@@ -23,6 +24,16 @@ func TestRunnerFingerprintMatchesDiscovery(t *testing.T) {
 	got := runnerWorkstationFingerprint(client)
 	if got != workstationFingerprint(testDiscoverySalt, testMachineID) {
 		t.Fatalf("fingerprint mismatch: %q", got)
+	}
+	if err := sendDiscoveryReport(client, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var report discoveryReportRequest
+	if err := json.Unmarshal(recorder.report, &report); err != nil {
+		t.Fatal(err)
+	}
+	if got != report.WorkstationFingerprint {
+		t.Fatalf("runner %q differs from discovery report %q", got, report.WorkstationFingerprint)
 	}
 	if got == workstationFingerprint("other-tenant-salt", testMachineID) {
 		t.Fatal("cross-account identity")
