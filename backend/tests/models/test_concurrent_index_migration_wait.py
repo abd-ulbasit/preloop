@@ -166,7 +166,7 @@ def test_concurrent_index_survives_writer_older_than_the_ddl_lock_budget(
                         with Operations.context(failed_context):
                             with pytest.raises(DBAPIError) as error:
                                 revision.upgrade()
-                    assert error.value.orig.sqlstate == "55P03"
+                    assert sqlstate_of(error.value) == "55P03"
             finally:
                 transaction.rollback()
         with index_database.connect() as check:
@@ -243,7 +243,7 @@ def test_concurrent_statement_budget_is_finite_and_restored_on_failure(
         with pytest.raises(DBAPIError) as error:
             with concurrent_index_ddl(context):
                 connection.execute(text("SELECT pg_sleep(3)"))
-        assert error.value.orig.sqlstate == "57014"
+        assert sqlstate_of(error.value) == "57014"
         assert "SQLSTATE 57014" in caplog.text
         assert "pg_stat_progress_create_index" in caplog.text
         assert connection.execute(text("SHOW lock_timeout")).scalar_one() == "5s"
