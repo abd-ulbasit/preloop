@@ -1684,6 +1684,25 @@ describe('DashboardView', () => {
       });
     }
 
+    it('treats a refused read as answered for a reader without the permission', async () => {
+      // The API helpers throw "Failed to fetch ..." with no status, so the
+      // refusal is recognised from the reader's permissions.
+      mePermissions = ['view_flows', 'view_tools'];
+      failNext.set('/api/v1/agents', 1);
+      failNext.set('/api/v1/budget/policies', 1);
+
+      const element = await mountDashboard();
+      await waitUntil(
+        () =>
+          !element['fetchingAgents'] &&
+          !element['fetchingBudget'] &&
+          element['profileResolved'] &&
+          element['unansweredInputs'].size === 0 &&
+          element['onboardingResolved'],
+        'a refused read never answered'
+      );
+    });
+
     it('keeps the agents on screen when a refresh of them fails', async () => {
       const element = await mountLoaded();
       const before = element['managedAgents'].length;

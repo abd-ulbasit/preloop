@@ -314,6 +314,15 @@ type GatewayFormat = '/openai/v1' | '/anthropic/v1' | '/google/v1';
  */
 type OnboardingInput = 'agents' | 'flows' | 'executions' | 'budget' | 'tools';
 
+/** The permission each input's endpoint requires. */
+const ONBOARDING_INPUT_PERMISSION: Record<OnboardingInput, string> = {
+  agents: 'view_agents',
+  flows: 'view_flows',
+  executions: 'view_flows',
+  budget: 'view_cost',
+  tools: 'view_tools',
+};
+
 interface NextStep {
   /** Nice to have: never keeps the card alive on its own. */
   optional?: boolean;
@@ -540,6 +549,8 @@ export class DashboardView extends AuthedElement {
   private backgroundTimer: number | null = null;
   /** The budget fetch, for the parts of the page that do need to wait on it. */
   private budgetReady: Promise<void> = Promise.resolve();
+  /** The profile read of the current load; permissions are known after it. */
+  private profileReady: Promise<void> = Promise.resolve();
   /** Set while a coalesced sessionStorage write is pending. */
   private cacheWriteScheduled = false;
   /** So a full cache is reported once per session, not once per write. */
@@ -2322,9 +2333,12 @@ export class DashboardView extends AuthedElement {
   }
 
   /**
-   * Read one onboarding input. A 403 answers "nothing this reader can see"
-   * with `forbidden`; any other failure answers nothing at all: the input is
-   * marked unanswered and `undefined` tells the caller to keep what it has.
+   * Read one onboarding input. A refusal for a reader without the
+   * permission answers "nothing this reader can see" with `forbidden`; any
+   * other failure answers nothing at all: the input is marked unanswered and
+   * `undefined` tells the caller to keep what it has. The API helpers throw
+   * without a status code, so a refusal is recognised by the reader's
+   * permissions once the profile has answered.
    */
   private async readOnboardingInput<T>(
     input: OnboardingInput,
@@ -2336,7 +2350,11 @@ export class DashboardView extends AuthedElement {
       value = await promise;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes('403')) {
+      await this.profileReady.catch(() => undefined);
+      const refused =
+        message.includes('403') ||
+        !hasPermission(this.permissions, ONBOARDING_INPUT_PERMISSION[input]);
+      if (!refused) {
         console.error(`Overview ${input} read failed:`, error);
         this.setInputAnswered(input, false);
         return undefined;
@@ -2541,6 +2559,7 @@ export class DashboardView extends AuthedElement {
 
     try {
       const adminPromise = this.fetchAdminStatus();
+      this.profileReady = adminPromise;
       const featuresPromise = this.fetchFeatures();
       if (!options.preserveLoadingState) {
         // The activity feed waits for this list instead of asking for its
