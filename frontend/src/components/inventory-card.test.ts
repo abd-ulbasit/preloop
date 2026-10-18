@@ -1,4 +1,6 @@
-import { expect, fixture, html, oneEvent } from '@open-wc/testing';
+import { expect, fixture, html, oneEvent, waitUntil } from '@open-wc/testing';
+import { mockApi, type MockApi } from '../test-helpers/capability-api';
+import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 import './inventory-card.ts';
 import { INVENTORY_TAB_STORAGE_KEY } from './inventory-card';
 import {
@@ -1219,5 +1221,46 @@ describe('inventory-card Agents columns', () => {
       agentTable: { widthOfColumn(id: string): number };
     };
     expect(again.agentTable.widthOfColumn('name')).to.equal(296);
+  });
+});
+
+describe('inventory-card spatial map', () => {
+  let api: MockApi;
+  afterEach(() => {
+    api?.restore();
+    localStorage.removeItem('accessToken');
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:inventory:')) localStorage.removeItem(key);
+  });
+
+  it('offers no map to anyone but an instance administrator', async () => {
+    localStorage.setItem('preloop:inventory:view:u1', 'map');
+    const el = await fixture<InventoryCard>(
+      html`<inventory-card userId="u1"></inventory-card>`
+    );
+    expect(el.shadowRoot!.querySelector('[data-inventory-view]')).to.not.exist;
+    expect(el.shadowRoot!.querySelector('fleet-map')).to.not.exist;
+  });
+
+  it('swaps the table for the spatial fleet map and remembers it', async () => {
+    localStorage.setItem('accessToken', 'test-token');
+    api = mockApi({
+      routes: [{ path: '/api/v1/fleet/map', body: sampleFleetMap() }],
+    });
+    const el = await fixture<InventoryCard>(
+      html`<inventory-card instanceAdmin userId="u1"></inventory-card>`
+    );
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      '[data-inventory-view="map"]'
+    )!.click();
+    await waitUntil(() => el.shadowRoot!.querySelector('fleet-map')?.graph);
+    const map = el.shadowRoot!.querySelector('fleet-map')!;
+    await map.updateComplete;
+    expect(map.positionsScope).to.equal('inventory');
+    expect(map.shadowRoot!.querySelector('.column-title')).to.not.exist;
+    expect(map.shadowRoot!.querySelector('[data-arrangement]')).to.not.exist;
+    expect(el.shadowRoot!.querySelector('table')).to.not.exist;
+    expect(localStorage.getItem('preloop:inventory:view:u1')).to.equal('map');
+    expect(api.callsTo('/api/v1/fleet/map').length).to.equal(1);
   });
 });

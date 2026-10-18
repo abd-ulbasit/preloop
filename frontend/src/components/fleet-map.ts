@@ -141,6 +141,8 @@ export class FleetMap extends LitElement {
   /** Instance administrators may arrange the map in space. */
   @property({ type: Boolean, attribute: 'instance-admin' })
   instanceAdmin = false;
+  /** Always spatial, with no Columns choice (the Overview inventory map). */
+  @property({ type: Boolean, attribute: 'spatial-only' }) spatialOnly = false;
   /** Whose arrangement and dragged positions are stored. */
   @property({ attribute: 'user-id' }) userId = '';
   /** Separates stored positions of different maps (fleet, inventory). */
@@ -210,7 +212,9 @@ export class FleetMap extends LitElement {
   }
 
   private get spatial(): boolean {
-    return this.instanceAdmin && this.arrangement === 'spatial';
+    return (
+      this.instanceAdmin && (this.spatialOnly || this.arrangement === 'spatial')
+    );
   }
 
   private setArrangement(value: FleetMapArrangement): void {
@@ -1210,7 +1214,7 @@ export class FleetMap extends LitElement {
     const retired = graph.decommissioned_agents ?? 0;
     return html`<div class="toolbar">
         ${
-          this.instanceAdmin
+          this.instanceAdmin && !this.spatialOnly
             ? html`<fieldset
                 class="seg"
                 aria-label="Arrangement"
