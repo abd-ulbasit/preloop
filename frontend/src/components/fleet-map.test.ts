@@ -475,4 +475,179 @@ describe('fleet-map labels', () => {
     expect(agentKindLabel('claude_code')).to.equal('Claude Code');
     expect(agentKindLabel('cursor_cli')).to.equal('Cursor CLI');
   });
+  describe('activity window', () => {
+    afterEach(() => localStorage.removeItem('preloop:fleet-map:window'));
+
+    it('hides resources inactive in the window when the server did not', async () => {
+      const graph = sampleFleetMap();
+      const recent = new Date().toISOString();
+      const old = new Date(Date.now() - 40 * 86_400_000).toISOString();
+      for (const n of graph.nodes) {
+        if (n.id === 'agent:codex' || n.id === 'device:mbp')
+          n.last_seen_at = recent;
+        if (n.id === 'agent:claude') n.last_seen_at = old;
+      }
+      const el = await fixture<FleetMap>(
+        html`<fleet-map .graph=${graph} .activityWindow=${'30d'}></fleet-map>`
+      );
+      expect(node(el, 'agent:codex')).to.exist;
+      expect(node(el, 'model:gpt')).to.exist;
+      expect(node(el, 'provider:openai')).to.exist;
+      expect(node(el, 'user:maya')).to.exist;
+      expect(node(el, 'agent:claude')).to.not.exist;
+      expect(node(el, 'model:sonnet')).to.not.exist;
+      expect(node(el, 'user:sam')).to.not.exist;
+      const changed = spy();
+      el.addEventListener('fleet-map-window-change', changed);
+      const select = el.shadowRoot!.querySelector<HTMLSelectElement>(
+        '[data-testid="fleet-map-window"]'
+      )!;
+      select.value = 'any';
+      select.dispatchEvent(new Event('change'));
+      await el.updateComplete;
+      expect(changed.firstCall.args[0].detail).to.deep.equal({
+        window: 'any',
+        hours: null,
+      });
+      expect(localStorage.getItem('preloop:fleet-map:window')).to.equal('any');
+      expect(node(el, 'agent:claude')).to.exist;
+    });
+
+    it('trusts a graph the server already filtered', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${{ ...sampleFleetMap(), active_within_hours: 24 }}
+          .activityWindow=${'24h'}
+        ></fleet-map>`
+      );
+      expect(node(el, 'agent:claude')).to.exist;
+    });
+  });
+
+  describe('live activity', () => {
+    it('lights the line a model request travelled and names it', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'any'}
+        ></fleet-map>`
+      );
+      const call = {
+        type: 'model_gateway_call',
+        payload: { managed_agent_id: 'codex', model_alias: 'gpt-6.1' },
+      };
+      el.recordActivity('gateway_activity', call);
+      el.recordActivity('gateway_activity', call);
+      el.recordActivity('gateway_activity', {
+        type: 'mcp_call',
+        payload: { managed_agent_id: 'codex', tool_name: 'search' },
+      });
+      el.recordActivity('approvals', { type: 'approval_created' });
+      expect(el.shadowRoot!.querySelector('path.edge.active')).to.not.exist;
+      el.flushActivity();
+      await el.updateComplete;
+      const line = el.shadowRoot!.querySelector<SVGPathElement>(
+        'path[data-edge-id="uses_model:agent:codex:model:gpt:configured"]'
+      )!;
+      expect(line.classList.contains('active')).to.equal(true);
+      expect(line.getAttribute('data-activity')).to.equal('model request ×2');
+      const hosted = el.shadowRoot!.querySelector<SVGPathElement>(
+        'path[data-edge-id="hosts:device:mbp:agent:codex:observed"]'
+      )!;
+      expect(hosted.getAttribute('data-activity')).to.equal('tool call');
+      const labels = [
+        ...el.shadowRoot!.querySelectorAll('.activity-label'),
+      ].map((label) => label.textContent);
+      expect(labels).to.include('model request ×2');
+      expect(
+        el.shadowRoot!.querySelectorAll('path.edge.active').length
+      ).to.equal(2);
+    });
+  });
+
+  describe('spatial arrangement', () => {
+    afterEach(() => {
+      for (const key of Object.keys(localStorage))
+        if (key.startsWith('preloop:fleet-map:')) localStorage.removeItem(key);
+    });
+
+    it('is not offered to anyone but an instance administrator', async () => {
+      localStorage.setItem('preloop:fleet-map:arrangement:fleet:u1', 'spatial');
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'any'}
+          user-id="u1"
+        ></fleet-map>`
+      );
+      expect(el.shadowRoot!.querySelector('[data-arrangement]')).to.not.exist;
+      // A stored choice cannot turn it on either: columns still render.
+      expect(el.shadowRoot!.querySelector('.column-title')).to.exist;
+    });
+
+    it('lays nodes out in space and keeps a dragged node where it was dropped', async () => {
+      const el = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'any'}
+          instance-admin
+          user-id="u1"
+        ></fleet-map>`
+      );
+      el.shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-arrangement="spatial"]'
+      )!.click();
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.column-title')).to.not.exist;
+      expect(
+        localStorage.getItem('preloop:fleet-map:arrangement:fleet:u1')
+      ).to.equal('spatial');
+      const target = node(el, 'agent:codex');
+      const before = {
+        x: parseFloat(target.style.left),
+        y: parseFloat(target.style.top),
+      };
+      const stage = el.shadowRoot!.querySelector<HTMLElement>('.stage')!;
+      const scale = 1;
+      (el as unknown as { scale: number }).scale = scale;
+      const at = (x: number, y: number) => ({
+        bubbles: true,
+        composed: true,
+        pointerId: 7,
+        button: 0,
+        clientX: x,
+        clientY: y,
+      });
+      target.dispatchEvent(new PointerEvent('pointerdown', at(100, 100)));
+      stage.dispatchEvent(new PointerEvent('pointermove', at(160, 140)));
+      stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
+      await el.updateComplete;
+      const moved = node(el, 'agent:codex');
+      expect(parseFloat(moved.style.left)).to.equal(before.x + 60);
+      expect(parseFloat(moved.style.top)).to.equal(before.y + 40);
+      const stored = JSON.parse(
+        localStorage.getItem('preloop:fleet-map:positions:fleet:u1')!
+      );
+      expect(stored['agent:codex']).to.deep.equal({
+        x: before.x + 60,
+        y: before.y + 40,
+      });
+      // The drop does not also select the node.
+      moved.click();
+      await el.updateComplete;
+      expect(el.hasSelection()).to.equal(false);
+
+      const again = await fixture<FleetMap>(
+        html`<fleet-map
+          .graph=${sampleFleetMap()}
+          .activityWindow=${'any'}
+          instance-admin
+          user-id="u1"
+        ></fleet-map>`
+      );
+      const restored = node(again, 'agent:codex');
+      expect(parseFloat(restored.style.left)).to.equal(before.x + 60);
+      expect(parseFloat(restored.style.top)).to.equal(before.y + 40);
+    });
+  });
 });

@@ -482,4 +482,42 @@ describe('Device fleet', () => {
     expect(text).to.include('Back to the table');
     localStorage.removeItem('preloop.device_fleet.view_mode');
   });
+  it('asks for the stored activity window and refetches when it changes', async () => {
+    localStorage.setItem('preloop.device_fleet.view_mode', 'canvas');
+    localStorage.removeItem('preloop:fleet-map:window');
+    api = mockApi({
+      capabilities: ['fleet_coverage'],
+      profile: { permissions: ['view_device_fleet'] },
+      routes: [
+        {
+          path: '/api/v1/fleet/map',
+          body: { ...sampleFleetMap(), active_within_hours: 720 },
+        },
+      ],
+    });
+    const view = await mount();
+    await waitUntil(() => view.shadowRoot.querySelector('fleet-map')?.graph);
+    expect(api.callsTo('/api/v1/fleet/map')[0].search).to.equal(
+      '?active_within_hours=720'
+    );
+    const map = view.shadowRoot.querySelector('fleet-map');
+    await map.updateComplete;
+    const select = map.shadowRoot.querySelector(
+      '[data-testid="fleet-map-window"]'
+    ) as HTMLSelectElement;
+    expect(select.value).to.equal('30d');
+    select.value = '24h';
+    select.dispatchEvent(new Event('change'));
+    await waitUntil(() => api.callsTo('/api/v1/fleet/map').length === 2);
+    expect(api.callsTo('/api/v1/fleet/map')[1].search).to.equal(
+      '?active_within_hours=24'
+    );
+    expect(localStorage.getItem('preloop:fleet-map:window')).to.equal('24h');
+    select.value = 'any';
+    select.dispatchEvent(new Event('change'));
+    await waitUntil(() => api.callsTo('/api/v1/fleet/map').length === 3);
+    expect(api.callsTo('/api/v1/fleet/map')[2].search).to.equal('');
+    localStorage.removeItem('preloop:fleet-map:window');
+    localStorage.removeItem('preloop.device_fleet.view_mode');
+  });
 });

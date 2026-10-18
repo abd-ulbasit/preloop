@@ -25,6 +25,28 @@ import {
   type FleetMapNodeType,
 } from '../fleet-map-api';
 import { formatRelativeTime } from '../utils/date';
+import {
+  FLEET_ACTIVITY_TOPICS,
+  FLEET_MAP_WINDOWS,
+  FleetActivityTracker,
+  activeGraph,
+  activityFromRealtime,
+  activityLabel,
+  edgesForActivity,
+  saveFleetMapWindow,
+  windowHours,
+  type FleetMapWindow,
+} from '../utils/fleet-map-activity';
+import {
+  loadArrangement,
+  loadPositions,
+  saveArrangement,
+  savePositions,
+  spatialLayout,
+  type FleetMapArrangement,
+  type FleetMapPoints,
+} from '../utils/fleet-map-spatial';
+import { unifiedWebSocketManager } from '../services/unified-websocket-manager';
 import { getAgentKindPresentation } from '../utils/agent-kinds';
 import consoleStyles from '../styles/console-styles.css?inline';
 
@@ -108,6 +130,23 @@ export class FleetMap extends LitElement {
   @property({ attribute: false }) graph: FleetMapGraph | null = null;
   /** Covers the viewport. Toggled by the map's own button or by a host. */
   @property({ type: Boolean, reflect: true }) fullscreen = false;
+  /**
+   * Which resources the map shows by recent activity. The host refetches on
+   * `fleet-map-window-change`; a server that ignores the window is filtered
+   * here with the same rule.
+   */
+  @property({ attribute: false }) activityWindow: FleetMapWindow = 'any';
+  /** Light relationships from the console's realtime stream. */
+  @property({ type: Boolean }) live = false;
+  /** Instance administrators may arrange the map in space. */
+  @property({ type: Boolean, attribute: 'instance-admin' })
+  instanceAdmin = false;
+  /** Whose arrangement and dragged positions are stored. */
+  @property({ attribute: 'user-id' }) userId = '';
+  /** Separates stored positions of different maps (fleet, inventory). */
+  @property({ attribute: 'positions-scope' }) positionsScope = 'fleet';
+  @state() private arrangement: FleetMapArrangement = 'columns';
+  @state() private points: FleetMapPoints = {};
   @state() private selected = '';
   @state() private types = new Set<FleetMapNodeType>(FLEET_MAP_TYPES);
   @state() private owner = '';
@@ -132,6 +171,72 @@ export class FleetMap extends LitElement {
     this.focusOnly = false;
   }
 
+  private readonly activity = new FleetActivityTracker(() =>
+    this.requestUpdate()
+  );
+  private unsubscribes: (() => void)[] = [];
+  private drag: {
+    id: number;
+    node: string;
+    x: number;
+    y: number;
+    origin: { x: number; y: number };
+    moved: boolean;
+  } | null = null;
+  private suppressClick = false;
+  private spatialCache?: { key: unknown[]; layout: FleetMapLayout };
+
+  /** Place one realtime message on the map, if it concerns a mapped agent. */
+  recordActivity(topic: string, message: unknown): void {
+    const hit = activityFromRealtime(topic, message);
+    if (!hit || !this.graph) return;
+    this.activity.add(edgesForActivity(this.graph, hit), hit.kind);
+  }
+
+  /** Repaint pending activity now rather than at the next throttle tick. */
+  flushActivity(): void {
+    this.activity.flush();
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this.live)
+      for (const topic of FLEET_ACTIVITY_TOPICS)
+        this.unsubscribes.push(
+          unifiedWebSocketManager.subscribe(topic, (message: unknown) =>
+            this.recordActivity(topic, message)
+          )
+        );
+  }
+
+  private get spatial(): boolean {
+    return this.instanceAdmin && this.arrangement === 'spatial';
+  }
+
+  private setArrangement(value: FleetMapArrangement): void {
+    if (!this.instanceAdmin || value === this.arrangement) return;
+    this.arrangement = value;
+    saveArrangement(this.userId, value, this.positionsScope);
+    this.refit = true;
+  }
+
+  private setWindow(value: FleetMapWindow): void {
+    if (
+      value === this.activityWindow ||
+      !FLEET_MAP_WINDOWS.some((item) => item.value === value)
+    )
+      return;
+    this.activityWindow = value;
+    saveFleetMapWindow(value);
+    this.dispatchEvent(
+      new CustomEvent('fleet-map-window-change', {
+        detail: { window: value, hours: windowHours(value) },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   private scale = 1;
   private translateX = 24;
   private translateY = 12;
@@ -146,6 +251,14 @@ export class FleetMap extends LitElement {
       plane.style.transform = `translate(${this.translateX}px,${this.translateY}px) scale(${this.scale})`;
     const zoom = this.shadowRoot?.querySelector('.zoom');
     if (zoom) zoom.textContent = `${Math.round(this.scale * 100)}%`;
+  }
+
+  protected willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has('userId') || changed.has('positionsScope')) {
+      this.arrangement = loadArrangement(this.userId, this.positionsScope);
+      this.points = loadPositions(this.userId, this.positionsScope);
+    }
+    this.dropHiddenSelection();
   }
 
   protected updated(changed: Map<string, unknown>): void {
@@ -164,6 +277,9 @@ export class FleetMap extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.unsubscribes.forEach((unsubscribe) => unsubscribe());
+    this.unsubscribes = [];
+    this.activity.stop();
     window.removeEventListener('keydown', this.onWindowKey);
     if (this.fullscreen) document.body.style.overflow = '';
   }
@@ -212,8 +328,29 @@ export class FleetMap extends LitElement {
   }
 
   private pointerDown(event: PointerEvent): void {
-    if (event.button !== 0 || (event.target as Element).closest('button'))
+    if (event.button !== 0) return;
+    const target = (event.target as Element).closest?.('[data-node]');
+    if (this.spatial && target && this.lastLayout) {
+      const id = target.getAttribute('data-node') || '';
+      const position = this.lastLayout.positions.get(id);
+      if (!position) return;
+      this.drag = {
+        id: event.pointerId,
+        node: id,
+        x: event.clientX,
+        y: event.clientY,
+        origin: { x: position.x, y: position.y },
+        moved: false,
+      };
+      // Pin the picture as it is, so only the dragged node moves.
+      const all: FleetMapPoints = {};
+      for (const [key, p] of this.lastLayout.positions)
+        all[key] = { x: p.x, y: p.y };
+      this.points = { ...all, ...this.points };
+      capture(event, true);
       return;
+    }
+    if ((event.target as Element).closest('button')) return;
     this.pan = {
       id: event.pointerId,
       x: event.clientX - this.translateX,
@@ -223,6 +360,21 @@ export class FleetMap extends LitElement {
   }
 
   private pointerMove(event: PointerEvent): void {
+    const drag = this.drag;
+    if (drag?.id === event.pointerId) {
+      const dx = (event.clientX - drag.x) / this.scale;
+      const dy = (event.clientY - drag.y) / this.scale;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      this.points = {
+        ...this.points,
+        [drag.node]: {
+          x: Math.round(drag.origin.x + dx),
+          y: Math.round(drag.origin.y + dy),
+        },
+      };
+      return;
+    }
     if (this.pan?.id !== event.pointerId) return;
     this.translateX = event.clientX - this.pan.x;
     this.translateY = event.clientY - this.pan.y;
@@ -230,6 +382,15 @@ export class FleetMap extends LitElement {
   }
 
   private pointerUp(event: PointerEvent): void {
+    const drag = this.drag;
+    if (drag?.id === event.pointerId) {
+      this.drag = null;
+      capture(event, false);
+      if (!drag.moved) return;
+      savePositions(this.userId, this.points, this.positionsScope);
+      this.suppressClick = true;
+      return;
+    }
     if (this.pan?.id !== event.pointerId) return;
     this.pan = null;
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
@@ -488,6 +649,23 @@ export class FleetMap extends LitElement {
       }
       .edge.dim {
         opacity: 0.08;
+      }
+      /* Live traffic: success means live (DESIGN.md, Colour). A state
+         change, held a few seconds, never an ambient animation. */
+      .edge.active {
+        stroke: var(--sl-color-success-600);
+        stroke-width: 2.5;
+        stroke-dasharray: none;
+        opacity: 1;
+      }
+      .activity-label {
+        font-size: 11px;
+        font-weight: 500;
+        fill: var(--sl-color-success-800);
+        paint-order: stroke;
+        stroke: var(--console-page);
+        stroke-width: 3px;
+        pointer-events: none;
       }
       .column-title {
         position: absolute;
@@ -875,6 +1053,7 @@ export class FleetMap extends LitElement {
       }
       @media (prefers-reduced-motion: reduce) {
         .edge,
+        .activity-label,
         .node,
         .box {
           transition: none;
@@ -884,7 +1063,7 @@ export class FleetMap extends LitElement {
   ];
 
   /** Filters cannot leave a hidden selection or gap focus dimming the canvas. */
-  willUpdate(): void {
+  private dropHiddenSelection(): void {
     const visible = this.filtered().nodes;
     if (this.selected && !visible.some((node) => node.id === this.selected)) {
       this.selected = '';
@@ -904,6 +1083,7 @@ export class FleetMap extends LitElement {
   private filtered(): FleetMapGraph {
     const key = [
       this.graph,
+      this.activityWindow,
       this.types,
       this.owner,
       this.provider,
@@ -913,7 +1093,13 @@ export class FleetMap extends LitElement {
     const cached = this.filterCache;
     if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.view;
-    const view = filterGraph(this.graph ?? EMPTY, {
+    const hours = windowHours(this.activityWindow);
+    // A server that applied the window says so; otherwise apply it here.
+    const source =
+      this.graph && hours && this.graph.active_within_hours === undefined
+        ? activeGraph(this.graph, Date.now() - hours * 3_600_000)
+        : (this.graph ?? EMPTY);
+    const view = filterGraph(source, {
       types: this.types,
       owner: this.owner,
       provider: this.provider,
@@ -1023,6 +1209,33 @@ export class FleetMap extends LitElement {
       !this.states.has('onboarded');
     const retired = graph.decommissioned_agents ?? 0;
     return html`<div class="toolbar">
+        ${
+          this.instanceAdmin
+            ? html`<fieldset
+                class="seg"
+                aria-label="Arrangement"
+                data-testid="fleet-map-arrangement"
+              >
+                ${(
+                  [
+                    ['columns', 'Columns'],
+                    ['spatial', 'Spatial'],
+                  ] as const
+                ).map(
+                  ([value, label]) =>
+                    html`<button
+                      type="button"
+                      class="pill"
+                      data-arrangement=${value}
+                      aria-pressed=${this.arrangement === value ? 'true' : 'false'}
+                      @click=${() => this.setArrangement(value)}
+                    >
+                      ${label}
+                    </button>`
+                )}
+              </fieldset>`
+            : nothing
+        }
         <span class="search">
           <sl-icon name="search" aria-hidden="true"></sl-icon>
           <input
@@ -1110,6 +1323,28 @@ export class FleetMap extends LitElement {
               </button>`
           )}
         </fieldset>
+        <label
+          >Active
+          <select
+            data-testid="fleet-map-window"
+            aria-label="Show resources active in"
+            .value=${this.activityWindow}
+            @change=${(e: Event) =>
+              this.setWindow(
+                (e.target as HTMLSelectElement).value as FleetMapWindow
+              )}
+          >
+            ${FLEET_MAP_WINDOWS.map(
+              (item) =>
+                html`<option
+                  value=${item.value}
+                  ?selected=${item.value === this.activityWindow}
+                >
+                  ${item.label}
+                </option>`
+            )}
+          </select></label
+        >
         <span class="count" aria-live="polite"
           >${shown === total ? total : `${shown} of ${total}`}
           node${total === 1 ? '' : 's'}${groups ? ` · ${groups} summary group${groups === 1 ? '' : 's'}` : ''}${
@@ -1303,7 +1538,13 @@ export class FleetMap extends LitElement {
       title="${node.label}${node.detail ? `\n${node.detail}` : ''}${
         gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''
       }"
-      @click=${() => this.select(node.id)}
+      @click=${() => {
+        if (this.suppressClick) {
+          this.suppressClick = false;
+          return;
+        }
+        this.select(node.id);
+      }}
     >
       <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
       <span class="text"
@@ -1373,7 +1614,7 @@ export class FleetMap extends LitElement {
       { edge: FleetMapEdge; from: string; to: string; accounts: string[] }
     >();
     for (const edge of view.edges) {
-      if (edge.kind === 'account_of_provider') continue;
+      if (edge.kind === 'account_of_provider' && !this.spatial) continue;
       if (
         edge.kind === 'uses_account' &&
         !(lit && lit.has(edge.source) && lit.has(edge.target))
@@ -1582,6 +1823,38 @@ export class FleetMap extends LitElement {
     </aside>`;
   }
 
+  /** The simulation reruns only when the shown graph or a position changes. */
+  private spatialFor(view: FleetMapGraph): FleetMapLayout {
+    const key = [view, this.points];
+    const cached = this.spatialCache;
+    if (cached && cached.key.every((value, index) => value === key[index]))
+      return cached.layout;
+    const seed = layoutGraph(view).positions;
+    const layout = spatialLayout(view, seed, this.points);
+    this.spatialCache = { key, layout };
+    return layout;
+  }
+
+  /** Lit relationships by drawn line, with the label of what travelled. */
+  private activityByLine(
+    view: FleetMapGraph,
+    layout: FleetMapLayout
+  ): Map<string, string> {
+    const lines = new Map<string, string>();
+    if (!this.activity.marks.size) return lines;
+    const now = Date.now();
+    const byId = new Map(view.edges.map((edge) => [edge.id, edge]));
+    for (const [id, mark] of this.activity.marks) {
+      const edge = byId.get(id);
+      if (!edge || mark.until <= now) continue;
+      const from = layout.anchor(edge.source);
+      const to = layout.anchor(edge.target);
+      if (from && to && !lines.has(`${from}>${to}`))
+        lines.set(`${from}>${to}`, activityLabel(mark));
+    }
+    return lines;
+  }
+
   render() {
     const graph = this.graph;
     if (!graph) return nothing;
@@ -1614,12 +1887,14 @@ export class FleetMap extends LitElement {
           }
         : filtered;
     const pinned = new Set([...hits, ...(lit ?? [])]);
-    const layout = layoutGraph(view, {
-      cap: FLEET_MAP_CAP,
-      expanded: this.expanded,
-      collapsed: this.collapsed,
-      pinned,
-    });
+    const layout = this.spatial
+      ? this.spatialFor(view)
+      : layoutGraph(view, {
+          cap: FLEET_MAP_CAP,
+          expanded: this.expanded,
+          collapsed: this.collapsed,
+          pinned,
+        });
     this.lastLayout = layout;
     const byId = new Map(graph.nodes.map((node) => [node.id, node]));
     const parentOf = new Map<string, string>();
@@ -1634,6 +1909,7 @@ export class FleetMap extends LitElement {
       );
     };
     const context = { view, layout, byId, lit, hits };
+    const active = this.activityByLine(view, layout);
     return html`${this.renderToolbar(graph, filtered, hits)}
       ${this.renderGaps(filtered)}
       ${
@@ -1708,6 +1984,7 @@ export class FleetMap extends LitElement {
                 >
                   ${this.drawnEdges(view, layout, lit).map(
                     ({ edge, from, to, accounts }) => {
+                      const live = active.get(`${from}>${to}`);
                       const a = layout.positions.get(from)!;
                       const b = layout.positions.get(to)!;
                       const na = byId.get(edge.source)!;
@@ -1739,6 +2016,7 @@ export class FleetMap extends LitElement {
                         edge.provenance,
                         edge.gaps.length ? 'gap' : '',
                         inRadius ? 'lit' : '',
+                        live ? 'active' : '',
                         (lit && !inRadius) ||
                         (!lit && this.focusGap && !focused)
                           ? 'dim'
@@ -1748,7 +2026,11 @@ export class FleetMap extends LitElement {
                         .map((id) => byId.get(id)?.label)
                         .filter(Boolean)
                         .join(', ');
-                      return svg`<path class=${cls} data-edge=${edge.kind} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}</title></path>`;
+                      const path = svg`<path class=${cls} data-edge=${edge.kind} data-edge-id=${edge.id} data-activity=${live || nothing} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}${live ? ` · ${live}` : ''}</title></path>`;
+                      if (!live) return path;
+                      const mx = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
+                      const my = (y1 + y2) / 2 - 6;
+                      return svg`${path}<text class="activity-label" x=${mx} y=${my} text-anchor="middle">${live}</text>`;
                     }
                   )}
                 </svg>
@@ -1845,6 +2127,17 @@ export class FleetMap extends LitElement {
         </div>
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
+  }
+}
+
+/** Pointer capture fails for synthetic or already released pointers. */
+function capture(event: PointerEvent, on: boolean): void {
+  const target = event.currentTarget as HTMLElement | null;
+  try {
+    if (on) target?.setPointerCapture(event.pointerId);
+    else target?.releasePointerCapture(event.pointerId);
+  } catch {
+    // Dragging still works without capture while the pointer is over the map.
   }
 }
 

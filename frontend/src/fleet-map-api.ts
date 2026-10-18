@@ -80,6 +80,8 @@ export interface FleetMapGraph {
   clusters: { type: FleetMapResourceType; count: number }[];
   unavailable: string[];
   decommissioned_agents?: number;
+  /** Activity window the server applied; absent on servers that ignore it. */
+  active_within_hours?: number | null;
 }
 
 /** Every resource type, in reading order; each can be shown or hidden. */
@@ -532,9 +534,13 @@ export function layoutGraph(
 }
 
 export async function getFleetMap(
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  activeWithinHours: number | null = null
 ): Promise<FleetMapGraph> {
-  const response = await fetchWithAuth('/api/v1/fleet/map', { signal });
+  const url = activeWithinHours
+    ? `/api/v1/fleet/map?active_within_hours=${activeWithinHours}`
+    : '/api/v1/fleet/map';
+  const response = await fetchWithAuth(url, { signal });
   if (!response.ok)
     throw new Error(
       response.status === 403
