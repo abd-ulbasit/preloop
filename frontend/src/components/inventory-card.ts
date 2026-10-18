@@ -406,9 +406,11 @@ export class InventoryCard extends LitElement {
 
         /* Not ".header": the console sheet gives that class a page-header
          min-height and bottom margin, which pads a card header by 40px. */
+        /* Wraps on phones: two selects do not fit next to the title. */
         .card-head {
           align-items: center;
           display: flex;
+          flex-wrap: wrap;
           gap: var(--sl-spacing-small);
           justify-content: space-between;
         }
@@ -421,7 +423,9 @@ export class InventoryCard extends LitElement {
         .header-controls {
           align-items: center;
           display: flex;
+          flex-wrap: wrap;
           gap: var(--sl-spacing-small);
+          max-width: 100%;
         }
 
         /* The sort is read next to the column it orders, so its label is for

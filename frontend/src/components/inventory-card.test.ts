@@ -828,6 +828,21 @@ describe('inventory-card', () => {
     expect(gap).to.be.lessThan(1);
   });
 
+  it('keeps the header controls inside the card on a phone', async () => {
+    const el = await card();
+    el.style.display = 'block';
+    el.style.width = '320px';
+    await el.updateComplete;
+    const head = el.shadowRoot!.querySelector('.card-head')!;
+    for (const control of el.shadowRoot!.querySelectorAll(
+      '.header-controls > *'
+    )) {
+      expect(control.getBoundingClientRect().right).to.be.at.most(
+        head.getBoundingClientRect().right + 1
+      );
+    }
+  });
+
   it('hands a period change to the page, which owns the range', async () => {
     const el = await card();
     const select = el.shadowRoot!.querySelector('time-range-select')!;
