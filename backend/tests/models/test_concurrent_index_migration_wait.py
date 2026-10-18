@@ -15,7 +15,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import DBAPIError
 
 from preloop.models.concurrent_index_ddl import concurrent_index_ddl
@@ -23,20 +23,25 @@ from preloop.models.concurrent_index_ddl import concurrent_index_ddl
 
 @pytest.fixture
 def index_database() -> Iterator[Engine]:
-    """Use a private schema in the configured disposable PostgreSQL database."""
+    """Use a private database so installed indexes cannot affect the revision.
+
+    The catalog probes in historical revisions predate schema qualification.
+    A seeded main test database can contain identically named indexes, so a
+    separate schema would not isolate these actual migration entry points.
+    """
     url = os.getenv("DATABASE_URL")
     if not url or not url.startswith("postgresql"):
         pytest.skip("requires a disposable PostgreSQL DATABASE_URL")
-    schema = f"migration_wait_{secrets.token_hex(6)}"
-    admin = create_engine(url, isolation_level="AUTOCOMMIT")
+    database = f"migration_wait_{secrets.token_hex(6)}"
+    base_url = make_url(url)
+    admin = create_engine(
+        base_url.set(database="postgres"), isolation_level="AUTOCOMMIT"
+    )
     with admin.connect() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(text(f'CREATE DATABASE "{database}"'))
     engine = create_engine(
-        url,
-        connect_args={
-            "options": f"-c search_path={schema} -c lock_timeout=5s "
-            "-c statement_timeout=23s"
-        },
+        base_url.set(database=database),
+        connect_args={"options": "-c lock_timeout=5s -c statement_timeout=23s"},
     )
     try:
         with engine.begin() as connection:
@@ -71,7 +76,7 @@ def index_database() -> Iterator[Engine]:
     finally:
         engine.dispose()
         with admin.connect() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            connection.execute(text(f'DROP DATABASE "{database}" WITH (FORCE)'))
         admin.dispose()
 
 
