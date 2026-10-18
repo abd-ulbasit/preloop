@@ -3,8 +3,9 @@
 An enabled plugin can implement `Plugin.get_attention_sources()` and return
 `AttentionSource(id, permission, provider)` objects. The async provider receives
 `(db, user)` and returns `list[ExtensionAttentionItem]`. Read through core CRUD and
-scope every read to `user.account_id`. A provider may offload synchronous CRUD
-using `run_db_off_loop`. The endpoint checks the declared permission before invoking
+scope every read to `user.account_id`. Providers run on the API event loop and must
+offload synchronous CRUD using `run_db_off_loop`. Contribution requests use the
+existing bounded heavy-route pool. The endpoint checks permission before invoking
 the provider; account owners and superusers also qualify. Restricted credentials
 cannot read attention items.
 

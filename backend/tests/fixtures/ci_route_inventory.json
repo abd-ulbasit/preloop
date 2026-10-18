@@ -90,6 +90,7 @@
   "GET /api/v1/approval-workflows/{workflow_id}": "deny",
   "GET /api/v1/artifacts": "deny",
   "GET /api/v1/attention/dismissals": "deny",
+  "GET /api/v1/attention/extension-items": "deny",
   "GET /api/v1/attention/spend-outliers": "deny",
   "GET /api/v1/attention/spend-outliers/settings": "deny",
   "GET /api/v1/audit/chain/checkpoints": "deny",

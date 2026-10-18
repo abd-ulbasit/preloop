@@ -4210,7 +4210,8 @@ paths:
       tags:
       - Account
       summary: List Extension Attention Items
-      description: Merge enabled plugin sources authorized for the selected membership.
+      description: Bound contribution fan-out while async providers run on the API
+        loop.
       operationId: list_extension_attention_items_api_v1_attention_extension_items_get
       responses:
         '200':

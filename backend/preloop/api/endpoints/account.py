@@ -3,6 +3,7 @@
 import html
 import logging
 import secrets
+import anyio.from_thread
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from typing import Annotated, Any, Literal, Optional
@@ -4225,9 +4226,17 @@ def _resolve_dismissal_usernames(
 
 
 @router.get("/attention/extension-items", response_model=list[ExtensionAttentionItem])
-async def list_extension_attention_items(
+@heavy_route
+def list_extension_attention_items(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
+) -> list[ExtensionAttentionItem]:
+    """Bound contribution fan-out while async providers run on the API loop."""
+    return anyio.from_thread.run(_list_extension_attention_items, current_user, db)
+
+
+async def _list_extension_attention_items(
+    current_user: UserModel, db: Session
 ) -> list[ExtensionAttentionItem]:
     """Merge enabled plugin sources authorized for the selected membership."""
     from preloop.api.auth.key_scopes import (
@@ -4237,13 +4246,16 @@ async def list_extension_attention_items(
     from preloop.api.auth.permissions import has_permission
     from preloop.plugins.base import get_plugin_manager
 
-    key = getattr(current_user, "_auth_api_key", None)
-    context = getattr(key, "context_data", None)
-    if (
-        is_mcp_only_api_key(key)
-        or is_single_purpose_api_key(key)
-        or (isinstance(context, dict) and "device_report" in context)
-    ):
+    def restricted() -> bool:
+        key = getattr(current_user, "_auth_api_key", None)
+        context = getattr(key, "context_data", None)
+        return (
+            is_mcp_only_api_key(key)
+            or is_single_purpose_api_key(key)
+            or (isinstance(context, dict) and "device_report" in context)
+        )
+
+    if await run_db_off_loop(restricted):
         raise HTTPException(403, "Restricted credentials cannot read attention items")
     sources = get_plugin_manager().attention_sources()
     if not sources:
