@@ -8,8 +8,9 @@ from uuid import uuid4
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import NullPool
 
 MIGRATION = (
     Path(__file__).resolve().parents[2]
@@ -23,10 +24,12 @@ def test_index_timeout_can_be_retried_without_partial_tables(db_engine: Any) -> 
     migration = module_from_spec(spec)
     spec.loader.exec_module(migration)
     schema = f"activity_migration_{uuid4().hex}"
-    with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as admin:
+    # Session GUCs belong only to this test; never return them to the suite pool.
+    engine = create_engine(db_engine.url, poolclass=NullPool)
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as admin:
         admin.execute(text(f'CREATE SCHEMA "{schema}"'))
         try:
-            with db_engine.connect() as connection, db_engine.connect() as writer:
+            with engine.connect() as connection, engine.connect() as writer:
                 for conn in (connection, writer):
                     conn.execute(text(f'SET search_path TO "{schema}"'))
                     conn.commit()
