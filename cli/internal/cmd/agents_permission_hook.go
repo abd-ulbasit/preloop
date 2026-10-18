@@ -562,7 +562,7 @@ func permissionHookRemediation(source string) string {
 		"To keep working, run `%s` (resumes automatically in %s). "+
 			"To repair: re-run `preloop agents onboard %q --approvals`",
 		approvalsPauseCommand,
-		strings.TrimSuffix(defaultPauseDuration.String(), "0m0s"),
+		defaultPauseLabel,
 		permissionSourceDisplayName(source),
 	)
 	if configPath, err := approvalHookConfigPath(source); err == nil {

@@ -574,16 +574,19 @@ approval expiry stay closed.
 
 #### Pausing approvals while Preloop is unavailable
 
-When the approval service is down, every fail-closed deny message starts with
-the way out: `preloop agents pause`. It pauses the approval hooks on this
-machine for 1h by default (`--for 30m`, maximum `24h`), for every agent or for
-one (`preloop agents pause "Codex CLI"`). While paused the hook does not call
-Preloop; it answers with no decision so the agent's own permission prompts
-apply, and prints `Preloop approvals are paused until <time>` to stderr.
-Agent config files are not touched. The pause is stored in
-`~/.preloop/approvals-pause.json`, ends on its own, and `preloop agents resume
-[agent]` ends it early. `preloop agents status <agent>` shows an active pause.
-Paused calls are not audited by Preloop. Flow runs with
+When the approval service is down, every fail-closed deny message names the
+way out right after the error: `preloop agents pause`. It pauses the CLI
+approval hooks (Claude Code, Codex CLI, Cursor, Copilot CLI, Devin) on this
+machine for 1h by default (`--for 30m`, maximum `24h`), for all of them or for
+one (`preloop agents pause "Codex CLI"`). While paused the hook skips the
+permission-check call and answers with no decision, so the agent's own
+permission prompts apply; Devin, whose hook requires a verdict, is approved.
+The hook prints `Preloop approvals are paused until <time>` to stderr. Codex's
+background credential sync may still contact Preloop. Agent config files are
+not touched. The pause is stored in `~/.preloop/approvals-pause.json`, ends on
+its own, and `preloop agents resume [agent]` ends it early. `preloop agents
+status <agent>` shows an active pause. Runtime-plugin harnesses (OpenCode, Pi
+and others) do not read the pause yet. Paused calls are not audited by Preloop. Flow runs with
 `--require-flow-credential` ignore the pause and stay governed.
 
 The server governance setting `native_tool_approvals=off` disables automatic

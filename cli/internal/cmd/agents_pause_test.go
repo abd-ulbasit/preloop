@@ -265,6 +265,12 @@ func TestFailClosedDenyLeadsWithPauseCommand(t *testing.T) {
 	}
 }
 
+func TestDefaultPauseLabelMatchesDuration(t *testing.T) {
+	if got, err := time.ParseDuration(defaultPauseLabel); err != nil || got != defaultPauseDuration {
+		t.Fatalf("defaultPauseLabel %q does not match defaultPauseDuration %s", defaultPauseLabel, defaultPauseDuration)
+	}
+}
+
 func TestAgentsPauseAndResumeCommands(t *testing.T) {
 	testenv.SetHome(t, t.TempDir())
 	withPauseClock(t, time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC))
@@ -316,6 +322,11 @@ func TestApprovalsPauseStatusLine(t *testing.T) {
 	}
 	if _, err := setApprovalsPause("", time.Hour); err != nil {
 		t.Fatal(err)
+	}
+	for _, source := range []string{permissionSourceOpenCode, "pi", ""} {
+		if line := approvalsPauseStatusLine(source); line != "" {
+			t.Errorf("%q does not read the pause marker; status must not claim a pause: %q", source, line)
+		}
 	}
 	line := approvalsPauseStatusLine(permissionSourceCodexCLI)
 	if !strings.Contains(line, "Approvals: paused until") {

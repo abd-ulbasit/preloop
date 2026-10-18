@@ -19,9 +19,11 @@ import (
 // approval service is unreachable. It never edits an agent's own config: the
 // hooks stay installed and consult this marker on every call.
 const (
-	approvalsPauseFile    = "approvals-pause.json"
-	approvalsPauseAllKey  = "all"
-	defaultPauseDuration  = time.Hour
+	approvalsPauseFile   = "approvals-pause.json"
+	approvalsPauseAllKey = "all"
+	defaultPauseDuration = time.Hour
+	// defaultPauseLabel is defaultPauseDuration as shown in deny messages.
+	defaultPauseLabel     = "1h"
 	maximumPauseDuration  = 24 * time.Hour
 	hookBehaviorPass      = "pass"
 	approvalsPauseCommand = "preloop agents pause"
@@ -126,6 +128,25 @@ func firstArg(args []string) string {
 	return args[0]
 }
 
+// pauseAwareSources are the hook sources whose CLI permission hook reads the
+// pause marker. Runtime-plugin harnesses call permission-check themselves.
+var pauseAwareSources = []string{
+	permissionSourceClaudeCode,
+	permissionSourceCodexCLI,
+	permissionSourceCursor,
+	permissionSourceCopilotCLI,
+	permissionSourceDevinCLI,
+}
+
+func isPauseAwareSource(source string) bool {
+	for _, candidate := range pauseAwareSources {
+		if candidate == source {
+			return true
+		}
+	}
+	return false
+}
+
 // resolvePauseTarget maps an agent argument onto its permission source. An
 // empty argument means every agent and resolves to "".
 func resolvePauseTarget(arg string) (string, error) {
@@ -136,13 +157,7 @@ func resolvePauseTarget(arg string) (string, error) {
 	if source := normalizePermissionSource(arg); source != "" {
 		return source, nil
 	}
-	for _, source := range []string{
-		permissionSourceClaudeCode,
-		permissionSourceCodexCLI,
-		permissionSourceCursor,
-		permissionSourceCopilotCLI,
-		permissionSourceDevinCLI,
-	} {
+	for _, source := range pauseAwareSources {
 		if strings.EqualFold(arg, permissionSourceDisplayName(source)) {
 			return source, nil
 		}
@@ -174,7 +189,7 @@ func parsePauseDuration(value string) (time.Duration, error) {
 
 func pauseTargetLabel(source string) string {
 	if source == "" {
-		return "all agents"
+		return "all CLI approval hooks (Claude Code, Codex CLI, Cursor, Copilot CLI, Devin)"
 	}
 	return permissionSourceDisplayName(source)
 }
@@ -328,7 +343,7 @@ func pausedPermissionDecision(source string) (hookDecision, bool) {
 
 // approvalsPauseStatusLine is the `agents status` line for an active pause.
 func approvalsPauseStatusLine(source string) string {
-	if source == "" {
+	if !isPauseAwareSource(source) {
 		return ""
 	}
 	until, ok := activeApprovalsPause(source)
