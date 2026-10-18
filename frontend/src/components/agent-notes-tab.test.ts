@@ -300,6 +300,66 @@ describe('agent-notes-tab', () => {
       expect(composer.nextSession).to.equal(true);
     });
 
+    it('reads live sessions when the host supplied the notes page', async () => {
+      stubSessions([live('s-1', 'fixer')], []);
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab
+          agent-id="agent-1"
+          can-send
+          .initial=${{ notes: [note(1)], total: 1 }}
+        ></agent-notes-tab>`
+      );
+      await settle(el);
+      expect(target(el).value).to.equal('s-1');
+      // The notes page was reused, not read again.
+      expect(noteCalls(fetchStub)).to.have.length(0);
+    });
+
+    it('reports the agent-wide count after a send while filtered', async () => {
+      stubSessions(
+        [live('s-1', 'fixer'), live('s-2', 'reviewer')],
+        [
+          { ...note(1), runtime_session_id: 's-1' },
+          { ...note(2), runtime_session_id: 's-2' },
+          { ...note(3), runtime_session_id: 's-2' },
+        ]
+      );
+      const el = await fixture<AgentNotesTab>(
+        html`<agent-notes-tab agent-id="agent-1" can-send></agent-notes-tab>`
+      );
+      await settle(el);
+      await waitUntil(() => el.shadowRoot!.querySelectorAll('li').length === 3);
+      const filter = el.shadowRoot!.querySelector(
+        '[data-testid="notes-session-filter"]'
+      ) as HTMLSelectElement;
+      filter.value = 's-1';
+      filter.dispatchEvent(new CustomEvent('sl-change'));
+      await waitUntil(() => el.shadowRoot!.querySelectorAll('li').length === 1);
+
+      const counts: number[] = [];
+      el.addEventListener('notes-count-changed', (event) =>
+        counts.push((event as CustomEvent<{ total: number }>).detail.total)
+      );
+      const composer = el.shadowRoot!.querySelector('operator-note-composer')!;
+      for (const sessionId of ['s-1', 's-2']) {
+        composer.dispatchEvent(
+          new CustomEvent('operator-note-sent', {
+            detail: {
+              ...note(9),
+              note_id: `sent-${sessionId}`,
+              runtime_session_id: sessionId,
+            },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      }
+      expect(counts).to.deep.equal([4, 5]);
+      await el.updateComplete;
+      // Only the note on the listed session joins the list.
+      expect(el.shadowRoot!.querySelectorAll('li').length).to.equal(2);
+    });
+
     it('makes the operator choose between several live sessions', async () => {
       stubSessions([live('s-1', 'fixer'), live('s-2', 'reviewer')], []);
       const el = await fixture<AgentNotesTab>(

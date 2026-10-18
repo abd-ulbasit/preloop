@@ -90,6 +90,13 @@ export class AgentNotesTab extends LitElement {
   @state() private sessionFilter = FILTER_ALL;
 
   private loadedFor = '';
+  /** The agent whose live sessions were read, apart from its notes. */
+  private sessionsLoadedFor = '';
+  /**
+   * Notes across every session: the tab's count. `total` narrows with the
+   * session filter, and the host's badge must not.
+   */
+  private agentTotal = 0;
 
   static styles = css`
     :host {
@@ -260,6 +267,7 @@ export class AgentNotesTab extends LitElement {
     ) {
       this.notes = this.initial.notes;
       this.total = this.initial.total;
+      this.agentTotal = this.initial.total;
       this.loadedFor = this.agentId;
     }
   }
@@ -271,6 +279,14 @@ export class AgentNotesTab extends LitElement {
       this.loadedFor !== this.agentId
     ) {
       void this.load(true);
+    }
+    // Apart from the notes: a page the host already read must not skip it.
+    if (
+      (changed.has('agentId') || changed.has('canSend')) &&
+      this.agentId &&
+      this.canSend &&
+      this.sessionsLoadedFor !== this.agentId
+    ) {
       void this.loadSessions();
     }
   }
@@ -300,6 +316,7 @@ export class AgentNotesTab extends LitElement {
       this.loadedFor = agentId;
       this.notes = reset ? page.notes : [...this.notes, ...page.notes];
       this.total = page.total;
+      if (this.sessionFilter === FILTER_ALL) this.agentTotal = page.total;
     } catch (error) {
       this.error =
         error instanceof Error ? error.message : 'Could not load the notes';
@@ -316,6 +333,7 @@ export class AgentNotesTab extends LitElement {
   private async loadSessions(): Promise<void> {
     const agentId = this.agentId;
     if (!agentId) return;
+    this.sessionsLoadedFor = agentId;
     this.targetsState = 'loading';
     const [live, recent] = await Promise.allSettled([
       listAllOperatorNoteSessionTargets(agentId),
@@ -359,28 +377,21 @@ export class AgentNotesTab extends LitElement {
   private onSent(event: CustomEvent<OperatorNote>): void {
     const note = event.detail;
     if (!note?.note_id) return;
+    this.agentTotal += 1;
     // A note for another session than the one listed belongs to that list.
-    if (
-      this.sessionFilter !== FILTER_ALL &&
-      note.runtime_session_id !== this.sessionFilter
-    ) {
-      this.dispatchEvent(
-        new CustomEvent('notes-count-changed', {
-          detail: { total: this.total },
-          bubbles: true,
-          composed: true,
-        })
-      );
-      return;
+    const listed =
+      this.sessionFilter === FILTER_ALL ||
+      note.runtime_session_id === this.sessionFilter;
+    if (listed) {
+      this.notes = [
+        note,
+        ...this.notes.filter((n) => n.note_id !== note.note_id),
+      ];
+      this.total += 1;
     }
-    this.notes = [
-      note,
-      ...this.notes.filter((n) => n.note_id !== note.note_id),
-    ];
-    this.total += 1;
     this.dispatchEvent(
       new CustomEvent('notes-count-changed', {
-        detail: { total: this.total },
+        detail: { total: this.agentTotal },
         bubbles: true,
         composed: true,
       })

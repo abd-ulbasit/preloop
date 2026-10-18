@@ -1269,6 +1269,49 @@ describe('SessionReplayPanel', () => {
     expect(highlighted.textContent).to.contain('rebase first');
   });
 
+  it('jumps to a linked note whose activity arrives after the focus', async () => {
+    // A second note linked in a loaded session: the focus moves first, the
+    // events search gives up, and the note arrives with the next read.
+    const events: FlowGatewayEvent[] = [
+      previewEvent('e1', '2026-06-07T12:00:00Z', [
+        { role: 'user', text: 'FIRST_TURN' },
+      ]),
+    ];
+    const element = await fixture<SessionReplayPanel>(html`
+      <session-replay-panel
+        replayMode="timeline"
+        .session=${SESSION}
+        .events=${events}
+        .hasMoreEvents=${false}
+        .focusEventId=${'note-9'}
+      ></session-replay-panel>
+    `);
+    await element.updateComplete;
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.chat-turn.jump-highlight')).to.be
+      .null;
+    element.activity = [
+      {
+        activity_type: 'agent_control_message',
+        timestamp: '2026-06-07T12:00:30Z',
+        title: 'Operator message',
+        summary: 'late note',
+        status: 'delivered',
+        metadata: { kind: 'operator_note', note_id: 'note-9', role: 'user' },
+      },
+    ] as unknown as RuntimeSessionActivityItem[];
+    await waitUntil(
+      () =>
+        Boolean(element.shadowRoot?.querySelector('.chat-turn.jump-highlight')),
+      'The late note was never jumped to'
+    );
+    expect(
+      element
+        .shadowRoot!.querySelector('.chat-turn.jump-highlight')!
+        .getAttribute('data-note-id')
+    ).to.equal('note-9');
+  });
+
   it('jumps to a deep linked turn named by its event id', async () => {
     // A tool_call snippet names the activity row id, which is also the
     // gateway event id the transcript already keys turns by.

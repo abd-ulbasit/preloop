@@ -4800,6 +4800,8 @@ export class SessionReplayPanel extends LitElement {
   // The focus id already honoured, so a re-render does not re-scroll a reader
   // who has since scrolled somewhere else.
   private jumpedFocusEventId: string | null = null;
+  /** The note last jumped to, latched apart from the events search. */
+  private jumpedNoteFocusId: string | null = null;
 
   // Auto-page requests issued while hunting for a deep linked turn. Reset
   // when the focus id changes. Bounded so a miss cannot walk a huge session.
@@ -4833,6 +4835,7 @@ export class SessionReplayPanel extends LitElement {
     const focusId = this.focusEventId;
     if (!focusId) {
       this.jumpedFocusEventId = null;
+      this.jumpedNoteFocusId = null;
       this.focusJumpTarget = null;
       this.focusJumpPageRequests = 0;
       this.focusJumpRequestedForCount = null;
@@ -4843,10 +4846,14 @@ export class SessionReplayPanel extends LitElement {
       this.focusJumpPageRequests = 0;
       this.focusJumpRequestedForCount = null;
     }
-    if (this.jumpedFocusEventId === focusId) return;
     // A delivered note is a timeline row with no gateway twin: it is found
-    // in the activity, which arrives whole, so no paging is needed.
+    // in the activity, which arrives whole, so no paging is needed. It is
+    // checked before the latch below, because a note linked in a loaded
+    // session arrives with a later activity read, after the events search
+    // may already have given it up as missing.
     if (this.activity.some((item) => activityNoteId(item) === focusId)) {
+      if (this.jumpedNoteFocusId === focusId) return;
+      this.jumpedNoteFocusId = focusId;
       this.jumpedFocusEventId = focusId;
       void this.updateComplete.then(() =>
         this.jumpToTurnElement(
@@ -4855,6 +4862,7 @@ export class SessionReplayPanel extends LitElement {
       );
       return;
     }
+    if (this.jumpedFocusEventId === focusId) return;
     const events = this.events || [];
     const match = events.find((event) =>
       this.eventMatchesFocus(event, focusId)
