@@ -1170,6 +1170,19 @@ describe('inventory-card Agents columns', () => {
     );
   });
 
+  it('gives a numeric header the same narrow gutter as its numbers', async () => {
+    const el = await card({ agentRows: [agentRow()] });
+    const header = el.shadowRoot!.querySelector(
+      'table thead th.numeric'
+    ) as HTMLElement;
+    const cell = el.shadowRoot!.querySelector('tbody td.num') as HTMLElement;
+    expect(header).to.exist;
+    expect(getComputedStyle(header).textAlign).to.equal('right');
+    expect(getComputedStyle(header).paddingLeft).to.equal(
+      getComputedStyle(cell).paddingLeft
+    );
+  });
+
   it('gives the agent name the widest column and a floor', async () => {
     const el = (await card({
       agentRows: [agentRow({ name: 'a-very-long-agent-name-on-a-build-host' })],

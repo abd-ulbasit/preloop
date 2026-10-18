@@ -11,29 +11,20 @@ unusable and every request reads the heap. The assertion is the plan.
 
 from __future__ import annotations
 
-import importlib.util
+import re
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import psycopg
 import pytest
-from psycopg._queries import PostgresQuery
 from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 from preloop.models.crud import crud_api_usage
 
-INDEX = "ix_api_usage_gateway_totals"
+# The values a caller varies: these stay parameters in the generic plan.
+VARIABLE = ("account_id", "timestamp", "ai_model_id")
+COVERING = ("ix_api_usage_gateway_totals", "ix_api_usage_gateway_model_totals")
 ACCOUNT = "00000000-0000-0000-0000-0000000000a1"
 MODELS = [f"00000000-0000-0000-0000-0000000000b{n}" for n in range(3)]
-MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "preloop"
-    / "models"
-    / "alembic"
-    / "versions"
-    / "20261030_api_usage_autovacuum.py"
-)
 
 
 def _captured_select(db_session: Session, **kwargs) -> tuple[str, dict]:
@@ -64,27 +55,42 @@ def _captured_select(db_session: Session, **kwargs) -> tuple[str, dict]:
 def _generic_plan(db_session: Session, statement: str, parameters: dict) -> str:
     """EXPLAIN the statement as a generic prepared plan, other indexes hidden.
 
-    Only the covering index and a sequential scan stay available, so the plan
-    shows whether the index predicate can be matched at all. The test
+    Named ``%(name)s`` placeholders become ``$n`` so PostgreSQL plans it the
+    way it plans a prepared statement, whichever driver runs the tests. Only
+    the covering indexes and a sequential scan stay available, so the plan
+    shows whether their predicate can be matched at all. The test
     transaction rolls the catalogue change back.
     """
-    raw = db_session.connection().connection.driver_connection
-    query = PostgresQuery(psycopg.adapt.Transformer(raw))
-    query.convert("EXPLAIN (GENERIC_PLAN) " + statement, parameters)
-    with raw.cursor() as cursor:
-        cursor.execute("SET LOCAL enable_seqscan = off")
-        cursor.execute(
+    numbers: dict[str, int] = {}
+
+    def _placeholder(match: re.Match) -> str:
+        name = match.group(1)
+        if not name.startswith(VARIABLE):
+            # Constants such as the 0 of a COALESCE: a generic plan cannot
+            # type an untyped parameter inside SUM, and they decide nothing.
+            value = parameters[name]
+            assert isinstance(value, (int, float)), (name, value)
+            return repr(value)
+        number = numbers.setdefault(name, len(numbers) + 1)
+        return f"${number}"
+
+    generic = re.sub(r"%\(([^)]+)\)s", _placeholder, statement)
+    assert any(name.startswith("timestamp") for name in numbers), numbers
+    db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    db_session.execute(
+        text(
             """
             UPDATE pg_index AS i SET indisvalid = false
             FROM pg_class AS c
             WHERE c.oid = i.indexrelid
               AND i.indrelid = 'api_usage'::regclass
-              AND c.relname <> %s
-            """,
-            (INDEX,),
-        )
-        cursor.execute(query.query.decode())
-        return "\n".join(row[0] for row in cursor.fetchall())
+              AND NOT (c.relname = ANY(:keep))
+            """
+        ),
+        {"keep": list(COVERING)},
+    )
+    rows = db_session.connection().exec_driver_sql("EXPLAIN (GENERIC_PLAN) " + generic)
+    return "\n".join(row[0] for row in rows)
 
 
 @pytest.mark.parametrize(
@@ -103,7 +109,7 @@ def test_generic_plan_is_index_only_on_the_covering_index(db_session, kwargs):
     """Prepared statements keep the aggregate off the heap."""
     statement, parameters = _captured_select(db_session, **kwargs)
     plan = _generic_plan(db_session, statement, parameters)
-    assert f"Index Only Scan using {INDEX}" in plan, plan
+    assert any(f"Index Only Scan using {index}" in plan for index in COVERING), plan
 
 
 def test_index_predicate_is_spelled_with_literals(db_session):
@@ -118,13 +124,20 @@ def test_index_predicate_is_spelled_with_literals(db_session):
     )
 
 
-def test_migration_tunes_api_usage_autovacuum(db_session):
-    """Index-only scans need a current visibility map on the hot table."""
-    spec = importlib.util.spec_from_file_location("api_usage_autovac", MIGRATION_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    options = db_session.execute(
-        text("SELECT reloptions FROM pg_class WHERE relname = 'api_usage'")
-    ).scalar()
-    for key, value in module.AUTOVACUUM.items():
-        assert f"{key}={value}" in (options or []), options
+def test_model_keyed_covering_index_is_built_valid(db_session):
+    """The model-keyed covering index exists, is valid, and has the predicate."""
+    row = db_session.execute(
+        text(
+            """
+            SELECT i.indisvalid, pg_get_indexdef(i.indexrelid)
+            FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+            WHERE c.relname = 'ix_api_usage_gateway_model_totals'
+            """
+        )
+    ).one()
+    valid, definition = row
+    assert valid is True
+    assert '(account_id, ai_model_id, "timestamp")' in definition
+    for column in ("estimated_cost", "cache_creation_tokens", "status_code"):
+        assert column in definition, definition
+    assert "replay_validation" in definition

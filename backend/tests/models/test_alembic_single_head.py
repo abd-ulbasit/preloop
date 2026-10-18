@@ -445,4 +445,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert governance_spend.down_revision == "20261028_obs_verification"
     unsealed = script.get_revision("20261029_audit_unsealed_idx")
     assert unsealed.down_revision == "20261018_gov_spend_idx"
-    assert script.get_heads() == ["20261029_audit_unsealed_idx"]
+    model_totals = script.get_revision("20261030_gateway_model_idx")
+    assert model_totals.down_revision == "20261029_audit_unsealed_idx"
+    assert script.get_heads() == ["20261030_gateway_model_idx"]

@@ -541,6 +541,7 @@ export class InventoryCard extends LitElement {
         /* Numbers pay less for their gutters than words do: the columns are
          narrow, and "Requests" has to fit its own heading. */
         .inventory-table th.num,
+        .inventory-table th.numeric,
         .inventory-table td.num {
           font-variant-numeric: tabular-nums;
           padding-inline: var(--sl-spacing-x-small);
@@ -548,6 +549,7 @@ export class InventoryCard extends LitElement {
         }
 
         .inventory-table th.num:last-child,
+        .inventory-table th.numeric:last-child,
         .inventory-table td.num:last-child {
           padding-right: var(--sl-spacing-medium);
         }
