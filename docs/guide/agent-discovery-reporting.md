@@ -81,7 +81,9 @@ status: `new`, `onboarded` or `ignored`.
   in the device fleet. Re-onboarding updates the same row.
 - **Mark ignored** in the console hides a candidate. **Copy onboard command**
   copies `preloop agents onboard <kind>` to run on that workstation.
-- Candidates nobody has reported for 90 days are deleted by a daily purge.
+- Candidates nobody has reported for 90 days are deleted by a daily purge,
+  except `onboarded` candidates still linked to a managed agent: those are
+  the agent's device link and are kept until the agent is deleted.
 
 ## API
 

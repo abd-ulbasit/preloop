@@ -982,6 +982,9 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 	if len(discovered) == 0 {
 		fmt.Println("No AI agents found on this machine.")
 		fmt.Println(agentDiscoverySearchLabel())
+		// Agents Preloop recorded as enrolled from this host are still
+		// worth listing when their local configs are gone.
+		printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, nil, nil))
 		return nil
 	}
 
@@ -3773,13 +3776,21 @@ func enrichDiscoveredAgents(discovered []AgentConfig, client *api.Client) ([]Age
 
 func enrichDiscoveredAgent(agent AgentConfig, client *api.Client) (AgentConfig, error) {
 	agent = normalizeDiscoveredAgent(agent)
-	state, _ := loadLocalEnrollmentState(agent)
 	var remote *managedAgentSummary
 	if client != nil {
 		if managed, err := getManagedAgentForDiscovered(client, agent); err == nil {
 			remote = managed
 		}
 	}
+	return enrichDiscoveredAgentWithRemote(agent, remote)
+}
+
+// enrichDiscoveredAgentWithRemote is enrichDiscoveredAgent for a caller that
+// already resolved the agent's server record (nil when there is none), so a
+// batch can list managed agents once instead of once per agent.
+func enrichDiscoveredAgentWithRemote(agent AgentConfig, remote *managedAgentSummary) (AgentConfig, error) {
+	agent = normalizeDiscoveredAgent(agent)
+	state, _ := loadLocalEnrollmentState(agent)
 	agent.IsOnboarded = state != nil || remote != nil
 	if remote != nil && strings.TrimSpace(remote.OnboardingState) != "" {
 		agent.OnboardingState = strings.TrimSpace(remote.OnboardingState)

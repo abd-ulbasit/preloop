@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable, Optional, Sequence
 
-from sqlalchemy import delete, func, literal_column, select, update
+from sqlalchemy import delete, func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -358,6 +358,9 @@ class CRUDDiscoveredAgentCandidate(CRUDBase[DiscoveredAgentCandidate]):
     ) -> int:
         """Delete candidates whose ``last_seen_at`` is older than the window.
 
+        Onboarded candidates still linked to a managed agent are kept: they
+        place that agent on its device.
+
         Args:
             db: Active session. Commits.
             now: Reference time (tests).
@@ -368,7 +371,16 @@ class CRUDDiscoveredAgentCandidate(CRUDBase[DiscoveredAgentCandidate]):
             Rows deleted.
         """
         cutoff = (now or utc_now_naive()) - timedelta(days=retention_days)
-        stmt = delete(self.model).where(self.model.last_seen_at < cutoff)
+        # A candidate linked to a managed agent is that agent's device link
+        # (onboarding records one even without a report), so it lives as long
+        # as the agent does; the FK nulls the link when the agent is deleted.
+        stmt = delete(self.model).where(
+            self.model.last_seen_at < cutoff,
+            or_(
+                self.model.status != CANDIDATE_STATUS_ONBOARDED,
+                self.model.managed_agent_id.is_(None),
+            ),
+        )
         if account_id is not None:
             stmt = stmt.where(self.model.account_id == account_id)
         result = db.execute(stmt)

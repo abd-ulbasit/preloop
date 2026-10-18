@@ -265,6 +265,56 @@ def test_purge_removes_candidates_unseen_for_90_days(db_session, test_user):
     assert kinds == {"edge", "fresh"}
 
 
+def test_purge_keeps_onboarded_device_links(client, db_session, test_user):
+    """An agent's device link must not expire while the agent exists."""
+    client.post(
+        "/api/v1/auth/runtime-sessions/token",
+        json={
+            "session_source_type": "claude_code",
+            "session_source_id": "workspace-purge-link",
+            "runtime_principal_name": "Claude Code Workspace",
+        },
+    )
+    agent = client.get("/api/v1/agents").json()["items"][0]
+    now = utc_now_naive()
+    crud_discovered_agent_candidate.link_onboarded(
+        db_session,
+        account_id=test_user.account_id,
+        workstation_fingerprint="e" * 64,
+        agent_kind=agent["agent_kind"],
+        managed_agent_id=agent["id"],
+        config_path_hash="4" * 64,
+        now=now,
+    )
+    crud_discovered_agent_candidate.record_report(
+        db_session,
+        account_id=test_user.account_id,
+        workstation_fingerprint="e" * 64,
+        os_family="linux",
+        cli_version="0.18.0",
+        candidates=[ReportedCandidate(agent_kind="orphan", config_path_hash="5" * 64)],
+        now=now,
+    )
+    db_session.commit()
+    for row in crud_discovered_agent_candidate.list_for_account(
+        db_session, account_id=test_user.account_id
+    ).items:
+        row.last_seen_at = now - timedelta(days=200)
+        if row.agent_kind == "orphan":
+            # Onboarded once, agent since deleted (FK set the link to NULL).
+            row.status = "onboarded"
+    db_session.commit()
+
+    deleted = crud_discovered_agent_candidate.purge_stale(
+        db_session, now=now, account_id=test_user.account_id
+    )
+    assert deleted == 1
+    remaining = crud_discovered_agent_candidate.list_for_account(
+        db_session, account_id=test_user.account_id
+    ).items
+    assert [str(row.managed_agent_id) for row in remaining] == [agent["id"]]
+
+
 def test_purge_sweeper_pass_uses_the_crud_purge(monkeypatch):
     from preloop.services import discovery_candidate_purge as purge
 

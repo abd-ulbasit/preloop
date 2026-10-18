@@ -30,27 +30,26 @@ const (
 
 // selectOnboardingRunCandidates returns every discovered agent for a batch
 // onboarding run, annotated with whether it is already onboarded and, if so,
-// why it is outdated. Agents are never dropped for being onboarded.
+// why it is outdated. Agents are never dropped for being onboarded. Managed
+// agents are listed once for the whole batch.
 func selectOnboardingRunCandidates(client *api.Client, discovered []AgentConfig) []AgentConfig {
-	return selectOnboardingRunCandidatesWith(client, discovered, enrichDiscoveredAgent, onboardingRefreshReasons)
+	var items []managedAgentSummary
+	if client != nil && client.IsAuthenticated() {
+		items, _ = listManagedAgents(client)
+	}
+	return selectOnboardingRunCandidatesWith(items, discovered, onboardingRefreshReasons)
 }
 
 func selectOnboardingRunCandidatesWith(
-	client *api.Client,
+	items []managedAgentSummary,
 	discovered []AgentConfig,
-	enrich func(AgentConfig, *api.Client) (AgentConfig, error),
 	refreshReasons func(AgentConfig) []string,
 ) []AgentConfig {
 	candidates := make([]AgentConfig, 0, len(discovered))
 	for _, agent := range discovered {
 		agent = normalizeDiscoveredAgent(agent)
-		if enriched, err := enrich(agent, client); err == nil {
+		if enriched, err := enrichDiscoveredAgentWithRemote(agent, findManagedAgentForDiscovered(items, agent)); err == nil {
 			agent = enriched
-		}
-		if !agent.IsOnboarded {
-			if _, err := loadLocalEnrollmentState(agent); err == nil {
-				agent.IsOnboarded = true
-			}
 		}
 		if agent.IsOnboarded {
 			for _, reason := range refreshReasons(agent) {
@@ -143,7 +142,11 @@ func appendServerOnlyDeviceAgents(
 	if err != nil {
 		return outcomes
 	}
-	host, _ := enrollmentHostnameLabel()
+	host, fallback := enrollmentHostnameLabel()
+	if fallback {
+		// "unknown-host" would match every other host without a name.
+		return outcomes
+	}
 	return appendServerOnlyDeviceAgentsFrom(items, host, discovered, outcomes)
 }
 
