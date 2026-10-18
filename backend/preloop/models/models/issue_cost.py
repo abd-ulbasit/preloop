@@ -27,11 +27,13 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
     false as sa_false,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -130,6 +132,16 @@ class IssueCostExecution(Base):
     """One execution's contribution; ``rollup_id`` NULL means unassigned."""
 
     __tablename__ = "issue_cost_execution"
+    __table_args__ = (
+        # Fleet Map merges join executions to a pull request by key.
+        # Migration 20261031_code_tool_idx.
+        Index(
+            "ix_issue_cost_execution_account_pr_key",
+            "account_id",
+            "pr_key",
+            postgresql_where=text("pr_key IS NOT NULL"),
+        ),
+    )
 
     account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

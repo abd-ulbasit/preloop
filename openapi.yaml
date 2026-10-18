@@ -8332,6 +8332,49 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/fleet/code-activity:
+    get:
+      tags:
+      - Fleet
+      summary: Read Fleet Code Activity
+      description: Pull and merge requests opened, commented, reviewed and merged
+        per node.
+      operationId: read_fleet_code_activity_api_v1_fleet_code_activity_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: active_within_minutes
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 527040
+            minimum: 1
+          - type: 'null'
+          description: Window in minutes; omitted reads the last 90 days.
+          title: Active Within Minutes
+        description: Window in minutes; omitted reads the last 90 days.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FleetCodeActivityResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/retention/settings:
     get:
       tags:
@@ -30602,6 +30645,144 @@ components:
       - opened_at
       title: ExtensionAttentionItem
       description: Neutral plugin item. Only local console destinations are accepted.
+    FleetCodeActivityResponse:
+      properties:
+        active_within_minutes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Active Within Minutes
+        since:
+          type: string
+          format: date-time
+          title: Since
+        truncated:
+          type: boolean
+          title: Truncated
+          default: false
+        counts:
+          additionalProperties:
+            $ref: '#/components/schemas/FleetCodeCounts'
+          type: object
+          title: Counts
+        flows:
+          items:
+            $ref: '#/components/schemas/FleetCodeFlow'
+          type: array
+          title: Flows
+        events:
+          items:
+            $ref: '#/components/schemas/FleetCodeEvent'
+          type: array
+          title: Events
+      type: object
+      required:
+      - since
+      title: FleetCodeActivityResponse
+      description: Bounded code activity for the Fleet Map, keyed by map node id.
+    FleetCodeCounts:
+      properties:
+        opened:
+          type: integer
+          title: Opened
+          default: 0
+        commented:
+          type: integer
+          title: Commented
+          default: 0
+        reviewed:
+          type: integer
+          title: Reviewed
+          default: 0
+        merged:
+          type: integer
+          title: Merged
+          default: 0
+      type: object
+      title: FleetCodeCounts
+      description: Pull and merge request actions by one map node in the window.
+    FleetCodeEvent:
+      properties:
+        id:
+          type: string
+          title: Id
+        at:
+          type: string
+          format: date-time
+          title: At
+        action:
+          type: string
+          enum:
+          - opened
+          - commented
+          - reviewed
+          - merged
+          title: Action
+        node_id:
+          type: string
+          title: Node Id
+          description: Agent or flow node that acted.
+        owner_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Id
+          description: Person node owning the acting agent, if any.
+        pr:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pr
+          description: Short reference, e.g. ``acme/api#42``.
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+      type: object
+      required:
+      - id
+      - at
+      - action
+      - node_id
+      title: FleetCodeEvent
+      description: One recent pull or merge request action, newest first.
+    FleetCodeFlow:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Map node id, ``flow:<uuid>``.
+        resource_id:
+          type: string
+          title: Resource Id
+        label:
+          type: string
+          title: Label
+        href:
+          type: string
+          title: Href
+        model_node_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model Node Id
+          description: Map node id of the flow's model, when it is configured.
+        last_active_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Active At
+      type: object
+      required:
+      - id
+      - resource_id
+      - label
+      - href
+      title: FleetCodeFlow
+      description: A flow with code activity in the window, placed on the map by the
+        client.
     FleetMapAction:
       properties:
         label:

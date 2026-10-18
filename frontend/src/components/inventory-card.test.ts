@@ -1269,10 +1269,83 @@ describe('inventory-card spatial map', () => {
     await map.updateComplete;
     expect(map.positionsScope).to.equal('inventory');
     expect(map.shadowRoot!.querySelector('[data-node="agent:codex"]')).to.exist;
+    // The live spatial canvas is the default; the columns are one click away.
     expect(map.shadowRoot!.querySelector('.column-title')).to.not.exist;
-    expect(map.shadowRoot!.querySelector('[data-arrangement]')).to.not.exist;
+    map
+      .shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-arrangement="columns"]'
+      )!
+      .click();
+    await map.updateComplete;
+    expect(map.shadowRoot!.querySelector('.column-title')).to.exist;
+    expect(
+      localStorage.getItem('preloop:fleet-map:arrangement:inventory:u1')
+    ).to.equal('columns');
     expect(el.shadowRoot!.querySelector('table')).to.not.exist;
     expect(localStorage.getItem('preloop:inventory:view:u1')).to.equal('map');
     expect(api.callsTo('/api/v1/fleet/map').length).to.equal(1);
+  });
+
+  it('keeps the table the default for an administrator', async () => {
+    const el = await fixture<InventoryCard>(
+      html`<inventory-card instanceAdmin userId="u2"></inventory-card>`
+    );
+    expect(
+      el
+        .shadowRoot!.querySelector('[data-inventory-view="table"]')!
+        .getAttribute('aria-pressed')
+    ).to.equal('true');
+    expect(el.shadowRoot!.querySelector('fleet-map')).to.not.exist;
+  });
+
+  it('shows the live map with pull request counters from the endpoint', async () => {
+    localStorage.setItem('accessToken', 'test-token');
+    localStorage.setItem('preloop:inventory:view:u1', 'map');
+    api = mockApi({
+      routes: [
+        {
+          path: '/api/v1/fleet/map',
+          body: { ...sampleFleetMap(), active_within_minutes: 43200 },
+        },
+        {
+          path: '/api/v1/fleet/code-activity',
+          body: {
+            active_within_minutes: 43200,
+            since: new Date().toISOString(),
+            truncated: false,
+            counts: {
+              'agent:codex': {
+                opened: 3,
+                commented: 0,
+                reviewed: 0,
+                merged: 1,
+              },
+            },
+            flows: [],
+            events: [],
+          },
+        },
+      ],
+    });
+    const el = await fixture<InventoryCard>(
+      html`<inventory-card instanceAdmin userId="u1"></inventory-card>`
+    );
+    await waitUntil(() => el.shadowRoot!.querySelector('fleet-map')?.graph);
+    const map = el.shadowRoot!.querySelector('fleet-map')!;
+    expect(map.live).to.equal(true);
+    await waitUntil(
+      () => map.shadowRoot!.querySelector('[data-code="agent:codex"]'),
+      'code counters render',
+      { timeout: 3000 }
+    );
+    const badges = [
+      ...map.shadowRoot!.querySelectorAll<HTMLElement>(
+        '[data-code="agent:codex"] .code-badge'
+      ),
+    ].map((b) => `${b.dataset.action}:${b.textContent!.trim()}`);
+    expect(badges).to.deep.equal(['opened:3', 'merged:1']);
+    expect(
+      api.callsTo('/api/v1/fleet/code-activity')[0]?.search ?? ''
+    ).to.contain('active_within_minutes=43200');
   });
 });

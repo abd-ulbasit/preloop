@@ -16,7 +16,12 @@ shows resources active in the last 30 days by default (5 minutes, 1 hour, 24 hou
 refreshes itself so resources join and leave a short window live, lights the connections live model
 requests, tool calls and approvals travel, and gives instance administrators a
 draggable spatial arrangement, also as a Map alternative to the Overview
-inventory table.
+inventory table. The spatial map is now a live canvas: people, machines and agents
+gather in islands around the models they share, nodes fade in and out with the
+window, messages travel between agents, models, devices and people as traffic
+happens, and pull and merge requests opened, reviewed and merged show as
+counters and live events on each agent, flow and person
+(`GET /api/v1/fleet/code-activity`, realtime topic `code_activity`).
 
 Highlights: **Bitbucket Cloud on Copilot host flows** publishes a managed
 branch and pull request from a native Copilot host profile and continues

@@ -24,15 +24,14 @@ const keyFor = (base: string, user: string, scope: string) =>
 
 export function loadArrangement(
   user: string,
-  scope = 'fleet'
+  scope = 'fleet',
+  fallback: FleetMapArrangement = 'columns'
 ): FleetMapArrangement {
   try {
-    return localStorage.getItem(keyFor(ARRANGEMENT_KEY, user, scope)) ===
-      'spatial'
-      ? 'spatial'
-      : 'columns';
+    const saved = localStorage.getItem(keyFor(ARRANGEMENT_KEY, user, scope));
+    return saved === 'spatial' || saved === 'columns' ? saved : fallback;
   } catch {
-    return 'columns';
+    return fallback;
   }
 }
 
@@ -80,22 +79,219 @@ export function savePositions(
   }
 }
 
+const ISLAND_ROW = 60;
+const ISLAND_INDENT = 28;
+const ISLAND_WIDTH = FLEET_MAP_NODE_WIDTH + ISLAND_INDENT;
+const TYPE_ORDER = ['user', 'device', 'runner', 'agent', 'flow', 'cluster'];
+
+/**
+ * Starting points by group. The models and providers everyone shares sit in
+ * the middle, models beside the provider behind them. Around them, on an
+ * ellipse that fills a wide screen, each group is a compact island: the
+ * person on top, each machine under them and the agents on it indented under
+ * the machine. Flows and anything unattached form their own islands.
+ * Deterministic for a given graph.
+ */
+export function clusterSeed(
+  ids: string[],
+  clusters: Map<string, string>,
+  graph?: Pick<FleetMapGraph, 'nodes' | 'edges'>
+): Map<string, { x: number; y: number }> {
+  const byId = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
+  const typeOf = (id: string) => byId.get(id)?.type ?? id.split(':')[0];
+  const members = new Map<string, string[]>();
+  for (const id of ids) {
+    const key = clusters.get(id) ?? 'other';
+    members.set(key, [...(members.get(key) ?? []), id]);
+  }
+  const seed = new Map<string, { x: number; y: number }>();
+  // The shared core: models in one column, providers in the next.
+  const shared = members.get('shared') ?? [];
+  const providerOf = (id: string) =>
+    graph?.edges.find(
+      (edge) =>
+        edge.source === id &&
+        (edge.kind === 'provided_by' || edge.kind === 'account_of_provider')
+    )?.target ?? '';
+  const right = shared.filter((id) => typeOf(id) === 'provider');
+  const left = shared
+    .filter((id) => typeOf(id) !== 'provider')
+    .sort(
+      (a, b) => providerOf(a).localeCompare(providerOf(b)) || a.localeCompare(b)
+    );
+  const coreRows = Math.max(left.length, right.length, 1);
+  left.forEach((id, i) =>
+    seed.set(id, {
+      x: -FLEET_MAP_NODE_WIDTH - 30,
+      y: (i - (left.length - 1) / 2) * ISLAND_ROW,
+    })
+  );
+  right.forEach((id, i) =>
+    seed.set(id, { x: 30, y: (i - (right.length - 1) / 2) * ISLAND_ROW * 1.4 })
+  );
+  // Islands, each stacked person > machine > agents.
+  const hostOf = new Map<string, string>();
+  for (const edge of graph?.edges ?? [])
+    if (edge.kind === 'hosts') hostOf.set(edge.target, edge.source);
+  const ring = [...members.keys()]
+    .filter((key) => key !== 'shared')
+    .sort((a, b) => {
+      const late = (key: string) =>
+        key === 'flows' || key === 'other' ? 1 : 0;
+      return late(a) - late(b) || a.localeCompare(b);
+    });
+  const islands = ring.map((key) => {
+    const list = members.get(key) ?? [];
+    const rank = (id: string) => TYPE_ORDER.indexOf(typeOf(id));
+    const top = list
+      .filter((id) => !hostOf.has(id) || !list.includes(hostOf.get(id)!))
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const rows: { id: string; depth: number }[] = [];
+    const place = (id: string, depth: number) => {
+      rows.push({ id, depth });
+      list
+        .filter((other) => hostOf.get(other) === id)
+        .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+        .forEach((other) => place(other, depth + 1));
+    };
+    top.forEach((id) =>
+      place(id, typeOf(id) === 'user' || typeOf(id) === 'flow' ? 0 : 1)
+    );
+    return { key, rows, height: rows.length * ISLAND_ROW };
+  });
+  const tallest = Math.max(ISLAND_ROW, ...islands.map((item) => item.height));
+  const coreHeight = coreRows * ISLAND_ROW * 1.4;
+  const count = Math.max(1, islands.length);
+  const rx = Math.max(
+    FLEET_MAP_NODE_WIDTH + 30 + ISLAND_WIDTH + 80,
+    (count * (ISLAND_WIDTH + 70)) / Math.PI
+  );
+  const ry = Math.max(coreHeight / 2 + tallest / 2 + 40, tallest * 1.1);
+  islands.forEach((island, k) => {
+    // Start at the top left and go round, so reading order follows the ring.
+    const angle = Math.PI + (2 * Math.PI * k) / count + Math.PI / count;
+    const cx = Math.cos(angle) * rx - ISLAND_WIDTH / 2;
+    const cy = Math.sin(angle) * ry - island.height / 2;
+    island.rows.forEach(({ id, depth }, row) =>
+      seed.set(id, {
+        x: cx + Math.min(depth, 2) * ISLAND_INDENT * 0.5,
+        y: cy + row * ISLAND_ROW,
+      })
+    );
+  });
+  return seed;
+}
+
+/** Push overlapping boxes apart; pinned boxes never move. */
+function separate(
+  xs: Float64Array,
+  ys: Float64Array,
+  fixed: boolean[],
+  passes = 40
+): void {
+  const n = xs.length;
+  const w = FLEET_MAP_NODE_WIDTH + 16;
+  const h = FLEET_MAP_NODE_HEIGHT + 12;
+  for (let pass = 0; pass < passes; pass++) {
+    let moved = false;
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++) {
+        const ox = w - Math.abs(xs[i] - xs[j]);
+        const oy = h - Math.abs(ys[i] - ys[j]);
+        if (ox <= 0 || oy <= 0 || (fixed[i] && fixed[j])) continue;
+        moved = true;
+        // Resolve along the shallower axis.
+        const vertical = oy < ox;
+        const sign = vertical
+          ? ys[i] <= ys[j]
+            ? -1
+            : 1
+          : xs[i] <= xs[j]
+            ? -1
+            : 1;
+        const amount = (vertical ? oy : ox) / (fixed[i] || fixed[j] ? 1 : 2);
+        if (!fixed[i]) {
+          if (vertical) ys[i] += sign * amount;
+          else xs[i] += sign * amount;
+        }
+        if (!fixed[j]) {
+          if (vertical) ys[j] -= sign * amount;
+          else xs[j] -= sign * amount;
+        }
+      }
+    if (!moved) break;
+  }
+}
+
+/**
+ * Where a node that joins an existing picture starts: beside what it links
+ * to that is already placed, else beside its group, so a new agent appears
+ * next to its laptop instead of on the far side of the map.
+ */
+function arrivalSeed(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
+  ids: string[],
+  pinned: FleetMapPoints,
+  clusters?: Map<string, string>
+): Map<string, { x: number; y: number }> {
+  const out = new Map<string, { x: number; y: number }>();
+  const placed = ids.filter((id) => id in pinned);
+  if (!placed.length || placed.length === ids.length) return out;
+  const centre = (points: { x: number; y: number }[]) => ({
+    x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+    y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+  });
+  ids.forEach((id, i) => {
+    if (id in pinned) return;
+    const linked = graph.edges
+      .filter((edge) => edge.source === id || edge.target === id)
+      .map((edge) => (edge.source === id ? edge.target : edge.source))
+      .filter((other) => other in pinned)
+      .map((other) => pinned[other]);
+    const group = clusters?.get(id);
+    const mates = group
+      ? placed.filter((other) => clusters?.get(other) === group)
+      : [];
+    const anchor = linked.length
+      ? centre(linked)
+      : mates.length
+        ? centre(mates.map((other) => pinned[other]))
+        : null;
+    if (!anchor) return;
+    // A fixed, per-node offset keeps arrivals deterministic and apart.
+    const angle = ((i * 137.5) % 360) * (Math.PI / 180);
+    out.set(id, {
+      x: anchor.x + Math.cos(angle) * 140,
+      y: anchor.y + Math.sin(angle) * 90,
+    });
+  });
+  return out;
+}
+
 /**
  * Place every node of `graph`. `seed` gives starting points (the column
  * layout); `pinned` points are fixed and never moved by the simulation.
+ * With `clusters` (node id to group key) nodes start in their group and are
+ * held near it, so a person, their machines and agents read as one place.
  */
 export function spatialLayout(
   graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
   seed: Map<string, FleetMapPosition>,
-  pinned: FleetMapPoints = {}
+  pinned: FleetMapPoints = {},
+  clusters?: Map<string, string>
 ): FleetMapLayout {
   const ids = graph.nodes.map((node) => node.id);
   const index = new Map(ids.map((id, i) => [id, i]));
   const n = ids.length;
   const xs = new Float64Array(n);
   const ys = new Float64Array(n);
+  const grouped = clusters ? clusterSeed(ids, clusters, graph) : null;
+  const near = arrivalSeed(graph, ids, pinned, clusters);
   ids.forEach((id, i) => {
-    const start = pinned[id] ?? seed.get(id) ?? { x: (i % 8) * 260, y: i * 30 };
+    const start = pinned[id] ??
+      near.get(id) ??
+      grouped?.get(id) ??
+      seed.get(id) ?? { x: (i % 8) * 260, y: i * 30 };
     xs[i] = start.x;
     ys[i] = start.y;
   });
@@ -107,13 +303,10 @@ export function spatialLayout(
         pair[0] !== undefined && pair[1] !== undefined && pair[0] !== pair[1]
     );
   const ideal = 300;
-  const iterations = fixed.every(Boolean)
-    ? 0
-    : n > 250
-      ? 60
-      : n > 80
-        ? 120
-        : 220;
+  // Grouped maps are laid out by island; only overlaps are resolved.
+  if (clusters) separate(xs, ys, fixed);
+  const iterations =
+    fixed.every(Boolean) || clusters ? 0 : n > 250 ? 60 : n > 80 ? 120 : 220;
   let heat = 60;
   const dx = new Float64Array(n);
   const dy = new Float64Array(n);
@@ -162,6 +355,15 @@ export function spatialLayout(
   if (!Object.keys(pinned).some((id) => index.has(id))) {
     minX = Math.min(...xs) - 24;
     minY = Math.min(...ys) - 24;
+  } else {
+    // Arrivals beside a pinned picture never land off its top or left edge,
+    // where the stage would clip them.
+    for (let i = 0; i < n; i++) {
+      if (fixed[i]) continue;
+      xs[i] = Math.max(24, xs[i]);
+      ys[i] = Math.max(24, ys[i]);
+    }
+    if (clusters) separate(xs, ys, fixed);
   }
   const positions = new Map<string, FleetMapPosition>();
   let width = 0;

@@ -1147,7 +1147,7 @@ export class InventoryCard extends LitElement {
       .activityWindow=${this.mapWindow}
       live
       instance-admin
-      spatial-only
+      default-arrangement="spatial"
       positions-scope="inventory"
       user-id=${this.userId}
       @fleet-map-window-change=${(

@@ -104,3 +104,56 @@ class FleetMapResponse(BaseModel):
         default=0,
         description="Decommissioned agents left out of the map, counted for context.",
     )
+
+
+CodeAction = Literal["opened", "commented", "reviewed", "merged"]
+
+
+class FleetCodeCounts(BaseModel):
+    """Pull and merge request actions by one map node in the window."""
+
+    opened: int = 0
+    commented: int = 0
+    reviewed: int = 0
+    merged: int = 0
+
+
+class FleetCodeFlow(BaseModel):
+    """A flow with code activity in the window, placed on the map by the client."""
+
+    id: str = Field(description="Map node id, ``flow:<uuid>``.")
+    resource_id: str
+    label: str
+    href: str
+    model_node_id: str | None = Field(
+        default=None,
+        description="Map node id of the flow's model, when it is configured.",
+    )
+    last_active_at: datetime | None = None
+
+
+class FleetCodeEvent(BaseModel):
+    """One recent pull or merge request action, newest first."""
+
+    id: str
+    at: datetime
+    action: CodeAction
+    node_id: str = Field(description="Agent or flow node that acted.")
+    owner_id: str | None = Field(
+        default=None, description="Person node owning the acting agent, if any."
+    )
+    pr: str | None = Field(
+        default=None, description="Short reference, e.g. ``acme/api#42``."
+    )
+    url: str | None = None
+
+
+class FleetCodeActivityResponse(BaseModel):
+    """Bounded code activity for the Fleet Map, keyed by map node id."""
+
+    active_within_minutes: int | None = None
+    since: datetime
+    truncated: bool = False
+    counts: dict[str, FleetCodeCounts] = Field(default_factory=dict)
+    flows: list[FleetCodeFlow] = Field(default_factory=list)
+    events: list[FleetCodeEvent] = Field(default_factory=list)

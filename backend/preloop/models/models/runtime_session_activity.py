@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,27 @@ class RuntimeSessionActivity(Base):
     """One durable activity item associated with a runtime session."""
 
     __tablename__ = "runtime_session_activity"
+    __table_args__ = (
+        # Fleet Map code activity: successful pull/merge request tool calls,
+        # newest first per account. Migration 20261031_code_tool_idx; the
+        # tool list matches preloop.models.crud.fleet_map.CODE_ACTIVITY_TOOLS.
+        Index(
+            "ix_runtime_session_activity_code_tools",
+            "account_id",
+            text("timestamp DESC"),
+            postgresql_include=["tool_name", "flow_execution_id", "runtime_session_id"],
+            postgresql_where=text(
+                "activity_type = 'tool_call' AND status = 'succeeded' AND "
+                "tool_name IN ('add_comment', 'add_comment_to_pending_review', "
+                "'approve_merge_request', "
+                "'create_merge_request', 'create_merge_request_note', "
+                "'create_pull_request', "
+                "'create_pull_request_review', 'merge_merge_request', "
+                "'merge_pull_request', 'pull_request_review_write', "
+                "'submit_pending_pull_request_review', 'update_pull_request')"
+            ),
+        ),
+    )
 
     account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
