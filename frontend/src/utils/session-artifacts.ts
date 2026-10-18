@@ -88,6 +88,23 @@ export function claimEagerArtifactPreview(
   return true;
 }
 
+/**
+ * Return an eager-preview claim, so another artifact in view can take it.
+ *
+ * Args:
+ *   sessionId: The runtime session.
+ *   artifactId: The artifact whose preview left the page.
+ */
+export function releaseEagerArtifactPreview(
+  sessionId: string,
+  artifactId: string
+): void {
+  const claims = eagerClaims.get(sessionId);
+  if (!claims) return;
+  claims.delete(artifactId);
+  if (claims.size === 0) eagerClaims.delete(sessionId);
+}
+
 /** Image previews larger than this wait for a click (#1690). */
 export const LARGE_PREVIEW_BYTES = 512 * 1024;
 

@@ -7,6 +7,7 @@ import {
   MAX_EAGER_ARTIFACT_PREVIEWS,
   activeSessionArtifactLoads,
   claimEagerArtifactPreview,
+  releaseEagerArtifactPreview,
   releaseSessionArtifact,
 } from './session-artifacts';
 
@@ -101,5 +102,8 @@ describe('session artifact loads (#1690)', () => {
     expect(claimEagerArtifactPreview('s-eager', 'e1')).to.equal(true);
     // Another session has its own budget.
     expect(claimEagerArtifactPreview('s-eager-2', 'e3')).to.equal(true);
+    // A released claim frees the slot.
+    releaseEagerArtifactPreview('s-eager', 'e1');
+    expect(claimEagerArtifactPreview('s-eager', 'e3')).to.equal(true);
   });
 });

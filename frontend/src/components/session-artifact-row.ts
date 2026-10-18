@@ -10,7 +10,6 @@ import {
   ARTIFACT_STORAGE_SETTINGS_HREF,
   LARGE_PREVIEW_BYTES,
   acquireSessionArtifact,
-  claimEagerArtifactPreview,
   artifactUnavailableReason,
   downloadSessionArtifact,
   formatArtifactBytes,
@@ -247,16 +246,14 @@ export class SessionArtifactRow extends LitElement {
   }
 
   /**
-   * Whether the screenshot preview waits for a click: a large image, or one
-   * past the session's two eager previews (#1690).
+   * Whether the screenshot preview always waits for a click: a large image.
+   * The two-per-session eager budget is claimed by the thumbnail once it is
+   * visible, not here at render time (#1690).
    */
   private get previewDeferred(): boolean {
     const artifact = this.artifact;
     if (!artifact) return true;
-    if ((artifact.sizeBytes ?? 0) > LARGE_PREVIEW_BYTES) return true;
-    // A deep link's target shows its preview without spending the budget.
-    if (this.highlighted) return false;
-    return !claimEagerArtifactPreview(this.sessionId, artifact.id);
+    return (artifact.sizeBytes ?? 0) > LARGE_PREVIEW_BYTES;
   }
 
   private get isText(): boolean {
@@ -619,6 +616,7 @@ ${shown}${more ? '\n...' : ''}</pre>
                 .availability=${this.availability}
                 .label=${artifact.name}
                 .deferred=${this.previewDeferred}
+                .budgeted=${!this.highlighted}
                 .sizeLabel=${formatArtifactBytes(artifact.sizeBytes)}
                 @thumbnail-open=${() => this.emit('artifact-open')}
               ></browser-step-thumbnail>`

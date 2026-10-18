@@ -3,6 +3,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import {
   ARTIFACT_STORAGE_SETTINGS_HREF,
   acquireSessionArtifact,
+  claimEagerArtifactPreview,
+  releaseEagerArtifactPreview,
   releaseSessionArtifact,
   unavailableReason,
   type SessionArtifactLoad,
@@ -31,11 +33,20 @@ export class BrowserStepThumbnail extends LitElement {
    * past the session's eager budget (#1690).
    */
   @property({ type: Boolean }) deferred = false;
+  /**
+   * Count this preview against the session's eager budget. The claim is
+   * taken only once the thumbnail is visible and returned when it leaves the
+   * DOM, so off-screen rows never starve the ones in view (#1690).
+   */
+  @property({ type: Boolean }) budgeted = false;
   /** Size shown on the deferred placeholder, e.g. "1.2 MB". */
   @property({ type: String }) sizeLabel = '';
 
   /** The user asked for a deferred preview. */
   @state() private requested = false;
+  /** The eager budget was spent when this thumbnail became visible. */
+  @state() private overBudget = false;
+  private claimed: { sessionId: string; artifactId: string } | null = null;
 
   @state() private load: SessionArtifactLoad | null = null;
   private held: { sessionId: string; artifactId: string } | null = null;
@@ -127,6 +138,7 @@ export class BrowserStepThumbnail extends LitElement {
     this.observer?.disconnect();
     this.observer = null;
     this.release();
+    this.releaseClaim();
     super.disconnectedCallback();
   }
 
@@ -135,16 +147,57 @@ export class BrowserStepThumbnail extends LitElement {
       changed.has('sessionId') ||
       changed.has('artifactId') ||
       changed.has('availability') ||
-      changed.has('deferred')
+      changed.has('deferred') ||
+      changed.has('budgeted')
     ) {
       this.sync();
     }
   }
 
+  /** Whether the preview waits for a click right now. */
+  private get waitsForClick(): boolean {
+    return (this.deferred || this.overBudget) && !this.requested;
+  }
+
+  /** Take or return the eager-budget claim for the visible artifact. */
+  private syncClaim(): void {
+    const key =
+      this.budgeted && this.visible && this.sessionId && this.artifactId
+        ? { sessionId: this.sessionId, artifactId: this.artifactId }
+        : null;
+    if (
+      key &&
+      this.claimed &&
+      key.sessionId === this.claimed.sessionId &&
+      key.artifactId === this.claimed.artifactId
+    ) {
+      return;
+    }
+    this.releaseClaim();
+    this.overBudget = false;
+    if (!key || this.deferred || this.availability !== 'available') return;
+    if (claimEagerArtifactPreview(key.sessionId, key.artifactId)) {
+      this.claimed = key;
+    } else {
+      this.overBudget = true;
+    }
+  }
+
+  private releaseClaim(): void {
+    if (this.claimed) {
+      releaseEagerArtifactPreview(
+        this.claimed.sessionId,
+        this.claimed.artifactId
+      );
+    }
+    this.claimed = null;
+  }
+
   private sync(): void {
+    this.syncClaim();
     const wanted =
       this.visible &&
-      (!this.deferred || this.requested) &&
+      !this.waitsForClick &&
       this.sessionId &&
       this.artifactId &&
       this.availability === 'available'
@@ -208,7 +261,7 @@ export class BrowserStepThumbnail extends LitElement {
         }
       </div>`;
     }
-    if (this.deferred && !this.requested && !this.held) {
+    if (this.waitsForClick && !this.held) {
       return html`<button
         class="box muted"
         type="button"
