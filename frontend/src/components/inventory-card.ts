@@ -31,6 +31,14 @@ import { renderAgentIcon } from '../utils/agent-icons';
 import type { AgentStatusChip } from '../utils/agent-display';
 import type { GatewayTokenUsage } from '../types';
 import './token-figures';
+import {
+  ListTable,
+  dataTableStyles,
+  listTableStyles,
+  type ListColumn,
+} from '../table';
+import '../table/data-table';
+import '../table/column-picker';
 
 /** Which inventory the box is showing. */
 export type InventoryTab =
@@ -377,6 +385,19 @@ export class InventoryCard extends LitElement {
   };
   @state() private rowLimit = ROWS_DEFAULT;
 
+  /**
+   * The Agents tab, on the shared console list: resizable headers, a column
+   * picker, and widths and visibility kept per browser like every other
+   * console list. Rows stay in the card's own sort and row limit, so no
+   * column is sortable here; the sort select in the header orders them.
+   */
+  readonly agentTable = new ListTable<InventoryAgentRow>(this, {
+    listId: 'overview-inventory-agents',
+    getRowId: (row) => row.id,
+    pageSize: 0,
+    columns: this.agentColumns(),
+  });
+
   private onResize = () => {
     const limit = window.innerHeight > TALL_VIEWPORT ? ROWS_TALL : ROWS_DEFAULT;
     if (limit !== this.rowLimit) {
@@ -388,6 +409,8 @@ export class InventoryCard extends LitElement {
     tableScrollStyles,
     [
       unsafeCSS(consoleStyles),
+      listTableStyles,
+      dataTableStyles,
       unsafeCSS(executionSubjectCss),
       css`
         :host {
@@ -1022,6 +1045,7 @@ export class InventoryCard extends LitElement {
                 >`
             )}
           </sl-select>
+          ${this.activeTab === 'agents' ? this.renderAgentColumnPicker() : nothing}
           <time-range-select
             class="range-select"
             ariaLabel="Inventory time range"
@@ -1116,97 +1140,131 @@ export class InventoryCard extends LitElement {
     `;
   }
 
+  private agentColumns(): Array<ListColumn<InventoryAgentRow>> {
+    return [
+      {
+        id: 'name',
+        header: 'Agent',
+        hideable: false,
+        // The name is what a reader scans for; it gets the room and keeps
+        // at least enough for "claude-code on a laptop" before cutting.
+        width: 280,
+        minWidth: 180,
+        truncate: true,
+        cellClass: 'identity-cell',
+        cellTitle: (row) => row.name,
+        cell: (row) => html`
+          <span class="identity">
+            ${renderAgentIcon(row.kind)}
+            <a
+              class="row-name"
+              href="/console/agents/${row.id}"
+              title=${row.name}
+              >${row.name}</a
+            >
+            <sl-badge class="chip" pill variant=${row.status.variant}
+              >${row.status.label}</sl-badge
+            >
+          </span>
+        `,
+      },
+      {
+        id: 'model',
+        header: 'Model',
+        // Absorbs what the other columns leave, so it has no handle.
+        resizable: false,
+        truncate: true,
+        cellClass: 'secondary muted',
+        cellTitle: (row) => row.modelAlias || '',
+        cell: (row) => row.modelAlias || 'No model',
+      },
+      {
+        id: 'requests',
+        cellClass: 'num',
+        cellLabel: 'Requests',
+        header: 'Requests',
+        numeric: true,
+        width: 96,
+        cell: (row) =>
+          this.renderUsageCell(this.formatCompactNumber(row.requests)),
+      },
+      {
+        // Tokens before cost, as one compact total (#1647); the split is in
+        // the tooltip.
+        id: 'tokens',
+        cellClass: 'num',
+        cellLabel: 'Tokens',
+        header: 'Tokens',
+        numeric: true,
+        width: 104,
+        cell: (row) =>
+          this.renderUsageCell(
+            html`<token-figures
+              total-only
+              .usage=${row.tokenUsage}
+            ></token-figures>`
+          ),
+      },
+      {
+        id: 'cost',
+        cellClass: 'num',
+        cellLabel: 'Spend',
+        header: '$ est.',
+        headerLabel: 'Estimated spend',
+        pickerLabel: 'Estimated spend',
+        numeric: true,
+        width: 88,
+        cell: (row) =>
+          this.renderUsageCell(
+            html`<span title=${formatUsdExact(row.cost)}
+              >${formatUsd(row.cost)}</span
+            >`
+          ),
+      },
+      {
+        id: 'last_seen',
+        cellClass: 'num',
+        cellLabel: 'Seen',
+        header: 'Last seen',
+        numeric: true,
+        width: 104,
+        cellTitle: (row) => this.absolute(row.lastSeenAt),
+        cell: (row) => this.relative(row.lastSeenAt),
+      },
+    ];
+  }
+
+  private renderAgentColumnPicker() {
+    const table = this.agentTable;
+    return html`<column-picker
+      class="column-picker"
+      .columns=${table.pickerColumns}
+      ?can-reset=${table.hasColumnChanges}
+      density=${table.density}
+      @column-toggle=${(event: CustomEvent) =>
+        table.setVisible(event.detail.id, event.detail.visible)}
+      @columns-reset=${() => table.resetColumns()}
+      @density-change=${(event: CustomEvent) =>
+        table.setDensity(event.detail.density)}
+    ></column-picker>`;
+  }
+
   private renderAgents() {
     const rows = this.sortedAgents.slice(0, this.rowLimit);
+    this.agentTable.data = rows;
     return html`
       <div class="table-scroll">
-        <table class="inventory-table">
-          <!-- Same trade as the Models tab: an alias is 24 characters and a
-             count is five, so the counts give up the four points that stop
-             "deepseek/deepseek-v4-pro" reading as "deepseek/deepse...". -->
-          <colgroup>
-            <col style="width: 28%" />
-            <col style="width: 27%" />
-            <col style="width: 11%" />
-            <col style="width: 11%" />
-            <col style="width: 10%" />
-            <col style="width: 13%" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>Agent</th>
-              <th>Model</th>
-              <th class="num">Requests</th>
-              <th class="num">Tokens</th>
-              <th class="num">$ est.</th>
-              <th class="num">Last seen</th>
-            </tr>
-          </thead>
-          ${
-            this.isTabLoading('agents') && rows.length === 0
-              ? this.renderSkeleton(6)
-              : html`
-                  <tbody>
-                    ${repeat(
-                      rows,
-                      (row) => row.id,
-                      (row) => html`
-                        <tr>
-                          <td class="identity-cell">
-                            <span class="identity">
-                              ${renderAgentIcon(row.kind)}
-                              <a
-                                class="row-name"
-                                href="/console/agents/${row.id}"
-                                >${row.name}</a
-                              >
-                              <sl-badge
-                                class="chip"
-                                pill
-                                variant=${row.status.variant}
-                                >${row.status.label}</sl-badge
-                              >
-                            </span>
-                          </td>
-                          <td
-                            class="secondary muted"
-                            title=${row.modelAlias || ''}
-                          >
-                            ${row.modelAlias || 'No model'}
-                          </td>
-                          <td class="num" data-label="Requests">
-                            ${this.renderUsageCell(
-                              this.formatCompactNumber(row.requests)
-                            )}
-                          </td>
-                          <!-- Tokens before cost, as one compact total: an
-                             11% column cut "734.6M in · 2.3M out" mid-figure
-                             (#1647). The split is in the tooltip. -->
-                          <td class="num" data-label="Tokens">
-                            ${this.renderUsageCell(
-                              html`<token-figures
-                                total-only
-                                .usage=${row.tokenUsage}
-                              ></token-figures>`
-                            )}
-                          </td>
-                          <td class="num" data-label="Spend">
-                            ${this.renderUsageCell(html`<span title=${formatUsdExact(row.cost)}>${formatUsd(row.cost)}</span>`)}
-                          </td>
-                          <td
-                            class="num"
-                            data-label="Seen"
-                            title=${this.absolute(row.lastSeenAt)}
-                          >
-                            ${this.relative(row.lastSeenAt)}
-                          </td>
-                        </tr>
-                      `
-                    )}
-                  </tbody>
-                `
-          }
-        </table>
+        <data-table
+          class="agent-table"
+          table-class="inventory-table"
+          .table=${this.agentTable}
+          .rows=${this.agentTable.rows}
+          .loading=${this.isTabLoading('agents') && rows.length === 0}
+          .stickyHeader=${false}
+          skeleton-rows="3"
+          label="Agents"
+          noun="agents"
+        ></data-table>
       </div>
     `;
   }

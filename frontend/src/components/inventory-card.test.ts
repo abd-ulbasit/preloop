@@ -1,6 +1,10 @@
 import { expect, fixture, html, oneEvent } from '@open-wc/testing';
 import './inventory-card.ts';
 import { INVENTORY_TAB_STORAGE_KEY } from './inventory-card';
+import {
+  clearTablePreferences,
+  readTablePreferences,
+} from '../table/table-preferences';
 import type {
   InventoryAgentRow,
   InventoryCard,
@@ -1129,5 +1133,78 @@ describe('inventory-card', () => {
         'a.row-name[href="/console/settings/users/user-1"]'
       )?.textContent
     ).to.equal('Ada Lovelace');
+  });
+});
+
+describe('inventory-card Agents columns', () => {
+  const LIST = 'overview-inventory-agents';
+  afterEach(() => clearTablePreferences(LIST));
+
+  const headers = (el: HTMLElement) =>
+    Array.from(el.shadowRoot!.querySelectorAll('table thead th')).map((th) =>
+      (th.textContent || '').trim()
+    );
+
+  it('lets the column picker switch a column off, and remembers it', async () => {
+    const el = await card({ agentRows: [agentRow()] });
+    expect(headers(el)).to.include('Tokens');
+    const picker = el.shadowRoot!.querySelector(
+      'column-picker'
+    ) as HTMLElement & {
+      columns: Array<{ id: string; hideable?: boolean }>;
+    };
+    expect(picker).to.exist;
+    // The name identifies the row; the picker may not take it away.
+    expect(picker.columns.find((c) => c.id === 'name')?.hideable).to.be.false;
+    picker.dispatchEvent(
+      new CustomEvent('column-toggle', {
+        detail: { id: 'tokens', visible: false },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect(headers(el)).to.not.include('Tokens');
+    expect(readTablePreferences(LIST)?.columnVisibility?.tokens).to.equal(
+      false
+    );
+  });
+
+  it('gives the agent name the widest column and a floor', async () => {
+    const el = (await card({
+      agentRows: [agentRow({ name: 'a-very-long-agent-name-on-a-build-host' })],
+    })) as HTMLElement & {
+      agentTable: {
+        widthOfColumn(id: string): number;
+        resizeBy(id: string, d: number): void;
+      };
+    };
+    const table = el.agentTable;
+    expect(table.widthOfColumn('name')).to.equal(280);
+    table.resizeBy('name', -1000);
+    await el.updateComplete;
+    expect(table.widthOfColumn('name')).to.equal(180);
+    const link = el.shadowRoot!.querySelector('a.row-name') as HTMLElement;
+    expect(link.getAttribute('title')).to.equal(
+      'a-very-long-agent-name-on-a-build-host'
+    );
+  });
+
+  it('keeps a resized width across reloads', async () => {
+    const el = await card({ agentRows: [agentRow()] });
+    const handle = el.shadowRoot!.querySelector(
+      'th.col-name .col-resize'
+    ) as HTMLElement;
+    expect(handle).to.exist;
+    handle.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })
+    );
+    await el.updateComplete;
+    expect(readTablePreferences(LIST)?.columnSizing?.name).to.equal(296);
+
+    const again = (await card({ agentRows: [agentRow()] })) as HTMLElement & {
+      agentTable: { widthOfColumn(id: string): number };
+    };
+    expect(again.agentTable.widthOfColumn('name')).to.equal(296);
   });
 });

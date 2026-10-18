@@ -161,12 +161,20 @@ export function renderListCells<TRow extends RowData>(
         textOf(column.value?.(row));
       // The cut happens on an inner block, so the cell itself never
       // overflows and the row stays one line.
-      return html`<td class=${classes || nothing} title=${title || nothing}>
+      return html`<td
+        class=${classes || nothing}
+        title=${title || nothing}
+        data-label=${column.cellLabel ?? nothing}
+      >
         <span class="cell-truncate">${column.cell(row)}</span>
       </td>`;
     }
     const title = column.cellTitle?.(row);
-    return html`<td class=${classes || nothing} title=${title || nothing}>
+    return html`<td
+      class=${classes || nothing}
+      title=${title || nothing}
+      data-label=${column.cellLabel ?? nothing}
+    >
       ${column.cell(row)}
     </td>`;
   });
