@@ -33,6 +33,64 @@ const activity = (): FleetCodeActivity => ({
   events: [],
 });
 
+/** The sample fleet plus Ana, her laptop and an onboarded agent: a new island. */
+function withAna(): ReturnType<typeof sampleFleetMap> {
+  const graph = sampleFleetMap();
+  const by = (id: string) => graph.nodes.find((n) => n.id === id)!;
+  const edge = graph.edges[0];
+  return {
+    ...graph,
+    nodes: [
+      ...graph.nodes,
+      { ...by('user:maya'), id: 'user:ana', label: 'Ana' },
+      { ...by('device:mbp'), id: 'device:ana', owner_ids: ['user:ana'] },
+      { ...by('agent:codex'), id: 'agent:ana', owner_ids: ['user:ana'] },
+    ],
+    edges: [
+      ...graph.edges,
+      {
+        ...edge,
+        id: 'o-ana',
+        source: 'user:ana',
+        target: 'device:ana',
+        kind: 'owns' as const,
+      },
+      {
+        ...edge,
+        id: 'h-ana',
+        source: 'device:ana',
+        target: 'agent:ana',
+        kind: 'hosts' as const,
+      },
+      {
+        ...edge,
+        id: 'm-ana',
+        source: 'agent:ana',
+        target: 'model:gpt',
+        kind: 'uses_model' as const,
+      },
+    ],
+  };
+}
+
+type Glide = {
+  camera?: unknown;
+  tween?: {
+    from: Map<string, { x: number; y: number }>;
+    to: { positions: Map<string, { x: number; y: number }> };
+  };
+  spatialCache?: { layout: unknown };
+};
+
+const movedIn = (el: FleetMap): number => {
+  const tween = (el as unknown as Glide).tween;
+  if (!tween) return 0;
+  return [...tween.to.positions].filter(([id, to]) => {
+    const from = tween.from.get(id);
+    return from && (from.x !== to.x || from.y !== to.y);
+  }).length;
+};
+
 async function spatialMap(extra: Record<string, unknown> = {}) {
   const el = await fixture<FleetMap>(
     html`<fleet-map
@@ -356,20 +414,103 @@ describe('fleet-map live canvas', () => {
     expect(inside.camera).to.equal(undefined);
   });
 
-  it('stops following the fleet for a while after a pan by hand', async () => {
-    const graph = sampleFleetMap();
-    const el = await spatialMap({
-      graph: {
-        ...graph,
-        nodes: graph.nodes.filter((n) => n.id !== 'user:sam'),
-      },
+  for (const [how, move] of [
+    [
+      'a scroll',
+      (stage: Element) =>
+        stage.dispatchEvent(
+          new WheelEvent('wheel', {
+            deltaY: 40,
+            bubbles: true,
+            cancelable: true,
+          })
+        ),
+    ],
+    [
+      'an arrow key',
+      (stage: Element) =>
+        stage.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })
+        ),
+    ],
+  ] as const)
+    it(`stops following the fleet for a while after ${how}`, async () => {
+      const el = await spatialMap();
+      move(el.shadowRoot!.querySelector('.stage')!);
+      el.graph = withAna();
+      await el.updateComplete;
+      expect(movedIn(el), 'the fleet still rearranges').to.be.greaterThan(0);
+      expect((el as unknown as Glide).camera).to.equal(undefined);
     });
-    el.shadowRoot!.querySelector('.stage')!.dispatchEvent(
-      new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true })
-    );
-    el.graph = { ...graph };
+
+  it('a press on the stage without moving keeps following', async () => {
+    const el = await spatialMap();
+    const stage = el.shadowRoot!.querySelector<HTMLElement>('.stage')!;
+    const at = {
+      bubbles: true,
+      composed: true,
+      pointerId: 3,
+      button: 0,
+      clientX: 50,
+      clientY: 50,
+    };
+    stage.dispatchEvent(new PointerEvent('pointerdown', at));
+    stage.dispatchEvent(new PointerEvent('pointerup', at));
+    el.graph = withAna();
     await el.updateComplete;
-    expect((el as unknown as { camera?: unknown }).camera).to.equal(undefined);
+    expect((el as unknown as Glide).camera).to.exist;
+  });
+
+  it('settles in focus mode instead of re-laying out every frame', async () => {
+    const el = await spatialMap();
+    el.shadowRoot!.querySelector<HTMLButtonElement>(
+      '[data-node="agent:codex"]'
+    )!.click();
+    await el.updateComplete;
+    const focus = [
+      ...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('button'),
+    ].find(
+      (b) =>
+        b.hasAttribute('aria-pressed') &&
+        /related|focus/i.test(b.textContent || '')
+    )!;
+    focus.click();
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const layout = (el as unknown as Glide).spatialCache!.layout;
+    el.requestUpdate();
+    await el.updateComplete;
+    el.requestUpdate();
+    await el.updateComplete;
+    expect((el as unknown as Glide).spatialCache!.layout).to.equal(layout);
+    expect((el as unknown as Glide).tween).to.equal(undefined);
+  });
+
+  it('stores only the dragged node, so the fleet can still rearrange', async () => {
+    const el = await spatialMap();
+    const target = el.shadowRoot!.querySelector<HTMLElement>(
+      '[data-node="agent:codex"]'
+    )!;
+    const stage = el.shadowRoot!.querySelector<HTMLElement>('.stage')!;
+    const at = (x: number, y: number) => ({
+      bubbles: true,
+      composed: true,
+      pointerId: 9,
+      button: 0,
+      clientX: x,
+      clientY: y,
+    });
+    target.dispatchEvent(new PointerEvent('pointerdown', at(100, 100)));
+    stage.dispatchEvent(new PointerEvent('pointermove', at(160, 140)));
+    stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
+    await el.updateComplete;
+    const stored = JSON.parse(
+      localStorage.getItem('preloop:fleet-map:positions:live-test:u-live')!
+    );
+    expect(Object.keys(stored)).to.deep.equal(['agent:codex']);
+    el.graph = withAna();
+    await el.updateComplete;
+    expect(movedIn(el), 'islands are dealt round again').to.be.greaterThan(0);
   });
 
   it('keeps nodes where they are when the graph refreshes', async () => {

@@ -70,8 +70,13 @@ export class FleetLights {
           : start,
       until: start + this.holdMs,
     });
-    while (this.items.size > this.max)
-      this.items.delete(this.items.keys().next().value as string);
+    // The cap counts lights on screen now; a reply still waiting for its
+    // delay never pushes out a node that is lit.
+    for (const [id, item] of this.items)
+      if (item.until <= now) this.items.delete(id);
+    const lit = [...this.items.values()].filter((item) => item.start <= now);
+    for (const item of lit.slice(0, Math.max(0, lit.length - this.max)))
+      this.items.delete(item.node);
   }
 
   /** The light on `node` at `now`, if any. */

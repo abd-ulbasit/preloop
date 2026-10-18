@@ -186,6 +186,32 @@ describe('fleet-map-motion', () => {
     lights.changed(700);
     expect(lights.changed(5000)).to.equal(true);
     expect(lights.size).to.equal(0);
+    // A reply still waiting for its delay never pushes out a lit node.
+    lights.light(
+      { from: 'agent:c', to: 'model:m', kind: 'request', label: '' },
+      6000
+    );
+    lights.light(
+      {
+        from: 'model:m',
+        to: 'agent:c',
+        kind: 'response',
+        label: '',
+        delay: 900,
+      },
+      6000
+    );
+    lights.light(
+      { from: 'agent:d', to: 'model:m', kind: 'request', label: '' },
+      6000
+    );
+    expect(
+      lights
+        .active(6000)
+        .map((l) => l.node)
+        .sort()
+    ).to.deep.equal(['agent:c', 'agent:d']);
+    expect(lights.size, 'the pending reply is kept').to.equal(3);
   });
 
   it('enters new nodes and fades out the ones that left the window', () => {

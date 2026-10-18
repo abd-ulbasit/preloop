@@ -686,8 +686,7 @@ export class FleetMap extends LitElement {
       ?.querySelector('.stage')
       ?.getBoundingClientRect();
     if (!bounds) return;
-    this.userMovedAt = Date.now();
-    this.camera = undefined;
+    this.handMove();
     const x = clientX === undefined ? bounds.width / 2 : clientX - bounds.left;
     const y = clientY === undefined ? bounds.height / 2 : clientY - bounds.top;
     const next = Math.max(0.2, Math.min(2, this.scale * factor));
@@ -720,6 +719,8 @@ export class FleetMap extends LitElement {
       const view = this.gravityView(layout);
       if (!view) return;
       this.camera = undefined;
+      this.tween = undefined;
+      this.userMovedAt = -Infinity;
       this.translateX = view.x;
       this.translateY = view.y;
       this.scale = view.s;
@@ -778,6 +779,17 @@ export class FleetMap extends LitElement {
     return { x: room / 2 - cx * s, y: bounds.height / 2 - cy * s, s };
   }
 
+  /**
+   * The user moved the view by hand (pan, scroll, zoom, arrow keys): stop
+   * any glide and stop following the fleet for a while.
+   */
+  private handMove(): void {
+    this.userMovedAt = Date.now();
+    this.camera = undefined;
+  }
+
+  private dragSnapshot: FleetMapPoints | null = null;
+
   /** Glide the view to the fleet's new centre of gravity. */
   private follow(): void {
     const layout = this.lastLayout;
@@ -826,7 +838,7 @@ export class FleetMap extends LitElement {
       const dragged = this.points !== this.glidePoints;
       this.glidePoints = this.points;
       if (dragged) this.tween = undefined;
-      else if (previous) {
+      else if (previous && !samePositions(previous, target)) {
         this.recenter = true;
         if (!this.motionOff)
           this.tween = {
@@ -883,23 +895,23 @@ export class FleetMap extends LitElement {
         origin: { x: position.x, y: position.y },
         moved: false,
       };
-      // Pin the picture as it is, so only the dragged node moves.
+      // Hold the picture as it is while dragging, so only this node moves.
+      // Only the nodes a user actually dropped are pinned and stored, so the
+      // islands can still be dealt round again when the fleet changes.
       const all: FleetMapPoints = {};
       for (const [key, p] of this.lastLayout.positions)
         all[key] = { x: p.x, y: p.y };
-      this.points = { ...all, ...this.points };
+      this.dragSnapshot = all;
       capture(event, true);
       return;
     }
     if ((event.target as Element).closest('button')) return;
-    this.userMovedAt = Date.now();
-    this.camera = undefined;
     this.pan = {
       id: event.pointerId,
       x: event.clientX - this.translateX,
       y: event.clientY - this.translateY,
     };
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    capture(event, true);
   }
 
   private pointerMove(event: PointerEvent): void {
@@ -919,6 +931,7 @@ export class FleetMap extends LitElement {
       return;
     }
     if (this.pan?.id !== event.pointerId) return;
+    this.handMove();
     this.translateX = event.clientX - this.pan.x;
     this.translateY = event.clientY - this.pan.y;
     this.applyTransform();
@@ -928,6 +941,7 @@ export class FleetMap extends LitElement {
     const drag = this.drag;
     if (drag?.id === event.pointerId) {
       this.drag = null;
+      this.dragSnapshot = null;
       capture(event, false);
       if (!drag.moved) return;
       savePositions(this.userId, this.points, this.positionsScope);
@@ -938,14 +952,13 @@ export class FleetMap extends LitElement {
     }
     if (this.pan?.id !== event.pointerId) return;
     this.pan = null;
-    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    capture(event, false);
   }
 
   /** Scroll pans, as on a page; pinch or Ctrl/Cmd + scroll zooms. */
   private onWheel(event: WheelEvent): void {
     event.preventDefault();
-    this.userMovedAt = Date.now();
-    this.camera = undefined;
+    this.handMove();
     if (event.ctrlKey || event.metaKey) {
       this.zoom(Math.exp(-event.deltaY * 0.01), event.clientX, event.clientY);
       return;
@@ -1863,6 +1876,7 @@ export class FleetMap extends LitElement {
     if (event.key === 'ArrowUp') this.translateY += step;
     if (event.key === 'ArrowDown') this.translateY -= step;
     if (event.key.startsWith('Arrow')) {
+      this.handMove();
       event.preventDefault();
       this.applyTransform();
     }
@@ -2614,7 +2628,13 @@ export class FleetMap extends LitElement {
 
   /** The simulation reruns only when the shown graph or a position changes. */
   private spatialFor(view: FleetMapGraph): FleetMapLayout {
-    const key = [view, this.points];
+    // Keyed on what is shown, not on the object: focus mode rebuilds the
+    // view on every render and must not re-run the layout each time.
+    const shape =
+      view.nodes.map((node) => node.id).join(',') +
+      '|' +
+      view.edges.map((edge) => edge.id).join(',');
+    const key = [shape, this.points, this.dragSnapshot];
     const cached = this.spatialCache;
     if (cached && cached.key.every((value, index) => value === key[index]))
       return cached.layout;
@@ -2638,7 +2658,7 @@ export class FleetMap extends LitElement {
     const layout = spatialLayout(
       view,
       seed,
-      { ...settled, ...this.points },
+      { ...settled, ...(this.dragSnapshot ?? {}), ...this.points },
       clusters
     );
     for (const [id, position] of layout.positions)
@@ -2977,6 +2997,16 @@ export class FleetMap extends LitElement {
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
   }
+}
+
+/** Whether two layouts place every node in the same spot. */
+function samePositions(a: FleetMapLayout, b: FleetMapLayout): boolean {
+  if (a.positions.size !== b.positions.size) return false;
+  for (const [id, p] of b.positions) {
+    const q = a.positions.get(id);
+    if (!q || q.x !== p.x || q.y !== p.y) return false;
+  }
+  return true;
 }
 
 /** Pointer capture fails for synthetic or already released pointers. */
