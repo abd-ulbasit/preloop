@@ -383,9 +383,7 @@ def test_second_relay_cannot_claim_a_held_intent(db_engine, service, flag_on):
 def test_session_search_query_opt_out_is_honoured_in_the_intent(
     db_session, account, service, flag_on
 ):
-    account.meta_data = {
-        audit.AUDIT_SETTINGS_KEY: {audit.RECORD_SESSION_SEARCH_QUERY_TEXT: False}
-    }
+    account.meta_data = {}
     db_session.flush()
     service.enqueue_in_transaction(
         db_session,
@@ -396,7 +394,8 @@ def test_session_search_query_opt_out_is_honoured_in_the_intent(
         query="customer secret phrase",
     )
     row = db_session.query(AuditOutbox).filter_by(account_id=account.id).one()
-    assert row.payload["query"] == ""
+    assert row.payload["query"] is None
+    assert row.payload["query_hash"].startswith("sha256:")
     db_session.commit()
     assert _relay(db_session, service).deliver_one() is True
     log = crud_audit_log.get_by_account(db_session, account_id=account.id)[0]
@@ -408,6 +407,8 @@ def test_session_search_query_opt_out_is_honoured_in_the_intent(
 def test_session_search_query_is_bounded_in_the_intent(
     db_session, account, service, flag_on
 ):
+    account.meta_data = {"session_search_audit_store_query_text": True}
+    db_session.flush()
     service.enqueue_in_transaction(
         db_session,
         "log_session_search",

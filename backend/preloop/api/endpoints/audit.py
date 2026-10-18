@@ -311,6 +311,7 @@ def list_audit_logs(
                 account_id=current_user.account_id,
                 action=action,
                 status=status_filter,
+                resource_type=resource_type,
                 start_date=start_date,
                 end_date=end_date,
                 consent_ref=consent_ref,
@@ -855,6 +856,8 @@ def get_user_audit_logs(
     Requires the 'view_audit_logs' permission.
     """
     try:
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
+
         # Get user's audit logs
         logs = crud_audit_log.get_by_user(
             db,
@@ -863,20 +866,21 @@ def get_user_audit_logs(
             skip=skip,
             limit=limit,
             days=days,
+            start_date=start_date,
         )
 
         # Count total logs for this user
-        start_date = datetime.now(timezone.utc) - timedelta(days=days)
         total = crud_audit_log.count_by_account(
             db,
             account_id=current_user.account_id,
+            user_id=user_id,
             start_date=start_date,
             end_date=None,
         )
 
         return AuditLogsListResponse(
             logs=[AuditLogResponse.model_validate(log) for log in logs],
-            total=len(logs),  # Use actual count since we're filtering by user
+            total=total,
             skip=skip,
             limit=limit,
         )

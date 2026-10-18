@@ -546,7 +546,9 @@ class TestLogApprovalToolExecuted:
         log = exec_logs[0]
         assert log.status == "executed"
         assert log.details["duration_ms"] == 1234
-        assert log.details["result_preview"] == "Deployment ok"
+        assert "result_preview" not in log.details
+        assert log.details["result_preview_length"] == len("Deployment ok")
+        assert len(log.details["result_preview_sha256"]) == 64
         assert log.details["tool_name"] == "deploy"
         assert log.details["approval_id"] == str(approval_id)
         assert log.details["correlation_id"] == "corr-xyz"
@@ -570,7 +572,7 @@ class TestLogApprovalToolExecuted:
         exec_logs = [l for l in logs if l.action == "approval_tool_executed"]
         assert len(exec_logs) == 1
         assert exec_logs[0].status == "failed"
-        assert len(exec_logs[0].details["error"]) == 2000
+        assert len(exec_logs[0].details["error"]) == 200
 
 
 class TestLogApprovalLifecycleAsync:

@@ -993,8 +993,12 @@ describe('AuditView', () => {
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
-        // The walk back through the timeline finds when it happened.
-        if (url.includes('limit=200')) return body([older]);
+        if (url === '/api/v1/audit-logs/audit-old') {
+          return new Response(JSON.stringify(older.primary_event), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
         // The reload, once the day is known, puts it on the first page.
         if (url.includes('start_date=')) return body([older]);
         return body([]);
@@ -1013,7 +1017,56 @@ describe('AuditView', () => {
         '[data-group-key="audit-old"]'
       ) as HTMLElement;
       expect(group.classList.contains('linked')).to.equal(true);
+      expect(
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('limit=200')),
+        'the focused endpoint should avoid the bounded page walk'
+      ).to.equal(false);
       element.remove();
+    });
+
+    it('falls back to the grouped timeline when an older core returns 404', async () => {
+      fetchStub.resetHistory();
+      fetchStub.callsFake(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/audit-logs/old-event') {
+          return new Response('{}', { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            groups: [
+              {
+                correlation_id: null,
+                primary_event: {
+                  id: 'old-event',
+                  timestamp: '2025-01-02T03:04:05Z',
+                },
+                sub_events: [],
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      });
+      const element = document.createElement('audit-view') as AuditView;
+      expect(await (element as any)._findEventTime('old-event')).to.equal(
+        '2025-01-02T03:04:05Z'
+      );
+      expect(fetchStub.callCount).to.equal(2);
+      expect(String(fetchStub.secondCall.args[0])).to.contain(
+        '/audit-logs/grouped?'
+      );
+    });
+
+    it('does not walk the timeline after a focused-entry permission failure', async () => {
+      fetchStub.resetHistory();
+      fetchStub.resolves(new Response('{}', { status: 403 }));
+      const element = document.createElement('audit-view') as AuditView;
+      expect(await (element as any)._findEventTime('private-event')).to.equal(
+        null
+      );
+      expect(fetchStub.callCount).to.equal(1);
     });
 
     it('says so, once, when the event is nowhere in range', async () => {

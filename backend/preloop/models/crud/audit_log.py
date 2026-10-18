@@ -295,6 +295,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         skip: int = 0,
         limit: int = 100,
         days: int = 30,
+        start_date: Optional[datetime] = None,
     ) -> List[AuditLog]:
         """Get audit logs for a specific user.
 
@@ -305,11 +306,13 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             skip: Number of records to skip
             limit: Maximum number of records to return
             days: Number of days to look back
+            start_date: Explicit cutoff shared with a corresponding count query
 
         Returns:
             List of audit logs for the user
         """
-        start_date = datetime.now(timezone.utc) - timedelta(days=days)
+        if start_date is None:
+            start_date = datetime.now(timezone.utc) - timedelta(days=days)
         account_id_str = str(account_id) if isinstance(account_id, UUID) else account_id
 
         return (
@@ -848,6 +851,8 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         account_id: Union[UUID, str],
         action: Optional[str] = None,
         status: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        user_id: Optional[UUID] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         consent_ref: Optional[str] = None,
@@ -859,6 +864,8 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             account_id: The account to filter by (UUID or str)
             action: Filter by action type
             status: Filter by status
+            resource_type: Filter by resource type
+            user_id: Filter by actor user
             start_date: Filter by start date
             consent_ref: Exact delegated grant consent reference
             end_date: Filter by end date
@@ -875,6 +882,10 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             query = query.filter(AuditLog.action == action)
         if status:
             query = query.filter(AuditLog.status == status)
+        if resource_type:
+            query = query.filter(AuditLog.resource_type == resource_type)
+        if user_id is not None:
+            query = query.filter(AuditLog.user_id == user_id)
         if consent_ref is not None:
             query = query.filter(
                 AuditLog.details.op("->")("grant").op("->>")("consent_ref")

@@ -221,6 +221,8 @@ Cloud is managed hosting. Cloud and Enterprise include support plans. Cloud bill
 
 Governance itself is open source: every model provider, flows, private runners, session search, operator notes, the audit trail for Preloop-observed activity with collection, query API and console, single-approver workflows and budgets scoped to the account, a flow, an API key or a managed agent all ship in this repository. What is commercial is the organizational layer on top of them: more than one approver, quorum, escalations, budgets scoped to a user or a team, budget notification routing, and users, teams and RBAC on one account. Cloud usage allowances and hosted credits are a separate thing from governance budgets.
 
+For durable audit delivery, enable the default-off `PRELOOP_AUDIT_OUTBOX_ENABLED` flag after applying migrations. The [audit outbox operator guide](docs/operations/audit-outbox.md) covers delivery limits, parked failures and bounded account-scoped replay.
+
 | Feature | Open Source | Cloud / Enterprise |
 |---|:---:|:---:|
 | Audit collection, query API, and console | Yes | Yes |

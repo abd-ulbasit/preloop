@@ -124,18 +124,31 @@ def sanitize_intent_fields(
             **extra,
             "grant": service_module._safe_grant_metadata(extra["grant"]),
         }
-    for key in ("error_code", "error_reason"):
+    for key in ("error", "error_code", "error_reason"):
         if isinstance(clean.get(key), str):
             clean[key] = service_module._safe_error_detail(clean[key])
+    if isinstance(clean.get("extra_details"), dict) and isinstance(
+        clean["extra_details"].get("error"), str
+    ):
+        clean["extra_details"] = {
+            **clean["extra_details"],
+            "error": service_module._safe_error_detail(clean["extra_details"]["error"]),
+        }
+    if operation == "log_approval_tool_executed":
+        clean = service_module._safe_approval_execution_fields(clean)
+        if isinstance(clean.get("extra_details"), dict):
+            clean["extra_details"] = service_module._safe_approval_execution_fields(
+                clean["extra_details"]
+            )
     if operation == "log_session_search" and isinstance(clean.get("query"), str):
+        from preloop.services.session_search_audit import query_hash
+
         query = clean["query"]
         clean["query_length"] = len(query)
-        if db is not None and not service_module._record_query_text(
-            db, clean["account_id"]
-        ):
-            # The account opted out of storing search text: never persist
-            # it, not even transiently. The true length travels separately.
-            clean["query"] = ""
+        clean["query_hash"] = query_hash(query)
+        if db is None or not service_module._record_query_text(db, clean["account_id"]):
+            # Text requires explicit opt-in before the intent is persisted.
+            clean["query"] = None
         else:
             clean["query"] = query[: service_module.MAX_QUERY_TEXT_CHARS]
     return clean

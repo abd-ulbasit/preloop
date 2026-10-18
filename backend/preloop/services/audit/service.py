@@ -1,5 +1,6 @@
 """Audit logging service for tracking security-sensitive operations."""
 
+import hashlib
 import logging
 import re
 import sys
@@ -273,52 +274,30 @@ class AuditActionType:
     SESSION_CONTENT_SEARCH = "session_content_search"
 
 
-#: Account ``meta_data`` bucket the audit service reads its per account
-#: switches from. Nothing in this repository writes it yet; the read half is
-#: the whole mechanism, so turning a switch off is configuration rather than a
-#: release.
-AUDIT_SETTINGS_KEY = "audit"
-
-#: Per account switch for recording the text of a session content search.
-#: Absent means recorded: an audit trail that says somebody searched but not
-#: what for answers nothing a compliance owner asks. An account that has to
-#: keep the question out of the log sets this to ``false`` and keeps the rest
-#: of the row.
-RECORD_SESSION_SEARCH_QUERY_TEXT = "record_session_search_query_text"
-
-#: Longest query text stored on a row. The request schema caps a query at 512
-#: characters; this is the audit side's own bound so a schema change cannot
-#: quietly widen what the log holds.
+#: Match the core search schema's bound without retaining raw text by default.
 MAX_QUERY_TEXT_CHARS = 512
 
 
 def _record_query_text(db: Session, account_id: Union[UUID, str]) -> bool:
-    """Whether this account records the text of a session search.
+    """Use the canonical explicit opt-in; unreadable metadata never opts in."""
+    from preloop.services.session_search_audit import (
+        account_meta_data,
+        query_text_audit_enabled,
+    )
 
-    Read in the audit writer rather than on the search path: the switch costs
-    one indexed row read, and it is not the searching caller who should pay
-    for it.
+    return query_text_audit_enabled(account_meta_data(db, account_id=account_id))
 
-    Returns:
-        True unless the account has explicitly turned query text off. A
-        lookup that fails falls back to recording, because the failure mode
-        of a missing setting must not be a silently emptier audit trail.
-    """
-    try:
-        from preloop.models.crud import crud_account
 
-        account = crud_account.get(db, id=account_id)
-        meta_data = getattr(account, "meta_data", None) if account else None
-        if not isinstance(meta_data, dict):
-            return True
-        settings = meta_data.get(AUDIT_SETTINGS_KEY)
-        if not isinstance(settings, dict):
-            return True
-        value = settings.get(RECORD_SESSION_SEARCH_QUERY_TEXT)
-        return value if isinstance(value, bool) else True
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug(f"Could not read the session search query text switch: {exc}")
-        return True
+def _safe_approval_execution_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep result evidence without copying tool output into the audit trail."""
+    clean = dict(fields)
+    preview = clean.pop("result_preview", None)
+    if isinstance(preview, str):
+        clean["result_preview_sha256"] = hashlib.sha256(preview.encode()).hexdigest()
+        clean["result_preview_length"] = len(preview)
+    if isinstance(clean.get("error"), str):
+        clean["error"] = _safe_error_detail(clean["error"])
+    return clean
 
 
 def _broadcast_audit_event(
@@ -981,6 +960,8 @@ class AuditService:
             if extra_details:
                 details.update(extra_details)
 
+            if isinstance(details.get("error"), str):
+                details["error"] = _safe_error_detail(details["error"])
             audit_log = crud_audit_log.log_action(
                 db=db,
                 account_id=account_id,
@@ -1051,6 +1032,8 @@ class AuditService:
         correlation_id: Optional[str] = None,
         execution_id: Optional[Union[UUID, str]] = None,
         extra_details: Optional[Dict[str, Any]] = None,
+        result_preview_sha256: Optional[str] = None,
+        result_preview_length: Optional[int] = None,
     ) -> None:
         """Log the post-approval tool execution outcome.
 
@@ -1066,7 +1049,7 @@ class AuditService:
             tool_name: Tool that was executed
             status: "executed" (success) or "failed"
             duration_ms: Execution time in milliseconds
-            result_preview: Short truncated string preview of the result
+            result_preview: Result evidence; only its hash and length are retained
             error: Error message if execution failed
             correlation_id: Correlation ID for grouping
             execution_id: Flow execution ID, if applicable
@@ -1082,10 +1065,12 @@ class AuditService:
             }
             if duration_ms is not None:
                 details["duration_ms"] = duration_ms
+            if result_preview_sha256 is not None:
+                details["result_preview_sha256"] = result_preview_sha256
+            if result_preview_length is not None:
+                details["result_preview_length"] = result_preview_length
             if result_preview is not None:
-                # Cap preview length defensively (DB column is JSONB but the
-                # UI truncates anyway and we don't want huge payloads).
-                details["result_preview"] = result_preview[:2000]
+                details["result_preview"] = result_preview
             if error:
                 details["error"] = error[:2000]
             if correlation_id:
@@ -1097,6 +1082,7 @@ class AuditService:
                 if "grant" in details:
                     details["grant"] = _safe_grant_metadata(details["grant"])
 
+            details = _safe_approval_execution_fields(details)
             audit_log = crud_audit_log.log_action(
                 db=db,
                 account_id=account_id,
@@ -1348,6 +1334,7 @@ class AuditService:
         error: Optional[str] = None,
         request: Optional[Request] = None,
         query_length: Optional[int] = None,
+        query_hash: Optional[str] = None,
     ) -> None:
         """Log one search over captured session content.
 
@@ -1362,8 +1349,8 @@ class AuditService:
             surface: Which way in the caller used ("search_endpoint",
                 "agent_tool", ...). See ``session_search_audit``.
             status: "success", "denied" or "failure".
-            query: The search text. Recorded unless the account turned it off;
-                never written to an access log by anything upstream.
+            query: Search text; retained only with the canonical account opt-in.
+            query_hash: Fingerprint already computed before outbox serialization.
             actor_type: "user", "agent" or "unknown".
             user_id: Acting user, when the caller is a user.
             runtime_principal_id: Agent principal, when the caller is an agent.
@@ -1396,18 +1383,19 @@ class AuditService:
                 "surface": surface,
                 "actor_type": actor_type,
             }
-            if query is not None:
-                if _record_query_text(db, account_id):
+            if query is not None or query_hash is not None:
+                from preloop.services.session_search_audit import (
+                    query_hash as hash_query,
+                )
+
+                details["query_hash"] = query_hash or hash_query(query or "")
+                if query is not None and _record_query_text(db, account_id):
                     details["query"] = query[:MAX_QUERY_TEXT_CHARS]
                     details["query_recorded"] = True
                 else:
-                    # The account asked for the question to stay out of the
-                    # log. The shape of it does not: a length says a search
-                    # happened and roughly how specific it was, without
-                    # holding the words.
                     details["query_recorded"] = False
                 details["query_length"] = (
-                    query_length if query_length is not None else len(query)
+                    query_length if query_length is not None else len(query or "")
                 )
             if user_id:
                 details["user_id"] = str(user_id)
@@ -1440,7 +1428,7 @@ class AuditService:
             if permission:
                 details["permission"] = permission
             if error:
-                details["error"] = error[:2000]
+                details["error"] = _safe_error_detail(error)
 
             user_uuid: Optional[UUID] = None
             if user_id is not None:

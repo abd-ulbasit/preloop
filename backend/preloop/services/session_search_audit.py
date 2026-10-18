@@ -443,14 +443,27 @@ def record_denied_endpoint_search(
         http_request = kwargs.get("request")
         client = getattr(http_request, "client", None)
         headers = getattr(http_request, "headers", {})
-        record_search(
-            db,
-            account_id=account_id,
-            actor=user_actor(
+        from preloop.models.crud.ci_principal import CiAuthorizationContext
+
+        if isinstance(user, CiAuthorizationContext):
+            actor = SearchActor(
+                actor_type="restricted_ci",
+                source=SOURCE_API,
+                api_key_id=str(user.key_id),
+                runtime_principal_id=str(user.principal_id),
+                ip_address=getattr(client, "host", None),
+                user_agent=headers.get("user-agent"),
+            )
+        else:
+            actor = user_actor(
                 user,
                 ip_address=getattr(client, "host", None),
                 user_agent=headers.get("user-agent"),
-            ),
+            )
+        record_search(
+            db,
+            account_id=account_id,
+            actor=actor,
             query=payload.query,
             mode=payload.mode,
             status=STATUS_DENIED,
