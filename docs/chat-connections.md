@@ -28,7 +28,7 @@ image, database, signing/encryption secrets, NATS connection, and operator
 `extraEnv`, `extraEnvFrom`, `extraVolumes`, and `extraVolumeMounts`. If you supply
 an encryption key or provider CA through those hooks, apply the same settings to
 both processes. Run migrations before starting the worker. See the
-[Helm chart guide](../helm/preloop/README.md#chat-worker).
+[Helm chart guide](https://github.com/preloop/preloop/blob/main/helm/preloop/README.md#chat-worker).
 
 Set `PRELOOP_URL` to your externally reachable HTTPS origin before setting up
 Slack or Discord. Provider callbacks cannot use a localhost or placeholder URL.
