@@ -22,6 +22,17 @@ class RuntimeSessionActivity(Base):
 
     __tablename__ = "runtime_session_activity"
     __table_args__ = (
+        # Prompt, turn-end and session-end timestamps (#1889), kept small
+        # next to the tool-call volume. Timestamp first: the live activity
+        # worker reads them across every account by time range.
+        Index(
+            "ix_rsa_account_turn_events",
+            "timestamp",
+            "account_id",
+            postgresql_where=text(
+                "activity_type IN ('user_prompt', 'turn_end', 'session_end')"
+            ),
+        ),
         # Fleet Map code activity: successful pull/merge request tool calls,
         # newest first per account. Migration 20261031_code_tool_idx; the
         # tool list matches preloop.models.crud.fleet_map.CODE_ACTIVITY_TOOLS.

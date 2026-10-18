@@ -447,6 +447,13 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert unsealed.down_revision == "20261018_gov_spend_idx"
     model_totals = script.get_revision("20261030_gateway_model_idx")
     assert model_totals.down_revision == "20261029_audit_unsealed_idx"
+    live_activity = script.get_revision("20261031_live_activity")
+    assert live_activity.down_revision == "20261030_gateway_model_idx"
     code_tools = script.get_revision("20261031_code_tool_idx")
     assert code_tools.down_revision == "20261030_gateway_model_idx"
-    assert script.get_heads() == ["20261031_code_tool_idx"]
+    activity_merge = script.get_revision("20261031_activity_merge")
+    assert set(activity_merge.down_revision) == {
+        "20261031_live_activity",
+        "20261031_code_tool_idx",
+    }
+    assert script.get_heads() == ["20261031_activity_merge"]

@@ -19,6 +19,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     tuple_,
+    update,
 )
 from sqlalchemy.orm import Session, aliased
 
@@ -393,6 +394,53 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         else:
             db.flush()
         return db_obj
+
+    def mark_ended_by_hook(
+        self,
+        db: Session,
+        *,
+        account_id: Any,
+        runtime_session_id: Any,
+        ended_at: datetime,
+        commit: bool = True,
+    ) -> tuple[Optional[RuntimeSession], bool]:
+        """Stamp ``ended_at`` from a SessionEnd hook, at most once.
+
+        One conditional ``UPDATE ... WHERE ended_at IS NULL``, so concurrent
+        SessionEnd hooks cannot both stamp it: an ended session keeps its
+        first ``ended_at`` and is never re-opened here.
+
+        Args:
+            db: Database session.
+            account_id: Owning account.
+            runtime_session_id: Session to end.
+            ended_at: Server receive time of the hook.
+            commit: Commit when True, flush otherwise.
+
+        Returns:
+            The session (None when absent) and whether this call ended it.
+        """
+        ended = db.execute(
+            update(self.model)
+            .where(
+                self.model.account_id == account_id,
+                self.model.id == runtime_session_id,
+                self.model.ended_at.is_(None),
+            )
+            .values(ended_at=ended_at, last_activity_at=ended_at)
+            .returning(self.model.id)
+            .execution_options(synchronize_session=False)
+        ).first()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db_obj = self.get_account_session(
+            db, account_id=str(account_id), runtime_session_id=str(runtime_session_id)
+        )
+        if db_obj is not None and ended is not None:
+            db.refresh(db_obj)
+        return db_obj, ended is not None
 
     def reopen_for_managed_agent(
         self,
