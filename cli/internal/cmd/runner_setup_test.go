@@ -474,10 +474,18 @@ func TestTokenLoginDoesNotInstallRunner(t *testing.T) {
 
 func TestLoadOrRegisterRunnerSecondCallResumes(t *testing.T) {
 	testenv.SetTempHome(t)
+	original := readMachineID
+	readMachineID = func() (string, error) { return "different-platform-machine-id", nil }
+	t.Cleanup(func() {
+		readMachineID = original
+		runnerFingerprint.Store("")
+	})
 	var creates, resumes int
+	deviceRef := "example-device"
+	salt := testDiscoverySalt
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == discoverySaltPath {
-			_ = json.NewEncoder(w).Encode(map[string]any{"salt": testDiscoverySalt})
+			_ = json.NewEncoder(w).Encode(map[string]any{"salt": salt})
 			return
 		}
 		if r.URL.Path != "/api/v1/runners/register" {
@@ -486,7 +494,7 @@ func TestLoadOrRegisterRunnerSecondCallResumes(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["workstation_fingerprint"] != workstationFingerprint(testDiscoverySalt, "example-device") {
+		if body["workstation_fingerprint"] != workstationFingerprint(salt, deviceRef) {
 			t.Error("registration must carry the discovery fingerprint")
 		}
 		if body["runner_id"] == nil || body["runner_id"] == "" {
@@ -507,13 +515,34 @@ func TestLoadOrRegisterRunnerSecondCallResumes(t *testing.T) {
 	defer server.Close()
 
 	client := api.NewClientWithToken(server.URL, "tok")
-	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, "example-device"); err != nil {
+	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, deviceRef); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, "example-device"); err != nil {
+	// Service units start `runner fg` without the original command's flags.
+	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2); err != nil {
 		t.Fatal(err)
 	}
-	if creates != 1 || resumes != 1 {
+	// An explicit replacement must survive subsequent restarts and salt rotation.
+	deviceRef = "replacement-device"
+	if _, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2, deviceRef); err != nil {
+		t.Fatal(err)
+	}
+	salt = "rotated-account-salt-at-least-thirty-two-characters"
+	state, err := loadOrRegisterRunner(client, "box", "host", personalRunnerLabels(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.DeviceRef != deviceRef {
+		t.Fatalf("resumed device reference = %q, want %q", state.DeviceRef, deviceRef)
+	}
+	salt = "another-rotated-salt-at-least-thirty-two-characters"
+	refreshRunnerFingerprint(client, state.DeviceRef, nil)
+	heartbeat := map[string]any{}
+	addRunnerFingerprint(heartbeat)
+	if heartbeat["workstation_fingerprint"] != workstationFingerprint(salt, deviceRef) {
+		t.Fatal("salt refresh after restart must retain the explicit device reference")
+	}
+	if creates != 1 || resumes != 3 {
 		t.Fatalf("creates=%d resumes=%d", creates, resumes)
 	}
 }

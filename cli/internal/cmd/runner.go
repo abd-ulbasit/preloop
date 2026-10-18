@@ -161,6 +161,9 @@ type runnerState struct {
 	ID          string             `json:"id"`
 	Token       string             `json:"token"`
 	Name        string             `json:"name"`
+	// DeviceRef keeps an explicit discovery reference across service restarts.
+	// Only its account-salted fingerprint is sent to the server.
+	DeviceRef string `json:"device_ref,omitempty"`
 	// AuthorizedDirectories is the operator's list of directories remote
 	// sessions may open (preloop runner dirs). Kept here so a token
 	// rotation or re-registration never drops it.
@@ -298,7 +301,7 @@ func runRunnerFg(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	stopFingerprintRefresh := startRunnerFingerprintRefresh(client, deviceRef)
+	stopFingerprintRefresh := startRunnerFingerprintRefresh(client, state.DeviceRef)
 	defer stopFingerprintRefresh()
 	// Checkouts of sessions that did not survive the restart are garbage;
 	// a session restored from disk keeps its clone.
@@ -388,7 +391,16 @@ func loadOrRegisterRunner(
 		req["flow_execution_consent"] = consent
 		return registerEphemeralRunner(client, req)
 	}
-	if fingerprint := runnerWorkstationFingerprint(client, deviceRefs...); fingerprint != "" {
+	deviceRef := ""
+	if len(deviceRefs) > 0 {
+		deviceRef = strings.TrimSpace(deviceRefs[0])
+	}
+	if deviceRef == "" {
+		if existing, err := readRunnerState(); err == nil {
+			deviceRef = existing.DeviceRef
+		}
+	}
+	if fingerprint := runnerWorkstationFingerprint(client, deviceRef); fingerprint != "" {
 		req["workstation_fingerprint"] = fingerprint
 		runnerFingerprint.Store(fingerprint)
 	}
@@ -400,6 +412,7 @@ func loadOrRegisterRunner(
 			// request must survive this write.
 			_ = updateRunnerState(func(current *runnerState) error {
 				current.ID = resumed.ID
+				current.DeviceRef = deviceRef
 				current.Name = existing.Name
 				if resumed.Name != "" {
 					current.Name = resumed.Name
@@ -429,6 +442,7 @@ func loadOrRegisterRunner(
 	// harness switches.
 	if err := updateRunnerState(func(current *runnerState) error {
 		current.ID, current.Token, current.Name = created.ID, created.Token, created.Name
+		current.DeviceRef = deviceRef
 		state = current
 		return nil
 	}); err != nil {
