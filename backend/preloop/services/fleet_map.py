@@ -136,8 +136,65 @@ def _enrollment_hostname(
     return names[0] if len(names) == 1 else None
 
 
+# Dependencies flow source -> target along these relations.
+_DOWNSTREAM = ("uses_model", "uses_account", "account_of_provider", "provided_by")
+# Holders flow target -> source: a device hosting, a person owning.
+_UPSTREAM = ("hosts", "owns")
+
+
+def _seen_at(value: Any) -> datetime | None:
+    """Read a projection timestamp that may be a datetime or an ISO string."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return _aware(value)
+
+
+def active_node_ids(
+    nodes: dict[str, FleetMapNode],
+    edges: dict[str, FleetMapEdge],
+    since: datetime,
+) -> set[str]:
+    """Return the nodes taking part in activity since ``since``.
+
+    Agents, devices and runners carry their own last-seen evidence. Models,
+    provider accounts and providers are active when an active agent reaches
+    them, and people and devices are active when something they hold is.
+
+    Args:
+        nodes: Graph nodes keyed by id.
+        edges: Graph edges keyed by id.
+        since: Oldest activity that still counts.
+
+    Returns:
+        Ids of every node to keep.
+    """
+    active = {
+        identifier
+        for identifier, item in nodes.items()
+        if item.type in {"agent", "device", "runner"}
+        and item.last_seen_at is not None
+        and item.last_seen_at >= since
+    }
+    for kind in _DOWNSTREAM:
+        for relation in edges.values():
+            if relation.kind == kind and relation.source in active:
+                active.add(relation.target)
+    for kind in _UPSTREAM:
+        for relation in edges.values():
+            if relation.kind == kind and relation.target in active:
+                active.add(relation.source)
+    return active
+
+
 def build_fleet_map(
-    db: Session, *, user: models.User, limit: int = 500
+    db: Session,
+    *,
+    user: models.User,
+    limit: int = 500,
+    active_within_hours: int | None = None,
 ) -> FleetMapResponse:
     """Load each source once, filter before linking, and cap the final graph.
 
@@ -145,6 +202,8 @@ def build_fleet_map(
         db: Request database session.
         user: Authenticated user in the selected account.
         limit: Maximum visible resource nodes, between 50 and 1000.
+        active_within_hours: Keep only resources active in this many hours;
+            None keeps every resource.
 
     Returns:
         Allowlisted graph with explicit source and output truncation.
@@ -161,7 +220,7 @@ def build_fleet_map(
         raise HTTPException(
             403, "Insufficient permissions. Required: view_device_fleet"
         )
-    result = FleetMapResponse(limit=limit)
+    result = FleetMapResponse(limit=limit, active_within_hours=active_within_hours)
     account_id = str(user.account_id)
     permissions = {
         name: _allowed(db, user, name, owner)
@@ -323,6 +382,7 @@ def build_fleet_map(
             status=status,
             owner_ids=[uid for uid in owners if uid in nodes],
             gaps=["offline_runner"] if status == "offline" else [],
+            last_seen_at=_aware(getattr(row, "last_heartbeat", None)),
         )
 
         for uid in item.owner_ids:
@@ -519,6 +579,7 @@ def build_fleet_map(
                 finding_count=count,
                 gaps=(["open_finding"] if count else [])
                 + (["unknown_device"] if not hostname else []),
+                last_seen_at=_seen_at(device.get("last_seen_at")),
             )
             for uid in owners:
                 edge(uid, item.id, "owns", "observed")
@@ -602,6 +663,15 @@ def build_fleet_map(
                     + nodes[relation.target].provider_ids
                 )
             )
+
+    if active_within_hours is not None:
+        keep = active_node_ids(nodes, edges, now - timedelta(hours=active_within_hours))
+        nodes = {key: item for key, item in nodes.items() if key in keep}
+        edges = {
+            key: relation
+            for key, relation in edges.items()
+            if relation.source in keep and relation.target in keep
+        }
 
     # Round-robin types so a large agent inventory cannot evict every provider
     # and owner. Summaries count only visible, loaded resources omitted here.
