@@ -1013,3 +1013,38 @@ chart skips local agent namespace/RBAC/quota/network-policy resources. Provision
 those resources separately in the execution cluster. Drain
 existing hosted executions before changing clusters, including before rollback,
 because existing runtime references do not record their cluster.
+
+
+### Chat worker
+
+Chat connections require a separate durable consumer; `preloop-sync worker`
+pools do not process chat ingress/outbox jobs. Set this in the values used by
+your normal Helm deployment:
+
+```yaml
+chatWorker:
+  enabled: true
+```
+
+The optional `-chat-worker` Deployment runs
+`python -m preloop.services.chat_worker` using the API image and shared database,
+signing/encryption secrets, NATS, service account, and execution configuration.
+`chatWorker.replicaCount` and `chatWorker.resources` configure this deployment
+independently. It defaults to disabled. Database leases coordinate queue claims
+and Mattermost listeners across replicas. Existing accepted jobs survive restarts;
+Mattermost messages sent while offline are not replayed.
+
+Global `extraEnv`, `extraEnvFrom`, `extraVolumes`, and `extraVolumeMounts` also apply
+to the chat worker. Keep encryption settings identical to the API. For a private
+Mattermost server, supply the required `MODEL_ENDPOINT_ALLOWED_CIDRS` and CA trust
+(for example `SSL_CERT_FILE` with a mounted certificate) to both workloads.
+Restart workloads when operator-managed Secrets change; their contents are not
+part of the chart-managed credentials checksum.
+
+Run schema migrations before the worker. This process has no HTTP server or
+HTTP probes. Kubernetes running status does not prove provider connectivity:
+check per-connection worker/provider health in **Settings → Chat connections**,
+then link an account and send a fresh message to verify delivery. The optional
+Cloud documentation support service does not replace this worker. See
+[Chat connections](../../docs/chat-connections.md) for enrollment, authorization,
+and delivery limits.

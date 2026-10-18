@@ -64,6 +64,19 @@ worker:
       cpu: "2"
       memory: "2Gi"
 
+# Separate PostgreSQL-backed chat ingress/outbox consumer and Mattermost listener.
+# Sync worker pools do not consume chat jobs. Enable when using chat connections.
+chatWorker:
+  enabled: false
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
 # Flow orchestration: when true, API/webhook create PENDING rows and publish
 # execute_flow / resume_flow_execution to JetStream instead of asyncio.create_task.
 flowExecution:
