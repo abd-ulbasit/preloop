@@ -4,9 +4,9 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Query, Session
 
 from ..models.api_key import ApiKey
@@ -612,6 +612,92 @@ class CRUDApiKey(CRUDBase[ApiKey]):
         if account_id:
             query = query.filter(User.account_id == account_id)
         return query.order_by(ApiKey.created_at.desc()).all()
+
+    #: Columns ``page_by_user`` may sort by, keyed by their public name.
+    PAGE_SORTS = ("name", "created", "expires")
+
+    def page_by_user(
+        self,
+        db: Session,
+        *,
+        username: str,
+        limit: int,
+        offset: int = 0,
+        account_id: Optional[str] = None,
+        search: Optional[str] = None,
+        include_retired: bool = True,
+        sort: str = "created",
+        descending: bool = True,
+    ) -> Tuple[List[ApiKey], int, int]:
+        """Read one page of a user's keys with the counts the list needs.
+
+        Settings > API keys used to read every key (242 KB on a busy
+        account) to show 25 of them (#1694).
+
+        Args:
+            db: Database session.
+            username: Owner of the keys.
+            limit: Page size.
+            offset: Rows to skip.
+            account_id: Optional account the owner must belong to.
+            search: Case-insensitive substring of the key name.
+            include_retired: Whether revoked and expired keys are listed.
+            sort: One of ``PAGE_SORTS``.
+            descending: Sort direction.
+
+        Returns:
+            The page, the number of rows matching the filters, and the number
+            of retired keys matching the search (listed or not).
+
+        Raises:
+            ValueError: If ``sort`` is not one of ``PAGE_SORTS``.
+        """
+        if sort not in self.PAGE_SORTS:
+            raise ValueError(f"Unsupported sort: {sort}")
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        retired = or_(
+            ApiKey.is_active.is_(False),
+            ApiKey.expires_at <= now_naive,
+        )
+        # Spelled out rather than ``~retired``: NOT over a NULL expiry is NULL.
+        usable = and_(
+            ApiKey.is_active.is_(True),
+            or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > now_naive),
+        )
+        base = (
+            db.query(ApiKey)
+            .join(User, ApiKey.user_id == User.id)
+            .filter(User.username == username)
+        )
+        base = self._legacy_only(base)
+        if account_id:
+            base = base.filter(User.account_id == account_id)
+        if search:
+            escaped = (
+                search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            base = base.filter(ApiKey.name.ilike(f"%{escaped}%", escape="\\"))
+        retired_count = int(
+            base.filter(retired).with_entities(func.count(ApiKey.id)).scalar() or 0
+        )
+        listed = base if include_retired else base.filter(usable)
+        total = int(listed.with_entities(func.count(ApiKey.id)).scalar() or 0)
+        if sort == "name":
+            column: Any = func.lower(ApiKey.name)
+        elif sort == "expires":
+            column = ApiKey.expires_at
+        else:
+            column = ApiKey.created_at
+        # Postgres sorts NULL as the largest value, which is what "Never
+        # expires" means.
+        order = column.desc() if descending else column.asc()
+        rows = (
+            listed.order_by(order, ApiKey.id.desc())
+            .offset(max(0, offset))
+            .limit(max(1, limit))
+            .all()
+        )
+        return rows, total, retired_count
 
     def count_usable_by_user(
         self, db: Session, *, username: str, account_id: Optional[str] = None

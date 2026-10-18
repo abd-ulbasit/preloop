@@ -555,32 +555,6 @@ paths:
       - OAuth2PasswordBearer: []
       x-restricted-ci: deny
   /api/v1/auth/api-keys:
-    get:
-      tags:
-      - Auth
-      summary: List Api Keys
-      description: "List all API keys for the current user.\n\nArgs:\n    current_user:\
-        \ The current authenticated user.\n\nReturns:\n    List of API keys."
-      operationId: list_api_keys_api_v1_auth_api_keys_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: '#/components/schemas/ApiKeySummary'
-                type: array
-                title: Response List Api Keys Api V1 Auth Api Keys Get
-        '401':
-          description: Invalid or expired credential
-        '403':
-          description: Operation or resource denied for restricted CI credentials
-        '503':
-          description: Credential verification unavailable
-      security:
-      - OAuth2PasswordBearer: []
-      x-restricted-ci: deny
     post:
       tags:
       - Auth
@@ -589,12 +563,14 @@ paths:
         \ data.\n    current_user: The current authenticated user.\n\nReturns:\n \
         \   The created API key details."
       operationId: create_api_key_api_v1_auth_api_keys_post
+      security:
+      - OAuth2PasswordBearer: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ApiKeyCreate'
-        required: true
       responses:
         '201':
           description: Successful Response
@@ -614,8 +590,99 @@ paths:
           description: Operation or resource denied for restricted CI credentials
         '503':
           description: Credential verification unavailable
+      x-restricted-ci: deny
+    get:
+      tags:
+      - Auth
+      summary: List Api Keys
+      description: "List the current user's API keys, optionally one page at a time.\n\
+        \nWith ``limit`` the list is paged on the server and the response carries\n\
+        ``X-Total-Count`` (rows matching the filters) and ``X-Retired-Count``\n(revoked\
+        \ or expired keys matching the search) headers (#1694). Without\nit every\
+        \ key is returned, as before.\n\nArgs:\n    response: The outgoing response,\
+        \ for the count headers.\n    limit: Page size, or None for every key.\n \
+        \   offset: Rows to skip.\n    q: Name search, applied only when paging.\n\
+        \    include_retired: Whether retired keys are listed, when paging.\n    sort:\
+        \ Sort key, when paging.\n    current_user: The current authenticated user.\n\
+        \    db: The database session.\n\nReturns:\n    List of API keys."
+      operationId: list_api_keys_api_v1_auth_api_keys_get
       security:
       - OAuth2PasswordBearer: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 200
+            minimum: 1
+          - type: 'null'
+          description: Page size. Omit to list every key.
+          title: Limit
+        description: Page size. Omit to list every key.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Rows to skip when paging.
+          default: 0
+          title: Offset
+        description: Rows to skip when paging.
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          description: Case-insensitive key name search.
+          title: Q
+        description: Case-insensitive key name search.
+      - name: include_retired
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Whether revoked and expired keys are listed.
+          default: true
+          title: Include Retired
+        description: Whether revoked and expired keys are listed.
+      - name: sort
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^-?(name|created|expires)$
+          description: name, created or expires; a leading '-' sorts descending.
+          default: -created
+          title: Sort
+        description: name, created or expires; a leading '-' sorts descending.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeySummary'
+                title: Response List Api Keys Api V1 Auth Api Keys Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
       x-restricted-ci: deny
   /api/v1/auth/runtime-sessions/token:
     post:

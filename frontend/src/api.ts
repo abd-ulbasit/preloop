@@ -4160,6 +4160,50 @@ export async function getApiKeys(): Promise<ApiKey[]> {
   return response.json();
 }
 
+/** One server page of API keys, with the counts the list footer needs. */
+export interface ApiKeyPage {
+  items: ApiKey[];
+  /** Keys matching the search and retired filter, across every page. */
+  total: number;
+  /** Revoked or expired keys matching the search, or null if not sent. */
+  retired: number | null;
+}
+
+/**
+ * One page of the user's API keys (#1694). `sort` is `name`, `created` or
+ * `expires`, with a leading `-` for descending.
+ */
+export async function getApiKeysPage(params: {
+  limit: number;
+  offset: number;
+  search?: string;
+  includeRetired: boolean;
+  sort?: string;
+}): Promise<ApiKeyPage> {
+  const query = new URLSearchParams({
+    limit: String(params.limit),
+    offset: String(params.offset),
+    include_retired: String(params.includeRetired),
+    sort: params.sort || '-created',
+  });
+  if (params.search) query.set('q', params.search);
+  const response = await fetchWithAuth(`/api/v1/auth/api-keys?${query}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch API keys');
+  }
+  const items: ApiKey[] = await response.json();
+  const header = (name: string): number | null => {
+    const raw = response.headers.get(name);
+    const value = raw === null ? NaN : Number(raw);
+    return Number.isFinite(value) ? value : null;
+  };
+  return {
+    items,
+    total: header('X-Total-Count') ?? items.length,
+    retired: header('X-Retired-Count'),
+  };
+}
+
 /**
  * How many of the user's API keys are usable (active, not expired). The
  * Overview reads this instead of the whole key list (#1694).
