@@ -671,19 +671,24 @@ describe('fleet-map labels', () => {
         x: before.x + 60,
         y: before.y + 40,
       });
-      // The click the drop produces does not select; the next real one does.
-      moved.click();
-      await el.updateComplete;
-      expect(el.hasSelection()).to.equal(false);
-      stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
+      // The drop click lands on the stage, not the node; the next real
+      // node click still selects.
+      stage.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
-      target.dispatchEvent(new PointerEvent('pointerdown', at(160, 140)));
-      stage.dispatchEvent(new PointerEvent('pointerup', at(160, 140)));
       node(el, 'agent:codex').click();
       await el.updateComplete;
       expect(el.hasSelection()).to.equal(true);
       el.clearSelection();
       await el.updateComplete;
+      // A click delivered to the node straight after a drop is swallowed.
+      node(el, 'user:maya').dispatchEvent(
+        new PointerEvent('pointerdown', at(160, 140))
+      );
+      stage.dispatchEvent(new PointerEvent('pointermove', at(200, 160)));
+      stage.dispatchEvent(new PointerEvent('pointerup', at(200, 160)));
+      node(el, 'user:maya').click();
+      await el.updateComplete;
+      expect(el.hasSelection()).to.equal(false);
 
       const again = await fixture<FleetMap>(
         html`<fleet-map
