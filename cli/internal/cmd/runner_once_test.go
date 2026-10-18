@@ -315,7 +315,7 @@ func TestRunnerFgOnceEphemeralRunsOneJobAndUnregisters(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(persistent), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	stored := []byte(`{"id":"persistent-id","token":"persistent-token","name":"desk"}`)
+	stored := []byte(`{"id":"persistent-id","token":"persistent-token","name":"desk","device_ref":"example-device"}`)
 	if err := os.WriteFile(persistent, stored, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -346,6 +346,9 @@ func TestRunnerFgOnceEphemeralRunsOneJobAndUnregisters(t *testing.T) {
 	if registers[0]["ephemeral"] != true {
 		t.Fatalf("register body = %v, want ephemeral true", registers[0])
 	}
+	if _, disclosed := registers[0]["workstation_fingerprint"]; disclosed {
+		t.Fatal("ephemeral registration disclosed the persistent device fingerprint")
+	}
 	if _, resumed := registers[0]["runner_id"]; resumed {
 		t.Fatalf("ephemeral register must not resume a stored runner: %v", registers[0])
 	}
@@ -372,6 +375,9 @@ func TestRunnerFgOnceEphemeralRunsOneJobAndUnregisters(t *testing.T) {
 	for _, frame := range state.handshakes() {
 		if frame["ephemeral"] != true {
 			t.Fatalf("heartbeat = %v, want ephemeral true", frame)
+		}
+		if _, disclosed := frame["workstation_fingerprint"]; disclosed {
+			t.Fatal("ephemeral heartbeat disclosed the persistent device fingerprint")
 		}
 	}
 	if !strings.Contains(out.String(), "/console/flows/executions/exec-1") {
