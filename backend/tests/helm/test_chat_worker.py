@@ -16,10 +16,40 @@ def test_chat_worker_disabled_by_default() -> None:
 
 
 def test_chat_worker_runtime_and_operator_configuration(tmp_path) -> None:
+    pod_settings = {
+        "podLabels": {"example.com/workload-identity": "chat"},
+        "podAnnotations": {"example.com/annotation": "chat"},
+        "nodeSelector": {"kubernetes.io/os": "linux"},
+        "affinity": {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {
+                            "matchExpressions": [
+                                {
+                                    "key": "example.com/pool",
+                                    "operator": "In",
+                                    "values": ["workers"],
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "tolerations": [
+            {
+                "key": "example.com/workload",
+                "operator": "Exists",
+                "effect": "NoSchedule",
+            }
+        ],
+    }
     values = tmp_path / "chat-values.yaml"
     values.write_text(
         yaml.safe_dump(
             {
+                **pod_settings,
                 "chatWorker": {
                     "enabled": True,
                     "replicaCount": 2,
@@ -53,6 +83,16 @@ def test_chat_worker_runtime_and_operator_configuration(tmp_path) -> None:
     assert doc["kind"] == "Deployment"
     assert doc["spec"]["replicas"] == 2
     pod = doc["spec"]["template"]["spec"]
+    for key in ("nodeSelector", "affinity", "tolerations"):
+        assert pod[key] == pod_settings[key]
+    assert (
+        doc["spec"]["template"]["metadata"]["labels"]["example.com/workload-identity"]
+        == "chat"
+    )
+    assert (
+        doc["spec"]["template"]["metadata"]["annotations"]["example.com/annotation"]
+        == "chat"
+    )
     container = pod["containers"][0]
     assert container["image"] == "example.com/preloop:test"
     assert container["command"] == ["python", "-m", "preloop.services.chat_worker"]

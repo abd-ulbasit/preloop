@@ -491,7 +491,7 @@ helm install preloop ./helm/preloop \
 | `serviceAccount.annotations`   | Annotations for the service account                   | `{}`        |
 | `serviceAccount.name`          | The name of the service account                       | `""`        |
 | `podAnnotations`               | Annotations for pods                                  | `{}`        |
-| `podLabels`                    | Extra labels on the api, gateway, frontend, and spacesync-* deployments (not health-monitor or Jobs). For Azure OpenAI with Microsoft Entra ID on AKS workload identity, set `azure.workload.identity/use: "true"` and annotate the service account with `azure.workload.identity/client-id` | `{}`        |
+| `podLabels`                    | Extra labels on the api, gateway, frontend, chat-worker, and spacesync-* deployments (not health-monitor or Jobs). For Azure OpenAI with Microsoft Entra ID on AKS workload identity, set `azure.workload.identity/use: "true"` and annotate the service account with `azure.workload.identity/client-id` | `{}`        |
 | `podSecurityContext`           | Pod security context                                  | `{}`        |
 | `securityContext`              | Container security context                            | `{}`        |
 | `nodeSelector`                 | Node selector                                         | `{}`        |
@@ -1034,8 +1034,10 @@ independently. It defaults to disabled. Database leases coordinate queue claims
 and Mattermost listeners across replicas. Existing accepted jobs survive restarts;
 Mattermost messages sent while offline are not replayed.
 
-Global `extraEnv`, `extraEnvFrom`, `extraVolumes`, and `extraVolumeMounts` also apply
-to the chat worker. Keep encryption settings identical to the API. For a private
+Global `podLabels`, `podAnnotations`, `nodeSelector`, `affinity`, and `tolerations`
+also apply to the chat worker, including workload-identity labels and placement
+constraints. Global `extraEnv`, `extraEnvFrom`, `extraVolumes`, and
+`extraVolumeMounts` apply as well. Keep encryption settings identical to the API. For a private
 Mattermost server, supply the required `MODEL_ENDPOINT_ALLOWED_CIDRS` and CA trust
 (for example `SSL_CERT_FILE` with a mounted certificate) to both workloads.
 Restart workloads when operator-managed Secrets change; their contents are not
