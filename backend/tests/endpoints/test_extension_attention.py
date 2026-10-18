@@ -1,6 +1,7 @@
 """Generic plugin inbox contributions are authorized before providers execute."""
 
 from datetime import UTC, datetime
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -77,6 +78,63 @@ async def test_report_credentials_cannot_read_sources() -> None:
     with pytest.raises(HTTPException) as exc:
         await list_extension_attention_items(user, MagicMock())
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_timeout_cancels_provider_rolls_back_and_continues() -> None:
+    cancelled = False
+
+    async def slow(db: object, user: object) -> list[ExtensionAttentionItem]:
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        return []
+
+    good = AsyncMock(return_value=[item()])
+    manager = MagicMock()
+    manager.attention_sources.return_value = [
+        ("example", AttentionSource("slow", "view_example", slow)),
+        ("example", AttentionSource("good", "view_example", good)),
+    ]
+    db = MagicMock()
+    user = SimpleNamespace(id=uuid4(), account_id=uuid4(), is_superuser=True)
+    with (
+        patch("preloop.plugins.base.get_plugin_manager", return_value=manager),
+        patch("preloop.plugins.attention.ATTENTION_SOURCE_TIMEOUT_SECONDS", 0.01),
+        patch("preloop.api.endpoints.account.crud_account.get", return_value=None),
+    ):
+        result = await list_extension_attention_items(user, db)
+    assert cancelled
+    assert len(result) == 1 and result[0].source == "example:good"
+    db.rollback.assert_called_once()
+    good.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_oversized_namespace_is_isolated_without_breaking_valid_source() -> None:
+    manager = MagicMock()
+    manager.attention_sources.return_value = [
+        (
+            "x" * 255,
+            AttentionSource(
+                "oversized", "view_example", AsyncMock(return_value=[item()])
+            ),
+        ),
+        (
+            "example",
+            AttentionSource("good", "view_example", AsyncMock(return_value=[item()])),
+        ),
+    ]
+    user = SimpleNamespace(id=uuid4(), account_id=uuid4(), is_superuser=True)
+    with (
+        patch("preloop.plugins.base.get_plugin_manager", return_value=manager),
+        patch("preloop.api.endpoints.account.crud_account.get", return_value=None),
+    ):
+        result = await list_extension_attention_items(user, MagicMock())
+    assert len(result) == 1 and result[0].source == "example:good"
 
 
 @pytest.mark.parametrize(

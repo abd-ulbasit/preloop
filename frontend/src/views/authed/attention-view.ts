@@ -1,4 +1,4 @@
-import type { ExtensionAttentionItem } from '../../utils/attention-extension';
+import type { PreparedExtensionAttentionItem } from '../../utils/attention-extension';
 import { decideMCPFinding, type MCPFinding } from '../../mcp-findings-api';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
@@ -119,7 +119,7 @@ export class AttentionView extends AuthedElement {
   @state() private priceOverrides: AttentionPriceOverride[] = [];
   @state() private mcpFindingsEnabled = false;
   @state() private mcpFindings: MCPFinding[] = [];
-  @state() private extensionItems: ExtensionAttentionItem[] = [];
+  @state() private extensionItems: PreparedExtensionAttentionItem[] = [];
   @state() private policyNotices: AttentionPolicyNotice[] = [];
   @state() private spendOutliers: SpendOutlierFinding[] = [];
   @state() private showSpendSettings = false;

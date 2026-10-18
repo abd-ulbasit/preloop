@@ -1,6 +1,7 @@
 """Account-related endpoints."""
 
 import html
+import asyncio
 import logging
 import secrets
 import anyio.from_thread
@@ -4245,6 +4246,7 @@ async def _list_extension_attention_items(
     )
     from preloop.api.auth.permissions import has_permission
     from preloop.plugins.base import get_plugin_manager
+    from preloop.plugins.attention import ATTENTION_SOURCE_TIMEOUT_SECONDS
 
     def restricted() -> bool:
         key = getattr(current_user, "_auth_api_key", None)
@@ -4276,11 +4278,14 @@ async def _list_extension_attention_items(
         ):
             continue
         try:
-            contributions = await source.provider(db, current_user)
+            async with asyncio.timeout(ATTENTION_SOURCE_TIMEOUT_SECONDS):
+                contributions = await source.provider(db, current_user)
             namespace = f"{plugin_name}:{source.id}"
             for value in contributions[:500]:
                 item = ExtensionAttentionItem.model_validate(value)
-                item = item.model_copy(update={"source": namespace})
+                item = ExtensionAttentionItem.model_validate(
+                    {**item.model_dump(), "source": namespace}
+                )
                 items.setdefault((namespace, item.id), item)
         except Exception:
             await run_db_off_loop(db.rollback)

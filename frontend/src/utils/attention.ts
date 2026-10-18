@@ -1,4 +1,4 @@
-import type { ExtensionAttentionItem } from './attention-extension';
+import type { PreparedExtensionAttentionItem } from './attention-extension';
 import type { MCPFinding } from '../mcp-findings-api';
 import type { BudgetPolicy } from '../api';
 import type {
@@ -298,7 +298,7 @@ export interface AttentionInputs {
   /** Notify rule hits of the last seven days, one row per rule. */
   policyNotices?: AttentionPolicyNotice[];
   mcpFindings?: MCPFinding[];
-  extensionItems?: ExtensionAttentionItem[];
+  extensionItems?: PreparedExtensionAttentionItem[];
   /**
    * Active dismissals. `undefined` (an older backend without the endpoint)
    * hides nothing and is not an error.
@@ -1445,20 +1445,14 @@ export function deriveAttentionItems(inputs: AttentionInputs): AttentionResult {
     ...(inputs.extensionItems || [])
       .filter((item) => /^\/console(?:[/?#][^\\\x00-\x20]*)?$/.test(item.href))
       .map((item): AttentionItem => ({
-        id: `extension:${encodeURIComponent(item.source)}:${encodeURIComponent(item.id)}`,
+        id: item.dismissalId,
         kind: 'extension',
         severity: item.severity === 'action' ? 'warning' : 'low',
         title: item.title,
         detail: item.detail,
         href: item.href,
         at: item.opened_at,
-        fingerprint: JSON.stringify([
-          item.opened_at,
-          item.title,
-          item.detail,
-          item.href,
-          item.severity,
-        ]),
+        fingerprint: item.fingerprint,
         dismissable: true,
       })),
   ];

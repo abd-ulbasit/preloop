@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.schemas.attention import ExtensionAttentionItem
 
+ATTENTION_SOURCE_TIMEOUT_SECONDS = 2.0
+
 
 @dataclass(frozen=True)
 class AttentionSource:
