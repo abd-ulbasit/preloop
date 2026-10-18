@@ -227,7 +227,7 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         touch-action: none;
         cursor: grab;
-        height: max(480px, calc(100vh - 340px));
+        height: var(--fleet-map-stage-height, max(480px, calc(100vh - 340px)));
         background: var(--console-page);
         border: 1px solid var(--console-hairline);
         border-radius: var(--console-card-radius);

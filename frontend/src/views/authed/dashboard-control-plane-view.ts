@@ -4763,6 +4763,7 @@ export class DashboardView extends AuthedElement {
         .deviceRows=${this.inventoryDeviceRows}
         .devicesTotal=${this.fleetDevicesTotal}
         ?showDevices=${this.canViewFleet}
+        ?showMap=${this.canViewFleet}
         .unavailableTabs=${this.unavailableInventoryTabs}
         .agentsTotal=${this.totalAgentsCount}
         .flowsTotal=${this.totalFlowsCount}

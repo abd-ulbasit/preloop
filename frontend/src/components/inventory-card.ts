@@ -7,6 +7,8 @@ import { repeat } from 'lit/directives/repeat.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
 import '@shoelace-style/shoelace/dist/components/card/card.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
+import '@shoelace-style/shoelace/dist/components/icon-button/icon-button.js';
+import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '@shoelace-style/shoelace/dist/components/skeleton/skeleton.js';
@@ -15,6 +17,8 @@ import '@shoelace-style/shoelace/dist/components/tab-group/tab-group.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
 import './user-avatar';
 import { userHref } from '../utils/user-href';
+import './fleet-map';
+import { getFleetMap, type FleetMapGraph } from '../fleet-map-api';
 
 import consoleStyles from '../styles/console-styles.css?inline';
 import { parseUTCDate, formatRelativeTime } from '../utils/date';
@@ -35,6 +39,9 @@ export type InventoryTab =
   'agents' | 'devices' | 'flows' | 'models' | 'tools' | 'users';
 
 export const INVENTORY_TAB_STORAGE_KEY = 'overview_inventory_tab';
+/** Table or Map, remembered like the tab. */
+export const INVENTORY_VIEW_STORAGE_KEY = 'overview_inventory_view';
+export type InventoryView = 'table' | 'map';
 
 /** The last run of a flow, as the executions list returns it. */
 export interface InventoryFlowRun extends ExecutionSubjectSource {
@@ -302,6 +309,11 @@ export class InventoryCard extends LitElement {
   /** Only where the device fleet is licensed and this reader may view it. */
   @property({ type: Boolean }) showDevices = false;
   /**
+   * Offer the Fleet Map in place of the tables. Same gate as Devices: the
+   * map reads `GET /api/v1/fleet/map`, which needs view_device_fleet.
+   */
+  @property({ type: Boolean }) showMap = false;
+  /**
    * Tabs whose list could not be read. Their count and body say so instead
    * of "0" and "No agents yet", which would be a statement about the account
    * when the truth is about one request.
@@ -369,6 +381,27 @@ export class InventoryCard extends LitElement {
     devices: SORT_OPTIONS.devices[0].value,
   };
   @state() private rowLimit = ROWS_DEFAULT;
+  @state() private view: InventoryView = 'table';
+  @state() private map: FleetMapGraph | null = null;
+  @state() private mapLoading = false;
+  @state() private mapError = '';
+  @state() private mapFullscreen = false;
+  private mapController?: AbortController;
+
+  /**
+   * Esc leaves full screen, except when the map has a selection to clear:
+   * the map uses Esc for that, and one key press should undo one thing.
+   * Registered in the capture phase, so the selection is read before the
+   * map's own handler clears it.
+   */
+  private onKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !this.mapFullscreen) return;
+    const map = this.shadowRoot?.querySelector('.map-overlay fleet-map') as
+      (Element & { selected?: string; focusGap?: string }) | null;
+    const fromMap = map != null && event.composedPath().includes(map);
+    if (fromMap && (map.selected || map.focusGap)) return;
+    void this.setFullscreen(false);
+  };
 
   private onResize = () => {
     const limit = window.innerHeight > TALL_VIEWPORT ? ROWS_TALL : ROWS_DEFAULT;
@@ -440,6 +473,73 @@ export class InventoryCard extends LitElement {
 
         /* The range is a fact about the numbers below, not a control: the one
          control lives on the Usage card. */
+        .view-switch {
+          border: 1px solid var(--console-button-border);
+          border-radius: var(--sl-border-radius-medium);
+          display: inline-flex;
+          overflow: hidden;
+        }
+
+        .view-switch button {
+          align-items: center;
+          background: var(--console-button-face);
+          border: 0;
+          color: var(--console-meta-color);
+          cursor: pointer;
+          display: inline-flex;
+          font: inherit;
+          font-size: var(--console-text-meta);
+          gap: 6px;
+          min-height: 32px;
+          padding: 4px 12px;
+        }
+
+        .view-switch button + button {
+          border-left: 1px solid var(--console-button-border);
+        }
+
+        .view-switch button[aria-pressed='true'] {
+          background: var(--console-selected-tint);
+          color: var(--console-body-color);
+          font-weight: 600;
+        }
+
+        .map-body {
+          --fleet-map-stage-height: 520px;
+          padding: var(--sl-spacing-medium);
+        }
+
+        .map-overlay {
+          --fleet-map-stage-height: calc(100dvh - 150px);
+          background: var(--console-page);
+          box-sizing: border-box;
+          inset: 0;
+          overflow: auto;
+          padding: var(--sl-spacing-medium) var(--sl-spacing-large);
+          position: fixed;
+          z-index: 900;
+        }
+
+        .map-overlay-head {
+          align-items: center;
+          display: flex;
+          gap: var(--sl-spacing-small);
+          margin-bottom: var(--sl-spacing-small);
+        }
+
+        .map-overlay-head .title {
+          flex: 1;
+        }
+
+        .link-button {
+          background: none;
+          border: 0;
+          color: var(--console-link-color);
+          cursor: pointer;
+          font: inherit;
+          padding: 0 0 0 var(--sl-spacing-x-small);
+        }
+
         .range-label {
           color: var(--console-meta-color);
           font-size: var(--console-text-meta);
@@ -738,16 +838,82 @@ export class InventoryCard extends LitElement {
       if (stored && (TAB_ORDER as string[]).includes(stored)) {
         this.tab = stored as InventoryTab;
       }
+      if (localStorage.getItem(INVENTORY_VIEW_STORAGE_KEY) === 'map') {
+        this.view = 'map';
+      }
     } catch {
       // Private mode or a blocked storage partition: keep Agents.
     }
     this.onResize();
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('keydown', this.onKeydown, true);
   }
 
   disconnectedCallback(): void {
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('keydown', this.onKeydown, true);
+    this.mapController?.abort();
     super.disconnectedCallback();
+  }
+
+  protected updated(): void {
+    // A remembered Map view loads once the host says the map is allowed.
+    if (
+      this.activeView === 'map' &&
+      !this.map &&
+      !this.mapLoading &&
+      !this.mapError
+    ) {
+      void this.loadMap();
+    }
+  }
+
+  /** The view on screen: never a map this reader may not see. */
+  private get activeView(): InventoryView {
+    return this.showMap ? this.view : 'table';
+  }
+
+  private setView(view: InventoryView): void {
+    if (view === this.view) return;
+    this.view = view;
+    if (view === 'table') this.mapFullscreen = false;
+    try {
+      localStorage.setItem(INVENTORY_VIEW_STORAGE_KEY, view);
+    } catch {
+      // Non-fatal: the view still switches for this session.
+    }
+  }
+
+  /** One read for the whole canvas, and only when the map is asked for. */
+  private async loadMap(): Promise<void> {
+    this.mapController?.abort();
+    const controller = (this.mapController = new AbortController());
+    this.mapLoading = true;
+    this.mapError = '';
+    try {
+      const map = await getFleetMap(controller.signal);
+      if (!controller.signal.aborted) this.map = map;
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        this.mapError =
+          error instanceof Error
+            ? error.message
+            : 'The fleet map could not be loaded. Retry to refresh it.';
+      }
+    } finally {
+      if (!controller.signal.aborted) this.mapLoading = false;
+    }
+  }
+
+  private async setFullscreen(open: boolean): Promise<void> {
+    this.mapFullscreen = open;
+    await this.updateComplete;
+    // Focus follows the toggle, so a keyboard reader lands on the control
+    // that undoes it.
+    const target = this.shadowRoot?.querySelector<HTMLElement>(
+      open ? '.map-overlay .fullscreen-toggle' : '.card-head .fullscreen-toggle'
+    );
+    target?.focus();
   }
 
   /** Users and Devices exist only where their features do. */
@@ -978,7 +1144,53 @@ export class InventoryCard extends LitElement {
     return rows;
   }
 
+  private renderViewSwitch() {
+    if (!this.showMap) return nothing;
+    return html`<div
+      class="view-switch"
+      role="group"
+      aria-label="Inventory view"
+    >
+      ${(
+        [
+          ['table', 'Table', 'table'],
+          ['map', 'Map', 'diagram-3'],
+        ] as const
+      ).map(
+        ([view, label, icon]) =>
+          html`<button
+            type="button"
+            aria-pressed=${this.activeView === view ? 'true' : 'false'}
+            @click=${() => this.setView(view)}
+          >
+            <sl-icon name=${icon} aria-hidden="true"></sl-icon>${label}
+          </button>`
+      )}
+    </div>`;
+  }
+
+  private renderFullscreenToggle() {
+    const open = this.mapFullscreen;
+    return html`<sl-icon-button
+      class="fullscreen-toggle"
+      name=${open ? 'fullscreen-exit' : 'arrows-fullscreen'}
+      label=${open ? 'Exit full screen' : 'Full screen'}
+      title=${open ? 'Exit full screen (Esc)' : 'Full screen'}
+      @click=${() => void this.setFullscreen(!open)}
+    ></sl-icon-button>`;
+  }
+
   private renderHeader() {
+    if (this.activeView === 'map') {
+      return html`
+        <div slot="header" class="card-head">
+          <span class="title">Inventory</span>
+          <div class="header-controls">
+            ${this.renderViewSwitch()} ${this.renderFullscreenToggle()}
+          </div>
+        </div>
+      `;
+    }
     const options = SORT_OPTIONS[this.activeTab];
     const sortHeld =
       this.activeTab === 'flows'
@@ -988,6 +1200,7 @@ export class InventoryCard extends LitElement {
       <div slot="header" class="card-head">
         <span class="title">Inventory</span>
         <div class="header-controls">
+          ${this.renderViewSwitch()}
           <sl-select
             class="sort-select"
             label="Sort ${TAB_LABELS[this.activeTab].toLowerCase()} by"
@@ -1751,7 +1964,65 @@ export class InventoryCard extends LitElement {
     `;
   }
 
+  private renderMapBody() {
+    if (this.mapLoading && !this.map) {
+      return html`<div class="empty" role="status">
+        <sl-spinner></sl-spinner> Mapping people, devices, agents and
+        providers...
+      </div>`;
+    }
+    if (this.mapError) {
+      return html`<div class="empty map-error" role="alert">
+        ${this.mapError}
+        <button
+          type="button"
+          class="link-button"
+          @click=${() => void this.loadMap()}
+        >
+          Retry
+        </button>
+      </div>`;
+    }
+    if (!this.map) return nothing;
+    return html`<fleet-map .graph=${this.map}></fleet-map>`;
+  }
+
+  private renderMapCard() {
+    return html`
+      <sl-card class="content-card">
+        ${this.renderHeader()}
+        ${
+          this.mapFullscreen
+            ? html`<div class="empty">
+                The fleet map is open in full screen.
+              </div>`
+            : html`<div class="map-body">${this.renderMapBody()}</div>`
+        }
+        <div class="footer">
+          <a href="/console/settings/device-fleet">Open the device fleet →</a>
+        </div>
+      </sl-card>
+      ${
+        this.mapFullscreen
+          ? html`<div
+              class="map-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Fleet map"
+            >
+              <div class="map-overlay-head">
+                <span class="title">Fleet map</span>
+                ${this.renderViewSwitch()} ${this.renderFullscreenToggle()}
+              </div>
+              ${this.renderMapBody()}
+            </div>`
+          : nothing
+      }
+    `;
+  }
+
   render() {
+    if (this.activeView === 'map') return this.renderMapCard();
     return html`
       <sl-card class="content-card">
         ${this.renderHeader()} ${this.renderTabs()} ${this.renderBody()}
