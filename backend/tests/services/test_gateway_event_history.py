@@ -136,7 +136,10 @@ def test_window_bounds_the_oldest_event_to_its_last_messages():
     assert tail == list(range(total - 10, total))
     assert len(positions) <= 11
     assert preview["metadata"]["history_window_start"] == total - 10
-    assert preview["metadata"]["history_elided_count"] == total - len(positions)
+    # The oldest event has nothing replayed from an older one; every message
+    # it lost was dropped by the window, and is counted as such.
+    assert preview["metadata"]["history_elided_count"] == 0
+    assert preview["metadata"]["history_window_elided_count"] == total - len(positions)
     assert len(oldest["payload"]["tools"]) == 10
 
 

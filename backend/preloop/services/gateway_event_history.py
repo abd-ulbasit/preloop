@@ -90,6 +90,7 @@ def elide_replayed_history(
             continue
         new_payload = dict(payload)
         elided = 0
+        window_elided = 0
 
         preview = payload.get("conversation_preview")
         messages = preview.get("messages") if isinstance(preview, dict) else None
@@ -101,7 +102,7 @@ def elide_replayed_history(
                 if not isinstance(message, dict):
                     continue
                 if index < window_start and index != keep_index:
-                    elided += 1
+                    window_elided += 1
                     continue
                 signature = _message_signature(index, message)
                 if (
@@ -118,10 +119,14 @@ def elide_replayed_history(
             # Tells a client this preview is partial and how many replayed
             # messages an older event on the page already carried; without
             # it a delta preview reads like a short conversation. A few bytes
-            # per event, against the kilobytes elided.
+            # per event, against the kilobytes elided. Messages dropped by
+            # the window are counted apart, in history_window_elided_count,
+            # with history_window_start as the boundary, so neither count
+            # claims the other's messages were "already shown".
             new_metadata["history_elided_count"] = elided
             if window is not None:
                 new_metadata["history_window_start"] = window_start
+                new_metadata["history_window_elided_count"] = window_elided
             new_payload["conversation_preview"] = {
                 **preview,
                 "messages": new_messages,
