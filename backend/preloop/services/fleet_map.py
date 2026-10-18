@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Any
 from urllib.parse import quote
@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session
 from preloop.api.auth.key_scopes import is_mcp_only_api_key, is_single_purpose_api_key
 from preloop.models import crud, models
 from preloop.models.crud.fleet_map import Source, list_resources
+from preloop.models.models.managed_agent_ai_model_binding import (
+    AUTOREGISTER_CONFIG_KEY_PREFIX,
+)
 from preloop.plugins.account_hooks import (
     AuthorizationContext,
     VISIBLE_AI_MODEL,
@@ -32,6 +35,8 @@ from preloop.schemas.fleet_map import (
     FleetMapResponse,
     NodeType,
 )
+from preloop.services.built_in_models import built_in_models_enabled
+from preloop.services.runner_presence import derive_state
 from preloop.utils.permissions import user_holds_permission
 
 logger = logging.getLogger(__name__)
@@ -114,7 +119,11 @@ def build_fleet_map(
         if not permissions[permission]:
             return []
         rows = list_resources(
-            db, source=name, account_id=account_id, limit=SOURCE_LIMIT + 1
+            db,
+            source=name,
+            account_id=account_id,
+            limit=SOURCE_LIMIT + 1,
+            include_built_in=name == "models" and built_in_models_enabled(),
         )
         result.truncated |= len(rows) > SOURCE_LIMIT
         if len(rows) > SOURCE_LIMIT:
@@ -207,14 +216,7 @@ def build_fleet_map(
         owners = (
             [f"user:{row.registered_by_user_id}"] if row.registered_by_user_id else []
         )
-        heartbeat = row.last_heartbeat
-        if heartbeat is not None and heartbeat.tzinfo is None:
-            heartbeat = heartbeat.replace(tzinfo=UTC)
-        status = row.status
-        if status in {"online", "busy", "idle"} and (
-            heartbeat is None or now - heartbeat > timedelta(seconds=45)
-        ):
-            status = "offline"
+        status = derive_state(row, now)
         item = node(
             "runner",
             row.id,
@@ -235,6 +237,9 @@ def build_fleet_map(
         model_href = f"{MODELS_HREF}/{quote(str(row.id), safe='')}"
         item = node("model", row.id, row.name, model_href, provider_ids=[provider.id])
         edge(item.id, provider.id, "provided_by")
+        # Hosted model routing and operator credentials are not tenant resources.
+        if row.account_id is None:
+            continue
         if row.runner_id:
             edge(item.id, f"runner:{row.runner_id}", "runs_on")
         # UUID references establish sharing. Legacy/ambient credentials do not
@@ -290,7 +295,7 @@ def build_fleet_map(
         provenance = (
             "configured"
             if row.binding_type == "configured"
-            and not row.config_key.startswith("gateway.autoregister.")
+            and not row.config_key.startswith(AUTOREGISTER_CONFIG_KEY_PREFIX)
             else "observed"
         )
         # Missing credentials or unknown status are not evidence of bypass.
@@ -331,26 +336,25 @@ def build_fleet_map(
             ),
         ):
             latest.setdefault(str(enrollment.managed_agent_id), enrollment)
+        aliases: dict[str, list[Any]] = {}
+        owned_aliases: dict[tuple[str, str], list[Any]] = {}
+        for row in source_rows["models"]:
+            model_alias = _normalize_gateway_model_alias(
+                _ai_model_meta_lookup(row, "gateway", "model_alias")
+            )
+            if model_alias is None:
+                continue
+            aliases.setdefault(model_alias, []).append(row)
+            owner_id = _ai_model_meta_lookup(row, "managed_agent_id")
+            if isinstance(owner_id, str):
+                owned_aliases.setdefault((model_alias, owner_id), []).append(row)
         for aid, enrollment in latest.items():
             alias = _managed_agent_configured_model_alias(
                 {"managed_config": enrollment.managed_config}
             )
             if alias is None:
                 continue
-            matches = [
-                row
-                for row in source_rows["models"]
-                if _normalize_gateway_model_alias(
-                    _ai_model_meta_lookup(row, "gateway", "model_alias")
-                )
-                == alias
-            ]
-            owned = [
-                row
-                for row in matches
-                if _ai_model_meta_lookup(row, "managed_agent_id") == aid
-            ]
-            matches = owned or matches
+            matches = owned_aliases.get((alias, aid)) or aliases.get(alias, [])
             if len(matches) == 1:
                 model_link(aid, str(matches[0].id), "configured", [])
 

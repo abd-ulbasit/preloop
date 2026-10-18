@@ -151,37 +151,34 @@ export function nodeGaps(node: FleetMapNode): FleetMapGap[] {
 export function blastRadius(
   graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
   selectedId: string
-): { nodes: Set<string>; edges: Set<number> } {
+): { nodes: Set<string> } {
   const ids = new Set(graph.nodes.map((node) => node.id));
   const nodes = new Set<string>();
-  const edges = new Set<number>();
-  if (!ids.has(selectedId)) return { nodes, edges };
-  const neighbours = new Map<string, { id: string; edge: number }[]>();
-  graph.edges.forEach((edge, index) => {
+  if (!ids.has(selectedId)) return { nodes };
+  const neighbours = new Map<string, string[]>();
+  graph.edges.forEach((edge) => {
     if (!ids.has(edge.impact_source) || !ids.has(edge.impact_target)) return;
     const list = neighbours.get(edge.impact_source) || [];
-    list.push({ id: edge.impact_target, edge: index });
+    list.push(edge.impact_target);
     neighbours.set(edge.impact_source, list);
   });
   const queue = [selectedId];
   nodes.add(selectedId);
   for (let i = 0; i < queue.length; i++) {
     for (const next of neighbours.get(queue[i]) || []) {
-      edges.add(next.edge);
-      if (!nodes.has(next.id)) {
-        nodes.add(next.id);
-        queue.push(next.id);
+      if (!nodes.has(next)) {
+        nodes.add(next);
+        queue.push(next);
       }
     }
   }
-  return { nodes, edges };
+  return { nodes };
 }
 
 export interface FleetMapFilters {
   types: ReadonlySet<FleetMapNodeType>;
   owner: string;
   provider: string;
-  gapsOnly: boolean;
 }
 
 /** Facets use permission-filtered server associations, not an undirected walk. */
@@ -197,8 +194,7 @@ export function filterGraph(
         node.owner_ids.includes(filters.owner)) &&
       (!filters.provider ||
         node.id === filters.provider ||
-        node.provider_ids.includes(filters.provider)) &&
-      (!filters.gapsOnly || nodeGaps(node).length > 0)
+        node.provider_ids.includes(filters.provider))
   );
   const ids = new Set(nodes.map((node) => node.id));
   return {

@@ -37,6 +37,7 @@ def model(identifier: str = "model-a", **changes: object) -> Row:
         **(
             dict(
                 id=identifier,
+                account_id="account-a",
                 name=identifier,
                 provider_name="openai",
                 credentials_secret_id="secret-a",
@@ -500,3 +501,108 @@ def test_legacy_fallback_uses_latest_enrollment_when_no_preferred_type_exists(
     assert [edge.target for edge in graph.edges if edge.kind == "uses_model"] == [
         "model:latest"
     ]
+
+
+def test_built_in_binding_preserves_impact_without_operator_credentials(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_ai_model.get_multi.return_value = [model(account_id=None)]
+    with patch(f"{MODULE}.built_in_models_enabled", return_value=True):
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    assert crud.crud_ai_model.get_multi.call_args.kwargs["include_built_in"] is True
+    assert any(
+        e.kind == "uses_model" and e.target == "model:model-a" for e in graph.edges
+    )
+    assert not any(n.type == "provider_account" for n in graph.nodes)
+    assert "secret-a" not in graph.model_dump_json()
+    assert not graph.truncated
+
+
+@pytest.mark.parametrize(
+    ("signals", "expected"),
+    [
+        ({"sleep_signaled_at": datetime.now(UTC)}, "asleep"),
+        ({"free_slots": 0}, "busy"),
+        ({"os_idle_seconds": 600}, "idle"),
+    ],
+)
+def test_runner_presence_matches_console(
+    sources: tuple[MagicMock, MagicMock], signals: dict, expected: str
+) -> None:
+    crud, _ = sources
+    crud.crud_flow_runner.get_multi.return_value = [
+        Row(
+            id="runner-a",
+            name="Example runner",
+            registered_by_user_id=None,
+            status="online",
+            last_heartbeat=datetime.now(UTC),
+            **signals,
+        )
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    runner = next(n for n in graph.nodes if n.type == "runner")
+    assert runner.status == expected
+    assert not runner.gaps
+
+
+def test_legacy_alias_metadata_is_read_once_per_model(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    from preloop.api.endpoints.account import _ai_model_meta_lookup
+
+    crud, _ = sources
+    size = 40
+    crud.crud_managed_agent_ai_model_binding.list_for_fleet_map.return_value = []
+    crud.crud_managed_agent.get_multi.return_value = [
+        agent(f"agent-{i}") for i in range(size)
+    ]
+    crud.crud_ai_model.get_multi.return_value = [
+        model(
+            f"model-{i}",
+            meta_data={
+                "gateway": {"model_alias": "shared"},
+                "managed_agent_id": f"agent-{i}",
+            },
+        )
+        for i in range(size)
+    ]
+    crud.crud_managed_agent_enrollment.list_latest_for_fleet_map.return_value = [
+        Row(
+            managed_agent_id=f"agent-{i}",
+            enrollment_type="cli_managed_config",
+            created_at=datetime.now(UTC),
+            managed_config={"model": "shared"},
+        )
+        for i in range(size)
+    ]
+    with patch(
+        "preloop.api.endpoints.account._ai_model_meta_lookup",
+        wraps=_ai_model_meta_lookup,
+    ) as lookup:
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    assert {(e.source, e.target) for e in graph.edges if e.kind == "uses_model"} == {
+        (f"agent:agent-{i}", f"model:model-{i}") for i in range(size)
+    }
+    assert lookup.call_count <= size * 2
+
+
+def test_runner_model_edge_uses_server_impact_direction(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, _ = sources
+    crud.crud_ai_model.get_multi.return_value = [model(runner_id="runner-a")]
+    crud.crud_flow_runner.get_multi.return_value = [
+        Row(
+            id="runner-a",
+            name="Example runner",
+            registered_by_user_id=None,
+            status="online",
+            last_heartbeat=datetime.now(UTC),
+        )
+    ]
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    link = next(e for e in graph.edges if e.kind == "runs_on")
+    assert (link.source, link.target) == ("model:model-a", "runner:runner-a")
+    assert (link.impact_source, link.impact_target) == (link.target, link.source)

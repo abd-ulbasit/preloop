@@ -47,10 +47,32 @@ export class FleetMap extends LitElement {
   @state() private owner = '';
   @state() private provider = '';
   @state() private focusGap: FleetMapGapCode | '' = '';
-  @state() private scale = 1;
-  @state() private translateX = 24;
-  @state() private translateY = 24;
+  private scale = 1;
+  private translateX = 24;
+  private translateY = 24;
   private pan: { id: number; x: number; y: number } | null = null;
+
+  private viewCache?: {
+    graph: FleetMapGraph | null;
+    types: Set<FleetMapNodeType>;
+    owner: string;
+    provider: string;
+    view: FleetMapGraph;
+    layout: ReturnType<typeof layoutGraph>;
+  };
+
+  /** Gestures change only the transform and zoom label, never graph templates. */
+  private applyTransform(): void {
+    const plane = this.shadowRoot?.querySelector<HTMLElement>('.plane');
+    if (plane)
+      plane.style.transform = `translate(${this.translateX}px,${this.translateY}px) scale(${this.scale})`;
+    const zoom = this.shadowRoot?.querySelector('.zoom');
+    if (zoom) zoom.textContent = `${Math.round(this.scale * 100)}%`;
+  }
+
+  protected updated(): void {
+    this.applyTransform();
+  }
 
   // The Agents canvas uses the same transformed Lit nodes, SVG links and
   // pointer-centred zoom. Keep the map keyboard-scrollable via its controls.
@@ -65,13 +87,14 @@ export class FleetMap extends LitElement {
     this.translateX = x - ((x - this.translateX) * next) / this.scale;
     this.translateY = y - ((y - this.translateY) * next) / this.scale;
     this.scale = next;
+    this.applyTransform();
   }
 
   private fit(): void {
     const bounds = this.shadowRoot
       ?.querySelector('.stage')
       ?.getBoundingClientRect();
-    const layout = layoutGraph(this.visible());
+    const layout = this.layout();
     if (!bounds || !layout.width) return;
     this.scale = Math.max(
       0.15,
@@ -86,6 +109,7 @@ export class FleetMap extends LitElement {
       56,
       (bounds.height - layout.height * this.scale) / 2
     );
+    this.applyTransform();
   }
 
   private pointerDown(event: PointerEvent): void {
@@ -103,6 +127,7 @@ export class FleetMap extends LitElement {
     if (this.pan?.id !== event.pointerId) return;
     this.translateX = event.clientX - this.pan.x;
     this.translateY = event.clientY - this.pan.y;
+    this.applyTransform();
   }
 
   private pointerUp(event: PointerEvent): void {
@@ -593,22 +618,43 @@ export class FleetMap extends LitElement {
   }
 
   private visible(): FleetMapGraph {
-    if (!this.graph)
-      return {
-        schema_version: 1,
-        limit: 500,
-        clusters: [],
-        unavailable: [],
-        truncated: false,
-        nodes: [],
-        edges: [],
-      };
-    return filterGraph(this.graph, {
+    const cached = this.viewCache;
+    if (
+      cached &&
+      cached.graph === this.graph &&
+      cached.types === this.types &&
+      cached.owner === this.owner &&
+      cached.provider === this.provider
+    )
+      return cached.view;
+    const graph = this.graph ?? {
+      schema_version: 1,
+      limit: 500,
+      clusters: [],
+      unavailable: [],
+      truncated: false,
+      nodes: [],
+      edges: [],
+    };
+    const view = filterGraph(graph, {
       types: this.types,
       owner: this.owner,
       provider: this.provider,
-      gapsOnly: false,
     });
+    this.viewCache = {
+      graph: this.graph,
+      types: this.types,
+      owner: this.owner,
+      provider: this.provider,
+      view,
+      layout: layoutGraph(view),
+    };
+    return view;
+  }
+
+  private layout(): ReturnType<typeof layoutGraph> {
+    this.visible();
+    return this.viewCache!.layout;
   }
 
   private select(id: string): void {
@@ -617,7 +663,7 @@ export class FleetMap extends LitElement {
     this.focusGap = '';
     // The panel covers the right of the stage; keep the selection in view.
     const stage = this.shadowRoot?.querySelector('.stage');
-    const position = layoutGraph(this.visible()).positions.get(id);
+    const position = this.layout().positions.get(id);
     if (!stage || !position) return;
     const right =
       this.translateX + (position.x + FLEET_MAP_NODE_WIDTH) * this.scale;
@@ -629,6 +675,7 @@ export class FleetMap extends LitElement {
     const left = this.translateX + position.x * this.scale;
     if (left < 24) this.translateX += 24 - left;
     if (narrow) this.translateY = 64 - position.y * this.scale;
+    this.applyTransform();
   }
 
   private toggleType(type: FleetMapNodeType): void {
@@ -650,7 +697,10 @@ export class FleetMap extends LitElement {
     if (event.key === 'ArrowRight') this.translateX -= step;
     if (event.key === 'ArrowUp') this.translateY += step;
     if (event.key === 'ArrowDown') this.translateY -= step;
-    if (event.key.startsWith('Arrow')) event.preventDefault();
+    if (event.key.startsWith('Arrow')) {
+      event.preventDefault();
+      this.applyTransform();
+    }
   };
 
   private renderFilters(graph: FleetMapGraph, shown: number) {
@@ -935,7 +985,7 @@ export class FleetMap extends LitElement {
         model to connect the map.
       </div>`;
     const view = this.visible();
-    const layout = layoutGraph(view);
+    const layout = this.layout();
     const radius =
       this.selected && graph.nodes.some((node) => node.id === this.selected)
         ? blastRadius(graph, this.selected)
@@ -1061,7 +1111,7 @@ export class FleetMap extends LitElement {
           >
             −
           </button>
-          <span class="zoom">${Math.round(this.scale * 100)}%</span>
+          <span class="zoom"></span>
           <button
             type="button"
             @click=${() => this.zoom(1.25)}
