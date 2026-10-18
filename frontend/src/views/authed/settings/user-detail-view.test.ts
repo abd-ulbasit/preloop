@@ -2,7 +2,11 @@ import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 import { invalidateApiCaches } from '../../../api';
 import './user-detail-view';
-import { RECENT_SESSION_LIMIT, type UserDetailView } from './user-detail-view';
+import {
+  RECENT_SESSION_LIMIT,
+  teamsForUser,
+  type UserDetailView,
+} from './user-detail-view';
 
 const USER = {
   id: 'user-1',
@@ -393,6 +397,64 @@ describe('user-detail-view', () => {
     await settled(el);
     expect(card(el, 'devices')).to.not.exist;
     expect(card(el, 'runners')).to.exist;
+  });
+
+  it('never draws a Devices skeleton for a reader without the fleet', async () => {
+    fetchStub = stubFetch({ fleet: false });
+    const el = await mount();
+    let sawDevices = false;
+    await waitUntil(() => {
+      if (card(el, 'devices')) sawDevices = true;
+      return (
+        root(el).querySelector('[data-testid="user-facts"]') &&
+        !root(el).querySelector('sl-skeleton')
+      );
+    }, 'sections did not settle');
+    expect(sawDevices).to.be.false;
+  });
+
+  it('finds teams past the first page, a few member reads at a time', async () => {
+    const teams = Array.from({ length: 150 }, (_, i) => ({
+      id: `team-${i}`,
+      name: `Team ${String(i).padStart(3, '0')}`,
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    fetchStub = sinon.stub(window, 'fetch').callsFake(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const respond = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      const page = url.match(/\/api\/v1\/teams\?skip=(\d+)&limit=(\d+)/);
+      if (page) {
+        const skip = Number(page[1]);
+        const limit = Number(page[2]);
+        return respond({
+          teams: teams.slice(skip, skip + limit),
+          total: teams.length,
+          skip,
+          limit,
+        });
+      }
+      const members = url.match(/\/api\/v1\/teams\/(team-\d+)\/members/);
+      if (members) {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return respond(
+          members[1] === 'team-140' ? [{ user_id: 'user-1' }] : []
+        );
+      }
+      return respond({});
+    });
+
+    const mine = await teamsForUser('user-1');
+
+    expect(mine.map((team) => team.id)).to.eql(['team-140']);
+    expect(peak).to.be.at.most(6);
   });
 
   it('says so where user management is not available', async () => {

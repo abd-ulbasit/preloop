@@ -104,8 +104,16 @@ export function userDisplayName(user: User): string {
   return user.full_name || user.username || user.email || 'Unknown user';
 }
 
+/** How many team member lists are read at once. */
+const TEAM_MEMBER_CONCURRENCY = 6;
+const TEAMS_PAGE = 100;
+
 /**
  * Teams the user belongs to, from the account's teams and their members.
+ *
+ * There is no per-user teams endpoint, so every page of teams is read (an
+ * account past the first hundred is not cut off) and their member lists are
+ * asked a few at a time rather than all at once.
  *
  * Args:
  *   userId: The account member.
@@ -114,15 +122,28 @@ export function userDisplayName(user: User): string {
  *   The teams that list the user as a member, by name.
  */
 export async function teamsForUser(userId: string): Promise<Team[]> {
-  const { teams } = await getTeams(0, 100);
-  const members = await Promise.all(
-    teams.map((team) => getTeamMembers(team.id))
-  );
-  return teams
-    .filter((_team, index) =>
-      members[index].some((member) => member.user_id === userId)
+  const teams: Team[] = [];
+  for (let skip = 0; ; skip += TEAMS_PAGE) {
+    const page = await getTeams(skip, TEAMS_PAGE);
+    teams.push(...page.teams);
+    if (page.teams.length < TEAMS_PAGE || teams.length >= page.total) break;
+  }
+  const mine: Team[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < teams.length) {
+      const team = teams[next++];
+      const members = await getTeamMembers(team.id);
+      if (members.some((member) => member.user_id === userId)) mine.push(team);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(TEAM_MEMBER_CONCURRENCY, teams.length) },
+      worker
     )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  );
+  return mine.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function errorText(error: unknown, fallback: string): string {
@@ -147,7 +168,7 @@ export class UserDetailView extends LitElement {
   @state() private user: Section<UserDetail> = LOADING;
   @state() private teams: Section<Team[]> = LOADING;
   /** Null when the reader may not see the device fleet: no section at all. */
-  @state() private devices: Section<DeviceFleetDevice[]> | null = LOADING;
+  @state() private devices: Section<DeviceFleetDevice[]> | null = null;
   @state() private runners: Section<RunnerRecord[]> = LOADING;
   @state() private agents: Section<ManagedAgentSummary[]> = LOADING;
   @state() private sessions: Section<RuntimeSessionSummary[]> = LOADING;
@@ -411,6 +432,15 @@ export class UserDetailView extends LitElement {
       (this as unknown as Record<SectionKey, Section<unknown> | null>)[key] =
         value;
     };
+    // The Devices card exists only for a reader who may see the fleet, so
+    // access is settled before a skeleton is drawn for it.
+    if (key === 'devices') {
+      const access = await fleetAccess().catch(() => ({ view: false }));
+      if (!access.view) {
+        set(null);
+        return;
+      }
+    }
     set(LOADING);
     try {
       switch (key) {
@@ -418,11 +448,6 @@ export class UserDetailView extends LitElement {
           set({ status: 'ready', data: await teamsForUser(userId) });
           break;
         case 'devices': {
-          const access = await fleetAccess();
-          if (!access.view) {
-            set(null);
-            break;
-          }
           const page = await getDeviceFleet();
           set({
             status: 'ready',

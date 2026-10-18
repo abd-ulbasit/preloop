@@ -1094,3 +1094,24 @@ def test_resolve_agent_filters_owner_without_agents_is_empty_not_unfiltered(
 
     assert principals == []
     assert source_types is None
+
+
+def test_resolve_agent_filters_owner_with_kind_never_widens_to_source_type(
+    service,
+):
+    """A kind filter's source-type match must not undo the owner filter."""
+    owner = uuid.uuid4()
+    agents = [
+        _managed_agent_row(owner, "mine", kind="codex"),
+        _managed_agent_row(uuid.uuid4(), "theirs", kind="codex"),
+    ]
+    with patch.object(service, "_account_managed_agents", return_value=agents):
+        principals, source_types = service._resolve_agent_filters(
+            account=_make_account(),
+            agent=None,
+            agent_kind="codex",
+            owner_user_id=str(owner),
+        )
+
+    assert principals == [("managed_agent", "mine")]
+    assert source_types is None
