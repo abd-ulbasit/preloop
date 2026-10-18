@@ -14,6 +14,7 @@ import {
   layoutGraph,
   nodeColumn,
   nodeGaps,
+  type FleetMapGapCode,
   type FleetMapGraph,
   type FleetMapNode,
   type FleetMapNodeType,
@@ -45,7 +46,7 @@ export class FleetMap extends LitElement {
   @state() private types = new Set<FleetMapNodeType>(FLEET_MAP_COLUMNS);
   @state() private owner = '';
   @state() private provider = '';
-  @state() private gapsOnly = false;
+  @state() private focusGap: FleetMapGapCode | '' = '';
   @state() private scale = 1;
   @state() private translateX = 24;
   @state() private translateY = 24;
@@ -77,11 +78,14 @@ export class FleetMap extends LitElement {
       Math.min(
         1,
         (bounds.width - 48) / layout.width,
-        (bounds.height - 48) / layout.height
+        (bounds.height - 96) / layout.height
       )
     );
     this.translateX = (bounds.width - layout.width * this.scale) / 2;
-    this.translateY = 24;
+    this.translateY = Math.max(
+      56,
+      (bounds.height - layout.height * this.scale) / 2
+    );
   }
 
   private pointerDown(event: PointerEvent): void {
@@ -120,109 +124,125 @@ export class FleetMap extends LitElement {
       .filters {
         display: flex;
         flex-wrap: wrap;
-        gap: var(--sl-spacing-small) var(--sl-spacing-medium);
-        align-items: end;
-        margin-bottom: var(--sl-spacing-medium);
+        gap: var(--sl-spacing-small) var(--sl-spacing-large);
+        align-items: center;
+        margin-bottom: var(--sl-spacing-small);
       }
       .filters label {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
       }
       .filters select {
         font: inherit;
+        font-size: var(--console-text-body);
         color: var(--console-body-color);
         background: var(--console-button-face);
         border: 1px solid var(--console-button-border);
-        border-radius: 4px;
+        border-radius: var(--sl-border-radius-medium);
         padding: 4px 8px;
-        min-height: 30px;
-      }
-      .filters label.check {
-        flex-direction: row;
-        align-items: center;
-        gap: 6px;
-        color: inherit;
-        font-size: var(--console-text-body);
+        min-height: 32px;
       }
       .type-toggles {
-        display: flex;
+        display: inline-flex;
         flex-wrap: wrap;
         gap: 4px;
         border: 0;
         margin: 0;
         padding: 0;
       }
-      .type-toggles legend {
-        font-size: var(--console-text-meta);
-        color: var(--console-meta-color);
-        margin-bottom: 4px;
-        padding: 0;
-      }
-      .type-toggles button {
+      .type-toggles button,
+      .gap-chip {
         font: inherit;
-        font-size: 12px;
+        font-size: var(--console-text-meta);
         font-weight: 500;
         border: 1px solid var(--console-hairline);
         background: transparent;
         color: var(--console-meta-color);
         border-radius: 999px;
-        padding: 2px 10px;
+        padding: 3px 12px;
+        min-height: 28px;
         cursor: pointer;
       }
       .type-toggles button[aria-pressed='true'] {
-        color: inherit;
+        color: var(--console-body-color);
         border-color: var(--sl-color-neutral-400);
+      }
+      .type-toggles button:hover,
+      .gap-chip:hover {
+        background: var(--console-hover-tint);
       }
       .count {
         margin-left: auto;
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
+        font-variant-numeric: tabular-nums;
       }
-      .canvas-tools {
+      .gaps {
         display: flex;
-        gap: 8px;
+        flex-wrap: wrap;
         align-items: center;
-        margin-bottom: 8px;
-      }
-      .canvas-tools button {
-        font: inherit;
-        font-size: var(--console-text-meta);
-        color: var(--console-body-color);
-        background: var(--console-button-face);
-        border: 1px solid var(--console-button-border);
-        border-radius: 4px;
-        min-width: 36px;
-        min-height: 32px;
-        cursor: pointer;
-      }
-      .canvas-tools span {
+        gap: 6px 8px;
+        margin-bottom: var(--sl-spacing-small);
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
       }
-      .layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 300px;
-        gap: var(--sl-spacing-medium);
-        align-items: start;
+      .gaps .title {
+        font-weight: 600;
+        color: var(--console-body-color);
+        margin-right: 4px;
       }
-      .layout.no-panel {
-        grid-template-columns: minmax(0, 1fr);
+      .gaps .title sl-icon {
+        color: var(--sl-color-warning-600);
+        vertical-align: -2px;
+        margin-right: 4px;
+      }
+      .gap-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--console-body-color);
+        border-color: color-mix(
+          in srgb,
+          var(--sl-color-warning-500) 40%,
+          transparent
+        );
+      }
+      .gap-chip strong {
+        font-variant-numeric: tabular-nums;
+        color: var(--sl-color-warning-700);
+      }
+      .gap-chip[aria-pressed='true'] {
+        background: color-mix(
+          in srgb,
+          var(--sl-color-warning-500) 16%,
+          transparent
+        );
+        border-color: var(--sl-color-warning-600);
       }
       .stage {
         position: relative;
         overflow: hidden;
         touch-action: none;
         cursor: grab;
-        height: min(62vh, 620px);
-        min-height: 360px;
+        height: max(480px, calc(100vh - 340px));
         background: var(--console-page);
-        border: var(--console-card-border);
-        box-shadow: var(--console-card-shadow);
+        border: 1px solid var(--console-hairline);
         border-radius: var(--console-card-radius);
-        padding: 0;
+        background-image: radial-gradient(
+          color-mix(in srgb, var(--sl-color-neutral-500) 22%, transparent) 1px,
+          transparent 1px
+        );
+        background-size: 24px 24px;
+      }
+      .stage:active {
+        cursor: grabbing;
+      }
+      .stage:focus-visible {
+        outline: 2px solid var(--sl-color-primary-600);
+        outline-offset: 2px;
       }
       .plane {
         position: relative;
@@ -236,7 +256,11 @@ export class FleetMap extends LitElement {
       }
       .edge {
         fill: none;
-        stroke: var(--sl-color-neutral-400);
+        stroke: color-mix(
+          in srgb,
+          var(--sl-color-neutral-500) 70%,
+          transparent
+        );
         stroke-width: 1.25;
         transition:
           opacity 150ms,
@@ -253,27 +277,33 @@ export class FleetMap extends LitElement {
         stroke-width: 2;
       }
       .edge.dim {
-        opacity: 0.15;
+        opacity: 0.12;
       }
       .column-title {
         position: absolute;
         top: 0;
+        width: ${FLEET_MAP_NODE_WIDTH}px;
         font-size: var(--console-text-eyebrow);
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.04em;
         color: var(--console-meta-color);
       }
+      .column-title .n {
+        font-weight: 500;
+        margin-left: 4px;
+        font-variant-numeric: tabular-nums;
+      }
       .node {
         position: absolute;
         box-sizing: border-box;
         display: grid;
-        grid-template-columns: 28px minmax(0, 1fr) auto;
+        grid-template-columns: 30px minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
-        padding: 6px 10px;
+        padding: 6px 10px 6px 8px;
         border-radius: var(--sl-border-radius-large);
-        border: var(--console-card-border);
+        border: 1px solid var(--console-hairline);
         background: var(--console-surface);
         cursor: pointer;
         text-align: left;
@@ -290,20 +320,30 @@ export class FleetMap extends LitElement {
         outline: 2px solid var(--sl-color-primary-600);
         outline-offset: 2px;
       }
+      .node.has-gap {
+        border-color: color-mix(
+          in srgb,
+          var(--sl-color-warning-500) 45%,
+          transparent
+        );
+      }
       .node.selected {
         border-color: var(--sl-color-primary-600);
         box-shadow: 0 0 0 1px var(--sl-color-primary-600);
       }
+      .node.focus {
+        border-color: var(--sl-color-warning-600);
+        box-shadow: 0 0 0 1px var(--sl-color-warning-600);
+      }
       .node.dim {
-        opacity: 0.3;
+        opacity: 0.28;
       }
       .node.cluster {
         border-style: dashed;
-        box-shadow: none;
       }
       .node .glyph {
-        width: 28px;
-        height: 28px;
+        width: 30px;
+        height: 30px;
         border-radius: 50%;
         display: grid;
         place-items: center;
@@ -312,7 +352,8 @@ export class FleetMap extends LitElement {
           var(--sl-color-neutral-500) 14%,
           transparent
         );
-        font-size: 14px;
+        color: var(--console-body-color);
+        font-size: 15px;
       }
       .node.selected .glyph,
       .node.lit .glyph {
@@ -327,10 +368,10 @@ export class FleetMap extends LitElement {
         display: flex;
         flex-direction: column;
         min-width: 0;
-        line-height: 1.25;
+        line-height: 1.3;
       }
       .node .label {
-        font-size: 13px;
+        font-size: var(--console-text-body);
         font-weight: 600;
         white-space: nowrap;
         overflow: hidden;
@@ -343,36 +384,52 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .node .sub.warn {
+        color: var(--sl-color-warning-700);
+      }
       .gap-dot {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
         display: grid;
         place-items: center;
-        font-size: 11px;
-        font-weight: 600;
-        background: color-mix(
-          in srgb,
-          var(--sl-color-warning-500) 16%,
-          transparent
-        );
-        color: var(--sl-color-warning-800);
+        font-size: 14px;
+        color: var(--sl-color-warning-600);
       }
-      .gap-dot.danger {
-        background: color-mix(
-          in srgb,
-          var(--sl-color-danger-500) 16%,
-          transparent
-        );
-        color: var(--sl-color-danger-800);
-      }
-      .legend {
+      .overlay {
+        position: absolute;
         display: flex;
-        flex-wrap: wrap;
-        gap: var(--sl-spacing-medium);
-        margin-top: var(--sl-spacing-small);
+        gap: 4px;
+        align-items: center;
+        z-index: 2;
+      }
+      .canvas-tools {
+        top: 12px;
+        right: 12px;
+      }
+      .canvas-tools button {
+        font: inherit;
+        font-size: var(--console-text-meta);
+        color: var(--console-body-color);
+        background: var(--console-surface-raised, var(--console-surface));
+        border: 1px solid var(--console-hairline);
+        border-radius: var(--sl-border-radius-medium);
+        min-width: 32px;
+        min-height: 32px;
+        padding: 0 10px;
+        cursor: pointer;
+      }
+      .canvas-tools .zoom {
+        min-width: 44px;
+        text-align: center;
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
+        font-variant-numeric: tabular-nums;
+      }
+      .legend {
+        left: 12px;
+        bottom: 10px;
+        gap: var(--sl-spacing-medium);
+        font-size: var(--console-text-meta);
+        color: var(--console-meta-color);
+        pointer-events: none;
       }
       .legend span {
         display: inline-flex;
@@ -380,34 +437,48 @@ export class FleetMap extends LitElement {
         gap: 6px;
       }
       .legend svg {
-        width: 28px;
+        width: 24px;
         height: 8px;
       }
       .panel {
-        background: var(--console-surface);
-        border: var(--console-card-border);
-        box-shadow: var(--console-card-shadow);
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: 320px;
+        z-index: 3;
+        box-sizing: border-box;
+        background: var(--console-surface-raised, var(--console-surface));
+        border: 1px solid var(--console-hairline);
+        box-shadow: var(--sl-shadow-large);
         border-radius: var(--console-card-radius);
         padding: var(--sl-spacing-medium) var(--sl-spacing-large);
-        position: sticky;
-        top: var(--sl-spacing-medium);
-        max-height: 72vh;
         overflow: auto;
+        cursor: auto;
       }
       .panel h3 {
-        margin: 0;
+        margin: 2px 0 0;
         font-size: var(--console-text-card-title);
+        padding-right: 24px;
       }
       .panel .eyebrow {
         font-size: var(--console-text-eyebrow);
         font-weight: 600;
         text-transform: uppercase;
+        letter-spacing: 0.04em;
         color: var(--console-meta-color);
       }
       .panel h4 {
-        margin: var(--sl-spacing-medium) 0 4px;
-        font-size: var(--console-text-meta);
+        margin: var(--sl-spacing-large) 0 2px;
+        font-size: var(--console-text-card-title);
         font-weight: 600;
+      }
+      .panel .group {
+        margin: var(--sl-spacing-small) 0 0;
+        font-size: var(--console-text-eyebrow);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
         color: var(--console-meta-color);
       }
       .panel ul {
@@ -416,15 +487,20 @@ export class FleetMap extends LitElement {
         padding: 0;
       }
       .panel li {
-        padding: 4px 0;
+        padding: 6px 0;
         border-top: 1px solid var(--console-hairline);
         font-size: var(--console-text-body);
         display: flex;
+        flex-wrap: wrap;
+        align-items: center;
         justify-content: space-between;
-        gap: 8px;
+        gap: 4px 8px;
       }
       .panel li:first-child {
         border-top: 0;
+      }
+      .panel li .act {
+        font-size: var(--console-text-meta);
       }
       .panel a {
         color: var(--console-link-color);
@@ -432,55 +508,59 @@ export class FleetMap extends LitElement {
       .panel .meta {
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
+        margin: 4px 0 0;
+      }
+      .panel .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: var(--sl-spacing-small);
       }
       .panel .actions {
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+        flex-direction: column;
+        gap: 4px;
         margin-top: var(--sl-spacing-small);
+        font-size: var(--console-text-body);
+      }
+      .panel .reach {
+        font-size: var(--console-text-body);
+        margin: 2px 0 0;
       }
       .close {
-        float: right;
+        position: absolute;
+        top: 8px;
+        right: 8px;
         background: none;
         border: 0;
         cursor: pointer;
         color: var(--console-meta-color);
-        font-size: 16px;
+        font-size: 18px;
+        width: 32px;
+        height: 32px;
+      }
+      .notice {
+        font-size: var(--console-text-meta);
+        color: var(--console-meta-color);
+        margin: 0 0 var(--sl-spacing-small);
       }
       .empty-state {
         min-height: 72px;
+        height: 100%;
         display: grid;
         place-items: center;
         text-align: center;
         color: var(--console-meta-color);
       }
       @media (max-width: 900px) {
-        .canvas-tools {
-          display: flex;
-          gap: 8px;
-          align-items: center;
-          margin-bottom: 8px;
-        }
-        .canvas-tools button {
-          font: inherit;
-          font-size: var(--console-text-meta);
-          color: var(--console-body-color);
-          background: var(--console-button-face);
-          border: 1px solid var(--console-button-border);
-          border-radius: 4px;
-          min-width: 36px;
-          min-height: 32px;
-          cursor: pointer;
-        }
-        .canvas-tools span {
-          font-size: var(--console-text-meta);
-          color: var(--console-meta-color);
-        }
-        .layout {
-          grid-template-columns: minmax(0, 1fr);
-        }
         .panel {
-          position: static;
+          left: 12px;
+          width: auto;
+          top: auto;
+          max-height: 60%;
+        }
+        .legend {
+          display: none;
         }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -517,12 +597,22 @@ export class FleetMap extends LitElement {
       types: this.types,
       owner: this.owner,
       provider: this.provider,
-      gapsOnly: this.gapsOnly,
+      gapsOnly: false,
     });
   }
 
   private select(id: string): void {
     this.selected = this.selected === id ? '' : id;
+    if (!this.selected) return;
+    this.focusGap = '';
+    // The panel covers the right of the stage; keep the selection in view.
+    const stage = this.shadowRoot?.querySelector('.stage');
+    const position = layoutGraph(this.visible()).positions.get(id);
+    if (!stage || !position) return;
+    const right =
+      this.translateX + (position.x + FLEET_MAP_NODE_WIDTH) * this.scale;
+    const limit = stage.getBoundingClientRect().width - 356;
+    if (right > limit) this.translateX -= right - limit;
   }
 
   private toggleType(type: FleetMapNodeType): void {
@@ -533,7 +623,10 @@ export class FleetMap extends LitElement {
   }
 
   private onKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') this.selected = '';
+    if (event.key === 'Escape') {
+      this.selected = '';
+      this.focusGap = '';
+    }
     if (event.key === '+' || event.key === '=') this.zoom(1.25);
     if (event.key === '-') this.zoom(0.8);
     const step = 48;
@@ -548,13 +641,9 @@ export class FleetMap extends LitElement {
     const people = graph.nodes.filter((node) => node.type === 'user');
     const providers = graph.nodes.filter((node) => node.type === 'provider');
     const filtered =
-      this.owner ||
-      this.provider ||
-      this.gapsOnly ||
-      this.types.size < FLEET_MAP_COLUMNS.length;
+      this.owner || this.provider || this.types.size < FLEET_MAP_COLUMNS.length;
     return html`<div class="filters">
-      <fieldset class="type-toggles">
-        <legend>Show</legend>
+      <fieldset class="type-toggles" aria-label="Show">
         ${FLEET_MAP_COLUMNS.map(
           (type) =>
             html`<button
@@ -592,18 +681,54 @@ export class FleetMap extends LitElement {
           )}
         </select></label
       >
-      <label class="check"
-        ><input
-          type="checkbox"
-          .checked=${this.gapsOnly}
-          @change=${(e: Event) =>
-            (this.gapsOnly = (e.target as HTMLInputElement).checked)}
-        />Only what has gaps</label
-      >
       <span class="count" aria-live="polite"
         >${filtered ? `${shown} of ${graph.nodes.length}` : graph.nodes.length}
         node${graph.nodes.length === 1 ? '' : 's'}</span
       >
+    </div>`;
+  }
+
+  /**
+   * One line naming every kind of gap in the loaded map with its count.
+   * A chip lights the nodes that carry that gap, so "1 runner offline" is
+   * a way to find it, not a number to take on trust.
+   */
+  private renderGaps(graph: FleetMapGraph) {
+    const counts = new Map<FleetMapGapCode, { label: string; n: number }>();
+    for (const node of graph.nodes)
+      for (const gap of nodeGaps(node)) {
+        const entry = counts.get(gap.code);
+        if (entry) entry.n += 1;
+        else counts.set(gap.code, { label: gap.label, n: 1 });
+      }
+    if (!counts.size)
+      return html`<div class="gaps" data-testid="fleet-map-gaps">
+        <span>No governance gaps in this map.</span>
+      </div>`;
+    return html`<div
+      class="gaps"
+      role="group"
+      aria-label="Governance gaps"
+      data-testid="fleet-map-gaps"
+    >
+      <span class="title"
+        ><sl-icon name="exclamation-triangle-fill"></sl-icon>Gaps</span
+      >
+      ${[...counts].map(
+        ([code, { label, n }]) =>
+          html`<button
+            type="button"
+            class="gap-chip"
+            data-gap=${code}
+            aria-pressed=${this.focusGap === code ? 'true' : 'false'}
+            @click=${() => {
+              this.focusGap = this.focusGap === code ? '' : code;
+              if (this.focusGap) this.selected = '';
+            }}
+          >
+            <strong>${n}</strong>${GAP_CHIP_LABEL[code] ?? label}
+          </button>`
+      )}
     </div>`;
   }
 
@@ -614,18 +739,22 @@ export class FleetMap extends LitElement {
     lit: Set<string> | null
   ) {
     const gaps = nodeGaps(node);
-    const danger = gaps.some((gap) => gap.severity === 'danger');
+    const focused = !!this.focusGap && node.gaps.includes(this.focusGap);
     const classes = [
       'node',
       node.type === 'cluster' ? 'cluster' : '',
+      gaps.length ? 'has-gap' : '',
       node.id === this.selected ? 'selected' : '',
+      focused ? 'focus' : '',
       lit && lit.has(node.id) && node.id !== this.selected ? 'lit' : '',
-      lit && !lit.has(node.id) ? 'dim' : '',
+      (lit && !lit.has(node.id)) || (this.focusGap && !focused) ? 'dim' : '',
     ].join(' ');
     const sub =
       node.type === 'cluster'
         ? `${node.count ?? ''} grouped`
-        : node.detail || FLEET_MAP_TYPE_LABEL[node.type];
+        : gaps.length
+          ? gaps.map((gap) => gap.label).join(' · ')
+          : node.detail || FLEET_MAP_TYPE_LABEL[node.type];
     return html`<button
       type="button"
       class=${classes}
@@ -635,21 +764,23 @@ export class FleetMap extends LitElement {
       aria-label="${FLEET_MAP_TYPE_LABEL[node.type]} ${node.label}${
         gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''
       }"
-      title=${gaps.length ? gaps.map((gap) => gap.label).join('\n') : node.label}
+      title="${node.label}${node.detail ? `\n${node.detail}` : ''}${
+        gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''
+      }"
       @click=${() => this.select(node.id)}
     >
       <span class="glyph"><sl-icon name=${ICON[node.type]}></sl-icon></span>
       <span class="text"
         ><span class="label">${node.label}</span
-        ><span class="sub">${sub}</span></span
+        ><span class="sub ${gaps.length ? 'warn' : ''}">${sub}</span></span
       >
       ${
         gaps.length
-          ? html`<span
-              class="gap-dot ${danger ? 'danger' : ''}"
+          ? html`<sl-icon
+              class="gap-dot"
+              name="exclamation-triangle-fill"
               aria-hidden="true"
-              >${gaps.length > 1 ? gaps.length : '!'}</span
-            >`
+            ></sl-icon>`
           : nothing
       }
     </button>`;
@@ -663,19 +794,18 @@ export class FleetMap extends LitElement {
     const dependents = [...reach]
       .filter((id) => id !== node.id)
       .map((id) => byId.get(id) as FleetMapNode);
-    const actions = [
-      ...(node.actions || []),
-      ...dependents.flatMap((item) =>
-        (item.actions || []).map((action) => ({
-          ...action,
-          label: `${action.label}: ${item.label}`,
-        }))
-      ),
-    ];
+    const groups = FLEET_MAP_COLUMNS.map((type) => ({
+      type,
+      items: dependents.filter((item) => nodeColumn(item) === type),
+    })).filter((group) => group.items.length);
+    const people = groups.find((group) => group.type === 'user')?.items.length;
+    const agents = groups.find((group) => group.type === 'agent')?.items.length;
     return html`<aside
       class="panel"
       aria-label="Blast radius"
       data-testid="fleet-map-panel"
+      @pointerdown=${(event: Event) => event.stopPropagation()}
+      @wheel=${(event: Event) => event.stopPropagation()}
     >
       <button
         class="close"
@@ -689,74 +819,90 @@ export class FleetMap extends LitElement {
       <h3>
         ${node.href ? html`<a href=${node.href}>${node.label}</a>` : node.label}
       </h3>
-      ${node.detail ? html`<div class="meta">${node.detail}</div>` : nothing}
+      ${node.detail ? html`<p class="meta">${node.detail}</p>` : nothing}
       ${
         gaps.length
-          ? html`<h4>Gaps</h4>
-              <ul>
-                ${gaps.map(
-                  (gap) =>
-                    html`<li>
-                      <sl-badge class="chip" pill variant=${gap.severity}
-                        >${gap.label}</sl-badge
-                      >
-                    </li>`
-                )}
-              </ul>`
+          ? html`<div class="chips">
+              ${gaps.map(
+                (gap) =>
+                  html`<sl-badge class="chip" pill variant=${gap.severity}
+                    >${gap.label}</sl-badge
+                  >`
+              )}
+            </div>`
           : nothing
       }
       ${
-        actions.length
-          ? html`<h4>Actions</h4>
-              <div class="actions">
-                ${actions.map(
-                  (action) => html`<a href=${action.href}>${action.label}</a>`
-                )}
-              </div>`
+        node.actions?.length
+          ? html`<div class="actions">
+              ${node.actions.map(
+                (action) => html`<a href=${action.href}>${action.label}</a>`
+              )}
+            </div>`
           : nothing
       }
-      ${
-        graph.truncated || graph.unavailable.length
-          ? html`<p class="meta" role="status">
-              Partial map: this impact list may be incomplete.
-            </p>`
-          : nothing
-      }
-      <p class="meta">
-        Dependencies and affected owners in the loaded map. This does not mean
-        these resources are down.
-      </p>
-      <h4>
+      <h4>Blast radius</h4>
+      <p class="reach">
         ${
           dependents.length
-            ? `Blast radius: ${dependents.length} connected`
-            : 'No downstream resources in this map'
+            ? html`Reaches ${dependents.length} connected
+              resource${dependents.length === 1 ? '' : 's'}${
+                agents || people
+                  ? html`, including
+                    ${[
+                      agents ? `${agents} agent${agents === 1 ? '' : 's'}` : '',
+                      people
+                        ? `${people} ${people === 1 ? 'person' : 'people'}`
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' and ')}`
+                  : nothing
+              }.`
+            : 'No downstream resources in this map.'
         }
-      </h4>
-      ${FLEET_MAP_COLUMNS.map((type) => {
-        const items = dependents.filter((item) => nodeColumn(item) === type);
-        if (!items.length) return nothing;
-        return html`<div class="meta">${FLEET_MAP_COLUMN_LABEL[type]}</div>
-          <ul>
-            ${items.map(
-              (item) =>
-                html`<li>
+      </p>
+      <p class="meta">
+        What depends on this in the loaded map, not an outage report.
+        ${
+          graph.truncated || graph.unavailable.length
+            ? html`<span role="status"
+                >Partial map: this impact list may be incomplete.</span
+              >`
+            : nothing
+        }
+      </p>
+      ${groups.map(
+        ({ type, items }) =>
+          html`<div class="group">
+              ${FLEET_MAP_COLUMN_LABEL[type]} · ${items.length}
+            </div>
+            <ul>
+              ${items.map((item) => {
+                const itemGaps = nodeGaps(item);
+                return html`<li>
                   ${
                     item.href
                       ? html`<a href=${item.href}>${item.label}</a>`
                       : html`<span>${item.label}</span>`
                   }
                   ${
-                    nodeGaps(item).length
+                    itemGaps.length
                       ? html`<sl-badge class="chip" pill variant="warning"
-                          >${nodeGaps(item)[0].label}</sl-badge
+                          >${itemGaps[0].label}</sl-badge
                         >`
                       : nothing
                   }
-                </li>`
-            )}
-          </ul>`;
-      })}
+                  ${(item.actions || []).map(
+                    (action) =>
+                      html`<a class="act" href=${action.href}
+                        >${action.label}</a
+                      >`
+                  )}
+                </li>`;
+              })}
+            </ul>`
+      )}
     </aside>`;
   }
 
@@ -778,11 +924,16 @@ export class FleetMap extends LitElement {
         : null;
     const lit = radius ? radius.nodes : null;
     const byId = new Map(view.nodes.map((node) => [node.id, node]));
+    const perColumn = new Map<string, number>();
+    for (const node of view.nodes)
+      if (node.type !== 'cluster')
+        perColumn.set(node.type, (perColumn.get(node.type) || 0) + 1);
     const half = FLEET_MAP_NODE_HEIGHT / 2;
     return html`${this.renderFilters(graph, view.nodes.length)}
+      ${this.renderGaps(graph)}
       ${
         graph.unavailable.length
-          ? html`<p class="meta" role="status">
+          ? html`<p class="notice" role="status">
               Device evidence is unavailable. Refresh when fleet collection is
               available; existing agents and model configuration remain visible.
               Blast radius is incomplete.
@@ -791,7 +942,7 @@ export class FleetMap extends LitElement {
       }
       ${
         graph.truncated
-          ? html`<p class="meta" role="status">
+          ? html`<p class="notice" role="status">
               This map is capped at ${graph.limit} resources. Summary groups
               show omitted resources; filters only narrow the loaded map. Blast
               radius is incomplete. Use the table or resource pages to inspect
@@ -799,133 +950,140 @@ export class FleetMap extends LitElement {
             </p>`
           : nothing
       }
-      <div class="layout ${radius ? '' : 'no-panel'}">
-        <div>
-          <div class="canvas-tools" role="group" aria-label="Map navigation">
-            <button
-              type="button"
-              @click=${() => this.zoom(1.25)}
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              @click=${() => this.zoom(0.8)}
-              aria-label="Zoom out"
-            >
-              −
-            </button>
-            <button type="button" @click=${this.fit}>Fit map</button>
-            <span
-              >${Math.round(this.scale * 100)}% · Drag to pan, scroll to
-              zoom</span
-            >
-          </div>
-          <div
-            class="stage"
-            tabindex="0"
-            role="region"
-            aria-label="Fleet dependency map"
-            @keydown=${this.onKeydown}
-            @wheel=${(event: WheelEvent) => {
-              event.preventDefault();
-              this.zoom(
-                Math.exp(-event.deltaY * 0.001),
-                event.clientX,
-                event.clientY
-              );
-            }}
-            @pointerdown=${this.pointerDown}
-            @pointermove=${this.pointerMove}
-            @pointerup=${this.pointerUp}
-            @pointercancel=${this.pointerUp}
-            data-testid="fleet-map"
+      <div
+        class="stage"
+        tabindex="0"
+        role="region"
+        aria-label="Fleet dependency map"
+        @keydown=${this.onKeydown}
+        @wheel=${(event: WheelEvent) => {
+          event.preventDefault();
+          this.zoom(
+            Math.exp(-event.deltaY * 0.001),
+            event.clientX,
+            event.clientY
+          );
+        }}
+        @pointerdown=${this.pointerDown}
+        @pointermove=${this.pointerMove}
+        @pointerup=${this.pointerUp}
+        @pointercancel=${this.pointerUp}
+        data-testid="fleet-map"
+      >
+        ${
+          view.nodes.length
+            ? html`<div
+                class="plane"
+                style="width:${layout.width}px;height:${layout.height}px;transform:translate(${this.translateX}px,${this.translateY}px) scale(${this.scale})"
+              >
+                ${layout.columns.map(
+                  (column) =>
+                    html`<div class="column-title" style="left:${column.x}px">
+                      ${FLEET_MAP_COLUMN_LABEL[column.type]}<span class="n"
+                        >${perColumn.get(column.type) ?? ''}</span
+                      >
+                    </div>`
+                )}
+                <svg
+                  width=${layout.width}
+                  height=${layout.height}
+                  aria-hidden="true"
+                >
+                  ${view.edges.map((edge) => {
+                    const a = layout.positions.get(edge.source);
+                    const b = layout.positions.get(edge.target);
+                    const na = byId.get(edge.source);
+                    const nb = byId.get(edge.target);
+                    if (!a || !b || !na || !nb) return nothing;
+                    const [left, right] = a.x <= b.x ? [a, b] : [b, a];
+                    const x1 = left.x + FLEET_MAP_NODE_WIDTH;
+                    const y1 = left.y + half;
+                    const x2 = right.x;
+                    const y2 = right.y + half;
+                    const mid = (x1 + x2) / 2;
+                    const inRadius =
+                      radius?.nodes.has(edge.impact_source) &&
+                      radius.nodes.has(edge.impact_target);
+                    const focused =
+                      !!this.focusGap &&
+                      (na.gaps.includes(this.focusGap) ||
+                        nb.gaps.includes(this.focusGap));
+                    const cls = [
+                      'edge',
+                      edge.provenance,
+                      edge.gaps.length ? 'gap' : '',
+                      inRadius ? 'lit' : '',
+                      (radius && !inRadius) || (this.focusGap && !focused)
+                        ? 'dim'
+                        : '',
+                    ].join(' ');
+                    return svg`<path class=${cls} d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}</title></path>`;
+                  })}
+                </svg>
+                ${view.nodes.map((node) => {
+                  const position = layout.positions.get(node.id);
+                  return position
+                    ? this.renderNode(node, position.x, position.y, lit)
+                    : nothing;
+                })}
+              </div>`
+            : html`<div class="empty-state">
+                No nodes match these filters. Clear a filter to see more.
+              </div>`
+        }
+        <div
+          class="overlay canvas-tools"
+          role="group"
+          aria-label="Map navigation"
+          style=${radius ? 'right:344px' : ''}
+        >
+          <button
+            type="button"
+            @click=${() => this.zoom(0.8)}
+            aria-label="Zoom out"
           >
-            ${
-              view.nodes.length
-                ? html`<div
-                    class="plane"
-                    style="width:${layout.width}px;height:${layout.height}px;transform:translate(${this.translateX}px,${this.translateY}px) scale(${this.scale})"
-                  >
-                    ${layout.columns.map(
-                      (column) =>
-                        html`<div
-                          class="column-title"
-                          style="left:${column.x}px"
-                        >
-                          ${FLEET_MAP_COLUMN_LABEL[column.type]}
-                        </div>`
-                    )}
-                    <svg
-                      width=${layout.width}
-                      height=${layout.height}
-                      aria-hidden="true"
-                    >
-                      ${view.edges.map((edge) => {
-                        const a = layout.positions.get(edge.source);
-                        const b = layout.positions.get(edge.target);
-                        const na = byId.get(edge.source);
-                        const nb = byId.get(edge.target);
-                        if (!a || !b || !na || !nb) return nothing;
-                        const [left, right] = a.x <= b.x ? [a, b] : [b, a];
-                        const x1 = left.x + FLEET_MAP_NODE_WIDTH;
-                        const y1 = left.y + half;
-                        const x2 = right.x;
-                        const y2 = right.y + half;
-                        const mid = (x1 + x2) / 2;
-                        const cls = [
-                          'edge',
-                          edge.provenance,
-                          edge.gaps.length ? 'gap' : '',
-                          radius?.nodes.has(edge.impact_source) &&
-                          radius.nodes.has(edge.impact_target)
-                            ? 'lit'
-                            : '',
-                          radius &&
-                          !(
-                            radius.nodes.has(edge.impact_source) &&
-                            radius.nodes.has(edge.impact_target)
-                          )
-                            ? 'dim'
-                            : '',
-                        ].join(' ');
-                        return svg`<path class=${cls} d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}</title></path>`;
-                      })}
-                    </svg>
-                    ${view.nodes.map((node) => {
-                      const position = layout.positions.get(node.id);
-                      return position
-                        ? this.renderNode(node, position.x, position.y, lit)
-                        : nothing;
-                    })}
-                  </div>`
-                : html`<div class="empty-state">
-                    No nodes match these filters. Clear a filter to see more.
-                  </div>`
-            }
-          </div>
-          <div class="legend">
-            <span
-              ><svg viewBox="0 0 28 8" aria-hidden="true">
-                <line x1="0" y1="4" x2="28" y2="4" class="edge" /></svg
-              >Configured</span
-            >
-            <span
-              ><svg viewBox="0 0 28 8" aria-hidden="true">
-                <line x1="0" y1="4" x2="28" y2="4" class="edge observed" /></svg
-              >Observed</span
-            >
-            <span
-              ><span class="gap-dot" aria-hidden="true">!</span>Has a gap</span
-            >
-            <span>Select a node to see its blast radius. Esc clears.</span>
-          </div>
+            −
+          </button>
+          <span class="zoom">${Math.round(this.scale * 100)}%</span>
+          <button
+            type="button"
+            @click=${() => this.zoom(1.25)}
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button type="button" @click=${this.fit}>Fit</button>
+        </div>
+        <div class="overlay legend">
+          <span
+            ><svg viewBox="0 0 24 8" aria-hidden="true">
+              <line x1="0" y1="4" x2="24" y2="4" class="edge" /></svg
+            >Configured</span
+          >
+          <span
+            ><svg viewBox="0 0 24 8" aria-hidden="true">
+              <line x1="0" y1="4" x2="24" y2="4" class="edge observed" /></svg
+            >Observed</span
+          >
+          <span
+            ><sl-icon class="gap-dot" name="exclamation-triangle-fill"></sl-icon
+            >Gap</span
+          >
+          <span>Select a node to see what depends on it. Esc clears.</span>
         </div>
         ${radius ? this.renderPanel(graph, radius.nodes) : nothing}
       </div>`;
   }
 }
+
+/** Short chip wording; the node and the side panel keep the full label. */
+const GAP_CHIP_LABEL: Partial<Record<FleetMapGapCode, string>> = {
+  discovered_agent: 'not onboarded',
+  unknown_device: 'device unknown',
+  offline_runner: 'runner offline',
+  not_via_gateway: 'not via the gateway',
+  open_finding: 'open finding',
+};
 
 declare global {
   interface HTMLElementTagNameMap {

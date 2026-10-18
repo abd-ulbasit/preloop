@@ -77,6 +77,44 @@ describe('fleet-map', () => {
   });
 });
 
+describe('fleet-map gap strip', () => {
+  it('counts each gap kind and lights the nodes that carry it', async () => {
+    const el = await fixture<FleetMap>(
+      html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
+    );
+    const chip = el.shadowRoot!.querySelector<HTMLButtonElement>(
+      '.gap-chip[data-gap="discovered_agent"]'
+    )!;
+    expect(chip.textContent!.replace(/\s+/g, ' ').trim()).to.equal(
+      '1not onboarded'
+    );
+    chip.click();
+    await el.updateComplete;
+    expect(chip.getAttribute('aria-pressed')).to.equal('true');
+    expect(node(el, 'agent:cursor').classList.contains('focus')).to.equal(true);
+    expect(node(el, 'agent:claude').classList.contains('dim')).to.equal(true);
+    expect(
+      node(el, 'agent:cursor').querySelector('.sub')!.textContent
+    ).to.equal('Not onboarded');
+  });
+
+  it('says so when the map has no gaps', async () => {
+    const graph = sampleFleetMap();
+    const el = await fixture<FleetMap>(
+      html`<fleet-map
+        .graph=${{
+          ...graph,
+          nodes: graph.nodes.map((n) => ({ ...n, gaps: [] })),
+        }}
+      ></fleet-map>`
+    );
+    expect(
+      el.shadowRoot!.querySelector('[data-testid="fleet-map-gaps"]')!
+        .textContent
+    ).to.contain('No governance gaps');
+  });
+});
+
 describe('fleet-map completeness and navigation', () => {
   it('keeps the full impact list when a type filter hides intermediate nodes', async () => {
     const el = await fixture<FleetMap>(

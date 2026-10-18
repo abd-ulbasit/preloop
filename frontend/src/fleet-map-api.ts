@@ -241,9 +241,9 @@ export interface FleetMapPosition {
   y: number;
 }
 
-export const FLEET_MAP_NODE_WIDTH = 188;
+export const FLEET_MAP_NODE_WIDTH = 176;
 export const FLEET_MAP_NODE_HEIGHT = 52;
-export const FLEET_MAP_COLUMN_GAP = 64;
+export const FLEET_MAP_COLUMN_GAP = 40;
 export const FLEET_MAP_ROW_GAP = 14;
 export const FLEET_MAP_HEADER = 40;
 
@@ -277,6 +277,7 @@ export function layoutGraph(graph: Pick<FleetMapGraph, 'nodes' | 'edges'>): {
     ]);
   }
   const row = new Map<string, number>();
+  const columnSize = new Map<string, number>();
   const positions = new Map<string, FleetMapPosition>();
   const columns: { type: Exclude<FleetMapNodeType, 'cluster'>; x: number }[] =
     [];
@@ -302,6 +303,7 @@ export function layoutGraph(graph: Pick<FleetMapGraph, 'nodes' | 'edges'>): {
     columns.push({ type, x });
     ordered.forEach((node, index) => {
       row.set(node.id, index);
+      columnSize.set(node.id, ordered.length);
       positions.set(node.id, {
         x,
         y:
@@ -310,6 +312,13 @@ export function layoutGraph(graph: Pick<FleetMapGraph, 'nodes' | 'edges'>): {
       });
     });
     tallest = Math.max(tallest, ordered.length);
+  }
+  // Centre each column on the tallest one, so a column of two providers
+  // sits beside the middle of the agents it serves, not above them.
+  const step = FLEET_MAP_NODE_HEIGHT + FLEET_MAP_ROW_GAP;
+  for (const [id, position] of positions) {
+    const size = columnSize.get(id) ?? tallest;
+    position.y += ((tallest - size) * step) / 2;
   }
   const width = columns.length
     ? columns.length * (FLEET_MAP_NODE_WIDTH + FLEET_MAP_COLUMN_GAP) -
