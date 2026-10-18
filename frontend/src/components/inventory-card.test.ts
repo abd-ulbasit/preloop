@@ -818,6 +818,16 @@ describe('inventory-card', () => {
     expect(el.shadowRoot?.querySelector('.sort-select')).to.exist;
   });
 
+  it('ends the header controls at the period select, with no gap', async () => {
+    const el = await card();
+    const controls = el.shadowRoot!.querySelector('.header-controls')!;
+    const period = el.shadowRoot!.querySelector('time-range-select')!;
+    const gap =
+      controls.getBoundingClientRect().right -
+      period.getBoundingClientRect().right;
+    expect(gap).to.be.lessThan(1);
+  });
+
   it('hands a period change to the page, which owns the range', async () => {
     const el = await card();
     const select = el.shadowRoot!.querySelector('time-range-select')!;

@@ -447,8 +447,10 @@ export class InventoryCard extends LitElement {
 
         /* The page range, editable here too: it is the same range as the
          Usage card's, so changing either changes both. */
+        /* A fixed width: the host's min(width, 100%) resolves against the
+           flex row's max-content and left a gap at the card's edge. */
         .range-select {
-          --time-range-select-width: 128px;
+          width: 128px;
         }
 
         .tabs {
