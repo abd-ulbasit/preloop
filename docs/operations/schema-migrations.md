@@ -73,7 +73,10 @@ so the same behaviour applies when migrations are run by hand in a pod.
 Concurrent index overrides are
 `PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS` and
 `PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS`. Zero, negative,
-non-integer or out-of-range values fall back to the finite defaults. The
+non-integer or out-of-range values fall back to the finite defaults. The lock
+budget must be shorter than the statement budget, which includes lock waits;
+conflicting combinations fall back to both defaults so lock contention times
+out first with a retryable SQLSTATE. The
 deployment deadline remains unchanged. Per-statement limits do not guarantee
 the total duration of multiple pending revisions.
 

@@ -70,6 +70,15 @@ def concurrent_index_ddl(context: MigrationContext) -> Iterator[None]:
             DEFAULT_STATEMENT_TIMEOUT_SECONDS,
             240,
         )
+        if lock_seconds >= statement_seconds:
+            logger.warning(
+                "Concurrent-index lock budget must be shorter than its statement "
+                "budget; using finite defaults %ss/%ss.",
+                DEFAULT_LOCK_TIMEOUT_SECONDS,
+                DEFAULT_STATEMENT_TIMEOUT_SECONDS,
+            )
+            lock_seconds = DEFAULT_LOCK_TIMEOUT_SECONDS
+            statement_seconds = DEFAULT_STATEMENT_TIMEOUT_SECONDS
         started = time.monotonic()
         logger.info(
             "Concurrent-index DDL starting (lock_timeout=%ss, statement_timeout=%ss).",

@@ -19,6 +19,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import DBAPIError
 
 from preloop.models.concurrent_index_ddl import concurrent_index_ddl
+from preloop.models.migration_runtime import sqlstate_of
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ def index_database() -> Iterator[Engine]:
             connection.execute(text(f'CREATE DATABASE "{database}"'))
     except DBAPIError as error:
         admin.dispose()
-        if getattr(error.orig, "sqlstate", None) == "42501":
+        if sqlstate_of(error) == "42501":
             pytest.skip("test database role lacks CREATEDB privilege")
         raise
     engine = create_engine(
@@ -235,12 +236,13 @@ def test_concurrent_statement_budget_is_finite_and_restored_on_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A slow concurrent operation cannot consume the whole deployment forever."""
-    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS", "2")
     with index_database.connect() as connection:
         context = MigrationContext.configure(connection)
         with pytest.raises(DBAPIError) as error:
             with concurrent_index_ddl(context):
-                connection.execute(text("SELECT pg_sleep(2)"))
+                connection.execute(text("SELECT pg_sleep(3)"))
         assert error.value.orig.sqlstate == "57014"
         assert "SQLSTATE 57014" in caplog.text
         assert "pg_stat_progress_create_index" in caplog.text
@@ -407,3 +409,55 @@ def test_in_range_custom_concurrent_budgets_restore_original_settings(
             )
         assert connection.execute(text("SHOW lock_timeout")).scalar_one() == "5s"
         assert connection.execute(text("SHOW statement_timeout")).scalar_one() == "23s"
+
+
+@pytest.mark.parametrize(
+    ("lock", "statement"), [("300", "120"), ("60", "60"), ("60", "1")]
+)
+def test_conflicting_budgets_use_a_retryable_lock_wait_before_statement_deadline(
+    index_database: Engine, monkeypatch: pytest.MonkeyPatch, lock: str, statement: str
+) -> None:
+    """A separately valid override must not turn a lock retry into cancellation."""
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS", lock)
+    monkeypatch.setenv(
+        "PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS", statement
+    )
+    with index_database.connect() as connection:
+        with concurrent_index_ddl(MigrationContext.configure(connection)):
+            assert connection.execute(text("SHOW lock_timeout")).scalar_one() == "1min"
+            assert (
+                connection.execute(text("SHOW statement_timeout")).scalar_one()
+                == "2min"
+            )
+        assert connection.execute(text("SHOW lock_timeout")).scalar_one() == "5s"
+        assert connection.execute(text("SHOW statement_timeout")).scalar_one() == "23s"
+
+
+def test_valid_short_lock_budget_remains_retryable_before_statement_cancellation(
+    index_database: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PostgreSQL reports lock contention first when a writer outlives the wait."""
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_LOCK_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("PRELOOP_MIGRATION_CONCURRENT_STATEMENT_TIMEOUT_SECONDS", "2")
+    with index_database.connect() as writer:
+        transaction = writer.begin()
+        writer.execute(text("INSERT INTO api_usage (id) VALUES (0)"))
+        try:
+            with index_database.connect() as connection:
+                with pytest.raises(DBAPIError) as error:
+                    with concurrent_index_ddl(MigrationContext.configure(connection)):
+                        connection.execute(
+                            text(
+                                "CREATE INDEX CONCURRENTLY retryable_wait_test ON api_usage (id)"
+                            )
+                        )
+                assert sqlstate_of(error.value) == "55P03"
+                assert (
+                    connection.execute(text("SHOW lock_timeout")).scalar_one() == "5s"
+                )
+                assert (
+                    connection.execute(text("SHOW statement_timeout")).scalar_one()
+                    == "23s"
+                )
+        finally:
+            transaction.rollback()

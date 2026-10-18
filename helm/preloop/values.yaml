@@ -24,6 +24,7 @@ migrationJob:
   lockTimeout: "5s"
   # -- Only concurrent index DDL may wait longer for old writers/snapshots.
   # Ordinary blocking DDL keeps lockTimeout above. Positive integer seconds.
+  # Lock budget must be shorter than statement budget; otherwise both default.
   concurrentLockTimeoutSeconds: 60
   concurrentStatementTimeoutSeconds: 120
   # -- How many times the whole `upgrade head` is retried when a revision
