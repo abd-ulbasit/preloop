@@ -834,6 +834,9 @@ async def main(
             # Windows / restricted environments
             signal.signal(sig, lambda *_: _request_drain())
 
+    from preloop.services.audit import start_audit, stop_audit
+
+    start_audit()
     listen_task = asyncio.create_task(worker.start_listening())
     drain_wait = asyncio.create_task(drain_requested.wait())
 
@@ -865,9 +868,12 @@ async def main(
     finally:
         drain_wait.cancel()
         logger.info("NATS Worker shutting down...")
-        await worker.stop()
-        # Close the event bus service
-        await event_bus_service.close()
+        try:
+            await worker.stop()
+            # Close the event bus service
+            await event_bus_service.close()
+        finally:
+            stop_audit()
         logger.info("NATS Worker shutdown complete.")
 
 

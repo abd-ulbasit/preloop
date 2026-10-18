@@ -77,6 +77,16 @@ def mark_delivered(db: Session, row: AuditOutbox) -> None:
     db.flush()
 
 
+def delete_for_delivery(db: Session, row: AuditOutbox) -> None:
+    """Delete a claimed intent in the transaction that writes its audit row.
+
+    Never commit here: a delivery failure must roll this deletion back so
+    the same intent can be retried after a restart.
+    """
+    db.delete(row)
+    db.flush()
+
+
 def record_failure(
     db: Session,
     *,

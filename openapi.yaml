@@ -8648,6 +8648,672 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/audit-logs/actors:
+    get:
+      tags:
+      - Audit Logs
+      summary: List Audit Actors
+      description: List display identities for the current account's audit filters.
+      operationId: list_audit_actors_api_v1_audit_logs_actors_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: skip
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Skip
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 1000
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditActorResponse'
+                title: Response List Audit Actors Api V1 Audit Logs Actors Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs:
+    get:
+      tags:
+      - Audit Logs
+      summary: List audit logs with filters
+      description: 'List audit logs with optional filters.
+
+
+        This endpoint allows querying audit logs for the current user''s account
+
+        with various filter options including action type, status, resource type,
+
+        and date range.
+
+
+        Requires the ''view_audit_logs'' permission.'
+      operationId: list_audit_logs_api_v1_audit_logs_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: action
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by action (e.g., 'permission_check', 'role_assigned')
+          title: Action
+        description: Filter by action (e.g., 'permission_check', 'role_assigned')
+      - name: status_filter
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by status (e.g., 'success', 'denied', 'failure')
+          title: Status Filter
+        description: Filter by status (e.g., 'success', 'denied', 'failure')
+      - name: resource_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by resource type (e.g., 'issue', 'user', 'team')
+          title: Resource Type
+        description: Filter by resource type (e.g., 'issue', 'user', 'team')
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Filter by start date (ISO 8601 format)
+          title: Start Date
+        description: Filter by start date (ISO 8601 format)
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Filter by end date (ISO 8601 format)
+          title: End Date
+        description: Filter by end date (ISO 8601 format)
+      - name: consent_ref
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 512
+          - type: 'null'
+          description: Exact delegated grant consent reference
+          title: Consent Ref
+        description: Exact delegated grant consent reference
+      - name: skip
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Number of records to skip
+          default: 0
+          title: Skip
+        description: Number of records to skip
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          description: Maximum number of records
+          default: 100
+          title: Limit
+        description: Maximum number of records
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogsListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/grouped:
+    get:
+      tags:
+      - Audit Logs
+      summary: Get audit logs grouped by correlation for unified timeline
+      description: 'Get audit logs grouped by correlation_id for the unified timeline.
+
+
+        Returns tool call events as primary rows with their correlated sub-events
+
+        (policy decisions, approval lifecycle) grouped together. Non-tool events
+
+        are returned as standalone groups.'
+      operationId: list_grouped_audit_logs_api_v1_audit_logs_grouped_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: event_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          description: 'Filter by event type(s): ''tool_call'', ''model_gateway_request'',
+            ''config:mcp_server'', ''config:tool_rule'', etc.'
+          title: Event Type
+        description: 'Filter by event type(s): ''tool_call'', ''model_gateway_request'',
+          ''config:mcp_server'', ''config:tool_rule'', etc.'
+      - name: outcome
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          description: Filter by outcome(s) (allow, deny, require_approval, approved,
+            declined, failed, budget_denied, upstream_error, error)
+          title: Outcome
+        description: Filter by outcome(s) (allow, deny, require_approval, approved,
+          declined, failed, budget_denied, upstream_error, error)
+      - name: outcome_match
+        in: query
+        required: false
+        schema:
+          enum:
+          - all
+          - any
+          type: string
+          description: 'With several outcomes: ''all'' (default) keeps a row whose
+            chain carries every one, ''any'' a row that carries at least one'
+          default: all
+          title: Outcome Match
+        description: 'With several outcomes: ''all'' (default) keeps a row whose chain
+          carries every one, ''any'' a row that carries at least one'
+      - name: tool_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by tool name (substring match)
+          title: Tool Name
+        description: Filter by tool name (substring match)
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Filter by start date (ISO 8601)
+          title: Start Date
+        description: Filter by start date (ISO 8601)
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Filter by end date (ISO 8601)
+          title: End Date
+        description: Filter by end date (ISO 8601)
+      - name: min_cost
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+            minimum: 0
+          - type: 'null'
+          description: Minimum estimated gateway spend (USD)
+          title: Min Cost
+        description: Minimum estimated gateway spend (USD)
+      - name: max_cost
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+            minimum: 0
+          - type: 'null'
+          description: Maximum estimated gateway spend (USD)
+          title: Max Cost
+        description: Maximum estimated gateway spend (USD)
+      - name: consent_ref
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 512
+          - type: 'null'
+          description: Exact delegated grant consent reference
+          title: Consent Ref
+        description: Exact delegated grant consent reference
+      - name: skip
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Number of groups to skip
+          default: 0
+          title: Skip
+        description: Number of groups to skip
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          description: Maximum number of groups
+          default: 50
+          title: Limit
+        description: Maximum number of groups
+      - name: count_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 1000000
+            minimum: 1
+          - type: 'null'
+          description: Stop counting the total past this many groups (total_capped
+            says so). The exact total reads the whole matching trail.
+          title: Count Limit
+        description: Stop counting the total past this many groups (total_capped says
+          so). The exact total reads the whole matching trail.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditGroupedListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/overview:
+    get:
+      tags:
+      - Audit Logs
+      summary: Audit figures and exceptions for the console Overview
+      description: 'The four audit reads the Overview made separately, in one request.
+
+
+        Every figure covers the same window, ``start_date`` onwards (#1592): the
+
+        Overview is a "this range" page, and the all-time tool call totals were
+
+        the slowest part of the request on a long trail.
+
+
+        ``events_total`` is the ``total`` the grouped timeline reports for the
+
+        window, counted up to ``OVERVIEW_COUNT_LIMIT`` so it agrees with the
+
+        Audit page. Past that, ``events_total_capped`` is set and the total is
+
+        the cap. ``tool_calls_total`` and
+
+        ``tool_calls_failed`` are plain counts of ``tool_call`` rows (all, and
+
+        those with status ``failed``) in the window. ``tool_calls_total`` equals
+
+        the grouped total for ``event_type=tool_call``; ``tool_calls_failed`` is
+
+        exact, where the grouped outcome filter only looks at the newest 5000
+
+        calls. ``exceptions`` lists the groups in the window that failed or were
+
+        denied by a policy or a budget (any of those outcomes, not all).
+
+
+        The response is cached per worker for ``OVERVIEW_CACHE_TTL_SECONDS``.'
+      operationId: get_audit_overview_api_v1_audit_logs_overview_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: Window start for every figure and the exceptions (ISO 8601)
+          title: Start Date
+        description: Window start for every figure and the exceptions (ISO 8601)
+      - name: exceptions_limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          description: Maximum number of exception groups
+          default: 12
+          title: Exceptions Limit
+        description: Maximum number of exception groups
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditOverviewResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/stats:
+    get:
+      tags:
+      - Audit Logs
+      summary: Get audit log statistics
+      description: 'Get statistics about audit events.
+
+
+        Returns aggregated statistics including action counts by type and status,
+
+        top active users, and total log counts for the specified time period.
+
+
+        Requires the ''view_audit_logs'' permission.'
+      operationId: get_audit_stats_api_v1_audit_logs_stats_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 365
+          minimum: 1
+          description: Number of days to analyze (default 30)
+          default: 30
+          title: Days
+        description: Number of days to analyze (default 30)
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditStatsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/user/{user_id}:
+    get:
+      tags:
+      - Audit Logs
+      summary: Get audit logs for a specific user
+      description: 'Get audit logs for a specific user.
+
+
+        Returns all audit logs associated with the specified user within the
+
+        given time period. This is useful for investigating user activity and
+
+        tracking security-relevant actions.
+
+
+        Requires the ''view_audit_logs'' permission.'
+      operationId: get_user_audit_logs_api_v1_audit_logs_user__user_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 365
+          minimum: 1
+          description: Number of days to look back (default 30)
+          default: 30
+          title: Days
+        description: Number of days to look back (default 30)
+      - name: skip
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Number of records to skip
+          default: 0
+          title: Skip
+        description: Number of records to skip
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          description: Maximum number of records
+          default: 100
+          title: Limit
+        description: Maximum number of records
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogsListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/denials:
+    get:
+      tags:
+      - Audit Logs
+      summary: Get recent permission denial events
+      description: 'Get recent permission denial events.
+
+
+        Returns all permission check events that resulted in denial within the
+
+        specified time period. This is useful for security auditing and
+
+        identifying potential unauthorized access attempts.
+
+
+        Requires the ''view_audit_logs'' permission.'
+      operationId: get_permission_denials_api_v1_audit_logs_denials_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 90
+          minimum: 1
+          description: Number of days to look back
+          default: 7
+          title: Days
+        description: Number of days to look back
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          description: Maximum number of records
+          default: 100
+          title: Limit
+        description: Maximum number of records
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogsListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/audit-logs/{entry_id}:
+    get:
+      tags:
+      - Audit Logs
+      summary: Get Audit Entry
+      description: Fetch one account-owned entry so a console deep link can focus
+        it.
+      operationId: get_audit_entry_api_v1_audit_logs__entry_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: entry_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Entry Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/audit/chain/status:
     get:
       tags:
@@ -25904,6 +26570,278 @@ components:
       - reason
       title: AttentionDismissalUpsertRequest
       description: Body of ``PUT /attention/dismissals/{item_id}``.
+    AuditActorResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        username:
+          type: string
+          title: Username
+        full_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Full Name
+      type: object
+      required:
+      - id
+      - username
+      title: AuditActorResponse
+      description: Account-scoped display identity, without user-management fields.
+    AuditGroupResponse:
+      properties:
+        correlation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Correlation Id
+        primary_event:
+          $ref: '#/components/schemas/AuditLogResponse'
+        sub_events:
+          items:
+            $ref: '#/components/schemas/AuditSubEventResponse'
+          type: array
+          title: Sub Events
+          default: []
+        outcome:
+          type: string
+          title: Outcome
+      type: object
+      required:
+      - correlation_id
+      - primary_event
+      - outcome
+      title: AuditGroupResponse
+      description: Response model for a grouped timeline entry.
+    AuditGroupedListResponse:
+      properties:
+        groups:
+          items:
+            $ref: '#/components/schemas/AuditGroupResponse'
+          type: array
+          title: Groups
+        total:
+          type: integer
+          title: Total
+        skip:
+          type: integer
+          title: Skip
+        limit:
+          type: integer
+          title: Limit
+        total_capped:
+          type: boolean
+          title: Total Capped
+          description: 'True when count_limit was given and more groups match: total
+            is then count_limit, a lower bound'
+          default: false
+      type: object
+      required:
+      - groups
+      - total
+      - skip
+      - limit
+      title: AuditGroupedListResponse
+      description: Response model for the grouped timeline.
+    AuditLogResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        account_id:
+          type: string
+          format: uuid
+          title: Account Id
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+        action:
+          type: string
+          title: Action
+        resource_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resource Type
+        resource_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resource Id
+        status:
+          type: string
+          title: Status
+        ip_address:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Address
+        user_agent:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Agent
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Details
+        timestamp:
+          type: string
+          format: date-time
+          title: Timestamp
+      type: object
+      required:
+      - id
+      - account_id
+      - user_id
+      - action
+      - resource_type
+      - resource_id
+      - status
+      - ip_address
+      - user_agent
+      - details
+      - timestamp
+      title: AuditLogResponse
+      description: Response model for audit log entries.
+    AuditLogsListResponse:
+      properties:
+        logs:
+          items:
+            $ref: '#/components/schemas/AuditLogResponse'
+          type: array
+          title: Logs
+        total:
+          type: integer
+          title: Total
+        skip:
+          type: integer
+          title: Skip
+        limit:
+          type: integer
+          title: Limit
+      type: object
+      required:
+      - logs
+      - total
+      - skip
+      - limit
+      title: AuditLogsListResponse
+      description: Response model for list of audit logs.
+    AuditOverviewResponse:
+      properties:
+        events_total:
+          type: integer
+          title: Events Total
+          description: Timeline groups since start_date, counted up to 10000. events_total_capped
+            means more groups match.
+        events_total_capped:
+          type: boolean
+          title: Events Total Capped
+          description: True when events_total stopped at 10000 groups and more match,
+            the same cap the Audit page reports as 10K+.
+          default: false
+        tool_calls_total:
+          type: integer
+          title: Tool Calls Total
+          description: tool_call events since start_date (every one when absent)
+        tool_calls_failed:
+          type: integer
+          title: Tool Calls Failed
+          description: tool_call events with status failed since start_date
+        exceptions:
+          $ref: '#/components/schemas/AuditGroupedListResponse'
+          description: Most recent groups since start_date whose chain failed or was
+            denied by a policy or a budget (any of these outcomes), newest first,
+            with their total.
+      type: object
+      required:
+      - events_total
+      - tool_calls_total
+      - tool_calls_failed
+      - exceptions
+      title: AuditOverviewResponse
+      description: Everything the console Overview reads from the audit trail, in
+        one call.
+    AuditStatsResponse:
+      properties:
+        action_stats:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Action Stats
+          description: Statistics by action and status
+          example:
+          - action: permission_check
+            count: 15
+            status: denied
+        user_activity:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: User Activity
+          description: Top active users
+          example:
+          - action_count: 150
+            email: admin@example.com
+            username: admin
+        total_count:
+          type: integer
+          title: Total Count
+          description: Total number of audit logs in period
+        period_days:
+          type: integer
+          title: Period Days
+          description: Number of days analyzed
+      type: object
+      required:
+      - action_stats
+      - user_activity
+      - total_count
+      - period_days
+      title: AuditStatsResponse
+      description: Response model for audit statistics.
+    AuditSubEventResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        action:
+          type: string
+          title: Action
+        status:
+          type: string
+          title: Status
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Details
+        timestamp:
+          type: string
+          format: date-time
+          title: Timestamp
+      type: object
+      required:
+      - id
+      - action
+      - status
+      - details
+      - timestamp
+      title: AuditSubEventResponse
+      description: Response model for a sub-event in a grouped timeline.
     AuthUserCreate:
       properties:
         username:

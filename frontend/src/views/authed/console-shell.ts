@@ -1000,11 +1000,7 @@ export class ConsoleShell extends LitElement {
   }
 
   private _canShowAuditEvents(): boolean {
-    return (
-      this._featuresLoaded &&
-      !!this.features['audit_logs'] &&
-      this._canAccess('/console/audit')
-    );
+    return this._canAccess('/console/audit');
   }
 
   /**

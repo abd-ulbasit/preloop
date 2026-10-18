@@ -854,9 +854,8 @@ describe('ConsoleShell', () => {
     const audit = approvals?.closest('details.nav-section');
     expect(audit?.textContent).to.contain('Audit');
     expect(sessions?.closest('details.nav-section')).to.equal(audit);
-    // Without audit_logs there is no All events entry.
-    expect(el.shadowRoot?.querySelector('a[href="/console/audit"]')).to.not
-      .exist;
+    // Core audit is available even without a proprietary capability flag.
+    expect(el.shadowRoot?.querySelector('a[href="/console/audit"]')).to.exist;
   });
 
   it('orders the top level as Overview, the product pages, Audit, Settings, Emergency', async () => {

@@ -219,10 +219,11 @@ Unqualified **Preloop** is this repository (Apache 2.0, self-hosted). **Preloop 
 
 Cloud is managed hosting. Cloud and Enterprise include support plans. Cloud billing owners can compare the available usage from the previous three completed months in Account settings before requesting a plan-change quote. Missing history is labeled explicitly; a change requires confirmation of its price, limits and effective date. Cloud plan limits do not apply to the open-source self-hosted edition.
 
-Governance itself is open source: every model provider, flows, private runners, session search, operator notes, single-approver workflows and budgets scoped to the account, a flow, an API key or a managed agent all ship in this repository. What is commercial is the organizational layer on top of them: more than one approver, quorum, escalations, budgets scoped to a user or a team, budget notification routing, and users, teams and RBAC on one account. Cloud usage allowances and hosted credits are a separate thing from governance budgets.
+Governance itself is open source: every model provider, flows, private runners, session search, operator notes, the audit trail for Preloop-observed activity with collection, query API and console, single-approver workflows and budgets scoped to the account, a flow, an API key or a managed agent all ship in this repository. What is commercial is the organizational layer on top of them: more than one approver, quorum, escalations, budgets scoped to a user or a team, budget notification routing, and users, teams and RBAC on one account. Cloud usage allowances and hosted credits are a separate thing from governance budgets.
 
 | Feature | Open Source | Cloud / Enterprise |
 |---|:---:|:---:|
+| Audit collection, query API, and console | Yes | Yes |
 | Users, teams, and RBAC on one account | No | Yes |
 | Budgets scoped to a user or a team, budget notification routing | No | Yes |
 | Multi-approver routing, quorum, escalations | No | Yes |

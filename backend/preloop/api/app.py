@@ -566,6 +566,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Skipping MCP server for %s role.", service_role)
 
+    # Audit collection belongs to core in API, gateway and chat processes.
+    # Start before extensions; legacy audit plugins do not own this lifecycle.
+    from preloop.services.audit import start_audit, stop_audit
+
+    start_audit()
+
     # Initialize plugin system (skip in testing mode)
     plugin_manager = None
     if not is_testing and is_api_role:
@@ -869,6 +875,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.debug("OTLP shutdown failed", exc_info=True)
 
+    stop_audit()
     shutdown_api_usage_recorder()
     # Restore the original jsonable_encoder
     import fastapi.encoders
@@ -926,6 +933,7 @@ def _register_control_plane_routes(
         anthropic_usage,
         artifact_search,
         audio,
+        audit,
         audit_chain,
         bitbucket_dc_webhooks,
         budget,
@@ -1126,6 +1134,11 @@ def _register_control_plane_routes(
     app.include_router(fleet_map.router, prefix="/api/v1")
     app.include_router(
         retention.router,
+        prefix="/api/v1",
+        dependencies=[Depends(get_current_active_user)],
+    )
+    app.include_router(
+        audit.router,
         prefix="/api/v1",
         dependencies=[Depends(get_current_active_user)],
     )

@@ -697,7 +697,7 @@ export class AgentsView extends LitElement {
         }
         .title-row {
           align-items: start;
-          border-bottom: 1px solid var(--sl-color-neutral-200);
+          border-bottom: 1px solid var(--console-hairline);
           padding-bottom: var(--sl-spacing-small);
           padding-right: 44px;
         }
@@ -858,9 +858,6 @@ export class AgentsView extends LitElement {
           justify-content: center;
           padding: var(--sl-spacing-medium) 0;
         }
-        :host(:host-context(.sl-theme-dark)) .title-row {
-          border-color: var(--sl-color-neutral-800);
-        }
 
         .agent-speech-bubble {
           position: absolute;
@@ -895,10 +892,8 @@ export class AgentsView extends LitElement {
           opacity: 1;
           animation: bubble-bounce 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
-        @media (prefers-color-scheme: dark) {
-          .flow-icon {
-            filter: invert(0.8) hue-rotate(180deg);
-          }
+        .flow-icon {
+          filter: var(--console-flow-icon-filter, none);
         }
 
         @keyframes bubble-bounce {
@@ -1034,9 +1029,9 @@ export class AgentsView extends LitElement {
           padding: 4px 12px;
           border-radius: 20px;
           font-weight: bold;
-          color: var(--sl-color-primary-600);
+          color: var(--console-link-color);
           box-shadow: var(--sl-shadow-medium);
-          border: 1px solid var(--sl-color-neutral-200);
+          border: 1px solid var(--console-hairline);
           letter-spacing: 1px;
           width: max-content;
         }
@@ -1146,18 +1141,6 @@ export class AgentsView extends LitElement {
         }
         .connection-line.exiting {
           opacity: 0;
-        }
-        @media (prefers-color-scheme: dark) {
-          .canvas-container {
-            border-color: var(--sl-color-neutral-800);
-          }
-          .gateway-label {
-            border-color: var(--sl-color-neutral-700);
-            color: var(--sl-color-primary-400);
-          }
-          .controls-overlay {
-            border-color: var(--sl-color-neutral-400);
-          }
         }
       `,
     ],

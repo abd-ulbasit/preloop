@@ -57,6 +57,11 @@ documented host; workspace routes can use reviewed regional prices without a
 cross-host credential transfer. Weekly review produces a PR with source evidence
 and verification gates. Feed ingestion never rewrites historical usage.
 
+Audit collection, the account-scoped query API, and the console are core features
+available in every edition. Core owns the audit service, bounded writer and
+optional durable outbox; Enterprise uses the same implementation and adds its
+RBAC permission checks and events from organizational features.
+
 Audit rows are sealed into a per-account hash chain with signed checkpoints.
 Period exports and evidence packs carry detached Ed25519 signatures.
 `preloop audit verify` and `preloop evidence verify` recompute both on the

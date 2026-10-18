@@ -607,6 +607,16 @@ export class DashboardView extends AuthedElement {
   }
 
   static styles = [
+    css`
+      .welcome-badge {
+        display: block;
+        width: 56px;
+        height: 56px;
+        margin: var(--sl-spacing-small) 0;
+        background-color: var(--console-body-color);
+        mask: url('/assets/preloop-badge.svg') center / contain no-repeat;
+      }
+    `,
     reducedMotionStyles,
     css`
       /* One row per plane: name, endpoint, what it did. */
@@ -3788,11 +3798,7 @@ export class DashboardView extends AuthedElement {
           <sl-icon name="x-lg" label="Dismiss get started"></sl-icon>
         </sl-button>
 
-        <img
-          src="/assets/preloop-badge.svg"
-          alt=""
-          style="width: 56px; height: 56px; margin-bottom: var(--sl-spacing-small); margin-top: var(--sl-spacing-small); border-radius: var(--sl-border-radius-medium);"
-        />
+        <span class="welcome-badge" aria-hidden="true"></span>
 
         <h2
           style="font-size: var(--console-text-h1); font-weight: 600; letter-spacing: -0.01em; color: var(--sl-color-neutral-900); margin: 0 0 var(--sl-spacing-medium) 0; text-align: center;"

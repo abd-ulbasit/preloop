@@ -82,14 +82,10 @@ def _operator_present_at_machine(db, approval_request: ApprovalRequest) -> bool:
 
 
 def _get_audit_service():
-    """Get the audit service instance (lazy import to avoid circular deps)."""
-    try:
-        from plugins.audit.service import get_audit_service
+    """Resolve the core audit singleton lazily to avoid circular imports."""
+    from preloop.services.audit import get_audit_service
 
-        return get_audit_service()
-    except ImportError:
-        logger.debug("Audit service not available")
-        return None
+    return get_audit_service()
 
 
 def _get_db_factory():

@@ -115,6 +115,18 @@ def _with_authorizer(func, permission_name: str):
     """
     from preloop.plugins.account_hooks import get_authorizer
 
+    def check(kwargs: dict[str, Any]) -> None:
+        try:
+            _check_authorizer(permission_name, kwargs)
+        except HTTPException as exc:
+            if exc.status_code == 403 and func.__name__ == "search_runtime_sessions":
+                from preloop.services.session_search_audit import (
+                    record_denied_endpoint_search,
+                )
+
+                record_denied_endpoint_search(permission=permission_name, kwargs=kwargs)
+            raise
+
     if asyncio.iscoroutinefunction(func):
 
         @functools.wraps(func)
@@ -122,9 +134,7 @@ def _with_authorizer(func, permission_name: str):
             if get_authorizer() is not None:
                 from preloop.api.loop_safety import run_db_off_loop
 
-                await run_db_off_loop(
-                    lambda: _check_authorizer(permission_name, kwargs)
-                )
+                await run_db_off_loop(lambda: check(kwargs))
             return await func(*args, **kwargs)
 
         return authorized_async
@@ -132,7 +142,7 @@ def _with_authorizer(func, permission_name: str):
     @functools.wraps(func)
     def authorized_sync(*args, **kwargs):
         if get_authorizer() is not None:
-            _check_authorizer(permission_name, kwargs)
+            check(kwargs)
         return func(*args, **kwargs)
 
     return authorized_sync

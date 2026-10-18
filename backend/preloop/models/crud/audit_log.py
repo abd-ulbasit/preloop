@@ -29,6 +29,20 @@ PRIMARY_ACTIONS = (
     "runtime_session_updated",
     "runtime_session_ended",
 )
+# Only these events are children of a tool/policy chain. All other actions,
+# including future event families, remain visible as standalone groups.
+GROUP_CHILD_ACTIONS = (
+    "policy_allow",
+    "approval_created",
+    "approval_approved",
+    "approval_denied",
+    "approval_expired",
+    "approval_escalated",
+    "ai_approval",
+    "ai_approval_evaluated",
+    "approval_notification_sent",
+    "approval_tool_executed",
+)
 # The grouped total is counted per branch and summed, which is only right
 # while no action can match both branches.
 assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
@@ -128,11 +142,11 @@ def audit_row_id(details: Optional[Dict[str, Any]]) -> UUID:
     """Primary key for an audit row.
 
     A policy match records the same id on ``policy_notice_hit.audit_event_id``
-    and in ``details['audit_event_id']`` before the audit plugin writes the
+    and in ``details['audit_event_id']`` before the audit service writes the
     row. Using that value as the row id makes the two point at each other
     without the plugin having to learn a new argument.
 
-    The EE audit plugin builds that payload with ``tool_args`` nested under
+    The audit service builds that payload with ``tool_args`` nested under
     ``details['tool_args']``, then ``details.update(extra_details)``.
     ``audit_event_id`` therefore has to be a top-level key. A nested
     ``details['extra_details']`` object is ignored. Any other value, or a
@@ -573,13 +587,55 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 AuditLog.action.in_(STANDALONE_POLICY_ACTIONS),
                 ~has_tool_call,
             )
-            anchor_condition = or_(
-                AuditLog.action.in_(PRIMARY_ACTIONS), standalone_condition
+            # Keep unknown/core event families visible without duplicating the
+            # known children that the grouping pass attaches below.
+            other_condition = AuditLog.action.notin_(
+                (*PRIMARY_ACTIONS, *STANDALONE_POLICY_ACTIONS, *GROUP_CHILD_ACTIONS)
+            )
+            parent = aliased(AuditLog)
+            has_direct_parent = (
+                db.query(parent.id)
+                .filter(
+                    parent.account_id == account_id_str,
+                    parent.action.in_(_GROUP_ANCHOR_ACTIONS),
+                    parent.details["correlation_id"].astext
+                    == AuditLog.details["correlation_id"].astext,
+                )
+                .offset(0)
+                .exists()
+            )
+            created = aliased(AuditLog)
+            approval_parent = aliased(AuditLog)
+            has_approval_parent = (
+                db.query(created.id)
+                .join(
+                    approval_parent,
+                    approval_parent.details["correlation_id"].astext
+                    == created.details["correlation_id"].astext,
+                )
+                .filter(
+                    created.account_id == account_id_str,
+                    created.action == "approval_created",
+                    created.details["approval_id"].astext
+                    == AuditLog.details["approval_id"].astext,
+                    approval_parent.account_id == account_id_str,
+                    approval_parent.action.in_(_GROUP_ANCHOR_ACTIONS),
+                )
+                .offset(0)
+                .exists()
+            )
+            orphan_condition = and_(
+                AuditLog.action.in_(GROUP_CHILD_ACTIONS),
+                ~has_direct_parent,
+                ~has_approval_parent,
             )
             count_conditions = [
                 AuditLog.action.in_(PRIMARY_ACTIONS),
                 standalone_condition,
+                other_condition,
+                orphan_condition,
             ]
+            anchor_condition = or_(*count_conditions)
 
         primary_query = db.query(AuditLog).filter(*scope_filters, anchor_condition)
 
@@ -634,7 +690,9 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                     AuditLog.details["correlation_id"].astext.in_(
                         list(correlation_ids)
                     ),
-                    AuditLog.action != "tool_call",
+                    AuditLog.action.in_(
+                        (*STANDALONE_POLICY_ACTIONS, *GROUP_CHILD_ACTIONS)
+                    ),
                 )
                 .order_by(AuditLog.timestamp.asc())
             )
@@ -667,6 +725,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         AuditLog.details["approval_id"].astext.in_(
                             list(approval_id_to_cid.keys())
                         ),
+                        AuditLog.action.in_(GROUP_CHILD_ACTIONS),
                         AuditLog.action != "approval_created",  # already fetched
                     )
                     .order_by(AuditLog.timestamp.asc())
@@ -691,7 +750,11 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             if event.details:
                 cid = event.details.get("correlation_id")
 
-            sub_list = sub_events_map.get(cid, []) if cid else []
+            sub_list = (
+                sub_events_map.get(cid, [])
+                if cid and event.action in _GROUP_ANCHOR_ACTIONS
+                else []
+            )
             # A standalone policy decision must not list itself as a sub-event.
             sub_list = [sub for sub in sub_list if sub.id != event.id]
 

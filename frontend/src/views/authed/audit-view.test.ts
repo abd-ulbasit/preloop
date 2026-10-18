@@ -33,7 +33,7 @@ describe('AuditView', () => {
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
 
-      if (url === '/api/v1/users') {
+      if (url === '/api/v1/audit-logs/actors') {
         return new Response(
           JSON.stringify([
             {
@@ -557,7 +557,7 @@ describe('AuditView', () => {
     const executionId = '99999999-8888-4777-8666-555555555555';
     fetchStub.callsFake(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url === '/api/v1/users') {
+      if (url === '/api/v1/audit-logs/actors') {
         return new Response(JSON.stringify([]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -980,7 +980,7 @@ describe('AuditView', () => {
       };
       fetchStub.callsFake(async (input: RequestInfo | URL) => {
         const url = typeof input === 'string' ? input : input.toString();
-        if (url === '/api/v1/users') {
+        if (url === '/api/v1/audit-logs/actors') {
           return new Response('[]', { status: 200 });
         }
         const body = (groups: unknown[]) =>

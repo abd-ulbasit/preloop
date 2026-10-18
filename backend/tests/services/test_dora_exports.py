@@ -363,17 +363,16 @@ class TestAssetRegister:
         assert runner["owner_user_id"] == str(test_user.id)
         assert runner["lifecycle_state"] == "online"
 
-    def test_ee_only_columns_are_present_and_declared_absent(
-        self, db_session, test_user, estate
-    ):
-        """The column never disappears; the manifest says why it is empty."""
+    def test_audit_columns_are_collected_by_core(self, db_session, test_user, estate):
+        """An empty history is not reported as an unavailable edition feature."""
         export = build_asset_register(
             db_session, account=test_user.account, generated_at=NOW
         )
         assert "last_config_change_at" in export.manifest["columns"]
         assert all(row["last_config_change_at"] is None for row in export.rows)
         absent = {item["field"] for item in export.manifest["edition"]["fields_absent"]}
-        assert absent == {"last_config_change_at", "last_config_change_by"}
+        assert absent == set()
+        assert export.manifest["edition"]["audit_collection"] is True
         assert export.manifest["edition"]["edition"] == "oss"
 
     def test_manifest_names_the_articles_and_the_scope(
@@ -527,12 +526,16 @@ class TestIncidentCandidates:
             )
         assert error.value.code == "invalid_period"
 
-    def test_oss_declares_policy_denies_unrecorded(self, db_session, test_user, estate):
-        """Zero denies on OSS means unrecorded, and the manifest says so."""
+    def test_oss_collects_policy_denies_without_an_enterprise_plugin(
+        self, db_session, test_user, estate
+    ):
+        """An empty time window does not imply an edition collection gap."""
         export = self._export(db_session, test_user)
-        absent = export.manifest["edition"]["record_types_absent"]
-        assert absent[0]["record_type"] == "policy_deny"
-        assert "Enterprise" in absent[0]["reason"]
+        edition = export.manifest["edition"]
+        assert edition["edition"] == "oss"
+        assert edition["audit_plugin"] is False
+        assert edition["audit_collection"] is True
+        assert edition.get("record_types_absent", []) == []
 
     def test_other_accounts_are_not_in_the_candidates(
         self, db_session, test_user, estate

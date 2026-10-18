@@ -97,7 +97,6 @@ interface GroupedResponse {
 interface User {
   id: string;
   username: string;
-  email: string;
   full_name: string | null;
 }
 
@@ -120,6 +119,9 @@ const APPROVAL_DECISION_ACTIONS = [
 // Sentence case throughout: one dropdown, one dialect.
 const EVENT_TYPE_OPTIONS = [
   { value: 'tool_call', label: 'Tool calls' },
+  { value: 'query', label: 'Session searches' },
+  { value: 'user.login', label: 'Sign-ins' },
+  { value: 'audit_chain_verified', label: 'Integrity verifications' },
   { value: APPROVAL_DECISION_FILTER, label: 'Approval decisions' },
   { value: 'model_gateway_request', label: 'Gateway requests' },
   { value: 'runtime_session_created', label: 'Sessions started' },
@@ -443,7 +445,7 @@ export class AuditView extends AuthedElement {
 
   private async _loadUsers() {
     try {
-      const res = await fetchWithAuth('/api/v1/users');
+      const res = await fetchWithAuth('/api/v1/audit-logs/actors');
       if (res.ok) {
         const data = await res.json();
         this._users = data.users || data || [];
@@ -1368,6 +1370,12 @@ export class AuditView extends AuthedElement {
             : '';
         return `${pretty} ${act}${name ? `: ${name}` : ''}`;
       }
+      case 'query':
+        return 'Session content search';
+      case 'user.login':
+        return 'User signed in';
+      case 'audit_chain_verified':
+        return 'Audit integrity verified';
       case 'permission_check':
         return `Permission: ${event.details?.permission || event.resource_id || 'check'}`;
       case 'runtime_session_created':
