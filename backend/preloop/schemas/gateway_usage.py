@@ -721,6 +721,12 @@ class ManagedAgentEnrollmentValidateRequest(BaseModel):
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     config_path_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # Same enumerated values a discovery report carries; recorded on the
+    # workstation candidate the validation creates.
+    os_family: Optional[Literal["darwin", "linux", "windows", "other"]] = None
+    cli_version: Optional[str] = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$"
+    )
 
 
 class ManagedAgentEnrollmentRestoreRequest(BaseModel):

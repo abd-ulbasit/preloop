@@ -36749,6 +36749,22 @@ components:
             pattern: ^[0-9a-f]{64}$
           - type: 'null'
           title: Config Path Hash
+        os_family:
+          anyOf:
+          - type: string
+            enum:
+            - darwin
+            - linux
+            - windows
+            - other
+          - type: 'null'
+          title: Os Family
+        cli_version:
+          anyOf:
+          - type: string
+            pattern: ^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$
+          - type: 'null'
+          title: Cli Version
       type: object
       title: ManagedAgentEnrollmentValidateRequest
       description: Request to update validation state for one enrollment.

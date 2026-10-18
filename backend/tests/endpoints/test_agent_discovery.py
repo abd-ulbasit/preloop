@@ -545,6 +545,81 @@ def test_validated_enrollment_links_candidate(client, db_session, test_user):
     assert by_path["2" * 64]["status"] == "new"
 
 
+def test_validated_enrollment_without_report_records_its_device(
+    client, db_session, test_user
+):
+    """Onboarding alone must place the agent on its workstation."""
+    token_response = client.post(
+        "/api/v1/auth/runtime-sessions/token",
+        json={
+            "session_source_type": "claude_code",
+            "session_source_id": "workspace-no-report",
+            "runtime_principal_name": "Claude Code Workspace",
+        },
+    )
+    assert token_response.status_code == 201
+    agent = client.get("/api/v1/agents").json()["items"][0]
+    agent_id = agent["id"]
+    enrollment_id = client.post(
+        f"/api/v1/agents/{agent_id}/enrollments",
+        json={"enrollment_type": "cli_managed_config", "status": "applied"},
+    ).json()["id"]
+    body = {
+        "status": "validated",
+        "workstation_fingerprint": "8" * 64,
+        "config_path_hash": "3" * 64,
+        "os_family": "darwin",
+        "cli_version": "0.18.0",
+    }
+    url = f"/api/v1/agents/{agent_id}/enrollments/{enrollment_id}/validate"
+    assert client.post(url, json=body).status_code == 200
+    # Re-onboarding the same install updates the one row, never duplicates.
+    assert client.post(url, json=body).status_code == 200
+    items = client.get(CANDIDATES).json()["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "onboarded"
+    assert items[0]["managed_agent_id"] == agent_id
+    assert items[0]["config_path_hash"] == "3" * 64
+    row = db_session.get(DiscoveredAgentCandidate, items[0]["id"])
+    assert row.workstation_fingerprint == "8" * 64
+    assert row.os_family == "darwin"
+    assert row.agent_kind == agent["agent_kind"]
+
+
+def test_validated_enrollment_without_path_hash_creates_nothing(client):
+    client.post(
+        "/api/v1/auth/runtime-sessions/token",
+        json={
+            "session_source_type": "claude_code",
+            "session_source_id": "workspace-no-path",
+            "runtime_principal_name": "Claude Code Workspace",
+        },
+    )
+    agent_id = client.get("/api/v1/agents").json()["items"][0]["id"]
+    enrollment_id = client.post(
+        f"/api/v1/agents/{agent_id}/enrollments",
+        json={"enrollment_type": "cli_managed_config", "status": "applied"},
+    ).json()["id"]
+    ok = client.post(
+        f"/api/v1/agents/{agent_id}/enrollments/{enrollment_id}/validate",
+        json={"status": "validated", "workstation_fingerprint": "9" * 64},
+    )
+    assert ok.status_code == 200
+    assert client.get(CANDIDATES).json()["items"] == []
+
+
+@pytest.mark.parametrize(
+    "extra", [{"os_family": "macos"}, {"cli_version": "jane laptop"}]
+)
+def test_validate_rejects_free_form_device_fields(client, extra):
+    response = client.post(
+        "/api/v1/agents/00000000-0000-0000-0000-000000000000/enrollments/"
+        "00000000-0000-0000-0000-000000000000/validate",
+        json={"status": "validated", **extra},
+    )
+    assert response.status_code == 422
+
+
 def test_validate_rejects_a_clear_fingerprint(client):
     response = client.post(
         "/api/v1/agents/00000000-0000-0000-0000-000000000000/enrollments/"

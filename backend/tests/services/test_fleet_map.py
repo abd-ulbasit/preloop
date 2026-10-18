@@ -841,3 +841,61 @@ def test_saturated_decommissioned_count_marks_the_map_partial(
         graph = build_fleet_map(MagicMock(), user=viewer())
     assert graph.decommissioned_agents == SOURCE_LIMIT
     assert graph.truncated
+
+
+def _runnerless_device(*agent_ids: str) -> dict[str, Any]:
+    return dict(
+        device_key="fp:example",
+        hostname=None,
+        runner_state="none",
+        users=[],
+        runners=[],
+        agents=[
+            dict(
+                id=f"candidate-{aid}",
+                source="candidate",
+                kind="codex",
+                status="onboarded",
+                managed_agent_id=aid,
+            )
+            for aid in agent_ids
+        ],
+        findings=[],
+    )
+
+
+def test_runnerless_device_is_named_by_its_agents_enrollment_hostname(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, manager = sources
+    crud.crud_managed_agent.get_multi.return_value = [
+        agent("agent-a", enrollment_hostname="example-laptop"),
+        agent("agent-b", enrollment_hostname="example-laptop"),
+    ]
+    service = manager.return_value.get_service.return_value = MagicMock()
+    service.read.return_value = dict(
+        truncated=False, items=[_runnerless_device("agent-a", "agent-b")]
+    )
+    nodes = {n.id: n for n in build_fleet_map(MagicMock(), user=viewer()).nodes}
+    device = nodes["device:fp:example"]
+    assert device.label == "example-laptop"
+    assert "unknown_device" not in device.gaps
+    for aid in ("agent-a", "agent-b"):
+        assert "unknown_device" not in nodes[f"agent:{aid}"].gaps
+
+
+def test_conflicting_enrollment_hostnames_do_not_name_the_device(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, manager = sources
+    crud.crud_managed_agent.get_multi.return_value = [
+        agent("agent-a", enrollment_hostname="example-one"),
+        agent("agent-b", enrollment_hostname="example-two"),
+    ]
+    service = manager.return_value.get_service.return_value = MagicMock()
+    service.read.return_value = dict(
+        truncated=False, items=[_runnerless_device("agent-a", "agent-b")]
+    )
+    nodes = {n.id: n for n in build_fleet_map(MagicMock(), user=viewer()).nodes}
+    assert nodes["device:fp:example"].label == "Unknown device"
+    assert "unknown_device" in nodes["device:fp:example"].gaps
