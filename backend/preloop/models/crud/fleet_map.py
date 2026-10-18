@@ -30,6 +30,7 @@ def list_resources(
 
     Returns:
         Tenant-visible rows in stable ID order, without loading relationships.
+        Decommissioned agents are never returned.
     """
     model = {
         "agents": models.ManagedAgent,
@@ -51,4 +52,33 @@ def list_resources(
             & models.AIModel.meta_data["retired"].astext.is_distinct_from("true")
         )
         visible = or_(visible, built_in)
+    if source == "agents":
+        # Decommissioning is terminal; those rows are history, not fleet.
+        visible = visible & (models.ManagedAgent.lifecycle_state != "decommissioned")
     return db.query(model).filter(visible).order_by(model.id).limit(limit).all()
+
+
+def list_decommissioned_agents(
+    db: Session, *, account_id: str, limit: int
+) -> list[models.ManagedAgent]:
+    """List the account's decommissioned agents that the map leaves out.
+
+    Args:
+        db: Request database session.
+        account_id: Selected membership's owning tenant.
+        limit: Maximum rows to read.
+
+    Returns:
+        Decommissioned managed agents in stable ID order, for counting after
+        the caller's visibility filter.
+    """
+    return (
+        db.query(models.ManagedAgent)
+        .filter(
+            models.ManagedAgent.account_id == account_id,
+            models.ManagedAgent.lifecycle_state == "decommissioned",
+        )
+        .order_by(models.ManagedAgent.id)
+        .limit(limit)
+        .all()
+    )

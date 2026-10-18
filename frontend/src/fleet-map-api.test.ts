@@ -1,6 +1,7 @@
 import { expect } from '@open-wc/testing';
 import {
   FLEET_MAP_COLUMNS,
+  FLEET_MAP_TYPES,
   blastRadius,
   filterGraph,
   layoutGraph,
@@ -8,21 +9,15 @@ import {
 } from './fleet-map-api';
 import { sampleFleetMap } from './test-helpers/fleet-map-graph';
 
-const all = new Set(FLEET_MAP_COLUMNS);
+const all = new Set(FLEET_MAP_TYPES);
 
 describe('fleet map graph', () => {
   it('walks a provider account back to agents, devices and people, not sideways', () => {
     const reach = blastRadius(sampleFleetMap(), 'account:prod').nodes;
     expect([...reach].sort()).to.deep.equal(
-      [
-        'account:prod',
-        'agent:codex',
-        'device:mbp',
-        'model:gpt',
-        'user:maya',
-      ].sort()
+      ['account:prod', 'agent:codex', 'device:mbp', 'user:maya'].sort()
     );
-    expect(reach.has('model:gpt')).to.equal(true);
+    expect(reach.has('model:gpt')).to.equal(false);
     expect(reach.has('agent:claude')).to.equal(false);
   });
 
@@ -79,7 +74,7 @@ describe('fleet map graph', () => {
   it('hides types and their incident edges', () => {
     const graph = sampleFleetMap();
     const noModels = filterGraph(graph, {
-      types: new Set(FLEET_MAP_COLUMNS.filter((t) => t !== 'model')),
+      types: new Set(FLEET_MAP_TYPES.filter((t) => t !== 'model')),
       owner: '',
       provider: '',
     });
@@ -153,5 +148,24 @@ describe('server summary groups', () => {
     expect(summary.count).to.equal(20);
     expect(summary.href).to.equal('');
     expect(summary.detail).to.equal('Outside this map');
+  });
+});
+
+describe('gaps only', () => {
+  it('keeps direct neighbours of gap nodes in any edge order', () => {
+    const graph = sampleFleetMap();
+    const ids = (edges: typeof graph.edges) =>
+      filterGraph(
+        { ...graph, edges },
+        { types: all, owner: '', provider: '', gapsOnly: true }
+      )
+        .nodes.map((n) => n.id)
+        .sort();
+    const forward = ids(graph.edges);
+    expect(forward).to.deep.equal(ids([...graph.edges].reverse()));
+    // The offline runner keeps the device hosting it; an agent that only
+    // shares a model with that runner is two hops away and drops out.
+    expect(forward).to.include('device:build');
+    expect(forward).not.to.include('agent:claude');
   });
 });

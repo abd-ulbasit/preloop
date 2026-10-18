@@ -206,3 +206,36 @@ def test_model_window_includes_only_available_built_ins_when_enabled(
         include_built_in=True,
     )
     assert [r.id for r in bounded] == [rows[0].id]
+
+
+def test_decommissioned_agents_are_excluded_and_counted(
+    db_session: Session,
+) -> None:
+    from preloop.models.crud.fleet_map import list_decommissioned_agents
+
+    account = crud.crud_account.create(
+        db_session, obj_in={"organization_name": "Example lifecycle"}
+    )
+    now = datetime.now(UTC)
+    for state in ("active", "suspended", "decommissioned", "decommissioned"):
+        db_session.add(
+            models.ManagedAgent(
+                account_id=account.id,
+                agent_kind="custom",
+                session_source_type="test",
+                session_source_id=str(uuid4()),
+                display_name=f"Example {state}",
+                lifecycle_state=state,
+                lifecycle_updated_at=now,
+                last_seen_at=now,
+            )
+        )
+    db_session.flush()
+    rows = list_resources(
+        db_session, source="agents", account_id=str(account.id), limit=10
+    )
+    assert sorted(row.lifecycle_state for row in rows) == ["active", "suspended"]
+    retired = list_decommissioned_agents(
+        db_session, account_id=str(account.id), limit=10
+    )
+    assert len(retired) == 2

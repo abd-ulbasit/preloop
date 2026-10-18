@@ -1,5 +1,6 @@
 """Public, credential-free fleet dependency graph."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ Gap = Literal[
     "not_via_gateway",
     "open_finding",
 ]
+AgentState = Literal["onboarded", "discovered", "inactive"]
 
 
 class FleetMapAction(BaseModel):
@@ -38,6 +40,18 @@ class FleetMapNode(BaseModel):
     gaps: list[Gap] = Field(default_factory=list)
     finding_count: int = 0
     actions: list[FleetMapAction] = Field(default_factory=list)
+    parent_id: str | None = Field(
+        default=None,
+        description="Containing node, such as the provider of a provider account.",
+    )
+    agent_state: AgentState | None = Field(
+        default=None,
+        description=(
+            "Agents only: onboarded and recently active, discovered on a device "
+            "but not onboarded, or onboarded but suspended or not seen recently."
+        ),
+    )
+    last_seen_at: datetime | None = None
 
 
 class FleetMapEdge(BaseModel):
@@ -59,6 +73,10 @@ class FleetMapEdge(BaseModel):
     impact_source: str
     impact_target: str
     gaps: list[Gap] = Field(default_factory=list)
+    account_id: str | None = Field(
+        default=None,
+        description="For uses_model: the provider account node the agent reaches it through.",
+    )
 
 
 class FleetMapCluster(BaseModel):
@@ -78,3 +96,7 @@ class FleetMapResponse(BaseModel):
     limit: int = 500
     clusters: list[FleetMapCluster] = Field(default_factory=list)
     unavailable: list[str] = Field(default_factory=list)
+    decommissioned_agents: int = Field(
+        default=0,
+        description="Decommissioned agents left out of the map, counted for context.",
+    )
