@@ -562,6 +562,48 @@ describe('FlowExecutionView', () => {
     expect(drawn()).to.be.greaterThan(100);
   });
 
+  it('prints the billing line once per run of same-billed calls (#1692)', async () => {
+    const element = (await fixture(
+      html`<flow-execution-view></flow-execution-view>`
+    )) as FlowExecutionView;
+    element.executionId = 'exec-1';
+    await element.updateComplete;
+    await waitUntil(
+      () =>
+        (element as any).execution?.id === 'exec-1' &&
+        !(element as any).isLoading,
+      'Execution view did not finish loading'
+    );
+
+    const billed = {
+      billing_path: 'your_key',
+      billing_model_name: 'Deepseek',
+      billing_model_id: 'model-1',
+    };
+    (element as any).gatewayEvents = Array.from({ length: 4 }, (_, i) => ({
+      id: `billed-${i}`,
+      execution_id: 'exec-1',
+      timestamp: new Date(
+        Date.parse('2026-03-09T10:00:00Z') + i * 1000
+      ).toISOString(),
+      type: 'model_gateway_call',
+      payload: {
+        api_usage_id: `usage-b${i}`,
+        request_id: `req-b${i}`,
+        ...(i === 3 ? { billing_path: 'allowance' } : billed),
+      },
+    }));
+    await element.updateComplete;
+
+    const rows = Array.from(
+      element.shadowRoot!.querySelectorAll('preloop-gateway-event')
+    ) as Array<HTMLElement & { hideBilling: boolean }>;
+    expect(rows.length).to.be.at.least(4);
+    const shown = rows.filter((row) => !row.hideBilling);
+    // One "your key" line for the three same-billed calls, one for allowance.
+    expect(shown.length).to.equal(rows.length - 2);
+  });
+
   it('puts what the run was about under the flow name (wave 4)', async () => {
     const element = (await fixture(
       html`<flow-execution-view></flow-execution-view>`
