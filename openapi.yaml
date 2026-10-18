@@ -3752,6 +3752,19 @@ paths:
           title: Limit
         description: Most recent model interactions merged into the timeline. The
           console asks for the latest 50 when a session opens.
+      - name: operator_note_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 64
+          - type: 'null'
+          description: Include this delivered note even beyond the recent activity
+            page.
+          title: Operator Note Id
+        description: Include this delivered note even beyond the recent activity page.
       responses:
         '200':
           description: Successful Response
@@ -4196,6 +4209,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AvatarResponse'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/attention/extension-items:
+    get:
+      tags:
+      - Account
+      summary: List Extension Attention Items
+      description: Bound contribution fan-out while async providers run on the API
+        loop.
+      operationId: list_extension_attention_items_api_v1_attention_extension_items_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ExtensionAttentionItem'
+                type: array
+                title: Response List Extension Attention Items Api V1 Attention Extension
+                  Items Get
         '401':
           description: Invalid or expired credential
         '403':
@@ -8065,6 +8106,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WebhookReplayResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
+  /api/v1/fleet/map:
+    get:
+      tags:
+      - Fleet
+      summary: Read Fleet Map
+      description: Read the selected organization's visible fleet and model dependencies.
+      operationId: read_fleet_map_api_v1_fleet_map_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 50
+          default: 500
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FleetMapResponse'
         '422':
           description: Validation Error
           content:
@@ -19932,6 +20012,62 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/operator-notes/session-targets:
+    get:
+      tags:
+      - Operator Notes
+      - Operator Notes
+      summary: List Operator Note Session Targets
+      description: List the agent's live conversations that an operator can explicitly
+        steer.
+      operationId: list_operator_note_session_targets_api_v1_operator_notes_session_targets_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: agent_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Agent Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorNoteSessionTargets'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/operator-notes/{note_id}:
     get:
       tags:
@@ -30213,6 +30349,257 @@ components:
         never added together: "this run cost X, the work it delegated cost Y" is
 
         the question the tree exists to answer, and one number would hide it.'
+    ExtensionAttentionItem:
+      properties:
+        id:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Id
+        source:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Source
+        title:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Title
+        detail:
+          type: string
+          maxLength: 4000
+          title: Detail
+        href:
+          type: string
+          pattern: ^/console(?:[/?#][^\\\x00-\x20]*)?$
+          title: Href
+        severity:
+          type: string
+          enum:
+          - info
+          - action
+          title: Severity
+        opened_at:
+          type: string
+          format: date-time
+          title: Opened At
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - source
+      - title
+      - detail
+      - href
+      - severity
+      - opened_at
+      title: ExtensionAttentionItem
+      description: Neutral plugin item. Only local console destinations are accepted.
+    FleetMapAction:
+      properties:
+        label:
+          type: string
+          title: Label
+        href:
+          type: string
+          title: Href
+      type: object
+      required:
+      - label
+      - href
+      title: FleetMapAction
+      description: Navigation to an existing control, never a graph mutation.
+    FleetMapCluster:
+      properties:
+        type:
+          type: string
+          enum:
+          - user
+          - device
+          - runner
+          - agent
+          - model
+          - provider_account
+          - provider
+          title: Type
+        count:
+          type: integer
+          title: Count
+      type: object
+      required:
+      - type
+      - count
+      title: FleetMapCluster
+      description: Omitted visible nodes grouped by resource type, never hidden resources.
+    FleetMapEdge:
+      properties:
+        id:
+          type: string
+          title: Id
+        source:
+          type: string
+          title: Source
+        target:
+          type: string
+          title: Target
+        kind:
+          type: string
+          enum:
+          - owns
+          - hosts
+          - runs_on
+          - uses_model
+          - uses_account
+          - account_of_provider
+          - provided_by
+          title: Kind
+        provenance:
+          type: string
+          enum:
+          - configured
+          - observed
+          title: Provenance
+        impact_source:
+          type: string
+          title: Impact Source
+        impact_target:
+          type: string
+          title: Impact Target
+        gaps:
+          items:
+            type: string
+            enum:
+            - discovered_agent
+            - unknown_device
+            - offline_runner
+            - not_via_gateway
+            - open_finding
+          type: array
+          title: Gaps
+      type: object
+      required:
+      - id
+      - source
+      - target
+      - kind
+      - provenance
+      - impact_source
+      - impact_target
+      title: FleetMapEdge
+      description: Relationship direction and separate affected-resource direction.
+    FleetMapNode:
+      properties:
+        id:
+          type: string
+          title: Id
+        type:
+          type: string
+          enum:
+          - user
+          - device
+          - runner
+          - agent
+          - model
+          - provider_account
+          - provider
+          title: Type
+        resource_id:
+          type: string
+          title: Resource Id
+        label:
+          type: string
+          title: Label
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+        href:
+          type: string
+          title: Href
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        owner_ids:
+          items:
+            type: string
+          type: array
+          title: Owner Ids
+        provider_ids:
+          items:
+            type: string
+          type: array
+          title: Provider Ids
+        gaps:
+          items:
+            type: string
+            enum:
+            - discovered_agent
+            - unknown_device
+            - offline_runner
+            - not_via_gateway
+            - open_finding
+          type: array
+          title: Gaps
+        finding_count:
+          type: integer
+          title: Finding Count
+          default: 0
+        actions:
+          items:
+            $ref: '#/components/schemas/FleetMapAction'
+          type: array
+          title: Actions
+      type: object
+      required:
+      - id
+      - type
+      - resource_id
+      - label
+      - href
+      title: FleetMapNode
+      description: Allowlisted resource metadata with stable graph identifiers.
+    FleetMapResponse:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        nodes:
+          items:
+            $ref: '#/components/schemas/FleetMapNode'
+          type: array
+          title: Nodes
+        edges:
+          items:
+            $ref: '#/components/schemas/FleetMapEdge'
+          type: array
+          title: Edges
+        truncated:
+          type: boolean
+          title: Truncated
+          default: false
+        limit:
+          type: integer
+          title: Limit
+          default: 500
+        clusters:
+          items:
+            $ref: '#/components/schemas/FleetMapCluster'
+          type: array
+          title: Clusters
+        unavailable:
+          items:
+            type: string
+          type: array
+          title: Unavailable
+      type: object
+      title: FleetMapResponse
+      description: Bounded partial graph; incompleteness must stay visible to consumers.
     FlowArtifactKindUsage:
       properties:
         bytes:
@@ -37434,6 +37821,12 @@ components:
           - type: 'null'
           title: Agent Id
           description: Managed agent to steer, current or next session.
+        next_session:
+          type: boolean
+          title: Next Session
+          description: With agent_id, wait for a session started after this note was
+            sent.
+          default: false
         runtime_session_id:
           anyOf:
           - type: string
@@ -37615,6 +38008,10 @@ components:
             format: uuid
           - type: 'null'
           title: Runtime Session Id
+        next_session:
+          type: boolean
+          title: Next Session
+          default: false
         author:
           $ref: '#/components/schemas/OperatorNoteAuthor'
         created_at:
@@ -37704,6 +38101,50 @@ components:
       - author
       title: OperatorNoteResponse
       description: One note and everything the sender needs to know about its fate.
+    OperatorNoteSessionTarget:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        alias:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Alias
+        session_source_type:
+          type: string
+          title: Session Source Type
+        started_at:
+          type: string
+          format: date-time
+          title: Started At
+        session_reference:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Reference
+      type: object
+      required:
+      - id
+      - session_source_type
+      - started_at
+      title: OperatorNoteSessionTarget
+      description: One live conversation available in the console's note target picker.
+    OperatorNoteSessionTargets:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/OperatorNoteSessionTarget'
+          type: array
+          title: Sessions
+        total:
+          type: integer
+          title: Total
+          default: 0
+      type: object
+      title: OperatorNoteSessionTargets
+      description: Paged live conversations, excluding enrollment identity placeholders.
     OperatorSessionEndRequest:
       properties:
         external_session_id:
