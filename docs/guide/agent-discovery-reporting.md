@@ -74,10 +74,16 @@ status: `new`, `onboarded` or `ignored`.
   re-report of the same tool only moves `last_seen_at` and emits nothing.
 - For current-user discovery, when an agent from the same workstation is onboarded and its enrollment
   validates, the CLI sends the same two hashes with the validation and the
-  matching candidate becomes `onboarded`, linked to the managed agent.
+  matching candidate becomes `onboarded`, linked to the managed agent. When
+  no report was ever sent for that install, the validation records an
+  `onboarded` candidate itself (the two hashes plus the OS family and CLI
+  version, nothing else), so onboarding alone places the agent on its device
+  in the device fleet. Re-onboarding updates the same row.
 - **Mark ignored** in the console hides a candidate. **Copy onboard command**
   copies `preloop agents onboard <kind>` to run on that workstation.
-- Candidates nobody has reported for 90 days are deleted by a daily purge.
+- Candidates nobody has reported for 90 days are deleted by a daily purge,
+  except `onboarded` candidates still linked to a managed agent: those are
+  the agent's device link and are kept until the agent is deleted.
 
 ## API
 

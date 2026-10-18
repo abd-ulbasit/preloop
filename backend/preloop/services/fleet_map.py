@@ -116,6 +116,26 @@ def _reject_report_key(user: models.User) -> None:
         raise HTTPException(403, "Report-only credentials cannot read the fleet map")
 
 
+def _enrollment_hostname(
+    device_agents: list[dict[str, Any]], agents_by_id: dict[str, Any]
+) -> str | None:
+    """Label a runner-less device by the hostname its linked agents enrolled from.
+
+    The device itself is still keyed by its exact salted fingerprint; the
+    hostname only names it, it never merges devices.
+    """
+    names = sorted(
+        {
+            name.strip()
+            for entry in device_agents
+            if (row := agents_by_id.get(str(entry.get("managed_agent_id")))) is not None
+            and isinstance(name := getattr(row, "enrollment_hostname", None), str)
+            and name.strip()
+        }
+    )
+    return names[0] if len(names) == 1 else None
+
+
 def build_fleet_map(
     db: Session, *, user: models.User, limit: int = 500
 ) -> FleetMapResponse:
@@ -477,6 +497,7 @@ def build_fleet_map(
         result.truncated |= len(devices) > SOURCE_LIMIT
         discovered_count = 0
         discovered_seen: set[tuple[str, str]] = set()
+        agents_by_id = {str(row.id): row for row in agents}
         for device in devices[:SOURCE_LIMIT]:
             key = device["device_key"]
             owners = [
@@ -485,16 +506,19 @@ def build_fleet_map(
                 if u.get("id") and f"user:{u['id']}" in nodes
             ]
             count = sum(f["state"] == "open" for f in device["findings"])
+            hostname = device.get("hostname") or _enrollment_hostname(
+                device["agents"], agents_by_id
+            )
             item = node(
                 "device",
                 key,
-                device.get("hostname") or "Unknown device",
+                hostname or "Unknown device",
                 f"{FLEET_HREF}?device={quote(key, safe='')}",
                 status=device["runner_state"],
                 owner_ids=owners,
                 finding_count=count,
                 gaps=(["open_finding"] if count else [])
-                + (["unknown_device"] if not device.get("hostname") else []),
+                + (["unknown_device"] if not hostname else []),
             )
             for uid in owners:
                 edge(uid, item.id, "owns", "observed")

@@ -227,10 +227,15 @@ func discoveryLinkFields(client *api.Client, agent AgentConfig) map[string]strin
 		return nil
 	}
 	home, _ := os.UserHomeDir()
-	return map[string]string{
+	fields := map[string]string{
 		"workstation_fingerprint": workstationFingerprint(discoveryLinkSalt, machineID),
 		"config_path_hash":        configPathHash(discoveryLinkSalt, home, agent.ConfigPath),
+		"os_family":               discoveryOSFamily(),
 	}
+	if discoveryVersionPattern.MatchString(version.Version) {
+		fields["cli_version"] = version.Version
+	}
+	return fields
 }
 
 // defaultReadMachineID reads the platform machine id. When the platform

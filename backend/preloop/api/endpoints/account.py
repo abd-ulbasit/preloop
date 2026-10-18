@@ -2606,6 +2606,8 @@ def _link_discovery_candidates(
             agent_kind=agent.agent_kind,
             managed_agent_id=agent.id,
             config_path_hash=payload.config_path_hash,
+            os_family=payload.os_family,
+            cli_version=payload.cli_version,
         )
         db.commit()
     except Exception:

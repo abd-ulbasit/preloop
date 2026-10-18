@@ -982,6 +982,9 @@ func runAgentsDiscover(cmd *cobra.Command, args []string) error {
 	if len(discovered) == 0 {
 		fmt.Println("No AI agents found on this machine.")
 		fmt.Println(agentDiscoverySearchLabel())
+		// Agents Preloop recorded as enrolled from this host are still
+		// worth listing when their local configs are gone.
+		printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, nil, nil))
 		return nil
 	}
 
@@ -1056,16 +1059,15 @@ func promptToOnboardDiscoveredAgents(
 		return nil
 	}
 
-	candidates, err := filterAgentsPendingEnrollment(client, discovered)
-	if err != nil {
-		return err
-	}
+	// Every discovered agent is a candidate, including already-onboarded
+	// ones: a re-run must refresh their hooks, plugins and MCP config.
+	candidates := selectOnboardingRunCandidates(client, discovered)
 	var outcomes []agentOnboardingOutcome
 	defer func() {
-		printAgentOnboardingSummary(os.Stdout, completeDiscoveryOutcomes(discovered, outcomes))
+		printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, outcomes)))
 	}()
 	if len(candidates) == 0 {
-		fmt.Println("All discovered agents are already onboarded or have local managed enrollment state.")
+		fmt.Println("No agents discovered.")
 		return nil
 	}
 
@@ -1139,22 +1141,20 @@ func promptToOnboardCandidates(
 
 	for _, agent := range candidates {
 		if !autoApprove {
-			action := "Onboard"
+			prompt := fmt.Sprintf("Onboard %s (%s) into managed Preloop access now? (Y/n): ", agent.Name, resolveAgentDisplayName(agent))
 			if agent.IsOnboarded {
-				action = "Re-onboard"
+				prompt = reonboardPrompt(writer, agent)
 			}
-			confirmed, err := confirmActionDefaultYes(
-				bufferedReader,
-				writer,
-				fmt.Sprintf("%s %s (%s) into managed Preloop access now? (Y/n): ", action, agent.Name, resolveAgentDisplayName(agent)),
-			)
+			confirmed, err := confirmActionDefaultYes(bufferedReader, writer, prompt)
 			if err != nil {
 				return outcomes, fmt.Errorf("failed to read onboarding confirmation: %w", err)
 			}
 			if !confirmed {
-				outcomes = append(outcomes, agentOnboardingOutcome{Agent: agent, Status: "skipped", Reason: "onboarding declined"})
+				outcomes = append(outcomes, declinedOnboardingOutcome(agent))
 				continue
 			}
+		} else {
+			announceAutoReonboard(writer, agent)
 		}
 		agent, err := prepareAgentForEnrollment(bufferedReader, writer, agent, autoApprove)
 		if err != nil {
@@ -1356,39 +1356,6 @@ func filterAgentsPendingLocalEnrollment(discovered []AgentConfig) []AgentConfig 
 	return candidates
 }
 
-func filterAgentsPendingEnrollment(client *api.Client, discovered []AgentConfig) ([]AgentConfig, error) {
-	candidates := make([]AgentConfig, 0, len(discovered))
-	for _, agent := range discovered {
-		if agent.ReonboardRecommended {
-			candidates = append(candidates, agent)
-			continue
-		}
-		if _, err := loadLocalEnrollmentState(agent); err == nil {
-			continue
-		}
-		if client != nil {
-			if managed, err := getManagedAgentForDiscovered(client, agent); err == nil &&
-				managedAgentIsLocallyComplete(managed) {
-				continue
-			}
-		}
-		candidates = append(candidates, agent)
-	}
-	return candidates, nil
-}
-
-func managedAgentIsLocallyComplete(managed *managedAgentSummary) bool {
-	if managed == nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(managed.OnboardingState)) {
-	case "fully_onboarded", "mcp_proxy_only":
-		return true
-	default:
-		return false
-	}
-}
-
 func isAutoApprove(cmd *cobra.Command) bool {
 	yes, _ := cmd.Flags().GetBool("yes")
 	force, _ := cmd.Flags().GetBool("force")
@@ -1462,10 +1429,9 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		candidates, err := filterAgentsPendingEnrollment(client, discovered)
-		if err != nil {
-			return err
-		}
+		// Every discovered agent is a candidate, including already-onboarded
+		// ones, so a re-run refreshes hooks, plugins and MCP config.
+		candidates := selectOnboardingRunCandidates(client, discovered)
 		// Batch onboarding (with or without --all/--yes) never touches
 		// config-only agents whose runtime is reliably missing; they need an
 		// explicit `preloop agents onboard <name>`.
@@ -1478,7 +1444,8 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 					return err
 				}
 			}
-			fmt.Println("No unenrolled agents found.")
+			fmt.Println("No onboardable agents found.")
+			printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, nil)))
 			return nil
 		}
 
@@ -1535,12 +1502,15 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 				enrolled = append(enrolled, secondTier...)
 				failures = append(failures, secondFailures...)
 			}
+			outcomes := outcomesFromBestEffort(enrolled, failures)
 			if deferLiveValidate && len(enrolled) > 0 {
-				runDeferredLiveValidationsParallel(client, enrolled, os.Stdout)
+				liveResults := runDeferredLiveValidationsParallel(client, enrolled, os.Stdout)
+				applyLiveValidationOutcomesToSummary(outcomes, liveResults)
 			}
 			if err := ensureAgentControlOnboarding(client, discovered, opts); err != nil {
 				return err
 			}
+			printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, outcomes)))
 			if len(failures) > 0 {
 				printAgentOnboardingFailures(os.Stdout, failures)
 				if len(enrolled) == 0 {
@@ -1576,7 +1546,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 			liveResults := runDeferredLiveValidationsParallel(client, enrolled, os.Stdout)
 			applyLiveValidationOutcomesToSummary(outcomes, liveResults)
 		}
-		printAgentOnboardingSummary(os.Stdout, outcomes)
+		printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, outcomes)))
 		return agentOnboardingSummaryError(outcomes)
 	}
 
@@ -3806,13 +3776,21 @@ func enrichDiscoveredAgents(discovered []AgentConfig, client *api.Client) ([]Age
 
 func enrichDiscoveredAgent(agent AgentConfig, client *api.Client) (AgentConfig, error) {
 	agent = normalizeDiscoveredAgent(agent)
-	state, _ := loadLocalEnrollmentState(agent)
 	var remote *managedAgentSummary
 	if client != nil {
 		if managed, err := getManagedAgentForDiscovered(client, agent); err == nil {
 			remote = managed
 		}
 	}
+	return enrichDiscoveredAgentWithRemote(agent, remote)
+}
+
+// enrichDiscoveredAgentWithRemote is enrichDiscoveredAgent for a caller that
+// already resolved the agent's server record (nil when there is none), so a
+// batch can list managed agents once instead of once per agent.
+func enrichDiscoveredAgentWithRemote(agent AgentConfig, remote *managedAgentSummary) (AgentConfig, error) {
+	agent = normalizeDiscoveredAgent(agent)
+	state, _ := loadLocalEnrollmentState(agent)
 	agent.IsOnboarded = state != nil || remote != nil
 	if remote != nil && strings.TrimSpace(remote.OnboardingState) != "" {
 		agent.OnboardingState = strings.TrimSpace(remote.OnboardingState)
@@ -6021,6 +5999,9 @@ func validateManagedEnrollmentRecord(
 	if status == "validated" {
 		// Salted hashes only; lets the server mark a candidate reported by
 		// `agents discover --report` on this workstation as onboarded.
+		// Since onboarding alone now records the agent on this workstation
+		// (no prior report needed), also send the enumerated OS family and
+		// CLI version so the device fleet can describe the device.
 		for key, value := range discoveryLinkFields(client, agent) {
 			request[key] = value
 		}
