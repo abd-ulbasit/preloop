@@ -713,7 +713,14 @@ when enabled. Hosted operator credentials and routing stay private. Each resourc
 kind retains its read permission and account visibility checks. Credential references group model
 accounts without resolving secrets. Configured and observed edges stay distinct;
 explicit impact directions support dependency and affected-owner traversal without
-crossing into unrelated accounts at the same provider. Omitted visible nodes are
+crossing into unrelated accounts at the same provider. Decommissioned agents are
+never read (only a visibility-filtered count is returned), and each agent carries an
+`agent_state` (onboarded, discovered, or inactive when suspended or not seen for 14
+days) with `last_seen_at`. Model rows collapse into canonical models keyed by
+identifier; the agent-to-model edge names the provider account it goes through, an
+account names its provider as `parent_id`, and an agent's provider facet follows its
+account, so one model offered by two providers does not join their blast radius.
+Omitted visible nodes are
 summarized by type, and source/output truncation and unavailable projections remain
 explicit so a partial graph never claims complete blast-radius coverage.
 

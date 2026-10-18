@@ -257,10 +257,12 @@ def build_fleet_map(
     if permissions["view_agents"]:
         # Count only what the caller could see, as the agent source does.
         retired = list_decommissioned_agents(
-            db, account_id=account_id, limit=SOURCE_LIMIT
+            db, account_id=account_id, limit=SOURCE_LIMIT + 1
         )
+        # A saturated count is a lower bound; say the map is partial.
+        result.truncated |= len(retired) > SOURCE_LIMIT
         result.decommissioned_agents = len(
-            filter_viewable(db, user, VISIBLE_MANAGED_AGENT, retired)
+            filter_viewable(db, user, VISIBLE_MANAGED_AGENT, retired[:SOURCE_LIMIT])
         )
     for row in agents:
         owners = [f"user:{row.owner_user_id}"] if row.owner_user_id else []

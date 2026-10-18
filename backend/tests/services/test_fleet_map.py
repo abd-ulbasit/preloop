@@ -826,3 +826,18 @@ def test_agent_providers_follow_its_account_not_the_shared_model(
     nodes = {n.id: n for n in graph.nodes}
     assert nodes["agent:a"].provider_ids == ["provider:anthropic"]
     assert nodes["agent:b"].provider_ids == ["provider:bedrock"]
+
+
+def test_saturated_decommissioned_count_marks_the_map_partial(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    from preloop.services.fleet_map import SOURCE_LIMIT
+
+    retired = [
+        agent(f"old-{i}", lifecycle_state="decommissioned")
+        for i in range(SOURCE_LIMIT + 1)
+    ]
+    with patch(f"{MODULE}.list_decommissioned_agents", return_value=retired):
+        graph = build_fleet_map(MagicMock(), user=viewer())
+    assert graph.decommissioned_agents == SOURCE_LIMIT
+    assert graph.truncated
