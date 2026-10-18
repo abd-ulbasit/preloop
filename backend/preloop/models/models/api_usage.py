@@ -213,6 +213,17 @@ class ApiUsage(Base):
             ),
         ),
         Index(
+            "ix_api_usage_governance_spend",
+            "account_id",
+            text("(meta_data ->> 'funding')"),
+            "timestamp",
+            postgresql_include=["id", "estimated_cost"],
+            postgresql_where=text(
+                "action_type = 'model_gateway' AND (meta_data ->> 'purpose') IN "
+                "('governance_session_digest', 'governance_review')"
+            ),
+        ),
+        Index(
             "ix_api_usage_governance_candidate",
             "account_id",
             "runtime_session_id",
