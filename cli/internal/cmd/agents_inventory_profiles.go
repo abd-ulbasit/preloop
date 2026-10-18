@@ -76,12 +76,15 @@ func directoryInventoryProfiles(root string, includeRoot bool) ([]inventoryProfi
 	}
 	defer directory.Close()
 	entries, err := directory.ReadDir(257)
-	if err != nil && err != io.EOF {
-		if includeRoot {
-			return []inventoryProfile{{Home: "/root"}}, false, err
-		}
-		return nil, false, err
+	if err == io.EOF {
+		err = nil
 	}
+	return inventoryDirectoryProfiles(root, entries, err, includeRoot)
+}
+
+// Entries read before a ReadDir error are still returned with that error, so
+// the collector scans them and marks the result partial.
+func inventoryDirectoryProfiles(root string, entries []os.DirEntry, readErr error, includeRoot bool) ([]inventoryProfile, bool, error) {
 	profiles := []inventoryProfile{}
 	truncated := len(entries) > 256
 	if truncated {
@@ -109,7 +112,7 @@ func directoryInventoryProfiles(root string, includeRoot bool) ([]inventoryProfi
 			profiles = append(profiles, inventoryProfile{Home: "/root"})
 		}
 	}
-	return profiles, truncated, nil
+	return profiles, truncated, readErr
 }
 
 func collectAllUsersInventory(deps inventoryProbeDependencies, profileDeps inventoryProfileDependencies, salt, context string) inventoryEnvelope {

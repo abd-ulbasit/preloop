@@ -21,10 +21,12 @@ func localInventoryProfiles() ([]inventoryProfile, bool, error) {
 	// Read one extra entry to detect the bounded enumeration limit. This
 	// includes service SIDs in the bound; excluded entries do not hide truncation.
 	names, err := key.ReadSubKeyNames(inventoryProfileLimit + 1)
-	if err != nil && err != io.EOF {
-		return nil, false, err
+	if err == io.EOF {
+		err = nil
 	}
-	return inventoryWindowsProfiles(names, func(sid string) (string, error) {
+	// Names read before a registry error are still scanned; the error marks
+	// the result partial.
+	return inventoryWindowsProfiles(names, err, func(sid string) (string, error) {
 		sub, err := registry.OpenKey(key, sid, registry.QUERY_VALUE)
 		if err != nil {
 			return "", err
@@ -46,7 +48,7 @@ func localInventoryProfiles() ([]inventoryProfile, bool, error) {
 
 // The reader and drive classifier are injected so native Windows CI tests
 // exercise ProfileList semantics using fixtures, never the host registry.
-func inventoryWindowsProfiles(names []string, read func(string) (string, error), localDrive func(string) bool) ([]inventoryProfile, bool, error) {
+func inventoryWindowsProfiles(names []string, enumErr error, read func(string) (string, error), localDrive func(string) bool) ([]inventoryProfile, bool, error) {
 	profiles := []inventoryProfile{}
 	truncated := len(names) > inventoryProfileLimit
 	if truncated {
@@ -74,7 +76,7 @@ func inventoryWindowsProfiles(names []string, read func(string) (string, error),
 			seen[normalized] = true
 		}
 	}
-	return profiles, truncated, nil
+	return profiles, truncated, enumErr
 }
 
 // OBJ_DONT_REPARSE rejects links anywhere in the relative path atomically,

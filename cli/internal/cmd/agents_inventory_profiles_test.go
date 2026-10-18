@@ -394,3 +394,27 @@ func TestAllUsersInventoryOpenRejectsParentReparse(t *testing.T) {
 		t.Fatal("atomic config open followed a parent symlink")
 	}
 }
+
+type inventoryFakeDirEntry struct{ name string }
+
+func (e inventoryFakeDirEntry) Name() string               { return e.name }
+func (e inventoryFakeDirEntry) IsDir() bool                { return true }
+func (e inventoryFakeDirEntry) Type() os.FileMode          { return os.ModeDir }
+func (e inventoryFakeDirEntry) Info() (os.FileInfo, error) { return nil, os.ErrNotExist }
+
+func TestInventoryDirectoryProfilesKeepEntriesReadBeforeError(t *testing.T) {
+	readErr := errors.New("readdir failed mid-enumeration")
+	entries := []os.DirEntry{inventoryFakeDirEntry{"alice"}, inventoryFakeDirEntry{"bob"}}
+	profiles, _, err := inventoryDirectoryProfiles("/home", entries, readErr, true)
+	if err != readErr {
+		t.Fatalf("err = %v, want %v", err, readErr)
+	}
+	want := []inventoryProfile{{Home: filepath.Join("/home", "alice")}, {Home: filepath.Join("/home", "bob")}, {Home: "/root"}}
+	if !reflect.DeepEqual(profiles, want) {
+		t.Fatalf("profiles = %#v, want %#v", profiles, want)
+	}
+	profiles, _, err = inventoryDirectoryProfiles("/Users", entries[:1], readErr, false)
+	if err != readErr || len(profiles) != 1 || profiles[0].Home != filepath.Join("/Users", "alice") {
+		t.Fatalf("profiles=%#v err=%v", profiles, err)
+	}
+}
