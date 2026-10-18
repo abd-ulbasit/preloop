@@ -341,6 +341,16 @@ export class AIModelDetailView extends LitElement {
         flex-direction: column;
       }
 
+      .model-settings {
+        display: flex;
+        flex-direction: column;
+        gap: var(--sl-spacing-large);
+      }
+
+      .model-settings .section-title {
+        margin: 0;
+      }
+
       .page,
       .stack,
       .results {
@@ -3155,19 +3165,6 @@ export class AIModelDetailView extends LitElement {
               }
             </sl-card>
 
-            ${this.renderUsedBy()}
-
-            <sl-card>
-              <div slot="header" class="model-title">Budget Management</div>
-              <budget-policy-editor
-                .readOnly=${!this.editPermissions.allows('manage_budgets')}
-                subjectType="ai_model"
-                .subjectId=${this.modelId}
-              ></budget-policy-editor>
-            </sl-card>
-
-            ${this.renderPricingCard()} ${this.renderGatewayValidation()}
-
             <div class="toolbar">
               <time-range-select
                 ariaLabel="Model usage range"
@@ -3279,6 +3276,22 @@ export class AIModelDetailView extends LitElement {
                     </div>
                   `
             }
+            ${this.renderUsedBy()}
+
+            <!-- #1692: usage is why the page is opened, so budgets, pricing
+                 and gateway checks sit below it in one Settings section. -->
+            <section class="model-settings" data-model-settings>
+              <h2 class="section-title">Settings</h2>
+              <sl-card>
+                <div slot="header" class="model-title">Budget Management</div>
+                <budget-policy-editor
+                  .readOnly=${!this.editPermissions.allows('manage_budgets')}
+                  subjectType="ai_model"
+                  .subjectId=${this.modelId}
+                ></budget-policy-editor>
+              </sl-card>
+              ${this.renderPricingCard()} ${this.renderGatewayValidation()}
+            </section>
           </div>
         </div>
       </div>

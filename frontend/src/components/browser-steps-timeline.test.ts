@@ -1,3 +1,4 @@
+import { resetSessionArtifactCache } from '../utils/session-artifacts';
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import sinon from 'sinon';
 import './session-chat-view';
@@ -113,6 +114,7 @@ describe('browser steps in the session timeline', () => {
   let fetchStub: sinon.SinonStub;
 
   beforeEach(() => {
+    resetSessionArtifactCache();
     localStorage.setItem('accessToken', 'test-access-token');
     fetchStub = sinon.stub(window, 'fetch').callsFake(async (input) => {
       const url = String(input instanceof Request ? input.url : input);

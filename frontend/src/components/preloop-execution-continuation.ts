@@ -45,6 +45,10 @@ export class PreloopExecutionContinuation extends LitElement {
       :host {
         display: block;
       }
+      /* #1692: renders nothing for most runs; take no flex gap then. */
+      :host([data-empty]) {
+        display: none;
+      }
       .action {
         margin: var(--sl-spacing-medium) 0;
       }
@@ -303,6 +307,15 @@ export class PreloopExecutionContinuation extends LitElement {
     this.open = false;
     this.loading = false;
     this.acknowledged = false;
+  }
+
+  protected updated(changed: Map<PropertyKey, unknown>): void {
+    super.updated?.(changed);
+    // Only Lit's comment markers remain when render() returned nothing.
+    this.toggleAttribute(
+      'data-empty',
+      (this.shadowRoot?.childElementCount ?? 0) === 0
+    );
   }
 
   render() {

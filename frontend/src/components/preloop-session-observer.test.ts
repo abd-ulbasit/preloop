@@ -376,6 +376,28 @@ describe('PreloopSessionObserver', () => {
     for (const url of pageCalls) expect(url).to.contain('history=delta');
   });
 
+  it('reads the last 20 turns with a bounded history window (#1689)', async () => {
+    const el = (await fixture(
+      html`<preloop-session-observer
+        .sessions=${[session]}
+      ></preloop-session-observer>`
+    )) as PreloopSessionObserver;
+    await waitUntil(
+      () => deepText(el.shadowRoot).includes('Build a widget'),
+      '',
+      { timeout: 3000 }
+    );
+    const pageCalls = fetchStub
+      .getCalls()
+      .map((call) => call.args[0].toString())
+      .filter((url) => /\/gateway-events\?/.test(url) && /offset=/.test(url));
+    expect(pageCalls.length).to.be.greaterThan(0);
+    for (const url of pageCalls) {
+      expect(url).to.contain('limit=20');
+      expect(url).to.match(/history_window=\d+/);
+    }
+  });
+
   it('bounds the full layout to the window so the page does not grow (#1585)', async () => {
     const el = (await fixture(
       html`<preloop-session-observer
@@ -745,9 +767,11 @@ describe('PreloopSessionObserver', () => {
     );
     const button = el.shadowRoot!.querySelector(
       '[data-testid="add-to-evidence-export"]'
-    ) as HTMLElement & { href: string };
+    ) as HTMLElement;
     expect(button.textContent).to.contain('Add to evidence export');
-    const url = new URL(button.href, 'http://x');
+    // In the overflow menu with Refresh, not a toolbar button (#1689).
+    expect(button.closest('sl-dropdown.more-actions')).to.exist;
+    const url = new URL(button.getAttribute('data-href')!, 'http://x');
     expect(url.pathname).to.equal('/console/settings/records');
     expect(url.hash).to.equal('#period-exports');
     expect(url.searchParams.get('runtime_session_id')).to.equal(id);
@@ -1474,6 +1498,16 @@ describe('PreloopSessionObserver', () => {
           el.shadowRoot!.querySelectorAll('.toolbar sl-button')
         ).find((button) => (button.textContent || '').includes('End session'));
         expect(endButton, 'End session button').to.exist;
+        // Refresh lives in the overflow menu, never beside End session (#1689).
+        const toolbarLabels = Array.from(
+          el.shadowRoot!.querySelectorAll('.mode-row > sl-button')
+        ).map((button) => (button.textContent || '').trim());
+        expect(toolbarLabels).to.not.include('Refresh');
+        expect(
+          el.shadowRoot!.querySelector(
+            'sl-dropdown.more-actions [data-testid="session-refresh"]'
+          )
+        ).to.exist;
         expect(endButton!.getAttribute('variant')).to.equal('danger');
         expect(endButton!.hasAttribute('outline')).to.be.true;
 

@@ -1757,6 +1757,44 @@ describe('AuditView', () => {
     expect(marks).to.deep.equal(['Sealed 12', 'Unsealed']);
     element.remove();
   });
+  it('mounts the chain status chip only after the timeline answers', async () => {
+    let releaseGrouped: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseGrouped = resolve;
+    });
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/v1/audit-logs/grouped?')) {
+        await gate;
+        return new Response(
+          JSON.stringify({ groups: [], total: 0, skip: 0, limit: 50 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const element = document.createElement('audit-view') as AuditView;
+    document.body.appendChild(element);
+    await waitUntil(
+      () => (element as any)._loading,
+      'Audit view did not start loading'
+    );
+    await element.updateComplete;
+    expect(element.shadowRoot?.querySelector('audit-integrity-strip')).to.equal(
+      null
+    );
+    releaseGrouped!();
+    await waitUntil(
+      () => element.shadowRoot?.querySelector('audit-integrity-strip'),
+      'chain chip did not mount after the timeline'
+    );
+    element.remove();
+  });
+
   it('shows upstream error code and reason in the expanded story', async () => {
     const element = document.createElement('audit-view') as AuditView;
     document.body.appendChild(element);

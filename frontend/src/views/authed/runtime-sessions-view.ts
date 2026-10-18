@@ -317,10 +317,14 @@ export class RuntimeSessionsView extends LitElement {
       /* The collection bar: the same inline row the Agents and Flows lists
          use, so the filters sit on the page instead of inside a card of
          their own. Slotted content lives in this view's tree, so these
-         rules reach the selects and the Apply/Reset pair. */
+         rules reach the selects and the Apply/Reset pair. They share one
+         row with the search at 1440 instead of claiming 180px each and
+         wrapping (#1689). */
       list-toolbar sl-select,
       list-toolbar sl-input[type='date'] {
-        min-width: 180px;
+        min-width: 140px;
+        flex: 0 1 150px;
+        width: 150px;
       }
 
       .filter-actions {

@@ -529,6 +529,9 @@ def _attach_flow_stats(
         stats = crud_flow_execution.get_execution_stats_for_flows(
             db, flow_ids, start_date=stats_since
         )
+        # The list's Last run cell links the run and prints its outcome;
+        # without these it could only say when, from the window counts.
+        last_runs = crud_flow_execution.get_last_runs_for_flows(db, flow_ids)
 
         def _window_fields(stat: Any = None) -> Dict[str, Any]:
             """The per-window counts, only when a window was asked for."""
@@ -559,6 +562,7 @@ def _attach_flow_stats(
                 # states money and no volume reads as unmeasured traffic.
                 "token_usage": getattr(s, "token_usage", None),
                 **_window_fields(s),
+                "last_run": last_runs.get(str(s.flow_id)),
             }
             for s in stats
         }
@@ -573,6 +577,7 @@ def _attach_flow_stats(
                     "estimated_cost": 0.0,
                     "token_usage": None,
                     **_window_fields(),
+                    "last_run": None,
                 },
             )
 

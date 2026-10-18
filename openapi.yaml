@@ -555,32 +555,6 @@ paths:
       - OAuth2PasswordBearer: []
       x-restricted-ci: deny
   /api/v1/auth/api-keys:
-    get:
-      tags:
-      - Auth
-      summary: List Api Keys
-      description: "List all API keys for the current user.\n\nArgs:\n    current_user:\
-        \ The current authenticated user.\n\nReturns:\n    List of API keys."
-      operationId: list_api_keys_api_v1_auth_api_keys_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: '#/components/schemas/ApiKeySummary'
-                type: array
-                title: Response List Api Keys Api V1 Auth Api Keys Get
-        '401':
-          description: Invalid or expired credential
-        '403':
-          description: Operation or resource denied for restricted CI credentials
-        '503':
-          description: Credential verification unavailable
-      security:
-      - OAuth2PasswordBearer: []
-      x-restricted-ci: deny
     post:
       tags:
       - Auth
@@ -589,12 +563,14 @@ paths:
         \ data.\n    current_user: The current authenticated user.\n\nReturns:\n \
         \   The created API key details."
       operationId: create_api_key_api_v1_auth_api_keys_post
+      security:
+      - OAuth2PasswordBearer: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ApiKeyCreate'
-        required: true
       responses:
         '201':
           description: Successful Response
@@ -614,8 +590,99 @@ paths:
           description: Operation or resource denied for restricted CI credentials
         '503':
           description: Credential verification unavailable
+      x-restricted-ci: deny
+    get:
+      tags:
+      - Auth
+      summary: List Api Keys
+      description: "List the current user's API keys, optionally one page at a time.\n\
+        \nWith ``limit`` the list is paged on the server and the response carries\n\
+        ``X-Total-Count`` (rows matching the filters) and ``X-Retired-Count``\n(revoked\
+        \ or expired keys matching the search) headers (#1694). Without\nit every\
+        \ key is returned, as before.\n\nArgs:\n    response: The outgoing response,\
+        \ for the count headers.\n    limit: Page size, or None for every key.\n \
+        \   offset: Rows to skip.\n    q: Name search, applied only when paging.\n\
+        \    include_retired: Whether retired keys are listed, when paging.\n    sort:\
+        \ Sort key, when paging.\n    current_user: The current authenticated user.\n\
+        \    db: The database session.\n\nReturns:\n    List of API keys."
+      operationId: list_api_keys_api_v1_auth_api_keys_get
       security:
       - OAuth2PasswordBearer: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 200
+            minimum: 1
+          - type: 'null'
+          description: Page size. Omit to list every key.
+          title: Limit
+        description: Page size. Omit to list every key.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Rows to skip when paging.
+          default: 0
+          title: Offset
+        description: Rows to skip when paging.
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          description: Case-insensitive key name search.
+          title: Q
+        description: Case-insensitive key name search.
+      - name: include_retired
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Whether revoked and expired keys are listed.
+          default: true
+          title: Include Retired
+        description: Whether revoked and expired keys are listed.
+      - name: sort
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^-?(name|created|expires)$
+          description: name, created or expires; a leading '-' sorts descending.
+          default: -created
+          title: Sort
+        description: name, created or expires; a leading '-' sorts descending.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeySummary'
+                title: Response List Api Keys Api V1 Auth Api Keys Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
       x-restricted-ci: deny
   /api/v1/auth/runtime-sessions/token:
     post:
@@ -4055,6 +4122,22 @@ paths:
           older event on the same page already carried. Positions are kept: each returned
           message carries its original `position`. The event detail endpoint still
           returns the full payload.'
+      - name: history_window
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 500
+            minimum: 1
+          - type: 'null'
+          description: With `history=delta`, each event keeps at most its last N messages
+            and tool entries, so the oldest event on a page of a long session does
+            not carry the whole conversation (#1689).
+          title: History Window
+        description: With `history=delta`, each event keeps at most its last N messages
+          and tool entries, so the oldest event on a page of a long session does not
+          carry the whole conversation (#1689).
       responses:
         '200':
           description: Successful Response
@@ -5413,6 +5496,17 @@ paths:
             format: date-time
           - type: 'null'
           title: End Date
+      - name: include_agents
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Include the per-agent breakdown (usage_by_agent). Lists that
+            show per-tool totals only pass false for a smaller response.
+          default: true
+          title: Include Agents
+        description: Include the per-agent breakdown (usage_by_agent). Lists that
+          show per-tool totals only pass false for a smaller response.
       responses:
         '200':
           description: Successful Response
@@ -5482,6 +5576,35 @@ paths:
                   $ref: '#/components/schemas/ToolSummaryResponse'
                 type: array
                 title: Response List Tool Summaries Api V1 Tools Summary Get
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      security:
+      - bearerAuth: []
+      x-restricted-ci: deny
+  /api/v1/tools/rules:
+    get:
+      tags:
+      - Tools
+      summary: List Tool Rules
+      description: "Return each tool's identity and policy state, for the Policies\
+        \ page.\n\nArgs:\n    account: Current user's account.\n    current_user:\
+        \ The authenticated user.\n    db: Database session.\n\nReturns:\n    One\
+        \ row per catalogue tool, without descriptions or input schemas."
+      operationId: list_tool_rules_api_v1_tools_rules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ToolRuleIndexRow'
+                type: array
+                title: Response List Tool Rules Api V1 Tools Rules Get
         '401':
           description: Invalid or expired credential
         '403':
@@ -46448,6 +46571,69 @@ components:
       type: object
       title: ToolConfigurationUpdate
       description: Schema for updating tool configuration.
+    ToolRuleIndexRow:
+      properties:
+        name:
+          type: string
+          title: Name
+        source:
+          type: string
+          enum:
+          - builtin
+          - mcp
+          - agent
+          title: Source
+        source_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Id
+        source_name:
+          type: string
+          title: Source Name
+        is_enabled:
+          type: boolean
+          title: Is Enabled
+        approval_workflow_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Approval Workflow Id
+        config_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Config Id
+        has_approval_condition:
+          type: boolean
+          title: Has Approval Condition
+        access_rules:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Access Rules
+      type: object
+      required:
+      - name
+      - source
+      - source_id
+      - source_name
+      - is_enabled
+      - approval_workflow_id
+      - config_id
+      - has_approval_condition
+      - access_rules
+      title: ToolRuleIndexRow
+      description: 'The policy state of one tool, for building the Policies rules
+        list.
+
+
+        Carries no description, schema or token estimate: the rules list and the
+
+        rule editor''s tool picker need the tool''s identity and its configuration
+
+        only, and the full catalogue is several times larger.'
     ToolSummaryResponse:
       properties:
         name:

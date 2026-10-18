@@ -14,6 +14,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     status,
 )
 from fastapi.security import OAuth2PasswordRequestForm
@@ -1926,21 +1927,62 @@ async def create_runtime_session_token(
 
 @router.get("/api-keys", response_model=List[ApiKeySummary])
 def list_api_keys(
+    response: Response,
+    limit: Optional[int] = Query(
+        None, ge=1, le=200, description="Page size. Omit to list every key."
+    ),
+    offset: int = Query(0, ge=0, description="Rows to skip when paging."),
+    q: Optional[str] = Query(
+        None, max_length=200, description="Case-insensitive key name search."
+    ),
+    include_retired: bool = Query(
+        True, description="Whether revoked and expired keys are listed."
+    ),
+    sort: str = Query(
+        "-created",
+        pattern=r"^-?(name|created|expires)$",
+        description="name, created or expires; a leading '-' sorts descending.",
+    ),
     current_user: AuthUserResponse = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ) -> List[ApiKeySummary]:
-    """List all API keys for the current user.
+    """List the current user's API keys, optionally one page at a time.
+
+    With ``limit`` the list is paged on the server and the response carries
+    ``X-Total-Count`` (rows matching the filters) and ``X-Retired-Count``
+    (revoked or expired keys matching the search) headers (#1694). Without
+    it every key is returned, as before.
 
     Args:
+        response: The outgoing response, for the count headers.
+        limit: Page size, or None for every key.
+        offset: Rows to skip.
+        q: Name search, applied only when paging.
+        include_retired: Whether retired keys are listed, when paging.
+        sort: Sort key, when paging.
         current_user: The current authenticated user.
+        db: The database session.
 
     Returns:
         List of API keys.
     """
     session = db
 
-    # Get API keys using CRUD layer
-    keys = crud_api_key.get_by_user(session, username=current_user.username)
+    if limit is None:
+        keys = crud_api_key.get_by_user(session, username=current_user.username)
+    else:
+        keys, total, retired = crud_api_key.page_by_user(
+            session,
+            username=current_user.username,
+            limit=limit,
+            offset=offset,
+            search=(q or "").strip() or None,
+            include_retired=include_retired,
+            sort=sort.lstrip("-"),
+            descending=sort.startswith("-"),
+        )
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Retired-Count"] = str(retired)
     if not keys:
         return []
     key_ids = [key.id for key in keys]

@@ -186,6 +186,11 @@ export class AuditView extends AuthedElement {
   // Timeline data
   @state() private _groups: AuditGroup[] = [];
   @state() private _loading = false;
+  /**
+   * Set once the first timeline answer is in. The chain status chip mounts
+   * only then, so its read never competes with the table (#1693).
+   */
+  @state() private _chainReady = false;
   @state() private _permissionError: PermissionError | null = null;
   /** Why the timeline could not be loaded; shown instead of the empty state. */
   @state() private _loadError: string | null = null;
@@ -545,6 +550,7 @@ export class AuditView extends AuthedElement {
     } finally {
       if (!background && generation === this._timelineGeneration) {
         this._loading = false;
+        this._chainReady = true;
       }
     }
     if (generation !== this._timelineGeneration) return;
@@ -1509,7 +1515,11 @@ export class AuditView extends AuthedElement {
                   message=${this._permissionError.message}
                 ></permission-denied>`
               : html`
-                  <audit-integrity-strip></audit-integrity-strip>
+                  ${
+                    this._chainReady
+                      ? html`<audit-integrity-strip></audit-integrity-strip>`
+                      : nothing
+                  }
                   ${this._renderFilterBar()}
                   ${
                     this._loading

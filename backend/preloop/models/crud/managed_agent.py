@@ -172,6 +172,18 @@ def _empty_usage_aggregate() -> dict[str, Any]:
     }
 
 
+class _PageRow:
+    """One listed agent: the page columns plus its model request count."""
+
+    def __init__(self, **values: Any) -> None:
+        """Expose every column as an attribute, like the SQL row it replaces.
+
+        Args:
+            **values: Column values keyed by label.
+        """
+        self.__dict__.update(values)
+
+
 def _usage_aggregates_for_principals(
     db: Session,
     *,
@@ -1042,15 +1054,21 @@ class CRUDManagedAgent(CRUDBase[ManagedAgent]):
 
         total = base_query.count()
 
-        rows = (
-            base_query.outerjoin(
-                ApiUsage,
-                and_(
-                    ApiUsage.runtime_session_id == self.model.runtime_session_id,
-                    ApiUsage.action_type == "model_gateway",
-                ),
+        # Rank with one index-bounded max() per agent, then count the page's
+        # requests over the page's sessions only. Joining api_usage for every
+        # agent and grouping on every column before the LIMIT made the cost
+        # follow the account's whole gateway history (#1694).
+        last_request = (
+            db.query(func.max(ApiUsage.timestamp))
+            .filter(
+                ApiUsage.runtime_session_id == self.model.runtime_session_id,
+                ApiUsage.action_type == "model_gateway",
             )
-            .with_entities(
+            .correlate(self.model)
+            .scalar_subquery()
+        )
+        page = (
+            base_query.with_entities(
                 self.model.id,
                 self.model.runtime_session_id,
                 self.model.owner_user_id,
@@ -1076,53 +1094,47 @@ class CRUDManagedAgent(CRUDBase[ManagedAgent]):
                 RuntimeSession.started_at,
                 RuntimeSession.last_activity_at,
                 RuntimeSession.ended_at,
-                func.count(ApiUsage.id).label("request_count"),
-                func.coalesce(func.sum(ApiUsage.estimated_cost), 0.0).label(
-                    "estimated_cost"
-                ),
-                func.max(ApiUsage.model_alias).label("latest_model_alias"),
-                func.max(ApiUsage.provider_name).label("latest_provider_name"),
-                func.max(ApiUsage.timestamp).label("last_request_at"),
-            )
-            .group_by(
-                self.model.id,
-                self.model.runtime_session_id,
-                self.model.owner_user_id,
-                self.model.others_may_start_sessions,
-                self.model.agent_kind,
-                self.model.display_name,
-                self.model.session_source_type,
-                self.model.session_source_id,
-                self.model.session_reference,
-                self.model.enrollment_hostname,
-                self.model.identity_derivation,
-                self.model.enrolled_via,
-                self.model.managed_mcp_servers,
-                self.model.lifecycle_state,
-                self.model.lifecycle_reason,
-                self.model.lifecycle_updated_at,
-                self.model.last_seen_at,
-                self.model.control_session_mode,
-                self.model.control_last_heartbeat_at,
-                self.model.tags,
-                User.username,
-                User.email,
-                RuntimeSession.started_at,
-                RuntimeSession.last_activity_at,
-                RuntimeSession.ended_at,
+                last_request.label("last_request_at"),
             )
             .order_by(
                 func.coalesce(
-                    func.max(ApiUsage.timestamp),
+                    last_request,
                     RuntimeSession.last_activity_at,
                     self.model.last_seen_at,
                     self.model.created_at,
-                ).desc()
+                ).desc(),
+                self.model.id.desc(),
             )
             .limit(limit)
             .offset(offset)
             .all()
         )
+        session_ids = [row.runtime_session_id for row in page if row.runtime_session_id]
+        request_counts: dict[Any, int] = {}
+        if session_ids:
+            request_counts = {
+                session_id: int(count or 0)
+                for session_id, count in db.query(
+                    ApiUsage.runtime_session_id, func.count(ApiUsage.id)
+                )
+                .filter(
+                    ApiUsage.runtime_session_id.in_(session_ids),
+                    ApiUsage.action_type == "model_gateway",
+                )
+                .group_by(ApiUsage.runtime_session_id)
+                .all()
+            }
+        rows = [
+            _PageRow(
+                **row._asdict(),
+                request_count=request_counts.get(row.runtime_session_id, 0),
+                # Overwritten below from the principal-scoped aggregates.
+                estimated_cost=0.0,
+                latest_model_alias=None,
+                latest_provider_name=None,
+            )
+            for row in page
+        ]
 
         principals = [(row.session_source_type, row.session_source_id) for row in rows]
         aggregates = _usage_aggregates_for_principals(

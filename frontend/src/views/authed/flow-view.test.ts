@@ -207,6 +207,58 @@ describe('FlowView detail page language', () => {
     return element;
   }
 
+  it('collapses a long prompt to 10 lines with a toggle (#1692)', async () => {
+    const prompt = Array.from({ length: 400 }, (_, i) => `line ${i}`).join(
+      '\n'
+    );
+    const element = await renderDetail({ prompt_template: prompt });
+    try {
+      const pre = element.shadowRoot.querySelector(
+        '[data-prompt-template]'
+      ) as HTMLElement;
+      expect(pre.classList.contains('collapsed')).to.equal(true);
+      const lineHeight = parseFloat(getComputedStyle(pre).lineHeight);
+      // Ten lines plus padding, and no inner scroll region.
+      expect(pre.getBoundingClientRect().height).to.be.below(
+        lineHeight * 10 + 60
+      );
+      const toggle = element.shadowRoot.querySelector(
+        '[data-prompt-toggle]'
+      ) as HTMLElement;
+      expect(toggle.textContent).to.include('Show full prompt');
+      toggle.click();
+      await element.updateComplete;
+      expect(pre.classList.contains('collapsed')).to.equal(false);
+      expect(pre.getBoundingClientRect().height).to.be.above(lineHeight * 100);
+    } finally {
+      element.remove();
+    }
+  });
+
+  it('offers no toggle for a short prompt', async () => {
+    const element = await renderDetail({ prompt_template: 'one\ntwo' });
+    try {
+      expect(element.shadowRoot.querySelector('[data-prompt-toggle]')).to.not
+        .exist;
+    } finally {
+      element.remove();
+    }
+  });
+
+  it('puts recent executions before the prompt (#1692)', async () => {
+    const element = await renderDetail({ prompt_template: 'Review it' });
+    try {
+      const runs = element.shadowRoot.querySelector('[data-recent-executions]');
+      const pre = element.shadowRoot.querySelector('[data-prompt-template]');
+      expect(runs).to.exist;
+      expect(
+        runs.compareDocumentPosition(pre) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).to.not.equal(0);
+    } finally {
+      element.remove();
+    }
+  });
+
   it('shows effective saved publication policy without claiming verification passed', async () => {
     const element = await renderDetail({
       effective_publication_policy: {

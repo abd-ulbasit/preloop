@@ -1849,11 +1849,20 @@ export async function exportIssueCosts(
 }
 
 export async function getToolUsageStats(
-  params: GatewayUsageSummaryParams = {}
+  params: GatewayUsageSummaryParams = {},
+  options: {
+    /**
+     * False drops `usage_by_agent` from every row: the Tools list prints
+     * per-tool totals only, and the breakdown is most of the payload (#1695).
+     */
+    includeAgents?: boolean;
+  } = {}
 ): Promise<ToolUsageStatsResponse> {
-  const response = await fetchWithAuth(
-    `/api/v1/tools/stats${buildGatewayUsageQuery(params)}`
-  );
+  let query = buildGatewayUsageQuery(params);
+  if (options.includeAgents === false) {
+    query += `${query ? '&' : '?'}include_agents=false`;
+  }
+  const response = await fetchWithAuth(`/api/v1/tools/stats${query}`);
   if (!response.ok) {
     throw new Error('Failed to fetch tool usage stats');
   }
@@ -3432,6 +3441,12 @@ export async function getRuntimeSessionGatewayEvents(
          * carried; kept messages carry their original `position` (#1586).
          */
         history?: 'full' | 'delta';
+        /**
+         * With `history: 'delta'`, keep at most the last N messages per
+         * event, so the oldest event on a page of a long session does not
+         * carry the whole conversation (#1689).
+         */
+        historyWindow?: number;
       } = {}
 ): Promise<FlowGatewayEventsResponse> {
   const searchParams = new URLSearchParams();
@@ -3446,6 +3461,8 @@ export async function getRuntimeSessionGatewayEvents(
       searchParams.set('offset', String(options.offset));
     if (options.metadataOnly) searchParams.set('metadata_only', 'true');
     if (options.history === 'delta') searchParams.set('history', 'delta');
+    if (options.historyWindow !== undefined)
+      searchParams.set('history_window', String(options.historyWindow));
   }
   const params = searchParams.toString() ? `?${searchParams.toString()}` : '';
   const response = await fetchWithAuth(
@@ -4141,6 +4158,50 @@ export async function getApiKeys(): Promise<ApiKey[]> {
     throw new Error('Failed to fetch API keys');
   }
   return response.json();
+}
+
+/** One server page of API keys, with the counts the list footer needs. */
+export interface ApiKeyPage {
+  items: ApiKey[];
+  /** Keys matching the search and retired filter, across every page. */
+  total: number;
+  /** Revoked or expired keys matching the search, or null if not sent. */
+  retired: number | null;
+}
+
+/**
+ * One page of the user's API keys (#1694). `sort` is `name`, `created` or
+ * `expires`, with a leading `-` for descending.
+ */
+export async function getApiKeysPage(params: {
+  limit: number;
+  offset: number;
+  search?: string;
+  includeRetired: boolean;
+  sort?: string;
+}): Promise<ApiKeyPage> {
+  const query = new URLSearchParams({
+    limit: String(params.limit),
+    offset: String(params.offset),
+    include_retired: String(params.includeRetired),
+    sort: params.sort || '-created',
+  });
+  if (params.search) query.set('q', params.search);
+  const response = await fetchWithAuth(`/api/v1/auth/api-keys?${query}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch API keys');
+  }
+  const items: ApiKey[] = await response.json();
+  const header = (name: string): number | null => {
+    const raw = response.headers.get(name);
+    const value = raw === null ? NaN : Number(raw);
+    return Number.isFinite(value) ? value : null;
+  };
+  return {
+    items,
+    total: header('X-Total-Count') ?? items.length,
+    retired: header('X-Retired-Count'),
+  };
 }
 
 /**
@@ -6286,6 +6347,31 @@ export async function getToolsSummary(): Promise<ToolSummary[]> {
   const response = await fetchWithAuth('/api/v1/tools/summary');
   if (!response.ok) {
     throw new Error('Failed to fetch tool summaries');
+  }
+  return response.json();
+}
+
+/** One tool's identity and policy state, as the Policies page needs it. */
+export interface ToolRuleIndexRow {
+  name: string;
+  source: 'builtin' | 'mcp' | 'agent';
+  source_id: string | null;
+  source_name: string;
+  is_enabled: boolean;
+  approval_workflow_id: string | null;
+  config_id: string | null;
+  has_approval_condition: boolean;
+  access_rules: AccessRule[];
+}
+
+/**
+ * The rules index behind Policies: every tool without descriptions or input
+ * schemas, a fraction of the full `/tools` catalogue (#1695).
+ */
+export async function getToolRules(): Promise<ToolRuleIndexRow[]> {
+  const response = await fetchWithAuth('/api/v1/tools/rules');
+  if (!response.ok) {
+    throw new Error('Failed to fetch tool rules');
   }
   return response.json();
 }

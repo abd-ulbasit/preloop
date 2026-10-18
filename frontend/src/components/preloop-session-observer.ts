@@ -7,9 +7,12 @@ import '@shoelace-style/shoelace/dist/components/button/button.js';
 import '@shoelace-style/shoelace/dist/components/button-group/button-group.js';
 import '@shoelace-style/shoelace/dist/components/card/card.js';
 import '@shoelace-style/shoelace/dist/components/dialog/dialog.js';
+import '@shoelace-style/shoelace/dist/components/dropdown/dropdown.js';
 import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/icon-button/icon-button.js';
 import '@shoelace-style/shoelace/dist/components/input/input.js';
+import '@shoelace-style/shoelace/dist/components/menu/menu.js';
+import '@shoelace-style/shoelace/dist/components/menu-item/menu-item.js';
 import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import './desktop-view';
 import {
@@ -118,6 +121,12 @@ const FULL_LAYOUT_MIN_HEIGHT_PX = 560;
 /** App header plus the page padding above and below the panel. */
 const FULL_LAYOUT_CHROME_PX = 120;
 const EVENT_PAGE_SIZE = 25;
+// The conversation pane reads the last 20 turns first; older turns come in
+// through "Load earlier". The window caps how much of the replayed history
+// the oldest event on a page may carry: on a 402-call session the unbounded
+// page was 2.7 MB of JSON (#1689).
+const TURN_PAGE_SIZE = 20;
+const TURN_HISTORY_WINDOW = 40;
 const REPLAY_METADATA_LIMIT = 5000;
 
 // Sidebar collapse/expand animation duration. Must match the CSS transition
@@ -1315,8 +1324,9 @@ export class PreloopSessionObserver extends LitElement {
     try {
       const [events, activity] = await Promise.all([
         getRuntimeSessionGatewayEvents(sessionId, {
-          limit: EVENT_PAGE_SIZE,
+          limit: TURN_PAGE_SIZE,
           offset: 0,
+          historyWindow: TURN_HISTORY_WINDOW,
           // Every call replays the whole conversation; the page carries each
           // message once (1.7 MB -> about 150 KB on a long session, #1586).
           history: 'delta',
@@ -1347,13 +1357,13 @@ export class PreloopSessionObserver extends LitElement {
         [sessionId]: {
           nextOffset:
             events.pagination?.next_offset ??
-            ((events.logs || []).length >= EVENT_PAGE_SIZE
+            ((events.logs || []).length >= TURN_PAGE_SIZE
               ? (events.logs || []).length
               : null),
           total: events.pagination?.total ?? null,
           hasMore:
             events.pagination?.has_more ??
-            (events.logs || []).length >= EVENT_PAGE_SIZE,
+            (events.logs || []).length >= TURN_PAGE_SIZE,
         },
       };
       this.loadedActivity = {
@@ -1402,9 +1412,10 @@ export class PreloopSessionObserver extends LitElement {
     this.loadingMoreEventsForSessionId = sessionId;
     try {
       const events = await getRuntimeSessionGatewayEvents(sessionId, {
-        limit: EVENT_PAGE_SIZE,
+        limit: TURN_PAGE_SIZE,
         offset: page.nextOffset,
         history: 'delta',
+        historyWindow: TURN_HISTORY_WINDOW,
       });
       this.loadedEvents = {
         ...this.loadedEvents,
@@ -2860,11 +2871,8 @@ export class PreloopSessionObserver extends LitElement {
             <sl-icon slot="prefix" name="list-columns-reverse"></sl-icon>
             Requests
           </sl-button>
-          ${this.renderLiveDesktopButton(session)}
-          ${this.renderEvidenceExportButton(session)} ${this.renderTalkButton()}
-          <sl-button size="small" @click=${() => this.reloadActiveSession()}>
-            Refresh
-          </sl-button>
+          ${this.renderLiveDesktopButton(session)} ${this.renderTalkButton()}
+          ${this.renderMoreActions(session)}
           ${
             session && this.isLiveRunnerSession(session)
               ? html`<sl-button
@@ -2903,26 +2911,57 @@ export class PreloopSessionObserver extends LitElement {
   }
 
   /**
+   * Refresh and the evidence export sit in one overflow menu, so the toolbar
+   * stays one row at 1440 and the first turn is above the fold (#1689).
+   * The destructive group keeps its own place at the end of the row.
+   */
+  private renderMoreActions(session: ObservedSession | null) {
+    return html`<sl-dropdown class="more-actions" placement="bottom-end" hoist>
+      <sl-button
+        slot="trigger"
+        size="small"
+        aria-label="More actions"
+        data-testid="session-more-actions"
+      >
+        <sl-icon name="three-dots" label="More actions"></sl-icon>
+      </sl-button>
+      <sl-menu>
+        <sl-menu-item
+          data-testid="session-refresh"
+          @click=${() => this.reloadActiveSession()}
+        >
+          <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>
+          Refresh
+        </sl-menu-item>
+        ${this.renderEvidenceExportItem(session)}
+      </sl-menu>
+    </sl-dropdown>`;
+  }
+
+  /**
    * Open the period export pre-filtered to this session (#1088), so its
    * transcripts, screenshots and files leave with a sha256 each.
    */
-  private renderEvidenceExportButton(session: ObservedSession | null) {
+  private renderEvidenceExportItem(session: ObservedSession | null) {
     // Synthetic observer rows (gateway-only traffic) have no session to export.
     if (!session || !isUuid(session.id)) return nothing;
-    return html`<sl-button
-      size="small"
+    const href = sessionExportHref({
+      id: session.id,
+      started_at: session.startedAt,
+      last_activity_at: session.lastActivityAt,
+      ended_at: session.endedAt,
+    });
+    return html`<sl-menu-item
       data-testid="add-to-evidence-export"
-      href=${sessionExportHref({
-        id: session.id,
-        started_at: session.startedAt,
-        last_activity_at: session.lastActivityAt,
-        ended_at: session.endedAt,
-      })}
+      data-href=${href}
       title="Open the signed period export limited to this session's artifacts"
+      @click=${() => {
+        window.location.href = href;
+      }}
     >
       <sl-icon slot="prefix" name="box-arrow-up"></sl-icon>
       Add to evidence export
-    </sl-button>`;
+    </sl-menu-item>`;
   }
 
   /**
