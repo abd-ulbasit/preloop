@@ -25,6 +25,7 @@ import {
   type FleetMapNodeType,
 } from '../fleet-map-api';
 import { formatRelativeTime } from '../utils/date';
+import { getAgentKindPresentation } from '../utils/agent-kinds';
 import consoleStyles from '../styles/console-styles.css?inline';
 
 const ICON: Record<FleetMapNodeType, string> = {
@@ -66,6 +67,28 @@ const EMPTY: FleetMapGraph = {
 };
 
 const MIN_FIT_SCALE = 0.6;
+
+/** "cursor_cli" reads as "Cursor CLI"; known kinds use their product name. */
+export function agentKindLabel(kind: string): string {
+  return (
+    getAgentKindPresentation(kind)?.label ??
+    kind
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((word) =>
+        ['cli', 'ai', 'ide'].includes(word.toLowerCase())
+          ? word.toUpperCase()
+          : word.charAt(0).toUpperCase() + word.slice(1)
+      )
+      .join(' ')
+  );
+}
+
+/** Discovered agents are named by their kind; show it as a product name. */
+const displayLabel = (node: FleetMapNode): string =>
+  node.type === 'agent' && node.detail && node.label === node.detail
+    ? agentKindLabel(node.detail)
+    : node.label;
 
 /**
  * The fleet as one picture: people, their machines (runners inside them),
@@ -172,12 +195,18 @@ export class FleetMap extends LitElement {
       ?.getBoundingClientRect();
     const layout = this.lastLayout;
     if (!bounds || !layout?.width) return;
+    // The selection panel covers the right of a wide stage.
+    const panel =
+      this.selected && !window.matchMedia('(max-width: 900px)').matches
+        ? 364
+        : 0;
+    const room = bounds.width - panel;
     this.scale = Math.max(
       MIN_FIT_SCALE,
-      Math.min(1, (bounds.width - 48) / layout.width)
+      Math.min(1, (room - 48) / layout.width)
     );
     const width = layout.width * this.scale;
-    this.translateX = width < bounds.width ? (bounds.width - width) / 2 : 24;
+    this.translateX = width < room ? (room - width) / 2 : 24;
     this.translateY = 16;
     this.applyTransform();
   }
@@ -903,7 +932,9 @@ export class FleetMap extends LitElement {
         .filter(
           (node) =>
             node.type !== 'cluster' &&
-            `${node.label} ${node.detail ?? ''}`.toLowerCase().includes(query)
+            `${displayLabel(node)} ${node.label} ${node.detail ?? ''}`
+              .toLowerCase()
+              .includes(query)
         )
         .map((node) => node.id)
     );
@@ -1174,7 +1205,7 @@ export class FleetMap extends LitElement {
         : '';
       if (state === 'inactive')
         return ['Inactive', seen].filter(Boolean).join(' · ');
-      return node.detail || 'Agent';
+      return node.detail ? agentKindLabel(node.detail) : 'Agent';
     }
     if (node.type === 'model') {
       const agents = new Set(
@@ -1255,7 +1286,9 @@ export class FleetMap extends LitElement {
       lit && lit.has(node.id) && node.id !== this.selected ? 'lit' : '',
       dim ? 'dim' : '',
     ].join(' ');
-    const label = child ? this.childLabel(node, context.parent) : node.label;
+    const label = child
+      ? this.childLabel(node, context.parent)
+      : displayLabel(node);
     const sub = this.subtitle(node, context.view, layout.groups, context.byId);
     const height = isHeader ? FLEET_MAP_NODE_HEIGHT : position.h;
     const button = html`<button
@@ -1419,7 +1452,7 @@ export class FleetMap extends LitElement {
       </button>
       <div class="eyebrow">${FLEET_MAP_TYPE_LABEL[node.type]}</div>
       <h3>
-        ${node.href ? html`<a href=${node.href}>${node.label}</a>` : node.label}
+        ${node.href ? html`<a href=${node.href}>${displayLabel(node)}</a>` : displayLabel(node)}
       </h3>
       ${
         node.detail || seen

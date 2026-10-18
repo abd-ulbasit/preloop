@@ -468,3 +468,11 @@ describe('fleet-map v2 readability', () => {
     expect(document.body.style.overflow).to.equal('');
   });
 });
+
+describe('fleet-map labels', () => {
+  it('names discovered agents by product, not raw kind', async () => {
+    const { agentKindLabel } = await import('./fleet-map');
+    expect(agentKindLabel('claude_code')).to.equal('Claude Code');
+    expect(agentKindLabel('cursor_cli')).to.equal('Cursor CLI');
+  });
+});
