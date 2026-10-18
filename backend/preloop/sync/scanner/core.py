@@ -804,15 +804,15 @@ async def _process_organization(
                 # API is not used so a repository access token also works.
                 for project in projects:
                     try:
-                        if not await client.client.is_webhook_registered_for_project(
-                            project, webhook_target_url
-                        ):
-                            await client.client.register_webhook(
-                                db=db,
-                                project=project,
-                                webhook_url=webhook_target_url,
-                                secret=current_secret_to_use,
-                            )
+                        # register_webhook is idempotent and lists hooks
+                        # itself; calling it unconditionally lets it collapse
+                        # pre-existing same-URL duplicates and drift.
+                        await client.client.register_webhook(
+                            db=db,
+                            project=project,
+                            webhook_url=webhook_target_url,
+                            secret=current_secret_to_use,
+                        )
                     except Exception as e:
                         logger.error(
                             f"Error registering webhook for Bitbucket repository {project.identifier}: {e}",

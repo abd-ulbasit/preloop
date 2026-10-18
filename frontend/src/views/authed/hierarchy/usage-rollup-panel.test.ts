@@ -168,4 +168,35 @@ describe('usage-rollup-panel', () => {
     expect(el.shadowRoot!.querySelector('sl-card')).to.be.null;
     expect(toastCount()).to.equal(before);
   });
+
+  it('hides an all-zero rollup with no open attention (#1696)', async () => {
+    let calls = 0;
+    api = mockApi({
+      capabilities: ['account_hierarchy'],
+      routes: [
+        {
+          path: USAGE,
+          body: () => {
+            calls++;
+            return { rows: [{ ...ROWS[0], requests: 0, cost_usd: 0 }] };
+          },
+        },
+        {
+          path: ATTENTION,
+          body: {
+            items: [
+              { subaccount_id: 'sub-a', subaccount_name: 'North', count: 0 },
+            ],
+          },
+        },
+      ],
+    });
+    const el = await fixture<UsageRollupPanel>(
+      html`<usage-rollup-panel .context=${{}}></usage-rollup-panel>`
+    );
+    await waitUntil(() => calls > 0);
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(el.shadowRoot!.querySelector('sl-card')).to.be.null;
+  });
 });
