@@ -195,6 +195,52 @@ describe('ApiKeysView', () => {
     expect(element.shadowRoot?.textContent).to.contain('Key 29');
   });
 
+  it('steps back a page when the last key on a later page is gone', async () => {
+    fetchStub.restore();
+    fetchStub = sinon.stub(window, 'fetch');
+    // 25 keys remain after the only key on page 2 was revoked.
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (/\/auth\/api-keys\?/.test(url)) {
+        const offset = Number(
+          new URL(url, window.location.origin).searchParams.get('offset')
+        );
+        const rows =
+          offset === 0
+            ? Array.from({ length: 25 }, (_, i) => ({
+                id: `key-${i}`,
+                name: `Key ${i}`,
+                created_at: '2026-03-10T09:00:00Z',
+                last_used_at: null,
+                activity_status: 'idle',
+                expires_at: null,
+              }))
+            : [];
+        return new Response(JSON.stringify(rows), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Total-Count': '25',
+            'X-Retired-Count': '0',
+          },
+        });
+      }
+      return new Response('{}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const element = await fixture<ApiKeysView>(
+      html`<api-keys-view></api-keys-view>`
+    );
+    await waitUntil(() => !(element as any).isLoading);
+    element.table.setPageIndex(1);
+    await waitUntil(() => element.table.pageIndex === 0, 'clamped to page 1');
+    await waitUntil(() => !(element as any).isLoading);
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).to.contain('Key 24');
+  });
+
   it('loads keys without fetching catalogs, including when creating a key', async () => {
     const element = await fixture<ApiKeysView>(
       html`<api-keys-view></api-keys-view>`
@@ -660,10 +706,6 @@ describe('ApiKeysView', () => {
   });
 
   it('searches and sorts through the shared table', async () => {
-    const answer = fetchStub.wrappedMethod;
-    void answer;
-    const original = fetchStub.getCall(-1)?.callback;
-    void original;
     const element = await fixture<ApiKeysView>(
       html`<api-keys-view></api-keys-view>`
     );

@@ -228,6 +228,15 @@ export class ApiKeysView extends LitElement {
         sort: sortKey ? `${sorted!.desc ? '-' : ''}${sortKey}` : '-created',
       });
       if (request !== this.fetchRequest) return;
+      const pageSize = query.pageSize || 25;
+      if (page.items.length === 0 && page.total > 0 && query.offset > 0) {
+        // The last key on this page was deleted or revoked: step back to the
+        // last page that still has keys. Changing the page refetches.
+        this.table.setPageIndex(
+          Math.max(0, Math.ceil(page.total / pageSize) - 1)
+        );
+        return;
+      }
       this.apiKeys = page.items;
       this.serverTotal = page.total;
       this.retiredCount = page.retired;
