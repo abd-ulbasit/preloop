@@ -624,3 +624,18 @@ async def test_both_tools_over_mcp(app, test_user, shared_db):  # noqa: F811
         assert refused.isError
         assert [b.type for b in refused.content] == ["text"]
         assert GRANT in refused.content[0].text
+
+    # Protocol isolation must preserve real core audit writes as well as the
+    # artifact service's own read/search records.
+    tool_rows = (
+        db.query(models.AuditLog)
+        .filter(
+            models.AuditLog.account_id == test_user.account_id,
+            models.AuditLog.action == "tool_call",
+        )
+        .all()
+    )
+    assert {r.details["tool_name"] for r in tool_rows} >= {
+        "search_artifacts",
+        "get_artifact",
+    }
