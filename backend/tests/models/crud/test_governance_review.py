@@ -987,7 +987,7 @@ def test_generic_update_cannot_bypass_completed_guard(
 
 
 def test_explicit_crud_override_records_caller_reason_in_audit(
-    db_session: Session, test_user: User
+    db_session: Session, test_user: User, caplog: pytest.LogCaptureFixture
 ) -> None:
     from preloop.models.crud import crud_audit_log
 
@@ -1037,6 +1037,9 @@ def test_explicit_crud_override_records_caller_reason_in_audit(
     assert audits[0].details["caller"] == "operator/test"
     assert audits[0].details["reason"] == "Approved repair"
     assert audits[0].details["force_resummarize"] is True
+    assert str(audits[0].id) in caplog.text
+    assert "operator/test" not in caplog.text
+    assert "Approved repair" not in caplog.text
 
 
 def test_parse_failure_enters_retry_queue_without_complete_segments(

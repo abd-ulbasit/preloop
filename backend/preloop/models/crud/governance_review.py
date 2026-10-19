@@ -936,7 +936,7 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
                 "segment_index": segment_index,
                 "runtime_session_id": str(runtime_session_id),
             }
-            crud_audit_log.log_action(
+            audit = crud_audit_log.log_action(
                 db,
                 account_id=account_id,
                 action="governance_review.summary_override",
@@ -947,11 +947,10 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
                 commit=False,
             )
             logger.warning(
-                "Governance digest write override account=%s segment=%s caller=%s reason=%s force_resummarize=%s include_history=%s",
+                "Governance digest write override account=%s segment=%s audit_event=%s force_resummarize=%s include_history=%s",
                 account_id,
                 identifier,
-                details["caller"],
-                details["reason"],
+                audit.id,
                 force_resummarize,
                 include_history,
             )
