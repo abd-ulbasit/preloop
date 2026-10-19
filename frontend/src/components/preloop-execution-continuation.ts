@@ -49,8 +49,9 @@ export class PreloopExecutionContinuation extends LitElement {
       :host([data-empty]) {
         display: none;
       }
+      /* #1692: inline in the execution status row, no block margin. */
       .action {
-        margin: var(--sl-spacing-medium) 0;
+        margin: 0;
       }
       sl-alert,
       sl-checkbox {
@@ -333,7 +334,10 @@ export class PreloopExecutionContinuation extends LitElement {
         : '';
     return html`
       <div class="action">
-        <sl-button data-continuation-preview @click=${this.loadPreview}
+        <sl-button
+          size="small"
+          data-continuation-preview
+          @click=${this.loadPreview}
           >Manage PR follow-up</sl-button
         >
       </div>

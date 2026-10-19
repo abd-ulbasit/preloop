@@ -281,6 +281,29 @@ class ApiUsage(Base):
             "timestamp",
             postgresql_ops={"timestamp": "DESC"},
         ),
+        # Agents list per-principal totals and latest request (#1694): both
+        # LATERAL reads are index-only, so a cold cache does not fetch every
+        # usage row from the heap. Migration 20261102_agent_usage_idx.
+        Index(
+            "ix_api_usage_principal_totals",
+            "account_id",
+            "runtime_principal_type",
+            "runtime_principal_id",
+            text("timestamp DESC"),
+            text("id DESC"),
+            postgresql_include=[
+                "status_code",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "estimated_cost",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+                "model_alias",
+                "provider_name",
+            ],
+            postgresql_where=text("action_type = 'model_gateway'"),
+        ),
         # Per-user summaries filter runtime_principal_id without the principal
         # type, so the type-leading index above is not usable. This partial
         # index covers that filter for model-gateway rows.

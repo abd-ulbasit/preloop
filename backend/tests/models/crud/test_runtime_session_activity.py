@@ -270,3 +270,75 @@ def test_control_message_preserves_only_explicit_author_attribution(
     assert trusted.metadata_["authorization"] == "***REDACTED***"
     assert trusted.metadata_["nested"]["api_key"] == "***REDACTED***"
     assert metadata["author_display"] == "Untrusted label"
+
+
+def _plan_nodes(node: dict) -> list[dict]:
+    nodes = [node]
+    for child in node.get("Plans", []):
+        nodes.extend(_plan_nodes(child))
+    return nodes
+
+
+def test_timeline_limits_ids_before_reading_metadata(
+    db_session: Session, create_account: Callable[..., models.Account]
+) -> None:
+    """The top-N sort never carries metadata, so history is not detoasted (#1689).
+
+    Stripping history keys on every row before the sort read 1.78 GB on a
+    prod session with 8,178 rows. The plan's Limit nodes must output ids and
+    timestamps only; metadata is projected after the newest ids are chosen.
+    """
+    from sqlalchemy import event
+
+    account = create_account()
+    now = datetime.now(UTC)
+    runtime_session = models.RuntimeSession(
+        account_id=account.id,
+        session_source_type="claude_code",
+        session_source_id="timeline-plan",
+        started_at=now - timedelta(minutes=5),
+    )
+    db_session.add(runtime_session)
+    db_session.flush()
+    db_session.add_all(
+        models.RuntimeSessionActivity(
+            account_id=account.id,
+            runtime_session_id=runtime_session.id,
+            activity_type="model_gateway_call",
+            timestamp=now - timedelta(seconds=index),
+            metadata_={"model_alias": "m", "messages": ["x" * 100]},
+        )
+        for index in range(5)
+    )
+    db_session.flush()
+
+    statements: list[tuple[str, object]] = []
+    connection = db_session.connection()
+
+    def capture(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if "runtime_session_activity" in statement and "metadata" in statement:
+            statements.append((statement, parameters))
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        rows = crud_runtime_session_activity.list_timeline_rows_for_runtime_session(
+            db_session,
+            account_id=str(account.id),
+            runtime_session_id=str(runtime_session.id),
+            limit=2,
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+
+    assert len(rows) == 2
+    assert all("messages" not in (row.metadata_ or {}) for row in rows)
+    assert len(statements) == 1
+    statement, parameters = statements[0]
+    cursor = connection.connection.cursor()
+    cursor.execute("EXPLAIN (VERBOSE, FORMAT JSON) " + statement, parameters)
+    plan = cursor.fetchone()[0][0]["Plan"]
+    cursor.close()
+    limits = [node for node in _plan_nodes(plan) if node["Node Type"] == "Limit"]
+    assert limits, "timeline query must bound rows with LIMIT"
+    for node in limits:
+        assert not any("metadata" in column for column in node.get("Output", []))

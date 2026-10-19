@@ -30,6 +30,7 @@ from .api_usage import (
     EMPTY_CACHE_SPLIT,
     cache_split_columns,
     cache_split_from_row,
+    gateway_action_condition,
 )
 from .base import CRUDBase
 
@@ -269,7 +270,9 @@ def _usage_aggregates_for_principals(
     def _principal_usage_filter() -> list[Any]:
         conditions = [
             ApiUsage.account_id == account_id,
-            ApiUsage.action_type == "model_gateway",
+            # Literal so a generic prepared plan can still match the partial
+            # ix_api_usage_principal_totals index (#1694).
+            gateway_action_condition(),
             ApiUsage.runtime_principal_type == principal_rows.c.principal_type,
             ApiUsage.runtime_principal_id == principal_rows.c.principal_id,
         ]

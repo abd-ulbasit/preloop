@@ -1,7 +1,7 @@
 """Restore action types retained before a manual governance usage relabel.
 
 Revision ID: 20261102_restore_usage_action
-Revises: 20261101_customer_usage_idx
+Revises: 20261102_agent_usage_idx
 
 Deployment cost: upgrade scans api_usage once; runtime scales with table size
 and must be measured on a representative copy before scheduling deployment.
@@ -16,7 +16,7 @@ Customer-imported usage is excluded because its metadata is untrusted.
 from alembic import op
 
 revision = "20261102_restore_usage_action"
-down_revision = "20261101_customer_usage_idx"
+down_revision = "20261102_agent_usage_idx"
 branch_labels = None
 depends_on = None
 

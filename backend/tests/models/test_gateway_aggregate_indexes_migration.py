@@ -18,6 +18,7 @@ INDEXES = (
     "ix_api_usage_gateway_subscription",
     "ix_api_usage_rate_limit_snapshot",
     "ix_api_usage_account_model_ts",
+    "ix_api_usage_principal_totals",
 )
 
 

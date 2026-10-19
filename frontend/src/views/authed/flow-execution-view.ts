@@ -482,7 +482,7 @@ export class FlowExecutionView extends LitElement {
         /* Tucked under the summary strip: it reads as the strip's last line. */
         margin: -16px 0 -8px;
       }
-      .status-row:not(:has(*)) {
+      .status-row:not(:has(:not(preloop-execution-continuation[data-empty]))) {
         display: none;
       }
       .status-row > * {
@@ -739,7 +739,13 @@ export class FlowExecutionView extends LitElement {
       }
       /* While the run is live the stream owns a viewport-sized region and
          scrolls inside itself, so the newest item stays where the eye is.
-         A finished run is a document: it scrolls with the page. */
+         A finished run is a document: it scrolls with the page, up to two
+         viewports (#1692). A heavier run (80+ entries) scrolls inside that
+         region, so the page stays within three screens. */
+      .timeline-stream:not(.is-live) {
+        max-height: calc(200dvh - 400px);
+        overflow-y: auto;
+      }
       .timeline-stream.is-live {
         height: calc(100dvh - 340px);
         min-height: 320px;
@@ -4087,6 +4093,11 @@ ${execution.resolved_input_prompt}</pre>
                 : ''
             }
             ${this.renderContinuationNavigation(execution)}
+            <!-- #1692: the PR follow-up action rides the status row instead
+                 of taking its own block above the tabs. -->
+            <preloop-execution-continuation
+              .execution=${execution}
+            ></preloop-execution-continuation>
           </div>
           ${this.renderHostSessions()}
           <!-- What this run delegated, and what that cost. Renders nothing
@@ -4095,9 +4106,6 @@ ${execution.resolved_input_prompt}</pre>
           <preloop-execution-tree
             execution-id=${execution.id}
           ></preloop-execution-tree>
-          <preloop-execution-continuation
-            .execution=${execution}
-          ></preloop-execution-continuation>
           ${this.renderOperatorNotes(execution)}
           <sl-tab-group
             class="execution-tabs"

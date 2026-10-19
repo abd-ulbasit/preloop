@@ -282,7 +282,10 @@ export class FlowView extends LitElement {
         }
         /* #1692: the prompt shows its first 10 lines until expanded. */
         pre.prompt-template.collapsed {
-          max-height: calc(10 * 1.5em + 2 * var(--sl-spacing-medium, 1rem));
+          /* content-box: max-height excludes the padding, so this is
+             exactly ten 1.5em lines (it was 10 + padding = ~11.5 lines). */
+          box-sizing: content-box;
+          max-height: calc(10 * 1.5em);
           overflow: hidden;
         }
         .prompt-toggle {

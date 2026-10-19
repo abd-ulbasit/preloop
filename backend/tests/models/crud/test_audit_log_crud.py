@@ -695,6 +695,62 @@ class TestGroupedStandalonePolicyDecisions:
         )
         assert total == len(groups) == 2
 
+    def _statements(self, db_session: Session, **kwargs) -> tuple[list[str], int]:
+        from sqlalchemy import event as sa_event
+
+        statements: list[str] = []
+
+        def _capture(conn, cursor, statement, *args):
+            statements.append(statement)
+
+        bind = db_session.get_bind()
+        sa_event.listen(bind, "before_cursor_execute", _capture)
+        try:
+            _, total = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=kwargs.pop("account_id"), **kwargs
+            )
+        finally:
+            sa_event.remove(bind, "before_cursor_execute", _capture)
+        return statements, total
+
+    def test_capped_total_stops_counting_once_past_the_cap(
+        self, db_session: Session, test_account, events
+    ):
+        # The primary branch is an index-only count. When it alone passes
+        # the cap, the anti-join branches (standalone decisions, orphans)
+        # cannot change the capped total, and on prod they were the cold
+        # tail of the Audit page: 0.87 s and 0.42 s of a 2.2 s call (#1693).
+        statements, total = self._statements(
+            db_session, account_id=test_account.id, limit=1, count_limit=1
+        )
+        counts = [s for s in statements if "count(" in s.lower()]
+        assert total == 2
+        assert len(counts) == 1
+        assert "EXISTS" not in counts[0]
+
+        # Under the cap every branch is still counted, exactly.
+        statements, total = self._statements(
+            db_session, account_id=test_account.id, limit=1, count_limit=10
+        )
+        assert total == 4
+        assert len([s for s in statements if "count(" in s.lower()]) == 4
+
+    def test_grouped_reads_run_without_jit_and_restore_it(
+        self, db_session: Session, test_account, events
+    ):
+        # The anti-join probes are estimated at millions of cost units, so
+        # Postgres JIT-compiled each statement: 150-270 ms of LLVM per query
+        # on prod, more on a fresh backend, for 20-100 ms of execution
+        # (#1693). The grouped read turns JIT off for its own statements.
+        from sqlalchemy import text as sa_text
+
+        db_session.execute(sa_text("SET jit = on"))
+        statements, _ = self._statements(
+            db_session, account_id=test_account.id, count_limit=10
+        )
+        assert any("set_config('jit'" in s for s in statements)
+        assert db_session.execute(sa_text("SHOW jit")).scalar() == "on"
+
     def test_tool_call_probe_is_not_hashed(
         self, db_session: Session, test_account, events
     ):
