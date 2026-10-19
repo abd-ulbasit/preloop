@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.models.crud import crud_api_usage, crud_spend_outlier_finding
 from preloop.models.crud.weekly_report_data import usage_snapshot
+from preloop.models.crud.billing import billing
+from preloop.models.crud.plan_eligibility import ingest_tokens_this_month
 from preloop.models.crud.weekly_signals import gateway_latency_signals
 
 
@@ -38,6 +40,7 @@ def test_governance_overhead_is_not_customer_usage(
             status_code=status,
             duration=1 if purpose is None else 100,
             estimated_cost=cost,
+            total_tokens=10 if purpose is None else 100,
             model_alias="customer" if purpose is None else "analysis",
             meta_data={
                 "purpose": purpose,
@@ -102,4 +105,18 @@ def test_governance_overhead_is_not_customer_usage(
             funding=funding,
         )
         == 4
+    )
+
+    month = datetime.now(UTC).strftime("%Y-%m")
+    observations = billing.monthly_observations(
+        db_session,
+        account_id=str(test_user.account_id),
+        start=start,
+        end=end,
+        hosted_model_ids=[],
+        byok_model_ids=[],
+    )
+    assert observations[month]["request_count"] == 1
+    assert (
+        ingest_tokens_this_month(db_session, account_id=str(test_user.account_id)) == 10
     )

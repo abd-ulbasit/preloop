@@ -1,7 +1,7 @@
-"""The per-model gateway aggregate can use its covering index in any plan.
+"""The customer gateway aggregates can use covering indexes in any plan.
 
 ``GET /ai-models/overview`` aggregates a 30-day window per model through
-``get_gateway_usage_by_model``. ``ix_api_usage_gateway_totals`` covers every
+``get_gateway_usage_by_model``. ``ix_api_usage_customer_totals`` covers every
 column it reads, but PostgreSQL only uses a partial index whose predicate it
 can prove from the query's constants. psycopg prepares a statement after a few
 executions, and a generic prepared plan sees bound parameters, not constants:
@@ -12,6 +12,7 @@ unusable and every request reads the heap. The assertion is the plan.
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -27,23 +28,24 @@ ACCOUNT = "00000000-0000-0000-0000-0000000000a1"
 MODELS = [f"00000000-0000-0000-0000-0000000000b{n}" for n in range(3)]
 
 
-def _captured_select(db_session: Session, **kwargs) -> tuple[str, dict]:
+def _captured_select(
+    db_session: Session, method: str = "get_gateway_usage_by_model", **kwargs
+) -> tuple[str, dict]:
     statements: list[tuple[str, dict]] = []
 
     def _record(conn, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().upper().startswith("SELECT"):
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
             statements.append((statement, parameters))
 
     bind = db_session.get_bind()
     end = datetime.now(timezone.utc)
     event.listen(bind, "before_cursor_execute", _record)
     try:
-        crud_api_usage.get_gateway_usage_by_model(
+        getattr(crud_api_usage, method)(
             db_session,
             account_id=ACCOUNT,
             start_date=end - timedelta(days=30),
             end_date=end,
-            limit=None,
             **kwargs,
         )
     finally:
@@ -69,7 +71,7 @@ def _generic_plan(db_session: Session, statement: str, parameters: dict) -> str:
             # Constants such as the 0 of a COALESCE: a generic plan cannot
             # type an untyped parameter inside SUM, and they decide nothing.
             value = parameters[name]
-            assert isinstance(value, (int, float)), (name, value)
+            assert isinstance(value, (int, float)) or value == "day", (name, value)
             return repr(value)
         number = numbers.setdefault(name, len(numbers) + 1)
         return f"${number}"
@@ -141,3 +143,30 @@ def test_model_keyed_covering_index_is_built_valid(db_session):
     for column in ("estimated_cost", "cache_creation_tokens", "status_code"):
         assert column in definition, definition
     assert "replay_validation" in definition
+
+
+@pytest.mark.parametrize(
+    "method", ["get_gateway_usage_summary", "get_gateway_usage_timeseries"]
+)
+def test_cost_headline_and_timeseries_use_customer_covering_index(
+    db_session: Session, method: str
+) -> None:
+    """Prepared Cost totals and chart queries can exclude overhead off the heap."""
+    statement, parameters = _captured_select(db_session, method=method)
+    plan = _generic_plan(db_session, statement, parameters)
+    assert any(f"Index Only Scan using {index}" in plan for index in COVERING), plan
+
+
+def test_old_replay_covering_index_requires_heap_for_governance_filter(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older covering index cannot filter governance without reading metadata."""
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "COVERING",
+        ("ix_api_usage_gateway_totals", "ix_api_usage_gateway_model_totals"),
+    )
+    statement, parameters = _captured_select(db_session)
+    plan = _generic_plan(db_session, statement, parameters)
+    assert "Index Only Scan" not in plan, plan
+    assert "governance_" in plan, plan

@@ -525,13 +525,16 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         CRUDTelemetryIngest().supersede_for_gateway_row(db, db_obj)
 
         # Atomically record spend if estimated_cost is present and > 0.
-        # Replay-validation runs are excluded: their spend is bounded by the
-        # replay path's own hard cap, and letting them consume budget-bucket
+        # Replay and governance analysis have their own purpose-targeted caps.
+        # Letting overhead consume customer budget-bucket
         # headroom would abort the user's REAL agent traffic (budget policies
         # are still checked per request at the gateway, so an account already
         # at its limit cannot replay either).
         usage_purpose = (meta_data or {}).get("purpose")
-        if estimated_cost and account_id and usage_purpose != REPLAY_VALIDATION_PURPOSE:
+        is_overhead = usage_purpose == REPLAY_VALIDATION_PURPOSE or (
+            isinstance(usage_purpose, str) and usage_purpose.startswith("governance_")
+        )
+        if estimated_cost and account_id and not is_overhead:
             from .budget import record_spend_for_request
 
             try:
@@ -1340,7 +1343,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             ).label("unpriced_tokens"),
             *cache_split_columns(),
         ).filter(
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
             exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
@@ -2819,7 +2822,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             ),
             *cache_split_columns(),
         ).filter(
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
             exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
