@@ -968,6 +968,22 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             (self.model.activity_type == "model_gateway_call", slim),
             else_=self.model.metadata_,
         ).label("metadata_")
+        base_filters = (
+            self.model.account_id == account_id,
+            self.model.runtime_session_id == runtime_session_id,
+            self.model.activity_type.notin_(HOOK_TURN_ACTIVITY_TYPES),
+        )
+        # Pick the newest ids first from the session/timestamp index, then
+        # project (and strip) metadata only for those rows. Computing the slim
+        # CASE before the top-N sort detoasted every row of a long session:
+        # 8,178 rows and 1.78 GB of metadata took 10 s on prod (#1689).
+        newest_ids = (
+            db.query(self.model.id)
+            .filter(*base_filters)
+            .order_by(self.model.timestamp.desc())
+            .limit(limit)
+            .subquery()
+        )
         query = db.query(
             self.model.id,
             self.model.activity_type,
@@ -978,16 +994,17 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             self.model.status,
             self.model.api_key_id,
             metadata_column,
-        ).filter(
-            self.model.account_id == account_id,
-            self.model.runtime_session_id == runtime_session_id,
-            self.model.activity_type.notin_(HOOK_TURN_ACTIVITY_TYPES),
         )
-        rows = query.order_by(self.model.timestamp.desc()).limit(limit).all()
+        rows = (
+            query.filter(self.model.id.in_(select(newest_ids.c.id)))
+            .order_by(self.model.timestamp.desc())
+            .all()
+        )
         if operator_note_id and not any(
             (row.metadata_ or {}).get("note_id") == operator_note_id for row in rows
         ):
             focused = query.filter(
+                *base_filters,
                 self.model.activity_type == "agent_control_message",
                 self.model.metadata_["kind"].astext == "operator_note",
                 self.model.metadata_["note_id"].astext == operator_note_id,
