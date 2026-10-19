@@ -191,7 +191,7 @@ def test_usage_meta_keys_picks_only_those_keys_in_sql(db_session, test_user):
     ``usage_meta_keys`` only the named keys leave the database, and the
     deferred column is never loaded back row by row.
     """
-    from sqlalchemy import event
+    from sqlalchemy import event, text
 
     usage = crud_api_usage.log_gateway_request(
         db_session,
@@ -217,6 +217,30 @@ def test_usage_meta_keys_picks_only_those_keys_in_sql(db_session, test_user):
     crud_gateway_usage_search_document.upsert_for_api_usage(
         db_session, api_usage=usage, searchable_text="slim metadata"
     )
+    # A JSON null (or scalar) meta_data must not break the pick: jsonb_each
+    # raises on a non-object.
+    scalar_usage = crud_api_usage.log_gateway_request(
+        db_session,
+        endpoint="/openai/v1/responses",
+        method="POST",
+        status_code=200,
+        duration=0.1,
+        user_id=str(test_user.id),
+        account_id=str(test_user.account_id),
+        model_alias="openai/gpt-5.4",
+        provider_name="openai",
+        prompt_tokens=1,
+        completion_tokens=1,
+        total_tokens=2,
+        estimated_cost=0.0,
+    )
+    db_session.execute(
+        text("UPDATE api_usage SET meta_data = 'null'::jsonb WHERE id = :id"),
+        {"id": scalar_usage.id},
+    )
+    crud_gateway_usage_search_document.upsert_for_api_usage(
+        db_session, api_usage=scalar_usage, searchable_text="null metadata"
+    )
     db_session.expire_all()
     statements: list[str] = []
 
@@ -236,7 +260,9 @@ def test_usage_meta_keys_picks_only_those_keys_in_sql(db_session, test_user):
     finally:
         event.remove(engine, "before_cursor_execute", record)
 
-    (item,) = result["items"]
+    by_id = {row["api_usage_id"]: row for row in result["items"]}
+    assert by_id[str(scalar_usage.id)]["meta_data"] == {}
+    item = by_id[str(usage.id)]
     assert item["meta_data"]["gateway_attempt"] == 2
     assert item["meta_data"]["is_retry"] is True
     assert "conversation_preview" not in item["meta_data"]
@@ -250,4 +276,5 @@ def test_usage_meta_keys_picks_only_those_keys_in_sql(db_session, test_user):
     full = crud_gateway_usage_search_document.search_account_documents(
         db_session, account_id=str(test_user.account_id), limit=5
     )
-    assert "conversation_preview" in full["items"][0]["meta_data"]
+    full_by_id = {row["api_usage_id"]: row for row in full["items"]}
+    assert "conversation_preview" in full_by_id[str(usage.id)]["meta_data"]

@@ -179,7 +179,16 @@ class CRUDGatewayUsageSearchDocument(CRUDBase[GatewayUsageSearchDocument]):
             # per key detoasts the whole value once per key (~113 KB a row of
             # ``usage_details`` on a long session), which made this slower
             # than shipping it.
-            entries = func.jsonb_each(ApiUsage.meta_data).table_valued("key", "value")
+            # Only objects: a row can hold a JSON null or scalar, and
+            # jsonb_each raises on those. NULL yields no entries.
+            meta_object = case(
+                (
+                    func.jsonb_typeof(ApiUsage.meta_data) == "object",
+                    ApiUsage.meta_data,
+                ),
+                else_=None,
+            )
+            entries = func.jsonb_each(meta_object).table_valued("key", "value")
             slim_usage_meta = (
                 select(func.jsonb_object_agg(entries.c.key, entries.c.value))
                 .where(entries.c.key.in_(list(usage_meta_keys)))
