@@ -100,34 +100,54 @@ def test_already_linked_agent_is_left_alone() -> None:
     assert resolve_hostname_devices(devices, [_agent()]) == {}
 
 
-def test_agent_page_uses_the_same_resolution() -> None:
-    """The agent's Device strip names the device the fleet map places it on."""
+def _agent_page(agents: list[Row], device: dict, *, allowed: bool = True) -> list:
     user = models.User(id=uuid4(), account_id=uuid4(), is_superuser=True)
     service = MagicMock()
     service.devices_for_agent.return_value = []
-    device = _device("fp:laptop", "Dimitriss-MacBook-Pro.local", ("owner-a",))
-    device |= dict(os="darwin", runner_state="online", last_seen_at=None)
     service.read.return_value = dict(truncated=False, items=[device])
+    module = "preloop.services.agent_device_links"
     with (
-        patch("preloop.services.agent_device_links.get_plugin_manager") as manager,
-        patch("preloop.services.agent_device_links.crud") as crud,
-        patch("preloop.services.fleet_map._allowed", return_value=True),
+        patch(f"{module}.get_plugin_manager") as manager,
+        patch(f"{module}.crud"),
+        patch(f"{module}.list_resources", return_value=agents),
+        patch(f"{module}.filter_viewable", side_effect=lambda db, u, k, rows: rows),
+        patch("preloop.services.fleet_map._allowed", return_value=allowed),
     ):
         manager.return_value.get_service.return_value = service
-        crud.crud_managed_agent.get_for_account.return_value = _agent()
         links = agent_device_links(MagicMock(), user=user, agent_id="agent-a")
-        assert [link.device_key for link in links] == ["fp:laptop"]
         service.read.return_value = dict(truncated=True, items=[device])
-        assert agent_device_links(MagicMock(), user=user, agent_id="agent-a") == []
-    with (
-        patch("preloop.services.agent_device_links.get_plugin_manager") as manager,
-        patch("preloop.services.agent_device_links.crud") as crud,
-        patch("preloop.services.fleet_map._allowed", return_value=False),
-    ):
-        manager.return_value.get_service.return_value = service
-        service.read.return_value = dict(truncated=False, items=[device])
-        crud.crud_managed_agent.get_for_account.return_value = _agent()
-        assert agent_device_links(MagicMock(), user=user, agent_id="agent-a") == []
+        partial = agent_device_links(MagicMock(), user=user, agent_id="agent-a")
+    assert partial == []
+    return [link.device_key for link in links]
+
+
+def _laptop() -> dict:
+    device = _device("fp:laptop", "Example-Laptop.local", ("owner-a",))
+    return device | dict(os="darwin", runner_state="online", last_seen_at=None)
+
+
+def test_agent_page_uses_the_same_resolution() -> None:
+    """The agent's Device strip names the device the fleet map places it on."""
+    agent = _agent(enrollment_hostname="example-laptop")
+    assert _agent_page([agent], _laptop()) == ["fp:laptop"]
+    assert _agent_page([agent], _laptop(), allowed=False) == []
+
+
+def test_agent_page_sees_sibling_ambiguity_like_the_map() -> None:
+    device = _laptop()
+    device["agents"] = [
+        dict(
+            id="r:cursor_cli",
+            kind="cursor_cli",
+            status="pending",
+            managed_agent_id=None,
+        )
+    ]
+    one = _agent(agent_kind="cursor", enrollment_hostname=None)
+    two = _agent(id="agent-b", agent_kind="cursor", enrollment_hostname=None)
+    assert _agent_page([one], device) == ["fp:laptop"]
+    assert _agent_page([one, two], device) == []
+    assert resolve_hostname_devices([device], [one, two]) == {}
 
 
 @pytest.mark.parametrize(

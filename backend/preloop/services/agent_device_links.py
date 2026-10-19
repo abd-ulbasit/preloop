@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from preloop.models import crud, models
+from preloop.models.crud.fleet_map import list_resources
+from preloop.plugins.account_hooks import VISIBLE_MANAGED_AGENT, filter_viewable
 from preloop.plugins.base import get_plugin_manager
 from preloop.schemas.gateway_usage import ManagedAgentDeviceSummary
 from preloop.services.agent_device_resolution import resolve_hostname_devices
@@ -44,7 +46,7 @@ def _hostname_device_links(
     Uses the same enrollment-hostname resolution as the fleet map, under the
     same fleet permission, so the agent page and the map name one device.
     """
-    from preloop.services.fleet_map import _allowed
+    from preloop.services.fleet_map import SOURCE_LIMIT, _allowed
 
     read = getattr(service, "read", None)
     if read is None:
@@ -53,17 +55,29 @@ def _hostname_device_links(
     owner = account is not None and str(account.primary_user_id) == str(user.id)
     if not _allowed(db, user, "view_device_fleet", owner):
         return []
-    agent = crud.crud_managed_agent.get_for_account(
-        db, account_id=str(user.account_id), agent_id=agent_id
+    # Resolve against the same agent source the fleet map reads, so sibling
+    # agents make a match ambiguous here exactly as they do on the map.
+    agents = filter_viewable(
+        db,
+        user,
+        VISIBLE_MANAGED_AGENT,
+        list_resources(
+            db,
+            source="agents",
+            account_id=str(user.account_id),
+            limit=SOURCE_LIMIT + 1,
+        ),
     )
-    if agent is None:
+    if len(agents) > SOURCE_LIMIT or not any(
+        str(row.id) == str(agent_id) for row in agents
+    ):
         return []
     projection = read(db, account_id=user.account_id)
     if projection.get("truncated"):
         # A partial window cannot prove the hostname match is unique.
         return []
     devices = projection["items"]
-    device_key = resolve_hostname_devices(devices, [agent]).get(str(agent.id))
+    device_key = resolve_hostname_devices(devices, agents).get(str(agent_id))
     return [
         ManagedAgentDeviceSummary.model_validate(
             {
