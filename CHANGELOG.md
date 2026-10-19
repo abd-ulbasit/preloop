@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Read-only production access example.** `docs/guide/examples/production-access/`
+  gives an incident investigation flow read access to Kubernetes, PostgreSQL and
+  Sentry MCP servers with no write path: a ServiceAccount bound to ClusterRole
+  `view`, a `SELECT`-only database role, read-scoped Sentry token guidance,
+  server settings, scripts that check the credentials, and a policy that denies
+  every tool not on each server's read list, including tools a later upstream
+  release adds. A test runs write and read calls through the policy simulator
+  (#1426).
+
 ### Security
 
 - Opening an approval bypass requires `decide_approvals`, and the
