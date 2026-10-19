@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-19
+
 **Fleet Map** adds a Table | Map view to Device fleet and the bounded,
 permission-filtered `GET /api/v1/fleet/map` endpoint. Explore owners, devices,
 runners, agents, models and provider credentials, inspect downstream impact,
