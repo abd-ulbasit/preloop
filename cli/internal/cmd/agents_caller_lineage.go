@@ -38,7 +38,7 @@ func callerLineageInput(raw []byte) map[string]interface{} {
 			return nil
 		}
 	}
-	updated := make(map[string]interface{}, len(input)+1)
+	updated := make(map[string]interface{})
 	for key, value := range input {
 		updated[key] = value
 	}

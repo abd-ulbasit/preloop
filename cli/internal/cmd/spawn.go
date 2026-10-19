@@ -31,7 +31,7 @@ func spawnEnvironment(sessionID, alias string, inherited []string) ([]string, er
 	if !ok || handoff.RuntimeSessionID == "" || handoff.ExternalSessionID != sessionID {
 		return nil, fmt.Errorf("no registered session handoff for %q", sessionID)
 	}
-	env := make([]string, 0, len(inherited)+2)
+	env := []string{}
 	for _, entry := range inherited {
 		if strings.HasPrefix(entry, parentSessionEnvVar+"=") || strings.HasPrefix(entry, sessionAliasEnvVar+"=") {
 			continue
