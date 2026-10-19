@@ -936,7 +936,7 @@ def test_historical_segment_requires_attributed_override(
     from datetime import timedelta
 
     runtime = _session(db_session, test_user.account_id)
-    end = datetime.now(timezone.utc) - timedelta(days=30)
+    end = _window()[0] - timedelta(days=30)
     with pytest.raises(GovernanceReviewValidationError, match="review window"):
         crud_governance_session_digest.upsert(
             db_session,
@@ -1064,3 +1064,23 @@ def test_parse_failure_enters_retry_queue_without_complete_segments(
         stale_before=datetime.now(timezone.utc) - timedelta(minutes=10),
     )
     assert found == [identifiers["parse_failed"]]
+
+
+def test_older_review_boundary_cannot_implicitly_allow_history(
+    db_session: Session, test_user: User
+) -> None:
+    from datetime import timedelta
+
+    runtime = _session(db_session, test_user.account_id)
+    old = _window()[0] - timedelta(days=30)
+    with pytest.raises(GovernanceReviewValidationError, match="review window"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=old,
+            window_end=old,
+            digest={},
+            review_window_start=old,
+            commit=False,
+        )

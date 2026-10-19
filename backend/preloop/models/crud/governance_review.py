@@ -787,8 +787,9 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             include_history: Permit creating or summarizing earlier content.
             override_caller: Required caller identity for either override.
             override_reason: Required reason, written to the audit log.
-            review_window_start: Start of the caller's explicit review window;
-                defaults to the week ending at the latest Monday 07:00 UTC.
+            review_window_start: Optional narrower review boundary. Cannot
+                widen the default week ending at the latest Monday 07:00 UTC
+                without the explicit include_history override.
 
         Returns:
             The stored segment.
@@ -807,11 +808,11 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             raise GovernanceReviewValidationError(
                 "summary overrides require a caller and reason"
             )
-        review_start = (
-            _digest_utc(review_window_start)
-            if review_window_start
-            else _digest_review_start()
-        )
+        review_start = _digest_review_start()
+        if review_window_start is not None:
+            # A narrower caller window is useful; an older boundary must not
+            # become an unaudited substitute for include_history.
+            review_start = max(review_start, _digest_utc(review_window_start))
         if not include_history and _digest_utc(window_start) < review_start:
             # Retiring a failed historical span sends no content to a model and
             # must not require permission to analyze that history. Never allow
