@@ -1,4 +1,5 @@
 import {
+  FLEET_MAP_CHILD_HEIGHT,
   FLEET_MAP_NODE_HEIGHT,
   FLEET_MAP_NODE_WIDTH,
   type FleetMapGraph,
@@ -95,8 +96,11 @@ const TYPE_ORDER = ['user', 'device', 'runner', 'agent', 'flow', 'cluster'];
 export function clusterSeed(
   ids: string[],
   clusters: Map<string, string>,
-  graph?: Pick<FleetMapGraph, 'nodes' | 'edges'>
+  graph?: Pick<FleetMapGraph, 'nodes' | 'edges'>,
+  heightOf: (id: string) => number = () => FLEET_MAP_NODE_HEIGHT
 ): Map<string, { x: number; y: number }> {
+  const rowOf = (id: string) =>
+    heightOf(id) + ISLAND_ROW - FLEET_MAP_NODE_HEIGHT;
   const byId = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
   const typeOf = (id: string) => byId.get(id)?.type ?? id.split(':')[0];
   const members = new Map<string, string[]>();
@@ -157,7 +161,11 @@ export function clusterSeed(
     top.forEach((id) =>
       place(id, typeOf(id) === 'user' || typeOf(id) === 'flow' ? 0 : 1)
     );
-    return { key, rows, height: rows.length * ISLAND_ROW };
+    return {
+      key,
+      rows,
+      height: rows.reduce((sum, row) => sum + rowOf(row.id), 0),
+    };
   });
   const tallest = Math.max(ISLAND_ROW, ...islands.map((item) => item.height));
   const coreHeight = coreRows * ISLAND_ROW * 1.4;
@@ -168,16 +176,18 @@ export function clusterSeed(
   );
   const ry = Math.max(coreHeight / 2 + tallest / 2 + 40, tallest * 1.1);
   islands.forEach((island, k) => {
-    // Start at the top left and go round, so reading order follows the ring.
-    const angle = Math.PI + (2 * Math.PI * k) / count + Math.PI / count;
+    // Start on the left and go round. Two groups sit left and right of the
+    // shared models, never above and below them; from five on, the ring
+    // turns half a step so no group sits straight above the core.
+    const angle =
+      Math.PI + (2 * Math.PI * k) / count + (count >= 5 ? Math.PI / count : 0);
     const cx = Math.cos(angle) * rx - ISLAND_WIDTH / 2;
     const cy = Math.sin(angle) * ry - island.height / 2;
-    island.rows.forEach(({ id, depth }, row) =>
-      seed.set(id, {
-        x: cx + Math.min(depth, 2) * ISLAND_INDENT * 0.5,
-        y: cy + row * ISLAND_ROW,
-      })
-    );
+    let y = cy;
+    for (const { id, depth } of island.rows) {
+      seed.set(id, { x: cx + Math.min(depth, 2) * ISLAND_INDENT * 0.5, y });
+      y += rowOf(id);
+    }
   });
   return seed;
 }
@@ -187,17 +197,20 @@ function separate(
   xs: Float64Array,
   ys: Float64Array,
   fixed: boolean[],
+  hs?: number[],
   passes = 40
 ): void {
   const n = xs.length;
   const w = FLEET_MAP_NODE_WIDTH + 16;
-  const h = FLEET_MAP_NODE_HEIGHT + 12;
+  const h = (i: number) => (hs ? hs[i] : FLEET_MAP_NODE_HEIGHT);
   for (let pass = 0; pass < passes; pass++) {
     let moved = false;
     for (let i = 0; i < n; i++)
       for (let j = i + 1; j < n; j++) {
         const ox = w - Math.abs(xs[i] - xs[j]);
-        const oy = h - Math.abs(ys[i] - ys[j]);
+        // Boxes may differ in height: the upper one's height decides.
+        const oy =
+          (ys[i] <= ys[j] ? h(i) : h(j)) + 12 - Math.abs(ys[i] - ys[j]);
         if (ox <= 0 || oy <= 0 || (fixed[i] && fixed[j])) continue;
         moved = true;
         // Resolve along the shallower axis.
@@ -274,18 +287,66 @@ function arrivalSeed(
  * With `clusters` (node id to group key) nodes start in their group and are
  * held near it, so a person, their machines and agents read as one place.
  */
+/** Space a contained node takes inside its machine. */
+const CHILD_ROW = FLEET_MAP_CHILD_HEIGHT + 6;
+const CHILD_INSET = 12;
+
+/**
+ * Which agents and runners sit inside which machine: a `hosts` line from a
+ * device to something on the map. Anything hosted twice stays with the
+ * first machine.
+ */
+export function hostedBy(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>
+): Map<string, string[]> {
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  const kids = new Map<string, string[]>();
+  const taken = new Set<string>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== 'hosts' || taken.has(edge.target)) continue;
+    const host = byId.get(edge.source);
+    const kid = byId.get(edge.target);
+    if (
+      host?.type !== 'device' ||
+      !kid ||
+      !['agent', 'runner'].includes(kid.type)
+    )
+      continue;
+    taken.add(edge.target);
+    kids.set(edge.source, [...(kids.get(edge.source) ?? []), edge.target]);
+  }
+  for (const list of kids.values()) list.sort();
+  return kids;
+}
+
+/** Height of a machine holding `count` agents and runners. */
+export const containerHeight = (count: number): number =>
+  count ? FLEET_MAP_NODE_HEIGHT + count * CHILD_ROW + 6 : FLEET_MAP_NODE_HEIGHT;
+
 export function spatialLayout(
   graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
   seed: Map<string, FleetMapPosition>,
   pinned: FleetMapPoints = {},
-  clusters?: Map<string, string>
+  clusters?: Map<string, string>,
+  collapsed: Set<string> = new Set()
 ): FleetMapLayout {
-  const ids = graph.nodes.map((node) => node.id);
+  // On a grouped map a machine is a box holding its agents: only the boxes
+  // are placed, and what they hold is laid out inside them.
+  const contained = clusters ? hostedBy(graph) : new Map<string, string[]>();
+  const kidOf = new Map<string, string>();
+  for (const [host, list] of contained)
+    for (const kid of list) kidOf.set(kid, host);
+  const heightOf = (id: string) =>
+    collapsed.has(id)
+      ? FLEET_MAP_NODE_HEIGHT
+      : containerHeight(contained.get(id)?.length ?? 0);
+  const ids = graph.nodes.map((node) => node.id).filter((id) => !kidOf.has(id));
   const index = new Map(ids.map((id, i) => [id, i]));
   const n = ids.length;
   const xs = new Float64Array(n);
   const ys = new Float64Array(n);
-  const grouped = clusters ? clusterSeed(ids, clusters, graph) : null;
+  const grouped = clusters ? clusterSeed(ids, clusters, graph, heightOf) : null;
+  const hs = ids.map(heightOf);
   const near = arrivalSeed(graph, ids, pinned, clusters);
   ids.forEach((id, i) => {
     const start = pinned[id] ??
@@ -304,7 +365,7 @@ export function spatialLayout(
     );
   const ideal = 300;
   // Grouped maps are laid out by island; only overlaps are resolved.
-  if (clusters) separate(xs, ys, fixed);
+  if (clusters) separate(xs, ys, fixed, hs);
   const iterations =
     fixed.every(Boolean) || clusters ? 0 : n > 250 ? 60 : n > 80 ? 120 : 220;
   let heat = 60;
@@ -363,29 +424,45 @@ export function spatialLayout(
       xs[i] = Math.max(24, xs[i]);
       ys[i] = Math.max(24, ys[i]);
     }
-    if (clusters) separate(xs, ys, fixed);
+    if (clusters) separate(xs, ys, fixed, hs);
   }
   const positions = new Map<string, FleetMapPosition>();
+  const groups = new Map<string, string[]>();
   let width = 0;
   let height = 0;
   ids.forEach((id, i) => {
     const x = Math.round(xs[i] - minX);
     const y = Math.round(ys[i] - minY);
-    positions.set(id, {
-      x,
-      y,
-      w: FLEET_MAP_NODE_WIDTH,
-      h: FLEET_MAP_NODE_HEIGHT,
-    });
+    const h = hs[i];
+    positions.set(id, { x, y, w: FLEET_MAP_NODE_WIDTH, h });
     width = Math.max(width, x + FLEET_MAP_NODE_WIDTH + 24);
-    height = Math.max(height, y + FLEET_MAP_NODE_HEIGHT + 24);
+    height = Math.max(height, y + h + 24);
+    const kids = contained.get(id);
+    if (!kids) return;
+    // A folded machine still owns its group, so it keeps its fold control.
+    groups.set(id, kids);
+    if (collapsed.has(id)) return;
+    kids.forEach((kid, k) =>
+      positions.set(kid, {
+        x: x + CHILD_INSET,
+        y: y + FLEET_MAP_NODE_HEIGHT + k * CHILD_ROW,
+        w: FLEET_MAP_NODE_WIDTH - 2 * CHILD_INSET,
+        h: FLEET_MAP_CHILD_HEIGHT,
+      })
+    );
   });
   return {
     positions,
-    groups: new Map(),
+    groups,
     columns: [],
     more: [],
-    anchor: (id) => (positions.has(id) ? id : undefined),
+    // A folded machine stands in for what it holds.
+    anchor: (id) =>
+      positions.has(id)
+        ? id
+        : kidOf.has(id) && positions.has(kidOf.get(id)!)
+          ? kidOf.get(id)
+          : undefined,
     width,
     height,
   };

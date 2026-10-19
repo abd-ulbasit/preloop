@@ -768,11 +768,22 @@ webhook for it count once. The generic `add_comment` counts only when the wrappe
 recorded a pull request target (`code_target`, a boolean kept instead of the target);
 issue comments and operator notes never count. "Any time" reads 90 days. Live, the `code_activity` realtime topic carries each successful code
 tool call and each first merge. In the spatial arrangement people, their machines and
-agents form islands around the shared models and providers, nodes fade in and out as
-they join and leave the window (positions already on screen are kept), and live
-traffic travels along the map as short-lived messages (model request and response,
-tool call, approval request and decision, code event), capped at 24 in flight and one
-per line per 400 ms; with `prefers-reduced-motion` only the line lights.
+agents form islands around the shared models and providers. Nodes fade in and out as
+they join and leave the window. When a person or lone machine joins or leaves, the
+islands are dealt round again and nodes glide (400 ms) to their places, and the view
+glides to the fleet's new centre of gravity unless the user panned or zoomed in the
+last 15 s. Live traffic lights the line it travels (held 2.5 s) and the node it starts
+from (the sending agent or flow, the answering model, the deciding person), capped at
+8 lit nodes. Nothing travels along a line; with `prefers-reduced-motion` nodes and
+the view also move without gliding or fading. A machine with a known `hosts` line is a
+box holding its agents and runners (the hosts line is then not drawn); it grows and
+shrinks as they come and go and drags as one unit, and only dropped boxes and nodes
+are stored. Optional Bubbles (a toolbar toggle, stored per user) put a short note
+beside a lit node ("asks Claude Opus 5.5", "answers", "runs Bash", "opened a PR"),
+never prompt text, at most six. Nodes show their product, model-family or provider
+mark (`utils/fleet-map-icons.ts`; vendor marks from lobe-icons, MIT, in
+`public/images/logos/vendors`): a model's family can differ from the provider serving
+it. A `bare` map shows only the canvas, for presentations.
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 

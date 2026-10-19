@@ -758,6 +758,7 @@ describe('fleet-map labels', () => {
         localStorage.getItem('preloop:fleet-map:arrangement:fleet:u1')
       ).to.equal('spatial');
       const target = node(el, 'agent:codex');
+      const machineX = parseFloat(node(el, 'device:mbp').style.left);
       const before = {
         x: parseFloat(target.style.left),
         y: parseFloat(target.style.top),
@@ -783,10 +784,9 @@ describe('fleet-map labels', () => {
       const stored = JSON.parse(
         localStorage.getItem('preloop:fleet-map:positions:fleet:u1')!
       );
-      expect(stored['agent:codex']).to.deep.equal({
-        x: before.x + 60,
-        y: before.y + 40,
-      });
+      // Codex sits inside maya-laptop, so the machine moved and is stored.
+      expect(Object.keys(stored)).to.deep.equal(['device:mbp']);
+      expect(stored['device:mbp'].x).to.equal(machineX + 60);
       // The drop click lands on the stage, not the node; the next real
       // node click still selects.
       stage.click();
