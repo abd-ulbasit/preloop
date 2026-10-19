@@ -1,0 +1,64 @@
+"""Governance overhead stays out of customer usage, but remains budgeted."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy.orm import Session
+
+from preloop.models import models
+from preloop.models.crud import crud_api_usage
+from preloop.models.crud.weekly_report_data import usage_snapshot
+from preloop.models.crud.weekly_signals import gateway_latency_signals
+
+
+@pytest.mark.parametrize("funding", ["platform", "account"])
+def test_governance_overhead_is_not_customer_usage(
+    db_session: Session, test_user: models.User, funding: str
+) -> None:
+    end = datetime.now(UTC) + timedelta(minutes=1)
+    start = end - timedelta(days=7)
+    for purpose, cost, status in [
+        (None, 2.0, 200),
+        ("governance_session_digest", 3.0, 500),
+        ("governance_review", 4.0, 500),
+    ]:
+        crud_api_usage.log_gateway_request(
+            db_session,
+            endpoint="/v1/chat/completions",
+            method="POST",
+            account_id=str(test_user.account_id),
+            user_id=str(test_user.id),
+            status_code=status,
+            duration=1 if purpose is None else 100,
+            estimated_cost=cost,
+            model_alias="customer" if purpose is None else "analysis",
+            meta_data={"purpose": purpose, "funding": funding},
+        )
+    summary = crud_api_usage.get_gateway_usage_summary(
+        db_session, account_id=str(test_user.account_id), start_date=start, end_date=end
+    )
+    assert summary["request_count"] == 1
+    assert summary["error_count"] == 0
+    assert summary["estimated_cost"] == 2
+    snapshot = usage_snapshot(
+        db_session, account_id=test_user.account_id, start=start, end=end
+    )
+    assert snapshot["request_count"] == 1
+    assert snapshot["total_gateway_cost_usd"] == 2
+    assert snapshot["error_count"] == 0
+    latency = gateway_latency_signals(
+        db_session, account_id=test_user.account_id, start=start, end=end
+    )
+    assert latency[0].request_count == 1
+    assert latency[0].error_count == 0
+    assert latency[0].p95_duration == 1
+    assert (
+        crud_api_usage.get_gateway_spend(
+            db_session,
+            account_id=str(test_user.account_id),
+            start=start,
+            purpose="governance_review",
+            funding=funding,
+        )
+        == 4
+    )

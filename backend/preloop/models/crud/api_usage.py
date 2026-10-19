@@ -136,6 +136,21 @@ def exclude_replay_usage_condition():
     )
 
 
+def exclude_customer_overhead_condition() -> Any:
+    """Exclude replay and all governance purposes from customer reporting.
+
+    Keep the replay predicate literal for existing partial indexes. Purpose-
+    targeted budget reads bypass this filter, so analysis still consumes its
+    own allowance and its cost remains visible in the policy review section.
+    NULL metadata and unrelated purposes retain their existing semantics.
+    """
+    purpose = ApiUsage.meta_data.op("->>")(literal_column("'purpose'"))
+    return and_(
+        exclude_replay_usage_condition(),
+        or_(purpose.is_(None), ~purpose.startswith("governance_", autoescape=True)),
+    )
+
+
 def gateway_action_condition() -> Any:
     """Return ``action_type = 'model_gateway'`` with a literal, not a parameter.
 
@@ -607,7 +622,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
             ApiUsage.provider_name.isnot(None),
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
         )
@@ -1322,7 +1337,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         ).filter(
             ApiUsage.action_type == "model_gateway",
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
         )
@@ -1414,7 +1429,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         ).filter(
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
             ApiUsage.estimated_cost.is_(None),
@@ -1479,7 +1494,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             func.coalesce(ApiUsage.error_class, "").notin_(
                 ("budget_exceeded", "hosted_credit_reserved")
             ),
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
         ]
@@ -1798,7 +1813,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             # callers often filter/sort by the client-visible alias).
             gateway_action_condition(),
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
         )
         if start_date:
             query = query.filter(ApiUsage.timestamp >= start_date)
@@ -2098,7 +2113,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 ApiUsage.account_id == account_id,
                 ApiUsage.user_id == user_id if user_id is not None else true(),
                 ApiUsage.action_type == "model_gateway",
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 ApiUsage.timestamp >= start_date,
                 ApiUsage.timestamp < end_date,
             )
@@ -2144,7 +2159,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .filter(
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.account_id == account_id,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
             )
         )
         if start_date:
@@ -2207,7 +2222,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .filter(
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.account_id == account_id,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 ApiUsage.flow_id == flow_id,
                 ApiUsage.timestamp >= start_date,
                 ApiUsage.timestamp < end_date,
@@ -2247,7 +2262,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         conditions = [
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             or_(
                 ApiUsage.runtime_session_id.isnot(None),
                 ApiUsage.flow_execution_id.isnot(None),
@@ -2801,7 +2816,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         ).filter(
             ApiUsage.action_type == "model_gateway",
             _usage_account_clause(ApiUsage.account_id, account_id, account_ids),
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
             ApiUsage.timestamp < end_date,
         )
@@ -2900,7 +2915,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 *conditions,
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.model_alias.isnot(None),
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
             ]
 
         # Branch 1, direct attribution: ``ix_api_usage_flow_execution_id``.
@@ -3040,7 +3055,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .filter(
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.flow_execution_id == execution_id,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
             )
             .first()
         )
@@ -3271,7 +3286,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             # agent traffic; replay-validation runs are excluded like in the
             # usage aggregations above. Purpose-targeted reads (e.g. the
             # optimizer's daily cap) are unaffected.
-            query = query.filter(exclude_replay_usage_condition())
+            query = query.filter(exclude_customer_overhead_condition())
         if funding is not None:
             query = query.filter(self.model.meta_data["funding"].astext == funding)
         return float(query.scalar() or 0.0)
@@ -3524,7 +3539,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 self.model.meta_data["usage_details"].label("usage_details"),
             )
             .filter(
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 self.model.action_type == "model_gateway",
                 self.model.account_id == account_id,
                 self.model.runtime_session_id == runtime_session_id,
@@ -3626,7 +3641,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         ).filter(
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.runtime_principal_id == runtime_principal_id,
             ApiUsage.timestamp >= start,
         )
@@ -3870,7 +3885,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .filter(
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.account_id == account_id,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 ApiUsage.timestamp >= start,
             )
             .one_or_none()
@@ -3939,7 +3954,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 ApiUsage.account_id == account_id,
                 ApiUsage.runtime_session_id.isnot(None),
                 ApiUsage.cache_creation_tokens > 0,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 ApiUsage.timestamp >= start,
                 ApiUsage.timestamp < end,
             )
@@ -4045,7 +4060,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             ApiUsage.action_type == "model_gateway",
             ApiUsage.account_id == account_id,
             ApiUsage.cost_source == "subscription",
-            exclude_replay_usage_condition(),
+            exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start,
             ApiUsage.timestamp < end,
         )
@@ -4100,7 +4115,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             .filter(
                 ApiUsage.action_type == "model_gateway",
                 ApiUsage.account_id == account_id,
-                exclude_replay_usage_condition(),
+                exclude_customer_overhead_condition(),
                 ApiUsage.timestamp >= start,
                 or_(
                     usage_details.has_key("prompt_tokens_details"),

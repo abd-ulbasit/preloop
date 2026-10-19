@@ -3,10 +3,11 @@
 import logging
 from datetime import datetime
 from uuid import UUID, uuid4
+from typing import Any
 
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from preloop.models import models
 
@@ -89,6 +90,81 @@ class CRUDMCPInventory:
             .execution_options(populate_existing=True)
         )
         return [(row[0], row[1], row[2]) for row in rows]
+
+    def digest_context(
+        self, db: Session, *, account_id: UUID, start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        """Read names, safe attribution and revision history in one SELECT.
+
+        All identity joins prove membership in the finding's account. No
+        registry URL or credential leaves this projection.
+        """
+        finding, review, server = (
+            models.MCPInventoryFinding,
+            models.MCPInventoryReview,
+            models.MCPServer,
+        )
+        agent, user = models.ManagedAgent, models.User
+        previous = aliased(finding)
+        prior = (
+            select(previous.id)
+            .where(
+                previous.account_id == finding.account_id,
+                previous.server_id == finding.server_id,
+                previous.registry_revision != finding.registry_revision,
+                previous.first_seen_at < finding.first_seen_at,
+            )
+            .exists()
+        )
+        query = (
+            select(
+                finding,
+                review.approval_state.label("approval"),
+                server.updated_at.label("updated_at"),
+                server.name.label("server_name"),
+                agent.display_name.label("agent_name"),
+                user.id.label("user_id"),
+                func.coalesce(user.full_name, user.username).label("user_name"),
+                prior.label("prior_revision"),
+            )
+            .outerjoin(
+                review,
+                and_(
+                    review.account_id == finding.account_id,
+                    review.server_id == finding.server_id,
+                    review.registry_revision == finding.registry_revision,
+                ),
+            )
+            .outerjoin(
+                server,
+                and_(
+                    server.account_id == finding.account_id,
+                    server.id == finding.server_id,
+                ),
+            )
+            .outerjoin(
+                agent,
+                and_(
+                    agent.account_id == finding.account_id,
+                    agent.id == finding.agent_id,
+                ),
+            )
+            .outerjoin(
+                user,
+                and_(
+                    user.account_id == finding.account_id,
+                    user.person_id == finding.person_id,
+                ),
+            )
+            .where(
+                finding.account_id == account_id,
+                finding.first_seen_at >= start,
+                finding.first_seen_at < end,
+            )
+            .order_by(finding.first_seen_at.desc(), finding.id)
+            .limit(500)
+        )
+        return [dict(row) for row in db.execute(query).mappings()]
 
     def lock(self, db: Session, *, account_id: UUID) -> None:
         """Serialize observations and decisions for one account."""

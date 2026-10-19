@@ -136,7 +136,8 @@ _NOT_REPLAY = """
     AND (
         meta_data IS NULL
         OR (meta_data ->> 'purpose') IS NULL
-        OR (meta_data ->> 'purpose') <> :replay_purpose
+        OR ((meta_data ->> 'purpose') <> :replay_purpose
+            AND LEFT(meta_data ->> 'purpose', 11) <> 'governance_')
     )
 """
 
@@ -263,7 +264,7 @@ def first_seen_signals(
                         ) AS label,
                         first_seen_at,
                         linked_user_id AS user_id,
-                        (SELECT COUNT(*) FROM api_usage u WHERE u.account_id = gateway_subject.account_id AND u.meta_data ->> 'gateway_subject_id' = gateway_subject.id::text AND u.timestamp >= :start AND u.timestamp < :end AND u.action_type = 'model_gateway')::int AS usage_count
+                        (SELECT COUNT(*) FROM api_usage u WHERE u.account_id = gateway_subject.account_id AND u.meta_data ->> 'gateway_subject_id' = gateway_subject.id::text AND u.timestamp >= :start AND u.timestamp < :end AND u.action_type = 'model_gateway' AND ((u.meta_data ->> 'purpose') IS NULL OR ((u.meta_data ->> 'purpose') <> :replay_purpose AND LEFT(u.meta_data ->> 'purpose', 11) <> 'governance_')))::int AS usage_count
                     FROM gateway_subject
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND first_seen_at >= :start
@@ -284,7 +285,7 @@ def first_seen_signals(
                          AND (u.runtime_session_id = m.runtime_session_id OR
                               (u.runtime_principal_type = 'managed_agent' AND u.runtime_principal_id = m.id::text))
                          AND u.action_type = 'model_gateway'
-                         AND u.timestamp >= :start AND u.timestamp < :end)::int
+                         AND u.timestamp >= :start AND u.timestamp < :end AND ((u.meta_data ->> 'purpose') IS NULL OR ((u.meta_data ->> 'purpose') <> :replay_purpose AND LEFT(u.meta_data ->> 'purpose', 11) <> 'governance_')))::int
                     FROM discovered_agent_candidate
                     WHERE account_id = CAST(:account_id AS uuid)
                       AND (first_seen_at AT TIME ZONE 'UTC') >= :start
