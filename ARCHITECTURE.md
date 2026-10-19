@@ -330,6 +330,16 @@ by `FLOW_DELEGATION_MAX_DEPTH`, `FLOW_DELEGATION_MAX_CHILDREN` and
 `FLOW_DELEGATION_MAX_TREE_USD`. See
 [Flow delegation](docs/guide/flows/flow-delegation.md).
 
+### Agent note governance
+
+`send_note` resolves its target and validates the hook's caller session against
+its credential principal before evaluating standard tool access rules. Seeded,
+editable rules allow self and descendants, request human approval for other runs
+the sender's owner can control, and deny the rest. Scope facts are recorded with
+the approval; async polling executes the approved call against its resolved
+target. `preloop spawn` passes the registered conductor session and worker alias
+to child processes. See [Spawning workers](docs/guide/spawning-workers.md).
+
 ### Telemetry export
 
 Optional OpenTelemetry export (`preloop.services.otel_export`, disabled by

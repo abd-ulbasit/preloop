@@ -172,7 +172,7 @@ func sessionHookNonInteractive() bool {
 
 // appendClaudeEnvExport exports the run's own id to its child processes.
 // Claude Code sources CLAUDE_ENV_FILE before every Bash command it runs.
-func appendClaudeEnvExport(runtimeSessionID string) error {
+func appendClaudeEnvExport(runtimeSessionID string, externalIDs ...string) error {
 	path := strings.TrimSpace(os.Getenv("CLAUDE_ENV_FILE"))
 	if path == "" {
 		return nil
@@ -185,6 +185,11 @@ func appendClaudeEnvExport(runtimeSessionID string) error {
 		return err
 	}
 	defer f.Close() //nolint:errcheck
+	if len(externalIDs) > 0 && sessionFileIDPattern.MatchString(externalIDs[0]) {
+		if _, err := fmt.Fprintf(f, "export PRELOOP_CURRENT_SESSION_ID=%s\n", externalIDs[0]); err != nil {
+			return err
+		}
+	}
 	_, err = fmt.Fprintf(f, "export %s=%s\n", parentSessionEnvVar, runtimeSessionID)
 	return err
 }
@@ -309,7 +314,7 @@ func runAgentsSessionHook(cmd *cobra.Command, _ []string) error {
 				if resp.Alias != "" && (!haveFile || existing.Alias != resp.Alias) {
 					fmt.Fprintf(errOut, "preloop session_alias=%s\n", resp.Alias)
 				}
-				if err := appendClaudeEnvExport(resp.RuntimeSessionID); err != nil {
+				if err := appendClaudeEnvExport(resp.RuntimeSessionID, externalID); err != nil {
 					fmt.Fprintf(errOut, "preloop session hook: could not export %s: %v\n", parentSessionEnvVar, err)
 				}
 				if sessionHookNonInteractive() && !(haveFile && existing.RuntimeSessionID == resp.RuntimeSessionID) {

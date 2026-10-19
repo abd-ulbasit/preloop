@@ -4112,3 +4112,22 @@ async def test_create_and_notify_owns_summary_session_until_finished(
             assert created is sample_approval_request
     assert phases == ["created", "summary", "closed"]
     assert all(thread != loop_thread for thread in worker_threads)
+
+
+@pytest.mark.parametrize("decision", ["approve_request", "decline_request"])
+async def test_note_approval_requires_bound_human(approval_service, decision):
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+
+    owner_id = uuid.uuid4()
+    request = SimpleNamespace(
+        id=uuid.uuid4(),
+        tool_name="send_note",
+        approval_workflow=SimpleNamespace(
+            approval_config={"note_caller_user_id": str(owner_id)}
+        ),
+    )
+    approval_service.get_approval_request_for_update = AsyncMock(return_value=request)
+    with pytest.raises(HTTPException) as exc:
+        await getattr(approval_service, decision)(request.id, user_id=uuid.uuid4())
+    assert exc.value.status_code == 403

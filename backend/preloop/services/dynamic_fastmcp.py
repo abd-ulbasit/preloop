@@ -2641,6 +2641,7 @@ async def {internal_name}({params_str}):
                     db=db,
                     tool_name=name,
                     tool_args=arguments,
+                    defer_note_scope=True,
                     account_id=uuid.UUID(user_context.account_id),
                     user_id=uuid.UUID(user_context.user_id),
                     server_name=scope_server_name,
