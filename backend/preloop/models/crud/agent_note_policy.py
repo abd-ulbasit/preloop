@@ -163,6 +163,7 @@ def caller_approval_workflow(
             approver_team_ids=[],
             approvals_required=1,
             approval_config={"note_caller_user_id": str(user.id)},
+            require_reason=workflow.require_reason,
             timeout_seconds=workflow.timeout_seconds,
             async_approval_enabled=workflow.async_approval_enabled,
         )

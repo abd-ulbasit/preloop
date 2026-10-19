@@ -72,6 +72,8 @@ def test_caller_workflows_keep_recipients_separate_and_follow_template(
             "is_active": True,
         },
     )
+    template.require_reason = True
+    db_session.flush()
     first_id = caller_approval_workflow(
         db_session, account_id=account_id, workflow_id=template.id, user_id=test_user.id
     )
@@ -83,9 +85,12 @@ def test_caller_workflows_keep_recipients_separate_and_follow_template(
     second = db_session.get(models.ApprovalWorkflow, other_id)
     assert first.approver_user_ids == [test_user.id]
     assert second.approver_user_ids == [other.id]
+    assert first.require_reason is True
+    assert second.require_reason is True
     assert not template.approver_user_ids
     template.async_approval_enabled = False
     template.timeout_seconds = 120
+    template.require_reason = False
     db_session.flush()
     assert (
         caller_approval_workflow(
@@ -98,6 +103,7 @@ def test_caller_workflows_keep_recipients_separate_and_follow_template(
     )
     assert first.async_approval_enabled is False
     assert first.timeout_seconds == 120
+    assert first.require_reason is False
     assert (
         caller_approval_workflow(
             db_session, account_id=account_id, workflow_id=template.id, user_id=None
