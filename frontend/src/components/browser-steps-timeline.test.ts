@@ -762,3 +762,31 @@ describe('browser steps in the session timeline', () => {
     viewer.remove();
   });
 });
+
+describe('browser-step thumbnails share the eager preview budget (#1690)', () => {
+  it('strip and row thumbnails count against the 2-preview limit', async () => {
+    const strip = await fixture<BrowserStepStrip>(html`
+      <browser-step-strip
+        .steps=${STEPS}
+        .sessionId=${SESSION_ID}
+      ></browser-step-strip>
+    `);
+    const thumbs = Array.from(
+      strip.shadowRoot!.querySelectorAll('browser-step-thumbnail')
+    ) as Array<HTMLElement & { budgeted: boolean }>;
+    expect(thumbs.length).to.be.greaterThan(0);
+    for (const thumb of thumbs) expect(thumb.budgeted).to.equal(true);
+
+    const row = await fixture<HTMLElement>(html`
+      <browser-step-row
+        .item=${STEPS[0]}
+        .sessionId=${SESSION_ID}
+      ></browser-step-row>
+    `);
+    const rowThumb = row.shadowRoot!.querySelector(
+      'browser-step-thumbnail'
+    ) as BrowserStepThumbnail & { budgeted: boolean };
+    expect(rowThumb).to.exist;
+    expect(rowThumb.budgeted).to.equal(true);
+  });
+});
