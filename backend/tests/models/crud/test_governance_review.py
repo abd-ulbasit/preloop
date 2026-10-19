@@ -45,6 +45,15 @@ def _window() -> tuple[datetime, datetime]:
     )
 
 
+@pytest.fixture(autouse=True)
+def fixed_digest_review_week(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CRUD fixtures independent of the wall clock."""
+    monkeypatch.setattr(
+        "preloop.models.crud.governance_review._digest_review_start",
+        lambda: _window()[0],
+    )
+
+
 def _session(db_session: Session, account_id: UUID) -> RuntimeSession:
     row = models.RuntimeSession(
         account_id=account_id,
@@ -888,3 +897,170 @@ def test_category_filter_precedes_paging_and_keeps_scope(
         )
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "status", ["complete", "deterministic_only", "deterministic_only_small"]
+)
+def test_completed_segment_cannot_be_overwritten(
+    db_session: Session, test_user: User, status: str
+) -> None:
+    runtime = _session(db_session, test_user.account_id)
+    start, end = _window()
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest={"summary_status": status, "intent": "Preserve this"},
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="complete"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=start,
+            window_end=end,
+            summary={"intent": "Overwrite through summary alias"},
+            commit=False,
+        )
+    db_session.refresh(stored)
+    assert stored.digest["intent"] == "Preserve this"
+
+
+def test_historical_segment_requires_attributed_override(
+    db_session: Session, test_user: User
+) -> None:
+    from datetime import timedelta
+
+    runtime = _session(db_session, test_user.account_id)
+    end = datetime.now(timezone.utc) - timedelta(days=30)
+    with pytest.raises(GovernanceReviewValidationError, match="review window"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=end,
+            window_end=end,
+            digest={},
+            commit=False,
+        )
+    with pytest.raises(GovernanceReviewValidationError, match="caller and reason"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=end,
+            window_end=end,
+            digest={},
+            include_history=True,
+            commit=False,
+        )
+
+
+def test_generic_update_cannot_bypass_completed_guard(
+    db_session: Session, test_user: User
+) -> None:
+    runtime = _session(db_session, test_user.account_id)
+    start, end = _window()
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest={"summary_status": "complete"},
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="complete"):
+        crud_governance_session_digest.update(
+            db_session,
+            db_obj=stored,
+            obj_in={"digest": {"summary_status": "pending"}},
+            commit=False,
+        )
+
+
+def test_explicit_crud_override_records_caller_reason_in_audit(
+    db_session: Session, test_user: User
+) -> None:
+    from preloop.models.crud import crud_audit_log
+
+    runtime = _session(db_session, test_user.account_id)
+    start, end = _window()
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest={"summary_status": "complete"},
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="caller and reason"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=start,
+            window_end=end,
+            digest={"summary_status": "pending"},
+            force_resummarize=True,
+            commit=False,
+        )
+    replaced = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest={"summary_status": "pending"},
+        force_resummarize=True,
+        override_caller="operator/test",
+        override_reason="Approved repair",
+        commit=False,
+    )
+    assert replaced.id == stored.id
+    assert replaced.digest["summary_status"] == "pending"
+    audits = crud_audit_log.get_by_account(
+        db_session,
+        account_id=test_user.account_id,
+        action="governance_review.summary_override",
+        resource_id=str(stored.id),
+    )
+    assert len(audits) == 1
+    assert audits[0].details["caller"] == "operator/test"
+    assert audits[0].details["reason"] == "Approved repair"
+    assert audits[0].details["force_resummarize"] is True
+
+
+def test_parse_failure_enters_retry_queue_without_complete_segments(
+    db_session: Session, test_user: User
+) -> None:
+    from datetime import timedelta
+    from preloop.models.crud.governance_session_candidates import (
+        list_session_digest_retries,
+    )
+
+    start, end = _window()
+    identifiers = {}
+    for status in ("complete", "deterministic_only", "parse_failed"):
+        runtime = _session(db_session, test_user.account_id)
+        row = crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=start,
+            window_end=end,
+            digest={"summary_status": status},
+            commit=False,
+        )
+        identifiers[status] = row.id
+    found = list_session_digest_retries(
+        db_session,
+        account_id=test_user.account_id,
+        stale_before=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    assert found == [identifiers["parse_failed"]]

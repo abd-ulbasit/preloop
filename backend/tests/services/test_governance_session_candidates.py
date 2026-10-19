@@ -178,7 +178,7 @@ def test_retry_reader_limits_orders_and_excludes_completed_or_live_claims(
             crud_governance_session_digest.update(
                 db_session, db_obj=row, obj_in={"updated_at": now - timedelta(hours=1)}
             )
-        if index in (1, 2, 4):
+        if index in (1, 2, 4, 6):
             expected.insert(0, row.id)
     assert (
         list_session_digest_retries(
