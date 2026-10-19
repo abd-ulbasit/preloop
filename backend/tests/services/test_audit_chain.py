@@ -339,6 +339,66 @@ def test_status_reports_the_head_and_the_pending_tail(db_session, account_id):
     assert status["head_hash"] != GENESIS_HASH
 
 
+def _sealed_in_db(db_session, account_id):
+    return len(
+        db_session.execute(
+            select(AuditLog.id).where(
+                AuditLog.account_id == account_id, AuditLog.chain_seq.is_not(None)
+            )
+        ).all()
+    )
+
+
+@pytest.mark.parametrize(
+    "deleted_seqs, floor",
+    [
+        ((), 0),  # nothing purged
+        ((1, 2), 2),  # a clean prefix
+        ((1, 3, 4), 4),  # a purge whose cutoff skipped seq 2
+    ],
+)
+def test_sealed_rows_matches_the_rows_still_stored(
+    db_session, account_id, deleted_seqs, floor
+):
+    rows = _rows(db_session, account_id, 6)
+    _seal(db_session, account_id)
+    for row in rows:
+        if row.chain_seq in deleted_seqs:
+            db_session.delete(row)
+    if floor:
+        audit_chain.note_pruned(
+            db_session, account_id=account_id, up_to_seq=floor, now=datetime.now(UTC)
+        )
+    db_session.flush()
+
+    status = audit_chain.chain_status(db_session, account_id=account_id)
+
+    assert status["sealed_rows"] == _sealed_in_db(db_session, account_id)
+    assert status["sealed_rows"] == 6 - len(deleted_seqs)
+
+
+def test_sealed_rows_does_not_count_the_sealed_history(db_session, account_id):
+    """The count reads the floor's survivors only, not every sealed row (#1693)."""
+    from sqlalchemy import event
+
+    _rows(db_session, account_id, 4)
+    _seal(db_session, account_id)
+    statements = []
+
+    def record(conn, cursor, statement, *args):
+        statements.append(" ".join(statement.split()))
+
+    engine = db_session.get_bind().engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        status = audit_chain.chain_status(db_session, account_id=account_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert status["sealed_rows"] == 4
+    assert not [sql for sql in statements if "audit_log.chain_seq IS NOT NULL" in sql]
+
+
 def test_one_account_chain_ignores_another_accounts_rows(db_session, test_user):
     other = models.Account(organization_name="other-co", is_active=True)
     db_session.add(other)

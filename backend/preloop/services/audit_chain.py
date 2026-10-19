@@ -488,6 +488,40 @@ def run_seal_pass(
     return summary
 
 
+def _sealed_row_count(db: Session, *, account_id: Any, state: Any) -> int:
+    """Sealed rows still stored, without counting the whole sealed history.
+
+    The sealer hands out ``chain_seq`` 1..``last_seq`` without gaps, and a
+    retention purge raises ``pruned_below_seq`` to the highest position it
+    deleted, so every purged row sits at or under the floor. Above the floor
+    the count is therefore ``last_seq - pruned_below_seq``; only the rows at
+    or under it (the survivors of a purge that did not delete a clean prefix,
+    normally none) are counted, through ``ix_audit_log_account_chain_seq``.
+    Counting every sealed row read 1.2M index entries for the founder account
+    on prod: 1.7 s cold (#1693). A row missing above the floor is tampering,
+    which is the verifier's job to report, not this figure's.
+    """
+    if state is None:
+        return 0
+    head = int(state.last_seq or 0)
+    floor = min(int(state.pruned_below_seq or 0), head)
+    if floor <= 0:
+        return head
+    survivors = int(
+        db.execute(
+            select(func.count())
+            .select_from(AuditLog)
+            .where(
+                AuditLog.account_id == account_id,
+                AuditLog.chain_seq.is_not(None),
+                AuditLog.chain_seq <= floor,
+            )
+        ).scalar_one()
+        or 0
+    )
+    return head - floor + survivors
+
+
 def chain_status(db: Session, *, account_id: Any) -> dict[str, Any]:
     """Head, floor, pending count and the newest checkpoint."""
     state = get_state(db, account_id=account_id, create=False)
@@ -499,14 +533,7 @@ def chain_status(db: Session, *, account_id: Any) -> dict[str, Any]:
         ).scalar_one()
         or 0
     )
-    sealed = int(
-        db.execute(
-            select(func.count())
-            .select_from(AuditLog)
-            .where(AuditLog.account_id == account_id, AuditLog.chain_seq.is_not(None))
-        ).scalar_one()
-        or 0
-    )
+    sealed = _sealed_row_count(db, account_id=account_id, state=state)
     latest = db.execute(
         select(AuditChainCheckpoint)
         .where(AuditChainCheckpoint.account_id == account_id)
