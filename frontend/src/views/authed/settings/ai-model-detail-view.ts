@@ -3034,137 +3034,6 @@ export class AIModelDetailView extends LitElement {
       <div class="dashboard extra-wide">
         <div class="main-column">
           <div class="page">
-            <sl-card>
-              <div slot="header" class="model-heading">
-                <!-- This card holds a name, an identifier, an alias,
-                     credentials and a managed agent. That is "Details";
-                     "Observability" promised telemetry it never carried. -->
-                <div class="model-title">Details</div>
-                <div class="badge-row">
-                  ${this.model?.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : null}
-                  ${
-                    this.model?.provider_name
-                      ? html`
-                          <sl-badge class="tag-chip" variant="neutral">
-                            ${this.model.provider_name}
-                          </sl-badge>
-                        `
-                      : ''
-                  }
-                  ${
-                    this.model?.is_default
-                      ? html`<sl-badge class="chip" variant="success" pill
-                          >Default</sl-badge
-                        >`
-                      : ''
-                  }
-                  ${
-                    this.model?.model_kind
-                      ? html`
-                          <sl-badge class="tag-chip" variant="neutral">
-                            ${
-                              this.model.model_kind === 'stt'
-                                ? 'Speech to text'
-                                : this.model.model_kind === 'tts'
-                                  ? 'Text to speech'
-                                  : 'Inference'
-                            }
-                          </sl-badge>
-                        `
-                      : ''
-                  }
-                </div>
-              </div>
-              ${
-                this.model
-                  ? html`
-                      <div class="metadata-stack">
-                        <div class="model-metadata">
-                          <span><strong>Name:</strong> ${this.model.name}</span>
-                          <span>
-                            <strong>Identifier:</strong>
-                            <code>${this.model.model_identifier}</code>
-                          </span>
-                          <span>
-                            <strong>Updated:</strong>
-                            ${
-                              // "Unknown" on a model that was never edited
-                              // reads as a lookup that failed.
-                              this.model.updated_at
-                                ? this.formatDateTime(this.model.updated_at)
-                                : 'Never'
-                            }
-                          </span>
-                        </div>
-                        <div class="model-metadata">
-                          <span>
-                            <strong>Gateway:</strong>
-                            ${
-                              this.model.model_kind === 'llm'
-                                ? this.gatewayEnabled
-                                  ? 'Enabled'
-                                  : 'Disabled'
-                                : 'Not used for audio fallback'
-                            }
-                          </span>
-                          ${
-                            this.gatewayModelAlias
-                              ? html`
-                                  <span>
-                                    <strong>Gateway alias:</strong>
-                                    <code>${this.gatewayModelAlias}</code>
-                                  </span>
-                                `
-                              : ''
-                          }
-                          <span>
-                            <strong>Upstream credentials:</strong>
-                            ${this.model.has_api_key ? 'Configured' : 'Missing'}
-                          </span>
-                          ${
-                            this.managedAgentDisplayName
-                              ? html`
-                                  <span>
-                                    <strong>Managed agent:</strong>
-                                    ${
-                                      this.managedAgentId
-                                        ? html`
-                                            <a
-                                              class="session-link"
-                                              href=${`/console/agents/${encodeURIComponent(this.managedAgentId)}`}
-                                            >
-                                              ${this.managedAgentDisplayName}
-                                            </a>
-                                          `
-                                        : this.managedAgentDisplayName
-                                    }
-                                  </span>
-                                `
-                              : ''
-                          }
-                          ${
-                            this.managedAgentRuntimePrincipalId
-                              ? html`
-                                  <span>
-                                    <strong>Runtime principal:</strong>
-                                    <code
-                                      >${this.managedAgentRuntimePrincipalId}</code
-                                    >
-                                  </span>
-                                `
-                              : ''
-                          }
-                        </div>
-                      </div>
-                    `
-                  : html`
-                      <div class="meta-line">
-                        Loading model metadata and observability surfaces.
-                      </div>
-                    `
-              }
-            </sl-card>
-
             <div class="toolbar">
               <time-range-select
                 ariaLabel="Model usage range"
@@ -3282,6 +3151,140 @@ export class AIModelDetailView extends LitElement {
                  and gateway checks sit below it in one Settings section. -->
             <section class="model-settings" data-model-settings>
               <h2 class="section-title">Settings</h2>
+              <!-- #1692: identifiers and credentials are reference, not the
+                   reason to open the page; they sit with the settings. -->
+              <sl-card data-model-details>
+                <div slot="header" class="model-heading">
+                  <!-- This card holds a name, an identifier, an alias,
+                     credentials and a managed agent. That is "Details";
+                     "Observability" promised telemetry it never carried. -->
+                  <div class="model-title">Details</div>
+                  <div class="badge-row">
+                    ${this.model?.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : null}
+                    ${
+                      this.model?.provider_name
+                        ? html`
+                            <sl-badge class="tag-chip" variant="neutral">
+                              ${this.model.provider_name}
+                            </sl-badge>
+                          `
+                        : ''
+                    }
+                    ${
+                      this.model?.is_default
+                        ? html`<sl-badge class="chip" variant="success" pill
+                            >Default</sl-badge
+                          >`
+                        : ''
+                    }
+                    ${
+                      this.model?.model_kind
+                        ? html`
+                            <sl-badge class="tag-chip" variant="neutral">
+                              ${
+                                this.model.model_kind === 'stt'
+                                  ? 'Speech to text'
+                                  : this.model.model_kind === 'tts'
+                                    ? 'Text to speech'
+                                    : 'Inference'
+                              }
+                            </sl-badge>
+                          `
+                        : ''
+                    }
+                  </div>
+                </div>
+                ${
+                  this.model
+                    ? html`
+                        <div class="metadata-stack">
+                          <div class="model-metadata">
+                            <span
+                              ><strong>Name:</strong> ${this.model.name}</span
+                            >
+                            <span>
+                              <strong>Identifier:</strong>
+                              <code>${this.model.model_identifier}</code>
+                            </span>
+                            <span>
+                              <strong>Updated:</strong>
+                              ${
+                                // "Unknown" on a model that was never edited
+                                // reads as a lookup that failed.
+                                this.model.updated_at
+                                  ? this.formatDateTime(this.model.updated_at)
+                                  : 'Never'
+                              }
+                            </span>
+                          </div>
+                          <div class="model-metadata">
+                            <span>
+                              <strong>Gateway:</strong>
+                              ${
+                                this.model.model_kind === 'llm'
+                                  ? this.gatewayEnabled
+                                    ? 'Enabled'
+                                    : 'Disabled'
+                                  : 'Not used for audio fallback'
+                              }
+                            </span>
+                            ${
+                              this.gatewayModelAlias
+                                ? html`
+                                    <span>
+                                      <strong>Gateway alias:</strong>
+                                      <code>${this.gatewayModelAlias}</code>
+                                    </span>
+                                  `
+                                : ''
+                            }
+                            <span>
+                              <strong>Upstream credentials:</strong>
+                              ${this.model.has_api_key ? 'Configured' : 'Missing'}
+                            </span>
+                            ${
+                              this.managedAgentDisplayName
+                                ? html`
+                                    <span>
+                                      <strong>Managed agent:</strong>
+                                      ${
+                                        this.managedAgentId
+                                          ? html`
+                                              <a
+                                                class="session-link"
+                                                href=${`/console/agents/${encodeURIComponent(this.managedAgentId)}`}
+                                              >
+                                                ${this.managedAgentDisplayName}
+                                              </a>
+                                            `
+                                          : this.managedAgentDisplayName
+                                      }
+                                    </span>
+                                  `
+                                : ''
+                            }
+                            ${
+                              this.managedAgentRuntimePrincipalId
+                                ? html`
+                                    <span>
+                                      <strong>Runtime principal:</strong>
+                                      <code
+                                        >${this.managedAgentRuntimePrincipalId}</code
+                                      >
+                                    </span>
+                                  `
+                                : ''
+                            }
+                          </div>
+                        </div>
+                      `
+                    : html`
+                        <div class="meta-line">
+                          Loading model metadata and observability surfaces.
+                        </div>
+                      `
+                }
+              </sl-card>
               <sl-card>
                 <div slot="header" class="model-title">Budget Management</div>
                 <budget-policy-editor

@@ -67,6 +67,18 @@ logger = logging.getLogger(__name__)
 # sessions are titled per list call (most-recent first); the rest get titled on
 # subsequent loads.
 MAX_TITLES_PER_LIST_REQUEST = 8
+#: Usage ``meta_data`` keys the activity timeline reads for a model call. Only
+#: these leave the database: the rest of a usage row's metadata is the captured
+#: request and response, megabytes on a long session (#1689).
+TIMELINE_USAGE_META_KEYS: tuple[str, ...] = (
+    "gateway_attempt",
+    "request_fingerprint",
+    "is_retry",
+    "retry_of_api_usage_id",
+    "transport",
+    "ws_mode",
+    "ws_override_source",
+)
 
 # Refresh a session's title once its request count has grown by at least this
 # many requests since the title was last generated.
@@ -803,6 +815,7 @@ class RuntimeSessionExplorerService:
             # The timeline shows rows, not a count; the count joins every
             # document in the window (#1582).
             include_total=False,
+            usage_meta_keys=TIMELINE_USAGE_META_KEYS,
         )
         interaction_items = [
             ModelGatewayUsageService._search_row_to_schema(item)

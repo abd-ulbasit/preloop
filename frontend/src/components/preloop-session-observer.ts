@@ -3002,7 +3002,6 @@ export class PreloopSessionObserver extends LitElement {
           void this.scrollToArtifact(event.detail.artifactId)}
       >
         ${this.renderToolbar()} ${this.renderOptimizeHint()}
-        ${this.renderArtifactSummary()} ${this.renderBrowserStepStrip()}
         ${
           this.error
             ? html`
@@ -3114,6 +3113,9 @@ export class PreloopSessionObserver extends LitElement {
             : nothing
         }
         ${this.renderConversationView()}
+        <!-- Artifacts and the step strip follow the transcript, so the
+             first turn starts above the fold at 1440x900 (#1689). -->
+        ${this.renderArtifactSummary()} ${this.renderBrowserStepStrip()}
         <session-replay-panel
           @session-live-reload=${() => void this.reloadActiveSession()}
           style=${this.replayMode === 'conversation' ? 'display: none;' : ''}

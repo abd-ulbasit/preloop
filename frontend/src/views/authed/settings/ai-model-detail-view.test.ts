@@ -684,6 +684,8 @@ describe('AIModelDetailView', () => {
     expect(settings).to.exist;
     expect(settings!.querySelector('budget-policy-editor')).to.exist;
     expect(settings!.querySelector('#pricing')).to.exist;
+    // Identifiers and credentials are reference: they sit with the settings.
+    expect(settings!.querySelector('[data-model-details]')).to.exist;
     const usage = Array.from(root.querySelectorAll('.model-title')).find(
       (node) => node.textContent?.trim() === 'Usage summary'
     );

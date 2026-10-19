@@ -1896,8 +1896,28 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         ai_model_id: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         """Return one runtime session with aggregated gateway usage."""
+        # The session's own identity first (a primary-key read), so the usage
+        # join can name it: matched through the correlated OR, Postgres read
+        # every gateway row of the account (294k on the founder's) to keep
+        # one session's 5.8k (#1689).
+        source = (
+            db.query(self.model.session_source_type, self.model.session_source_id)
+            .filter(
+                self.model.account_id == account_id, self.model.id == runtime_session_id
+            )
+            .first()
+        )
+        if source is None:
+            return None
         usage_join = self._usage_join_conditions(
-            start_date=start_date, end_date=end_date, ai_model_id=ai_model_id
+            start_date=start_date,
+            end_date=end_date,
+            ai_model_id=ai_model_id,
+            session=(
+                runtime_session_id,
+                source.session_source_type,
+                source.session_source_id,
+            ),
         )
         summary_columns_available = self._summary_columns_available(db)
         parent_session_id_available = self._parent_session_id_available(db)
@@ -2069,20 +2089,49 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
         start_date: Optional[datetime],
         end_date: Optional[datetime],
         ai_model_id: Optional[str] = None,
+        session: Optional[tuple[Any, Optional[str], Optional[str]]] = None,
     ):
-        legacy_flow_execution_match = and_(
-            RuntimeSession.session_source_type == "flow_execution",
-            ApiUsage.flow_execution_id.isnot(None),
-            cast(ApiUsage.flow_execution_id, String)
-            == RuntimeSession.session_source_id,
-        )
+        """Join conditions from a runtime session to its gateway usage rows.
+
+        Args:
+            start_date: Inclusive lower bound on usage timestamps.
+            end_date: Exclusive upper bound on usage timestamps.
+            ai_model_id: Only usage of this model.
+            session: ``(id, session_source_type, session_source_id)`` of the
+                one session being read. Its values go into the match as
+                constants, so each half is an index lookup instead of a
+                filter over the account's usage.
+
+        Returns:
+            The SQLAlchemy join condition.
+        """
+        if session is not None:
+            session_id, source_type, source_id = session
+            session_match: Any = ApiUsage.runtime_session_id == session_id
+            if source_type == "flow_execution" and source_id:
+                try:
+                    execution_id = uuid.UUID(str(source_id))
+                except ValueError:
+                    execution_id = None
+                if execution_id is not None:
+                    session_match = or_(
+                        session_match, ApiUsage.flow_execution_id == execution_id
+                    )
+        else:
+            legacy_flow_execution_match = and_(
+                RuntimeSession.session_source_type == "flow_execution",
+                ApiUsage.flow_execution_id.isnot(None),
+                cast(ApiUsage.flow_execution_id, String)
+                == RuntimeSession.session_source_id,
+            )
+            session_match = or_(
+                ApiUsage.runtime_session_id == RuntimeSession.id,
+                legacy_flow_execution_match,
+            )
         conditions = [
             ApiUsage.account_id == RuntimeSession.account_id,
             ApiUsage.action_type == "model_gateway",
-            or_(
-                ApiUsage.runtime_session_id == RuntimeSession.id,
-                legacy_flow_execution_match,
-            ),
+            session_match,
             # Exclude Preloop-internal usage (session optimization + title
             # generation) from the summed metrics so a session's token/cost/
             # request totals reflect only real agent traffic. This join is the

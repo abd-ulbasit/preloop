@@ -651,8 +651,22 @@ export class SessionChatView extends LitElement {
       height: 1px;
     }
 
+    /* A one-line link, not a button row: it must not push the first turn
+       below the fold (#1689). */
     .load-earlier {
       align-self: center;
+      background: none;
+      border: none;
+      color: var(--sl-color-primary-600);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--sl-font-size-x-small);
+      line-height: 1.2;
+      padding: 0;
+    }
+    .load-earlier[disabled] {
+      color: var(--console-meta-color);
+      cursor: progress;
     }
 
     .inline-toggle {
@@ -1352,14 +1366,19 @@ ${
           ${
             this.hasMoreEvents
               ? html`
-                  <sl-button
+                  <button
+                    type="button"
                     class="load-earlier"
-                    size="small"
-                    ?loading=${this.loadingMoreEvents}
+                    data-testid="load-earlier"
+                    ?disabled=${this.loadingMoreEvents}
                     @click=${() => this.requestEarlierEvents()}
                   >
-                    Load earlier conversation
-                  </sl-button>
+                    ${
+                      this.loadingMoreEvents
+                        ? 'Loading earlier conversation…'
+                        : 'Load earlier conversation'
+                    }
+                  </button>
                 `
               : nothing
           }

@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import (
     APIRouter,
@@ -318,6 +318,16 @@ def create_ai_model(
 def list_ai_models(
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_active_user),
+    default_only: Annotated[
+        bool,
+        Query(
+            description=(
+                "Only the models marked default. Use this when a caller only "
+                "needs to know whether a default model exists, rather than "
+                "reading the whole catalog."
+            ),
+        ),
+    ] = False,
 ) -> List[SharedResourceRead | AIModelRead]:
     """List all AI Models associated with the authenticated user's account."""
     from preloop.plugins.account_hooks import VISIBLE_AI_MODEL, filter_viewable
@@ -342,7 +352,7 @@ def list_ai_models(
     priced = _apply_tariff_visibility(
         visible, is_admin=getattr(current_user, "is_superuser", False) is True
     )
-    return [
+    rows = [
         public_built_in_model(
             row, account_has_default=row.model_kind in account_default_kinds
         )
@@ -350,6 +360,9 @@ def list_ai_models(
         else row
         for row in priced
     ]
+    if default_only:
+        rows = [row for row in rows if getattr(row, "is_default", False) is True]
+    return rows
 
 
 def _apply_tariff_visibility(

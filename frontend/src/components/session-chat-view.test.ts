@@ -274,6 +274,29 @@ describe('session-chat-view', () => {
     expect(paged).to.equal(true);
   });
 
+  it('keeps load-earlier to one compact line above the first turn (#1689)', async () => {
+    const events = [
+      previewEvent('e1', '2026-08-06T10:00:00Z', [
+        { role: 'user', text: 'hello' },
+        { role: 'assistant', text: 'hi', source: 'response' },
+      ]),
+    ];
+    const el = await fixture<SessionChatView>(
+      html`<session-chat-view
+        .events=${events}
+        .hasMoreEvents=${true}
+      ></session-chat-view>`
+    );
+    const link = el.shadowRoot!.querySelector(
+      '[data-testid="load-earlier"]'
+    ) as HTMLButtonElement;
+    expect(link.tagName).to.equal('BUTTON');
+    expect(link.getBoundingClientRect().height).to.be.lessThan(24);
+    el.loadingMoreEvents = true;
+    await el.updateComplete;
+    expect(link.disabled).to.equal(true);
+  });
+
   it('shows the loading state before any data arrives', async () => {
     const el = await fixture<SessionChatView>(
       html`<session-chat-view .loading=${true}></session-chat-view>`

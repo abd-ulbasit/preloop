@@ -94,7 +94,7 @@ describe('ToolsView (approvals + conditions)', () => {
           });
         }
 
-        if (url.endsWith('/api/v1/ai-models') && method === 'GET') {
+        if (url.includes('/api/v1/ai-models') && method === 'GET') {
           return new Response(JSON.stringify([]), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
@@ -280,6 +280,25 @@ describe('ToolsView (approvals + conditions)', () => {
     expect(stats).to.contain('include_agents=false');
     // Input schemas stay on the full catalogue until a tool is expanded.
     expect(urls.some((url) => url.endsWith('/api/v1/tools'))).to.equal(false);
+    el.remove();
+  });
+
+  it('asks only for the default models on first view (#1695)', async () => {
+    const el = await fixture<ToolsView>(html`<tools-view></tools-view>`);
+    await waitUntil(
+      () =>
+        fetchStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes('/api/v1/ai-models')),
+      'ai-models was not requested'
+    );
+    const models = fetchStub
+      .getCalls()
+      .map((call) => String(call.args[0]))
+      .filter((url) => url.includes('/api/v1/ai-models'));
+    // The page reads "is there a default model"; the full catalog was 75 KB
+    // of a 206 KB first load on prod.
+    expect(models).to.deep.equal(['/api/v1/ai-models?default_only=true']);
     el.remove();
   });
 
@@ -969,7 +988,7 @@ describe('ToolsView – tabs and toolbar', () => {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        if (url.endsWith('/api/v1/ai-models') && method === 'GET') {
+        if (url.includes('/api/v1/ai-models') && method === 'GET') {
           return new Response(JSON.stringify([]), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
@@ -1985,7 +2004,7 @@ describe('ToolsView – starter policy suggestions', () => {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        if (url.endsWith('/api/v1/ai-models') && method === 'GET') {
+        if (url.includes('/api/v1/ai-models') && method === 'GET') {
           return new Response(JSON.stringify(aiModels), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },

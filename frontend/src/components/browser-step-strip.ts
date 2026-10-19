@@ -180,6 +180,7 @@ export class BrowserStepStrip extends LitElement {
                 shot?.artifact_id
                   ? html`<browser-step-thumbnail
                       compact
+                      budgeted
                       .sessionId=${this.sessionId}
                       .artifactId=${shot.artifact_id}
                       .availability=${String(shot.availability || 'available')}
