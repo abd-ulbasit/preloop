@@ -261,6 +261,19 @@ export class BrowserStepThumbnail extends LitElement {
         }
       </div>`;
     }
+    if (this.waitsForClick && !this.held && this.compact) {
+      // The strip wraps the thumbnail in its own step button and turns off
+      // pointer events here, so a nested "Load preview" button could never
+      // take a click. A plain placeholder; the step's row below the strip
+      // carries the load control.
+      return html`<div
+        class="box muted"
+        data-testid="preview-on-demand"
+        title=${`Preview of ${this.label} loads from its step`}
+      >
+        Preview
+      </div>`;
+    }
     if (this.waitsForClick && !this.held) {
       return html`<button
         class="box muted"

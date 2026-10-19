@@ -322,9 +322,9 @@ def list_ai_models(
         bool,
         Query(
             description=(
-                "Only the models marked default. The Tools list asks this to "
-                "know whether a default model exists, instead of reading every "
-                "model with its pricing (75 KB of its first load on prod, #1695)."
+                "Only the models marked default. Use this when a caller only "
+                "needs to know whether a default model exists, rather than "
+                "reading the whole catalog."
             ),
         ),
     ] = False,

@@ -12612,14 +12612,13 @@ paths:
         required: false
         schema:
           type: boolean
-          description: 'Only the models marked default. The Tools list asks this to
-            know whether a default model exists, instead of reading every model with
-            its pricing (75 KB of its first load on prod, #1695).'
+          description: Only the models marked default. Use this when a caller only
+            needs to know whether a default model exists, rather than reading the
+            whole catalog.
           default: false
           title: Default Only
-        description: 'Only the models marked default. The Tools list asks this to
-          know whether a default model exists, instead of reading every model with
-          its pricing (75 KB of its first load on prod, #1695).'
+        description: Only the models marked default. Use this when a caller only needs
+          to know whether a default model exists, rather than reading the whole catalog.
       responses:
         '200':
           description: Successful Response
