@@ -6,14 +6,20 @@ import pytest
 from sqlalchemy.orm import Session
 
 from preloop.models import models
-from preloop.models.crud import crud_api_usage
+from preloop.models.crud import crud_api_usage, crud_spend_outlier_finding
 from preloop.models.crud.weekly_report_data import usage_snapshot
 from preloop.models.crud.weekly_signals import gateway_latency_signals
 
 
 @pytest.mark.parametrize("funding", ["platform", "account"])
+@pytest.mark.parametrize(
+    "customer_metadata", [None, {}, {"purpose": None}, {"purpose": "customer_report"}]
+)
 def test_governance_overhead_is_not_customer_usage(
-    db_session: Session, test_user: models.User, funding: str
+    db_session: Session,
+    test_user: models.User,
+    funding: str,
+    customer_metadata: dict | None,
 ) -> None:
     end = datetime.now(UTC) + timedelta(minutes=1)
     start = end - timedelta(days=7)
@@ -21,6 +27,7 @@ def test_governance_overhead_is_not_customer_usage(
         (None, 2.0, 200),
         ("governance_session_digest", 3.0, 500),
         ("governance_review", 4.0, 500),
+        ("governance_future_stage", 5.0, 500),
     ]:
         crud_api_usage.log_gateway_request(
             db_session,
@@ -32,7 +39,13 @@ def test_governance_overhead_is_not_customer_usage(
             duration=1 if purpose is None else 100,
             estimated_cost=cost,
             model_alias="customer" if purpose is None else "analysis",
-            meta_data={"purpose": purpose, "funding": funding},
+            meta_data={
+                "purpose": purpose,
+                "funding": funding,
+                "rate_limit": {"remaining_requests": 1},
+            }
+            if purpose
+            else customer_metadata,
         )
     summary = crud_api_usage.get_gateway_usage_summary(
         db_session, account_id=str(test_user.account_id), start_date=start, end_date=end
@@ -52,6 +65,34 @@ def test_governance_overhead_is_not_customer_usage(
     assert latency[0].request_count == 1
     assert latency[0].error_count == 0
     assert latency[0].p95_duration == 1
+    by_model = crud_api_usage.get_gateway_usage_by_model(
+        db_session,
+        account_id=str(test_user.account_id),
+        start_date=start,
+        end_date=end,
+    )
+    assert len(by_model) == 1
+    assert by_model[0]["model_alias"] == "customer"
+    timeline = crud_api_usage.get_gateway_usage_timeseries(
+        db_session,
+        account_id=str(test_user.account_id),
+        start_date=start,
+        end_date=end,
+    )
+    assert sum(day["request_count"] for day in timeline) == 1
+    spends = crud_spend_outlier_finding.gateway_spend_by_user_model_day(
+        db_session,
+        account_id=test_user.account_id,
+        start_day=start.date(),
+        end_day=end.date(),
+    )
+    assert len(spends) == 1 and spends[0].cost_usd == 2
+    assert (
+        crud_api_usage.get_latest_rate_limit_snapshots(
+            db_session, account_id=str(test_user.account_id)
+        )
+        == []
+    )
     assert (
         crud_api_usage.get_gateway_spend(
             db_session,

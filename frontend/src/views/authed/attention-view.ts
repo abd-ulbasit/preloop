@@ -787,11 +787,28 @@ export class AttentionView extends AuthedElement {
     this.loading = false;
     // The header's bell has no budget for these nine requests; it states the
     // counts this page just derived.
-    publishAttentionSummary(this.items);
+    publishAttentionSummary(
+      this.items.filter(
+        (item) =>
+          !item.evidence?.mcpFinding ||
+          item.evidence.mcpFinding.state === 'open'
+      )
+    );
   }
 
   private get derived() {
+    let focusedItemId: string | undefined;
+    try {
+      if (window.location.hash.startsWith('#item-')) {
+        focusedItemId = decodeURIComponent(
+          window.location.hash.slice('#item-'.length)
+        );
+      }
+    } catch {
+      // A malformed link must not prevent the rest of Attention from loading.
+    }
     return deriveAttentionItems({
+      focusedItemId,
       approvals: this.approvals,
       agents: this.agents,
       sessions: this.sessions,
@@ -1580,6 +1597,7 @@ export class AttentionView extends AuthedElement {
       <p>${finding.limitation}</p>
       <div class="evidence-actions">
         ${
+          finding.state === 'open' &&
           hasPermission(this.permissions, 'approve_mcp_servers')
             ? html`
                 <sl-button
@@ -1591,6 +1609,7 @@ export class AttentionView extends AuthedElement {
             : nothing
         }
         ${
+          finding.state === 'open' &&
           hasPermission(this.permissions, 'ignore_mcp_findings')
             ? html`
                 <sl-button

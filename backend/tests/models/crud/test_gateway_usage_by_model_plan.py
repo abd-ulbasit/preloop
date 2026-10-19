@@ -22,7 +22,7 @@ from preloop.models.crud import crud_api_usage
 
 # The values a caller varies: these stay parameters in the generic plan.
 VARIABLE = ("account_id", "timestamp", "ai_model_id")
-COVERING = ("ix_api_usage_gateway_totals", "ix_api_usage_gateway_model_totals")
+COVERING = ("ix_api_usage_customer_totals", "ix_api_usage_customer_model_totals")
 ACCOUNT = "00000000-0000-0000-0000-0000000000a1"
 MODELS = [f"00000000-0000-0000-0000-0000000000b{n}" for n in range(3)]
 

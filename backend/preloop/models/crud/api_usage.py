@@ -109,7 +109,9 @@ _RATE_LIMIT_SNAPSHOT_ROWS = (
     "action_type = 'model_gateway' "
     "AND (meta_data ->> 'rate_limit') IS NOT NULL "
     "AND ((meta_data ->> 'purpose') IS NULL "
-    "OR (meta_data ->> 'purpose') <> 'replay_validation')"
+    "OR (meta_data ->> 'purpose') <> 'replay_validation') "
+    "AND ((meta_data ->> 'purpose') IS NULL "
+    "OR left(meta_data ->> 'purpose', 11) <> 'governance_')"
 )
 
 
@@ -147,7 +149,10 @@ def exclude_customer_overhead_condition() -> Any:
     purpose = ApiUsage.meta_data.op("->>")(literal_column("'purpose'"))
     return and_(
         exclude_replay_usage_condition(),
-        or_(purpose.is_(None), ~purpose.startswith("governance_", autoescape=True)),
+        or_(
+            purpose.is_(None),
+            func.left(purpose, literal_column("11")) != literal_column("'governance_'"),
+        ),
     )
 
 
