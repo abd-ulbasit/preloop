@@ -85,7 +85,13 @@ def list_session_digest_retries(
     """
     digest = models.GovernanceSessionDigest
     status = digest.digest["summary_status"].astext
-    statement = select(digest.id).where(
+    columns = (
+        digest.id,
+        digest.window_end,
+        digest.runtime_session_id,
+        digest.segment_index,
+    )
+    statement = select(*columns).where(
         digest.account_id == account_id,
         text(gov.SESSION_DIGEST_RETRY_PREDICATE),
         or_(
@@ -93,15 +99,27 @@ def list_session_digest_retries(
             and_(status == "summarizing", digest.updated_at <= stale_before),
         ),
     )
+    parse_failures = select(*columns).where(
+        digest.account_id == account_id,
+        text(gov.SESSION_DIGEST_PARSE_RETRY_PREDICATE),
+    )
     if runtime_session_id is not None:
         statement = statement.where(digest.runtime_session_id == runtime_session_id)
+        parse_failures = parse_failures.where(
+            digest.runtime_session_id == runtime_session_id
+        )
+    # Each branch has its own partial index. An OR would defeat the existing
+    # queue predicate and scan completed history on every sweep.
+    candidates = statement.union_all(parse_failures).subquery()
     return list(
         db.scalars(
-            statement.order_by(
-                digest.window_end,
-                digest.runtime_session_id,
-                digest.segment_index,
-                digest.id,
-            ).limit(min(max(limit, 1), 50))
+            select(candidates.c.id)
+            .order_by(
+                candidates.c.window_end,
+                candidates.c.runtime_session_id,
+                candidates.c.segment_index,
+                candidates.c.id,
+            )
+            .limit(min(max(limit, 1), 50))
         ).all()
     )
