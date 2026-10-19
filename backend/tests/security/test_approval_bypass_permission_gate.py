@@ -457,8 +457,9 @@ class TestPermissionChoice:
 
         The role matrix in ``scripts/init_system_roles.py`` puts
         ``view_approvals`` in ``_READ_CORE`` and leaves ``decide_approvals``
-        out of it, so an analyst can observe the approval queue while being
-        unable to decide anything.  Gating bypass creation on the read
+        out of it, so the analyst role can observe the approval queue without
+        being granted the decision permission.  This test pins the role
+        matrix and the bypass router only.  Gating bypass creation on the read
         permission would have let that role open an ``auto_approve`` bypass
         and approve on the approver's behalf.
         """
