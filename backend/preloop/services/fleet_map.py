@@ -32,6 +32,10 @@ from preloop.plugins.account_hooks import (
     filter_viewable,
 )
 from preloop.plugins.base import get_plugin_manager
+from preloop.services.agent_device_resolution import (
+    agent_kind_for_harness,
+    resolve_hostname_devices,
+)
 from preloop.schemas.fleet_map import (
     FleetMapAction,
     FleetMapCluster,
@@ -558,6 +562,19 @@ def build_fleet_map(
         discovered_count = 0
         discovered_seen: set[tuple[str, str]] = set()
         agents_by_id = {str(row.id): row for row in agents}
+        # Agents with no fingerprint link are placed by enrollment hostname,
+        # only on an unambiguous, owner-consistent match.
+        by_hostname: dict[str, list[str]] = {}
+        # A partial agent or device window cannot prove a match is unique.
+        complete = (
+            "agents" not in partial_sources
+            and not projection["truncated"]
+            and len(devices) <= SOURCE_LIMIT
+        )
+        for agent_id, device_key in (
+            resolve_hostname_devices(devices, agents) if complete else {}
+        ).items():
+            by_hostname.setdefault(device_key, []).append(agent_id)
         for device in devices[:SOURCE_LIMIT]:
             key = device["device_key"]
             owners = [
@@ -601,6 +618,27 @@ def build_fleet_map(
                 linked = nodes.get(f"agent:{discovered.get('managed_agent_id')}")
                 if linked is not None:
                     discovered_seen.add((key, str(linked.detail)))
+            for agent_id in sorted(by_hostname.get(key, [])):
+                aid = f"agent:{agent_id}"
+                if aid not in nodes:
+                    continue
+                # The same harness reported by inventory or discovery is
+                # this managed agent, not a second, discovered one.
+                discovered_seen.add((key, str(nodes[aid].detail)))
+                nodes[aid].gaps = [
+                    gap for gap in nodes[aid].gaps if gap != "unknown_device"
+                ]
+                nodes[aid].owner_ids = sorted(set(nodes[aid].owner_ids + owners))
+                edge(
+                    item.id,
+                    aid,
+                    "hosts",
+                    "observed",
+                    gaps=["open_finding"] if count else [],
+                )
+                item.provider_ids = sorted(
+                    set(item.provider_ids + nodes[aid].provider_ids)
+                )
             for discovered in device["agents"]:
                 managed_id = discovered.get("managed_agent_id")
                 if managed_id:
@@ -615,9 +653,10 @@ def build_fleet_map(
                     # dismissed candidate is a decision, not a gap.
                     if discovered.get("status") in {"ignored", "dismissed"}:
                         continue
-                    if (key, discovered["kind"]) in discovered_seen:
+                    kind = agent_kind_for_harness(discovered["kind"])
+                    if (key, kind) in discovered_seen:
                         continue
-                    discovered_seen.add((key, discovered["kind"]))
+                    discovered_seen.add((key, kind))
                     discovered_count += 1
                     if discovered_count > SOURCE_LIMIT:
                         result.truncated = True

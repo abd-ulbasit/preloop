@@ -728,6 +728,24 @@ type managedAgentEnrollmentCreateRequest struct {
 	LastAppliedAt    *time.Time             `json:"last_applied_at,omitempty"`
 	LastValidatedAt  *time.Time             `json:"last_validated_at,omitempty"`
 	LastRestoredAt   *time.Time             `json:"last_restored_at,omitempty"`
+	// Device link (salted hashes and enumerated values only), so the server
+	// attaches the agent to this workstation whatever the enrollment status.
+	WorkstationFingerprint string `json:"workstation_fingerprint,omitempty"`
+	ConfigPathHash         string `json:"config_path_hash,omitempty"`
+	OSFamily               string `json:"os_family,omitempty"`
+	CLIVersion             string `json:"cli_version,omitempty"`
+}
+
+// withDeviceLink returns request carrying this workstation's device link
+// fields for agent. Best effort: without a salt or machine id the request is
+// returned unchanged.
+func (request managedAgentEnrollmentCreateRequest) withDeviceLink(client *api.Client, agent AgentConfig) managedAgentEnrollmentCreateRequest {
+	fields := discoveryLinkFields(client, agent)
+	request.WorkstationFingerprint = fields["workstation_fingerprint"]
+	request.ConfigPathHash = fields["config_path_hash"]
+	request.OSFamily = fields["os_family"]
+	request.CLIVersion = fields["cli_version"]
+	return request
 }
 
 type managedAgentDetailResponse struct {
@@ -5996,15 +6014,12 @@ func validateManagedEnrollmentRecord(
 		"status":            status,
 		"validation_result": validationResult,
 	}
-	if status == "validated" {
-		// Salted hashes only; lets the server mark a candidate reported by
-		// `agents discover --report` on this workstation as onboarded.
-		// Since onboarding alone now records the agent on this workstation
-		// (no prior report needed), also send the enumerated OS family and
-		// CLI version so the device fleet can describe the device.
-		for key, value := range discoveryLinkFields(client, agent) {
-			request[key] = value
-		}
+	// Salted hashes only. Sent for every status: an agent that is applied
+	// or fails validation (MCP-only and IDE-config agents often never reach
+	// "validated") still runs on this workstation, so the server links it to
+	// the device and the device fleet can describe that device.
+	for key, value := range discoveryLinkFields(client, agent) {
+		request[key] = value
 	}
 	var response managedAgentEnrollmentSummary
 	if err := client.Post(

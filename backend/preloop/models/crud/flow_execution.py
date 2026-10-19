@@ -748,12 +748,16 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
         completion committed on another session is visible. External uploads
         pass ``require_open=True``; controller retention after terminal
         failure passes False.
+
+        NO KEY UPDATE still excludes the status UPDATE of a terminal close,
+        but lets concurrent usage, log and activity inserts take the KEY
+        SHARE their foreign key needs instead of queueing behind the PUT.
         """
         execution = (
             db.query(FlowExecution)
             .filter(FlowExecution.id == execution_id)
             .populate_existing()
-            .with_for_update()
+            .with_for_update(key_share=True)
             .first()
         )
         if execution is None:

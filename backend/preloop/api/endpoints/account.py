@@ -87,6 +87,7 @@ from preloop.schemas.gateway_usage import (
     ManagedAgentEnrollmentSummary,
     ManagedAgentModelBindingSummary,
     ManagedAgentModelBindingSyncRequest,
+    ManagedAgentDeviceLinkFields,
     ManagedAgentEnrollmentValidateRequest,
     ManagedAgentIdentityMutationCounts,
     ManagedAgentMergeRequest,
@@ -2549,6 +2550,13 @@ async def create_account_managed_agent_enrollment(
         )
     db.commit()
     db.refresh(enrollment)
+    _link_discovery_candidates(
+        db,
+        account=account,
+        agent_id=str(agent.id),
+        payload=payload,
+        status_value=payload.status,
+    )
     emit_account_event(
         build_account_event(
             account_id=str(account.id),
@@ -2572,6 +2580,8 @@ async def create_account_managed_agent_enrollment(
 
 
 ENROLLMENT_STATUS_VALIDATED = "validated"
+# A restore removes Preloop's management; it is not evidence of a device link.
+ENROLLMENT_STATUSES_WITHOUT_DEVICE_LINK = frozenset({"restored"})
 
 
 def _link_discovery_candidates(
@@ -2579,18 +2589,20 @@ def _link_discovery_candidates(
     *,
     account: Account,
     agent_id: str,
-    payload: ManagedAgentEnrollmentValidateRequest,
+    payload: ManagedAgentDeviceLinkFields,
+    status_value: str,
 ) -> None:
-    """Mark reported discovery candidates from this workstation onboarded.
+    """Attach the managed agent to the workstation it was enrolled from.
 
-    Runs only for a successful validation that carries the salted
-    workstation fingerprint. Linking is best effort: a failure here must not
-    fail the enrollment it decorates. Call it after the enrollment transaction
-    commits so a link failure cannot roll back ``agent.onboarded``.
+    Runs for any enrollment write that carries the salted workstation
+    fingerprint, except a restore: an agent applied, or onboarded but failing
+    validation, still runs on that device, and MCP-only or IDE-config agents
+    are often never ``validated``. Linking is best effort: a failure here must
+    not fail the enrollment it decorates. Call it after the enrollment
+    transaction commits so a link failure cannot roll back ``agent.onboarded``.
     """
-    if (
-        payload.status != ENROLLMENT_STATUS_VALIDATED
-        or not payload.workstation_fingerprint
+    if status_value in ENROLLMENT_STATUSES_WITHOUT_DEVICE_LINK or (
+        not payload.workstation_fingerprint
     ):
         return
     agent = crud_managed_agent.get_for_account(
@@ -2715,7 +2727,13 @@ async def validate_account_managed_agent_enrollment(
         )
     db.commit()
     db.refresh(enrollment)
-    _link_discovery_candidates(db, account=account, agent_id=agent_id, payload=payload)
+    _link_discovery_candidates(
+        db,
+        account=account,
+        agent_id=agent_id,
+        payload=payload,
+        status_value=payload.status,
+    )
     emit_account_event(
         build_account_event(
             account_id=str(account.id),

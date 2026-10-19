@@ -37809,6 +37809,34 @@ components:
       description: An explicitly associated device from the optional fleet projection.
     ManagedAgentEnrollmentCreateRequest:
       properties:
+        workstation_fingerprint:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Workstation Fingerprint
+        config_path_hash:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Config Path Hash
+        os_family:
+          anyOf:
+          - type: string
+            enum:
+            - darwin
+            - linux
+            - windows
+            - other
+          - type: 'null'
+          title: Os Family
+        cli_version:
+          anyOf:
+          - type: string
+            pattern: ^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$
+          - type: 'null'
+          title: Cli Version
         enrollment_type:
           type: string
           maxLength: 64
@@ -37977,16 +38005,6 @@ components:
       description: Durable enrollment state for one managed agent.
     ManagedAgentEnrollmentValidateRequest:
       properties:
-        status:
-          type: string
-          maxLength: 32
-          minLength: 1
-          title: Status
-          default: validated
-        validation_result:
-          additionalProperties: true
-          type: object
-          title: Validation Result
         workstation_fingerprint:
           anyOf:
           - type: string
@@ -38015,6 +38033,16 @@ components:
             pattern: ^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$
           - type: 'null'
           title: Cli Version
+        status:
+          type: string
+          maxLength: 32
+          minLength: 1
+          title: Status
+          default: validated
+        validation_result:
+          additionalProperties: true
+          type: object
+          title: Validation Result
       type: object
       title: ManagedAgentEnrollmentValidateRequest
       description: Request to update validation state for one enrollment.
