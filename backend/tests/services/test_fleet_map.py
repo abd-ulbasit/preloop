@@ -997,3 +997,151 @@ def test_activity_window_reads_device_and_runner_evidence(
     assert _seen_at(now.isoformat().replace("+00:00", "Z")) == now
     assert _seen_at("not a date") is None
     assert _seen_at(None) is None
+
+
+def _laptop(
+    key: str = "fp:laptop",
+    hostname: str = "Dimitriss-MacBook-Pro.local",
+    user_ids: tuple[str, ...] = ("owner-a",),
+    agents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        device_key=key,
+        hostname=hostname,
+        runner_state="online",
+        users=[dict(id=uid, source="runner_registrant") for uid in user_ids],
+        runners=[dict(id=f"runner-{key}", hostname=hostname, state="online")],
+        agents=agents or [],
+        findings=[],
+    )
+
+
+def _fleet(
+    sources: tuple[MagicMock, MagicMock],
+    agents: list[Row],
+    devices: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    crud, manager = sources
+    crud.crud_managed_agent.get_multi.return_value = agents
+    service = manager.return_value.get_service.return_value = MagicMock()
+    service.read.return_value = dict(truncated=False, items=devices)
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    return {n.id: n for n in graph.nodes}, {e.id: e for e in graph.edges}
+
+
+def _hosted(edges: dict[str, Any], device: str) -> set[str]:
+    return {
+        e.target
+        for e in edges.values()
+        if e.kind == "hosts" and e.source == f"device:{device}"
+    }
+
+
+def test_unlinked_agent_is_placed_on_the_device_its_hostname_names(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    cursor = agent(
+        "agent-cursor",
+        agent_kind="cursor",
+        owner_user_id="owner-a",
+        enrollment_hostname="dimitriss-macbook-pro",
+    )
+    inventory = dict(
+        id="runner:cursor_cli",
+        source="inventory",
+        kind="cursor_cli",
+        status="pending",
+        managed_agent_id=None,
+    )
+    nodes, edges = _fleet(sources, [cursor], [_laptop(agents=[inventory])])
+    assert "unknown_device" not in nodes["agent:agent-cursor"].gaps
+    edge = edges["hosts:device:fp:laptop:agent:agent-cursor:observed"]
+    assert edge.provenance == "observed"
+    # The inventory entry for the same harness folds into the managed agent.
+    assert _hosted(edges, "fp:laptop") == {"agent:agent-cursor"}
+    assert not any(n.agent_state == "discovered" for n in nodes.values())
+
+
+def test_fingerprint_linked_agent_folds_inventory_harness_of_its_kind(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    codex = agent("agent-codex", agent_kind="codex")
+    entries = [
+        dict(
+            id="cand-1",
+            source="candidate",
+            kind="codex",
+            status="onboarded",
+            managed_agent_id="agent-codex",
+        ),
+        dict(
+            id="runner:codex_cli",
+            source="inventory",
+            kind="codex_cli",
+            status="pending",
+            managed_agent_id=None,
+        ),
+    ]
+    nodes, edges = _fleet(sources, [codex], [_laptop(agents=entries)])
+    assert _hosted(edges, "fp:laptop") == {"agent:agent-codex"}
+
+
+def test_two_devices_with_the_same_hostname_link_neither(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    cursor = agent("agent-cursor", enrollment_hostname="dimitriss-macbook-pro")
+    nodes, edges = _fleet(
+        sources,
+        [cursor],
+        [_laptop("fp:one"), _laptop("fp:two", hostname="dimitriss_macbook_pro")],
+    )
+    assert "unknown_device" in nodes["agent:agent-cursor"].gaps
+    assert not _hosted(edges, "fp:one") | _hosted(edges, "fp:two")
+
+
+def test_owner_mismatch_does_not_link(sources: tuple[MagicMock, MagicMock]) -> None:
+    cursor = agent(
+        "agent-cursor",
+        owner_user_id="someone-else",
+        enrollment_hostname="dimitriss-macbook-pro",
+    )
+    nodes, edges = _fleet(sources, [cursor], [_laptop()])
+    assert "unknown_device" in nodes["agent:agent-cursor"].gaps
+    assert not _hosted(edges, "fp:laptop")
+
+
+def test_fingerprint_link_wins_over_hostname(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    codex = agent("agent-codex", enrollment_hostname="dimitriss-macbook-pro")
+    linked = dict(
+        id="cand-1",
+        source="candidate",
+        kind="codex",
+        status="onboarded",
+        managed_agent_id="agent-codex",
+    )
+    other = _laptop("fp:other", hostname="other", agents=[linked])
+    nodes, edges = _fleet(sources, [codex], [_laptop(), other])
+    assert _hosted(edges, "fp:other") == {"agent:agent-codex"}
+    assert not _hosted(edges, "fp:laptop")
+
+
+def test_ambiguous_inventory_entry_keeps_its_discovered_node(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    agents = [
+        agent(f"agent-{n}", agent_kind="cursor", owner_user_id="owner-a")
+        for n in ("one", "two")
+    ]
+    inventory = dict(
+        id="runner:cursor_cli",
+        source="inventory",
+        kind="cursor_cli",
+        status="pending",
+        managed_agent_id=None,
+    )
+    nodes, edges = _fleet(sources, agents, [_laptop(agents=[inventory])])
+    assert _hosted(edges, "fp:laptop") == {"agent:discovered:runner:cursor_cli"}
+    for aid in ("agent:agent-one", "agent:agent-two"):
+        assert "unknown_device" in nodes[aid].gaps

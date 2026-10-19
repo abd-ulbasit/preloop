@@ -1114,7 +1114,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 			ValidationResult: validationResult,
 			RestoreAvailable: true,
 			LastAppliedAt:    &appliedAt,
-		},
+		}.withDeviceLink(client, agent),
 	)
 	if err != nil {
 		return err

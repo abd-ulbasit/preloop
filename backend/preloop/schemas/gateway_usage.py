@@ -692,7 +692,28 @@ class ManagedAgentEnrollmentSummary(BaseModel):
     updated_at: datetime
 
 
-class ManagedAgentEnrollmentCreateRequest(BaseModel):
+class ManagedAgentDeviceLinkFields(BaseModel):
+    """Optional device link sent with any enrollment write.
+
+    The CLI sends the same salted hashes it would report with
+    ``agents discover --report`` so the managed agent is attached to the
+    workstation it was onboarded from, whatever the enrollment's status.
+    Never a clear id or path.
+    """
+
+    workstation_fingerprint: Optional[str] = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    config_path_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # Same enumerated values a discovery report carries; recorded on the
+    # workstation candidate the link creates.
+    os_family: Optional[Literal["darwin", "linux", "windows", "other"]] = None
+    cli_version: Optional[str] = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$"
+    )
+
+
+class ManagedAgentEnrollmentCreateRequest(ManagedAgentDeviceLinkFields):
     """Request to persist an enrollment record for one managed agent."""
 
     enrollment_type: str = Field(..., min_length=1, max_length=64)
@@ -709,24 +730,11 @@ class ManagedAgentEnrollmentCreateRequest(BaseModel):
     last_restored_at: Optional[datetime] = None
 
 
-class ManagedAgentEnrollmentValidateRequest(BaseModel):
+class ManagedAgentEnrollmentValidateRequest(ManagedAgentDeviceLinkFields):
     """Request to update validation state for one enrollment."""
 
     status: str = Field(default="validated", min_length=1, max_length=32)
     validation_result: dict = Field(default_factory=dict)
-    # Optional discovery link. The CLI sends the same salted hashes it would
-    # report with ``agents discover --report`` so a reported candidate from
-    # this workstation can be marked onboarded. Never a clear id or path.
-    workstation_fingerprint: Optional[str] = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
-    config_path_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    # Same enumerated values a discovery report carries; recorded on the
-    # workstation candidate the validation creates.
-    os_family: Optional[Literal["darwin", "linux", "windows", "other"]] = None
-    cli_version: Optional[str] = Field(
-        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_\-]{0,63}$"
-    )
 
 
 class ManagedAgentEnrollmentRestoreRequest(BaseModel):
