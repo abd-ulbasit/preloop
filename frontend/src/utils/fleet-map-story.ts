@@ -73,8 +73,8 @@ export class FleetStory {
     const repo = text(s.repo, 200);
     const key =
       text(s.key, 360) ||
-      url ||
       (repo && ref ? `${repo}${ref}` : '') ||
+      url ||
       text(s.issue_id, 80);
     // A number without a repository/URL is ambiguous across trackers.
     if (!kind || !key) return '';
@@ -95,10 +95,7 @@ export class FleetStory {
       node: {
         id: identity,
         type: 'work',
-        resource_id: key,
         label,
-        detail: repo || null,
-        href: url || previous?.node.href || '',
         status: 'Open',
         owner_ids: [],
         provider_ids: [],
@@ -106,6 +103,9 @@ export class FleetStory {
         finding_count: 0,
         actions: [],
         ...previous?.node,
+        resource_id: key,
+        detail: repo || previous?.node.detail || null,
+        href: url || previous?.node.href || '',
         ...(text(s.title) || !previous ? { label } : {}),
         work_kind: kind,
         last_seen_at: new Date(now).toISOString(),
@@ -481,8 +481,18 @@ export class FleetStory {
   }
 
   /** Used to expire runs and work without running an animation loop forever. */
-  get hasActivity(): boolean {
-    return !!(this.works.size || this.runs.size);
+  hasLiveActivity(minutes: number | null, now = Date.now()): boolean {
+    const since = minutes === null ? 0 : now - minutes * 60_000;
+    return (
+      [...this.works.values()].some(
+        (work) =>
+          work.at >= since && (work.expires === undefined || now < work.expires)
+      ) ||
+      [...this.runs.values()].some(
+        (run) =>
+          run.at >= since && (run.end === undefined || now - run.end < 60_000)
+      )
+    );
   }
   clear(): void {
     this.works.clear();

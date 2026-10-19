@@ -1,4 +1,5 @@
 import { expect, fixture, html } from '@open-wc/testing';
+import { useFakeTimers } from 'sinon';
 import './fleet-map';
 import type { FleetMap } from './fleet-map';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
@@ -168,6 +169,86 @@ describe('fleet-map v3 lifecycle and controls', () => {
   afterEach(() => {
     for (const key of Object.keys(localStorage))
       if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+
+  it('stops the story clock after run and merged-work expiry, then restarts for new activity', async () => {
+    const el = await map({ activityWindow: 'any' });
+    const clock = useFakeTimers({
+      now: Date.now(),
+      toFake: ['Date', 'setInterval', 'clearInterval'],
+    });
+    const state = el as unknown as { storyTimer?: number };
+    const run = (id: string) => ({
+      type: 'status_update',
+      flow_id: 'triage',
+      execution_id: id,
+      payload: { status: 'SUCCEEDED', flow_name: 'Issue triage' },
+    });
+    try {
+      el.recordActivity('flow_executions', run('first'));
+      expect(state.storyTimer).not.to.equal(undefined);
+      clock.tick(59_000);
+      expect(state.storyTimer).not.to.equal(undefined);
+      clock.tick(1000);
+      await el.updateComplete;
+      expect(state.storyTimer).to.equal(undefined);
+      expect(el.shadowRoot!.querySelector('[data-node="flow:triage"]')).not.to
+        .exist;
+
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: { action: 'merged', pr: 'example/widgets#51' },
+      });
+      expect(state.storyTimer).not.to.equal(undefined);
+      clock.tick(119_000);
+      expect(state.storyTimer).not.to.equal(undefined);
+      clock.tick(1000);
+      await el.updateComplete;
+      expect(state.storyTimer).to.equal(undefined);
+      expect(el.shadowRoot!.querySelector('[data-kind="work"]')).not.to.exist;
+
+      el.recordActivity('flow_executions', run('second'));
+      expect(state.storyTimer).not.to.equal(undefined);
+    } finally {
+      el.remove();
+      clock.restore();
+    }
+  });
+
+  it('resumes the story clock when a wider window reveals retained work', async () => {
+    const el = await map({ activityWindow: '5m' });
+    const clock = useFakeTimers({
+      now: Date.now(),
+      toFake: ['Date', 'setInterval', 'clearInterval'],
+    });
+    const state = el as unknown as { storyTimer?: number };
+    try {
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: {
+          action: 'issue_opened',
+          subject: {
+            kind: 'issue',
+            key: 'example/widgets#41',
+            reference: '#41',
+          },
+        },
+      });
+      clock.tick(301_000);
+      await el.updateComplete;
+      expect(state.storyTimer).to.equal(undefined);
+      expect(el.shadowRoot!.querySelector('[data-kind="work"]')).not.to.exist;
+      el.activityWindow = 'any';
+      await el.updateComplete;
+      expect(state.storyTimer).not.to.equal(undefined);
+      expect(el.shadowRoot!.querySelector('[data-kind="work"]')).to.exist;
+      el.activityWindow = '5m';
+      await el.updateComplete;
+      expect(state.storyTimer).to.equal(undefined);
+    } finally {
+      el.remove();
+      clock.restore();
+    }
   });
 
   it('resets a complete manual layout and restores it with Undo without moving the camera', async () => {

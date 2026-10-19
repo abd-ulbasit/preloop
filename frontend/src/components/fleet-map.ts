@@ -378,10 +378,7 @@ export class FleetMap extends LitElement {
         this.storyVersion++;
         this.eventLog.record(notes, message);
         this.pendingMessages.push(...notes);
-        if (!this.storyTimer)
-          this.storyTimer = setInterval(() => {
-            this.storyVersion++;
-          }, 1000);
+        this.syncStoryTimer();
       }
       if (topic === 'code_activity') {
         this.recordCode(message, notes.length > 0);
@@ -406,6 +403,20 @@ export class FleetMap extends LitElement {
       !this.graph.nodes.some((node) => node.id === hit.agent)
     )
       this.requestRefresh(FLEET_MAP_STALE_DEBOUNCE_MS);
+  }
+
+  private syncStoryTimer(): void {
+    if (
+      !this.isConnected ||
+      !this.story.hasLiveActivity(windowMinutes(this.activityWindow))
+    ) {
+      if (this.storyTimer !== undefined) clearInterval(this.storyTimer);
+      this.storyTimer = undefined;
+    } else if (this.storyTimer === undefined)
+      this.storyTimer = setInterval(() => {
+        this.storyVersion++;
+        this.syncStoryTimer();
+      }, 1000);
   }
 
   // Calm by default: at most eight nodes lit at once.
@@ -789,6 +800,7 @@ export class FleetMap extends LitElement {
       this.settled.clear();
       this.eventLog.clear();
       this.story.clear();
+      this.syncStoryTimer();
       this.filterCache = undefined;
       this.lights.clear();
       this.bubbleLights.clear();
@@ -861,6 +873,7 @@ export class FleetMap extends LitElement {
     }
     if (changed.has('activityWindow') || changed.has('live'))
       this.scheduleRefresh();
+    if (changed.has('activityWindow')) this.syncStoryTimer();
     if (changed.has('live') || changed.has('instanceAdmin')) {
       this.syncActivitySubscriptions();
       this.syncCodeSubscription();
@@ -3352,11 +3365,9 @@ export class FleetMap extends LitElement {
       return cached.layout;
     const seed = layoutGraph(view).positions;
     const clusters = clusterOf(view);
-    // When a person (or a lone machine) joins or leaves, the islands are
-    // dealt round the ring again and every node glides to its new place, so
-    // the picture stays balanced around its centre of gravity. Otherwise
-    // nodes already on screen stay put and only arrivals are placed, beside
-    // what they link to.
+    // Fresh layouts repack their shelves when island membership changes.
+    // Once the user owns the layout, existing nodes stay put and arrivals
+    // are placed beside what they link to.
     const groups =
       [...new Set(clusters.values())].sort().join('|') +
       '|' +

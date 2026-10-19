@@ -195,6 +195,28 @@ describe('Fleet Map observed work story', () => {
       workUrl('https://user:secret@example.com/issues/41?token=secret#x')
     ).to.equal('https://example.com/issues/41');
   });
+
+  for (const explicitKey of [true, false])
+    it(`enriches an existing work reference with a late URL (${explicitKey ? 'explicit key' : 'repo/reference'})`, () => {
+      const story = new FleetStory();
+      const subject = { ...issue, key: explicitKey ? issue.key : undefined };
+      story.record(
+        'code_activity',
+        code('issue_opened', { subject: { ...subject, url: undefined } }),
+        1000
+      );
+      const original = story
+        .graph(sampleFleetMap(), null, 1000)
+        .nodes.find((n) => n.type === 'work')!;
+      expect(original.href).to.equal('');
+      story.record('code_activity', code('issue_updated', { subject }), 2000);
+      const work = story
+        .graph(sampleFleetMap(), null, 2000)
+        .nodes.filter((n) => n.type === 'work');
+      expect(work).to.have.length(1);
+      expect(work[0].id).to.equal(original.id);
+      expect(work[0].href).to.equal(issue.url);
+    });
 });
 
 describe('Fleet Map current publication and repair metadata', () => {

@@ -1,5 +1,7 @@
 # Fleet Map
 
+Editions: OSS, Cloud, Enterprise. Unless stated otherwise, everything on this page ships in OSS.
+
 The Fleet Map connects people, devices, agents, models and providers. Open it from
 Device fleet or the Overview inventory card. Device evidence depends on the
 configured fleet collector; missing evidence is identified on the map.
@@ -12,8 +14,9 @@ a governance gap. Select a node for dependencies, blast radius and resource link
 Instance administrators can choose Columns or Spatial. The spatial layout packs
 machines and their agents beside the model/provider core. Drag a machine to move its
 contents. Your first drag saves the whole visible arrangement for your user and map
-scope. Refreshes and membership changes preserve that arrangement and camera; new
-resources join beside their links. Inactive positions are retained for seven days.
+scope. Refreshes and membership changes preserve that arrangement; new resources
+join beside their links. Membership changes leave the camera alone once you own
+the layout. Inactive positions are retained for seven days.
 More > Reset layout repacks the map and offers Undo for six seconds. Fit changes the
 camera without moving your nodes.
 
