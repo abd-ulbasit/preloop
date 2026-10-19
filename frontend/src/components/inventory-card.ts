@@ -486,7 +486,7 @@ export class InventoryCard extends LitElement {
           background: var(--console-hover-tint);
         }
         .inventory-map {
-          --fleet-map-stage-height: 520px;
+          --fleet-map-height: clamp(420px, calc(100dvh - 360px), 720px);
         }
 
         .header-controls {
@@ -1143,6 +1143,7 @@ export class InventoryCard extends LitElement {
       return html`<div class="empty" role="status">Mapping the fleet...</div>`;
     return html`<fleet-map
       class="inventory-map"
+      wheel-mode="page"
       .graph=${this.map}
       .activityWindow=${this.mapWindow}
       live

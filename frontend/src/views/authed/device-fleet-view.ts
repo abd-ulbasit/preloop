@@ -191,6 +191,21 @@ export class DeviceFleetView extends LitElement {
         flex-direction: column;
         gap: var(--sl-spacing-large);
       }
+      .content.map-content {
+        height: var(--fleet-content-height, calc(100dvh - 220px));
+        min-height: 0;
+        padding: 0;
+        gap: 12px;
+      }
+      .map-content fleet-map {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto;
+      }
+      .map-content .limits {
+        flex: none;
+        margin: 0;
+      }
       .view-switch {
         display: inline-flex;
         align-self: flex-end;
@@ -468,13 +483,32 @@ export class DeviceFleetView extends LitElement {
       }
     `,
   ];
+  private hostObserver?: ResizeObserver;
+  private sizeMap = (): void => {
+    const content = this.shadowRoot?.querySelector<HTMLElement>('.map-content');
+    if (!content) return;
+    const top = content.getBoundingClientRect().top;
+    const bottom = 32;
+    content.style.setProperty(
+      '--fleet-content-height',
+      `${Math.max(300, window.innerHeight - top - bottom)}px`
+    );
+  };
+  protected updated(): void {
+    this.sizeMap();
+  }
   connectedCallback(): void {
     super.connectedCallback();
+    this.hostObserver = new ResizeObserver(this.sizeMap);
+    this.hostObserver.observe(this);
+    window.addEventListener('resize', this.sizeMap);
     void this.load();
   }
   disconnectedCallback(): void {
     this.controller?.abort();
     this.mapController?.abort();
+    this.hostObserver?.disconnect();
+    window.removeEventListener('resize', this.sizeMap);
     super.disconnectedCallback();
   }
 
@@ -603,6 +637,7 @@ export class DeviceFleetView extends LitElement {
         </div>
       </sl-alert>`;
     return html`<fleet-map
+      wheel-mode="pan"
       .graph=${this.map}
       .activityWindow=${this.mapWindow}
       live
@@ -790,8 +825,7 @@ export class DeviceFleetView extends LitElement {
   }
 
   private renderDevices() {
-    if (this.view === 'canvas')
-      return html`${this.renderViewSwitch()} ${this.renderMap()}`;
+    if (this.view === 'canvas') return this.renderMap();
     const page = this.page;
     if (!page) return nothing;
     const firstDevice = html`<span
@@ -805,7 +839,7 @@ export class DeviceFleetView extends LitElement {
     // No devices: say how to get the first one, even when agents have
     // already been seen in traffic. Filters over nothing would only mislead.
     if (!page.items.length)
-      return html`${this.renderViewSwitch()}<sl-card class="table-card">
+      return html`<sl-card class="table-card">
           <div class="empty-state" data-testid="fleet-empty">
             ${firstDevice}
           </div>
@@ -814,7 +848,7 @@ export class DeviceFleetView extends LitElement {
 
     const devices = this.filteredDevices(page);
     const filtered = Boolean(this.search || this.runnerState);
-    return html`${this.renderStrip(page)} ${this.renderViewSwitch()}
+    return html`${this.renderStrip(page)}
       <div class="filters">
         <label
           >Search
@@ -1208,6 +1242,7 @@ ${JSON.stringify(finding.evidence, null, 2)}</pre>
               >`
             : nothing
         }
+        ${!onDevice && this.tab !== 'settings' ? html`<div slot="main-column">${this.renderViewSwitch()}</div>` : nothing}
         <div slot="description">
           ${
             device
@@ -1216,7 +1251,9 @@ ${JSON.stringify(finding.evidence, null, 2)}</pre>
           }
         </div>
       </view-header>
-      <div class="content">
+      <div
+        class="content ${!onDevice && this.tab !== 'settings' && this.view === 'canvas' ? 'map-content' : ''}"
+      >
         ${
           onDevice
             ? nothing

@@ -115,7 +115,12 @@ export function activeGraph(
 }
 
 /** Realtime topics carrying traffic the map can place. */
-export const FLEET_ACTIVITY_TOPICS = ['gateway_activity', 'approvals'];
+export const FLEET_ACTIVITY_TOPICS = [
+  'gateway_activity',
+  'approvals',
+  'runtime_sessions',
+  'flow_executions',
+];
 
 export type FleetActivityKind = 'model request' | 'tool call' | 'approval';
 
@@ -140,17 +145,32 @@ export function activityFromRealtime(
   const type = text(record.type);
   const payload = (record.payload || {}) as Record<string, unknown>;
   if (topic === 'gateway_activity') {
-    const agent = text(payload.managed_agent_id);
+    const flow = text(record.flow_id) || text(payload.flow_id);
+    const agentId = text(payload.managed_agent_id);
+    const agent = flow ? `flow:${flow}` : agentId ? `agent:${agentId}` : '';
     if (!agent) return null;
-    if (type === 'model_gateway_call')
+    if (
+      type === 'model_gateway_call' ||
+      type === 'model_gateway_request_started'
+    )
       return {
         kind: 'model request',
-        agent: `agent:${agent}`,
+        agent,
         model: text(payload.requested_model) || text(payload.model_alias),
       };
-    if (type === 'mcp_call')
-      return { kind: 'tool call', agent: `agent:${agent}` };
+    if (type === 'mcp_call') return { kind: 'tool call', agent };
     return null;
+  }
+  if (
+    topic === 'runtime_sessions' &&
+    type === 'runtime_session_updated' &&
+    payload.activity_type === 'tool_call'
+  ) {
+    const agent = text(payload.managed_agent_id);
+    const flow = text(payload.flow_id) || text(record.flow_id);
+    return agent || flow
+      ? { kind: 'tool call', agent: agent ? `agent:${agent}` : `flow:${flow}` }
+      : null;
   }
   if (topic === 'approvals' && type === 'approval_created') {
     const agent =

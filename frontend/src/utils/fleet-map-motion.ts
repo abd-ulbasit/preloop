@@ -28,6 +28,10 @@ export interface FleetMessage {
   kind: FleetMessageKind;
   label: string;
   delay?: number;
+  /** Resource credited in Recent, including the agent receiving a completion. */
+  actor?: string;
+  icon?: string;
+  requestId?: string;
 }
 
 /** A node lit because traffic just started there. */
@@ -37,6 +41,8 @@ export interface FleetLight {
   label: string;
   start: number;
   until: number;
+  icon?: string;
+  requestId?: string;
 }
 
 /**
@@ -58,12 +64,22 @@ export class FleetLights {
   /** Light the origin of `message`, after its delay. */
   light(message: FleetMessage, now: number): void {
     const start = now + (message.delay ?? 0);
+    if (message.kind === 'response' && message.requestId) {
+      const pending = this.items.get(message.actor ?? message.to);
+      if (
+        pending?.kind === 'request' &&
+        pending.requestId === message.requestId
+      )
+        this.items.delete(pending.node);
+    }
     const current = this.items.get(message.from);
     this.items.delete(message.from);
     this.items.set(message.from, {
       node: message.from,
       kind: message.kind,
       label: message.label,
+      icon: message.icon,
+      requestId: message.requestId,
       start:
         current && current.start <= start && current.until > start
           ? current.start
@@ -206,6 +222,44 @@ export function ownerOf(
     : undefined;
 }
 
+export const object = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+export const safeEventText = (value: unknown, limit = 300): string =>
+  typeof value === 'string'
+    ? value
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .trim()
+        .slice(0, limit)
+    : '';
+
+/** Extra display scrubbing for already-redacted approval commands. Never reads other arguments. */
+export function approvalCommand(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const scrubbed = value
+    .replace(/(Bearer\s+)[^\s"']+/gi, '$1[redacted]')
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})\b/g,
+      '[redacted]'
+    )
+    .replace(
+      /((?:token|password|secret|api[_-]?key)[=:]\s*)[^\s"'&]+/gi,
+      '$1[redacted]'
+    )
+    .replace(/(https?:\/\/)[^/\s]+@/gi, '$1[redacted]@');
+  return safeEventText(scrubbed, 300);
+}
+
+export const finiteCount = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+
+export const compactCount = (value: number): string =>
+  value >= 1000 ? `${Number((value / 1000).toFixed(1))}k` : String(value);
+
 /**
  * The messages one realtime event sends. A model request goes agent to model
  * and its response comes back; an approval request goes to the person who
@@ -232,74 +286,132 @@ export function messagesForRealtime(
   // A flow run's model calls belong to the flow, as the server counts them,
   // even when the run also carries an employee agent's id. Tool calls and
   // approvals stay with the agent, which is the one acting.
-  const agent =
-    type === 'model_gateway_call' ? flow || mappedAgent : mappedAgent || flow;
+  const modelCall =
+    type === 'model_gateway_call' || type === 'model_gateway_request_started';
+  const agent = modelCall ? flow || mappedAgent : mappedAgent || flow;
   if (!agent) return [];
-  const out: FleetMessage[] = [];
-  if (topic === 'gateway_activity' && type === 'model_gateway_call') {
+  if (topic === 'gateway_activity' && modelCall) {
     const alias = text(payload.requested_model) || text(payload.model_alias);
     const key = alias ? modelKey(alias) : '';
     const byId = new Map(graph.nodes.map((node) => [node.id, node]));
     const lines = graph.edges.filter(
       (edge) => edge.kind === 'uses_model' && edge.source === agent
     );
-    const exact = lines.filter((edge) => {
+    const exact = lines.find((edge) => {
       const detail = byId.get(edge.target)?.detail || '';
       return key && (detail === key || detail.startsWith(`${key} `));
     });
-    const target = (exact[0] ?? (lines.length === 1 ? lines[0] : undefined))
+    const target = (exact ?? (lines.length === 1 ? lines[0] : undefined))
       ?.target;
-    if (!target) return [];
-    const label = alias.split('/').pop() || 'request';
-    out.push({ from: agent, to: target, kind: 'request', label });
-    out.push({
-      from: target,
-      to: agent,
-      kind: 'response',
-      label: '',
-      delay: 900,
-    });
-    return out;
+    const model =
+      byId.get(target ?? '')?.label || alias.split('/').pop() || 'Model call';
+    const started = type === 'model_gateway_request_started';
+    const input = finiteCount(payload.prompt_tokens);
+    const output = finiteCount(payload.completion_tokens);
+    const failed =
+      payload.outcome === 'error' ||
+      payload.outcome === 'failed' ||
+      (typeof payload.status_code === 'number' && payload.status_code >= 400);
+    const content = started
+      ? 'thinking'
+      : failed
+        ? 'failed'
+        : input !== null && output !== null
+          ? `${compactCount(input)} in / ${compactCount(output)} out`
+          : 'completed';
+    return [
+      {
+        from: started ? agent : (target ?? agent),
+        to: started ? (target ?? agent) : agent,
+        actor: agent,
+        requestId: text(payload.gateway_request_id) || undefined,
+        kind: started ? 'request' : 'response',
+        icon: 'stars',
+        label: `${model}  ${content}`,
+      },
+    ];
   }
-  if (topic === 'gateway_activity' && type === 'mcp_call') {
+  const native =
+    topic === 'runtime_sessions' &&
+    type === 'runtime_session_updated' &&
+    payload.activity_type === 'tool_call';
+  if ((topic === 'gateway_activity' && type === 'mcp_call') || native) {
     const device = graph.edges.find(
       (edge) =>
         (edge.kind === 'hosts' || edge.kind === 'owns') &&
         edge.target === agent &&
         ids.has(edge.source)
     )?.source;
-    if (!device) return [];
+    const tool = safeEventText(payload.tool_name) || 'Tool call';
+    const status = text(payload.status);
+    const blocked = ['blocked', 'refused', 'denied', 'declined'].includes(
+      status
+    );
+    const failed = ['failed', 'error'].includes(status);
+    // No argument bags or message previews: only the explicit, server-redacted
+    // target field may enrich native calls when that capture is opted into.
+    const preview = object(payload.preview ?? object(payload.metadata).preview);
+    const target = safeEventText(preview.text || payload.target_preview, 160);
+    const content = blocked
+      ? 'blocked'
+      : failed
+        ? 'failed'
+        : target ||
+          (native
+            ? status === 'allowed'
+              ? 'allowed'
+              : ''
+            : safeEventText(payload.server_name));
     return [
       {
         from: agent,
-        to: device,
+        to: device ?? agent,
+        actor: agent,
         kind: 'tool',
-        label: text(payload.tool_name) || 'tool call',
+        icon: 'wrench',
+        label: content ? `${tool}  ${content}` : tool,
       },
     ];
   }
   if (topic === 'approvals' && type.startsWith('approval_')) {
     const person = ownerOf(graph, agent);
-    if (!person || !ids.has(person)) return [];
-    const tool = text(record.tool_name) || text(payload.tool_name);
+    const tool =
+      safeEventText(record.tool_name) || safeEventText(payload.tool_name);
+    const args = object(record.tool_args ?? payload.tool_args);
+    const command =
+      approvalCommand(args.command) ||
+      tool ||
+      safeEventText(record.summary || payload.summary);
     if (type === 'approval_created')
       return [
         {
           from: agent,
-          to: person,
+          to: person && ids.has(person) ? person : agent,
+          actor: agent,
           kind: 'approval',
-          label: tool ? `approve ${tool}?` : 'approval?',
+          icon: 'shield-check',
+          label: command ? `Approve?  ${command}` : 'Approval requested',
         },
       ];
-    if (type === 'approval_approved' || type === 'approval_declined')
+    if (type === 'approval_approved' || type === 'approval_declined') {
+      const deciderId = text(record.user_id) || text(payload.user_id);
+      const decider =
+        deciderId && ids.has(`user:${deciderId}`) ? `user:${deciderId}` : '';
+      const name = decider
+        ? graph.nodes.find((node) => node.id === decider)?.label
+        : '';
+      const verb = type === 'approval_approved' ? 'Approved' : 'Declined';
       return [
         {
-          from: person,
+          from: decider || agent,
           to: agent,
+          actor: agent,
           kind: 'decision',
-          label: type === 'approval_approved' ? 'approved' : 'declined',
+          icon: 'shield-check',
+          label: name ? `${verb} by ${name}` : verb,
         },
       ];
+    }
   }
   return [];
 }
@@ -324,6 +436,7 @@ export function clusterOf(
     if (node.type === 'user') group.set(node.id, node.id);
     else if (shared(node)) group.set(node.id, 'shared');
     else if (node.type === 'flow') group.set(node.id, 'flows');
+    else if (node.type === 'work') group.set(node.id, 'work');
   }
   const assign = (id: string, to: string) => {
     if (!group.has(id) && byId.has(id)) group.set(id, to);

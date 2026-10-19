@@ -7,7 +7,7 @@ import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 import type { FleetCodeActivity } from '../fleet-map-api';
 
 const call = {
-  type: 'model_gateway_call',
+  type: 'model_gateway_request_started',
   payload: { managed_agent_id: 'codex', model_alias: 'gpt-6.1' },
 };
 
@@ -123,6 +123,10 @@ describe('fleet-map live canvas', () => {
       expect(codex.classList.contains('speaking')).to.equal(true);
       expect(codex.classList.contains('speak-request')).to.equal(true);
       clock.tick(1000);
+      el.recordActivity('gateway_activity', {
+        ...call,
+        type: 'model_gateway_call',
+      });
       expect(el.litNodes).to.include('model:gpt');
       el.requestUpdate();
       await el.updateComplete;
@@ -269,7 +273,7 @@ describe('fleet-map live canvas', () => {
     )!;
     expect(hidden, 'the cap folds some agents').to.exist;
     el.recordActivity('gateway_activity', {
-      type: 'model_gateway_call',
+      type: 'model_gateway_request_started',
       payload: { managed_agent_id: hidden.resource_id, model_alias: 'gpt-6.1' },
     });
     expect(el.litNodes).to.deep.equal([]);
@@ -394,7 +398,8 @@ describe('fleet-map live canvas', () => {
       el.shadowRoot!.querySelector<HTMLElement>('.plane')!.style.transform;
     el.graph = joined;
     await el.updateComplete;
-    expect(inside.camera, 'the view starts gliding').to.exist;
+    // Membership can re-pack an unowned layout without moving a camera that already fits.
+    expect(inside.lastLayout).to.exist;
     const tween = inside.tween as {
       from: Map<string, { x: number; y: number }>;
       to: { positions: Map<string, { x: number; y: number }> };
@@ -458,7 +463,7 @@ describe('fleet-map live canvas', () => {
     stage.dispatchEvent(new PointerEvent('pointerup', at));
     el.graph = withAna();
     await el.updateComplete;
-    expect((el as unknown as Glide).camera).to.exist;
+    expect(movedIn(el)).to.be.greaterThan(0);
   });
 
   it('settles in focus mode instead of re-laying out every frame', async () => {
@@ -486,7 +491,7 @@ describe('fleet-map live canvas', () => {
     expect((el as unknown as Glide).tween).to.equal(undefined);
   });
 
-  it('stores only the dragged machine, so the fleet can still rearrange', async () => {
+  it('stores the whole visible arrangement when a machine is dragged', async () => {
     const el = await spatialMap();
     const target = el.shadowRoot!.querySelector<HTMLElement>(
       '[data-node="agent:codex"]'
@@ -507,10 +512,13 @@ describe('fleet-map live canvas', () => {
     const stored = JSON.parse(
       localStorage.getItem('preloop:fleet-map:positions:live-test:u-live')!
     );
-    expect(Object.keys(stored)).to.deep.equal(['device:mbp']);
+    expect(Object.keys(stored)).to.have.length(
+      el.shadowRoot!.querySelectorAll('[data-node]').length
+    );
     el.graph = withAna();
     await el.updateComplete;
-    expect(movedIn(el), 'islands are dealt round again').to.be.greaterThan(0);
+    expect(movedIn(el), 'owned positions stay put').to.equal(0);
+    expect((el as unknown as Glide).camera).to.equal(undefined);
   });
 
   it('keeps nodes where they are when the graph refreshes', async () => {

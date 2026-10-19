@@ -773,23 +773,42 @@ the flows whose runs touched the pull request. A flow's tool-call merge and the 
 webhook for it count once. The generic `add_comment` counts only when the wrapper
 recorded a pull request target (`code_target`, a boolean kept instead of the target);
 issue comments and operator notes never count. "Any time" reads 90 days. Live, the `code_activity` realtime topic carries each successful code
-tool call and each first merge. In the spatial arrangement people, their machines and
-agents form islands around the shared models and providers. Nodes fade in and out as
-they join and leave the window. When a person or lone machine joins or leaves, the
-islands are dealt round again and nodes glide (400 ms) to their places, and the view
-glides to the fleet's new centre of gravity unless the user panned or zoomed in the
-last 15 s. Live traffic lights the line it travels (held 2.5 s) and the node it starts
-from (the sending agent or flow, the answering model, the deciding person), capped at
-8 lit nodes. Nothing travels along a line; with `prefers-reduced-motion` nodes and
-the view also move without gliding or fading. A machine with a known `hosts` line is a
-box holding its agents and runners (the hosts line is then not drawn); it grows and
-shrinks as they come and go and drags as one unit, and only dropped boxes and nodes
-are stored. Optional Bubbles (a toolbar toggle, stored per user) put a short note
-beside a lit node ("asks Claude Opus 5.5", "answers", "runs Bash", "opened a PR"),
-never prompt text, at most six. Nodes show their product, model-family or provider
-mark (`utils/fleet-map-icons.ts`; vendor marks from lobe-icons, MIT, in
-`public/images/logos/vendors`): a model's family can differ from the provider serving
-it. A `bare` map shows only the canvas, for presentations.
+tool call and each first merge. The collection toolbar shares
+`list-toolbar` with the other console collections; accounts are an optional layer.
+The hosts give the canvas its height. Device fleet and full screen pan on wheel,
+while the Overview card lets plain wheel scroll the page. Fit keeps spatial scale
+at least 0.85 and leaves overflow reachable by panning.
+
+Spatial layout packs measured owner/machine islands beside the model/provider core,
+with attached issue/PR rows in the work lane. The first drag stores the complete
+visible arrangement per user and scope. Membership updates preserve those positions
+and the camera, place arrivals beside their relationships and retain inactive slots
+for seven days. A growing machine moves only the following boxes in its island.
+Reset layout offers a six-second Undo. Unowned layouts can repack; the camera follows
+only when the layout leaves the viewport and the user has not recently navigated.
+
+Gateway starts light the sender; real completions light the model and show measured
+input/output tokens. Native permission activity identifies its managed agent
+explicitly, without treating a runtime principal ID as a registry ID. Tool activity
+lights the node and relationship and feeds a bounded client tally and Recent list,
+labelled as events seen since the map opened. Permission allowed is not execution
+success. Bubbles show four bounded metadata notes for four seconds, with a neutral
+hairline and reduced-motion support. Approval commands use the existing display
+payload with additional credential scrubbing; model prompts, replies and generic
+argument bags are never selected by this layer. Product and model-family marks
+remain in `utils/fleet-map-icons.ts`. The `bare` property hides presentation chrome.
+
+Flow start/status messages project `fleet_context` from already-loaded execution
+metadata: compact trigger refs, safe object URLs and actual parent/retry/resume/thread
+IDs. They add no reads, migrations or content capture. The live story folds concurrent
+runs per flow, expires completed runs after 60 seconds and retains observed work
+associations as hairlines after their six-second highlight. Controlled publication's
+existing `result.pr_url` attaches a PR to its recorded issue; structured reviewer
+verdicts are explicitly labelled reported. Forge merge metadata confirms a merge,
+but contributing flows are not a human merger. Richer normalized issue/PR events can
+supply titles, label changes, confirmed review states and verified actors. Missing
+fields remain unknown. This in-memory view is not a durable tracker event journal.
+
 
 Provider callback adapters can reuse account-owned encrypted secret references and [durable callback receipts](docs/architecture/callback-receipts.md) to commit content-free verdicts and audit entries atomically across workers.
 

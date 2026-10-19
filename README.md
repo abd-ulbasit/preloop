@@ -74,6 +74,8 @@ A run in progress is not out of reach. [Operator notes](docs/guide/operator-note
 
 Finished runs stay searchable, in the console, from `preloop sessions search`, and by an agent that has been given the `search_sessions` tool. Keyword ranking is always available, semantic and hybrid ranking are a per-account opt-in, every search is audited, and a question worth repeating can be [saved under a name](docs/guide/session-saved-searches.md). Two exports turn the agent inventory and the failure record into files an auditor can read: [DORA: the AI-agent slice](docs/guide/dora-agent-slice.md). They feed an Art. 8 inventory and an Art. 28 register, and list Art. 17 incident candidates. Classification stays with your firm, and Preloop covers the agent slice of the ICT estate only.
 
+The [Fleet Map](docs/guide/fleet-map.md) connects people, devices, agents, models and observed work in Columns or Spatial view. It keeps manual arrangements, shows live tool and model metadata, and follows flow subjects through published PRs, reported reviews and merges when those events are available.
+
 ## What you get
 
 Jobs teams otherwise buy from several vendors, in one Apache 2.0 stack:

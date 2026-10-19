@@ -21,10 +21,15 @@ describe('fleet-map-motion', () => {
       payload: { managed_agent_id: 'codex', model_alias: 'openai/gpt-6.1' },
     });
     expect(messages.map((m) => [m.from, m.to, m.kind])).to.deep.equal([
-      ['agent:codex', 'model:gpt', 'request'],
       ['model:gpt', 'agent:codex', 'response'],
     ]);
-    expect(messages[1].delay).to.be.greaterThan(0);
+    expect(messages[0].delay).to.equal(undefined);
+    const start = messagesForRealtime(sampleFleetMap(), 'gateway_activity', {
+      type: 'model_gateway_request_started',
+      payload: { managed_agent_id: 'codex', model_alias: 'gpt-6.1' },
+    });
+    expect(start[0].from).to.equal('agent:codex');
+    expect(start[0].label).to.contain('thinking');
   });
 
   it('sends approvals to the owner and decisions back, tool calls to the device', () => {
@@ -39,7 +44,9 @@ describe('fleet-map-motion', () => {
         from: 'agent:claude',
         to: 'user:maya',
         kind: 'approval',
-        label: 'approve Bash?',
+        label: 'Approve?  Bash',
+        actor: 'agent:claude',
+        icon: 'shield-check',
       },
     ]);
     const decided = messagesForRealtime(graph, 'approvals', {
@@ -47,10 +54,10 @@ describe('fleet-map-motion', () => {
       managed_agent_id: 'claude',
     });
     expect(decided[0]).to.include({
-      from: 'user:maya',
+      from: 'agent:claude',
       to: 'agent:claude',
       kind: 'decision',
-      label: 'approved',
+      label: 'Approved',
     });
     const tool = messagesForRealtime(graph, 'gateway_activity', {
       type: 'mcp_call',
@@ -93,7 +100,11 @@ describe('fleet-map-motion', () => {
       flow_id: 'f1',
       payload: { model_alias: 'claude-sonnet-5-5' },
     });
-    expect(messages[0]).to.include({ from: 'flow:f1', to: 'model:sonnet' });
+    expect(messages[0]).to.include({
+      from: 'model:sonnet',
+      to: 'flow:f1',
+      actor: 'flow:f1',
+    });
   });
 
   it("gives a flow run's model call to the flow, its approvals to the agent", () => {
@@ -120,7 +131,7 @@ describe('fleet-map-motion', () => {
       flow_id: 'f1',
       payload: { managed_agent_id: 'claude', model_alias: 'x' },
     });
-    expect(call[0].from).to.equal('flow:f1');
+    expect(call[0].actor).to.equal('flow:f1');
     const asked = messagesForRealtime(graph, 'approvals', {
       type: 'approval_created',
       managed_agent_id: 'claude',
@@ -137,8 +148,9 @@ describe('fleet-map-motion', () => {
       {},
       clusterOf(graph)
     );
-    const pinned: Record<string, { x: number; y: number }> = {};
-    for (const [id, p] of first.positions) pinned[id] = { x: p.x, y: p.y };
+    const pinned: Record<string, { x: number; y: number; w: number }> = {};
+    for (const [id, p] of first.positions)
+      pinned[id] = { x: p.x, y: p.y, w: p.w };
     const withFlow = {
       ...graph,
       nodes: [

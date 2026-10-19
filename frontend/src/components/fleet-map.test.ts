@@ -9,10 +9,14 @@ const node = (el: FleetMap, id: string) =>
 
 /** The default view is onboarded agents; include discovered and inactive. */
 async function allAgents(el: FleetMap): Promise<void> {
-  for (const state of ['discovered', 'inactive'])
-    el.shadowRoot!.querySelector<HTMLButtonElement>(
-      `[data-state="${state}"]`
-    )!.click();
+  const states = el.shadowRoot!.querySelector(
+    '[data-testid="fleet-map-states"]'
+  ) as unknown as { value: string[]; dispatchEvent(e: Event): boolean };
+  states.value = ['onboarded', 'discovered', 'inactive'];
+  states.dispatchEvent(new Event('sl-change'));
+  el.shadowRoot!.querySelector('[data-type="provider_account"]')!.dispatchEvent(
+    new Event('sl-change')
+  );
   await el.updateComplete;
 }
 
@@ -79,9 +83,10 @@ describe('fleet-map', () => {
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
     await allAgents(el);
-    const select = el.shadowRoot!.querySelectorAll('select')[0];
+    const select =
+      el.shadowRoot!.querySelector<HTMLSelectElement>('.owner-select')!;
     select.value = 'user:sam';
-    select.dispatchEvent(new Event('change'));
+    select.dispatchEvent(new Event('sl-change'));
     await el.updateComplete;
     expect(node(el, 'user:maya')).to.not.exist;
     expect(
@@ -93,21 +98,22 @@ describe('fleet-map', () => {
   });
 });
 
-describe('fleet-map gap strip', () => {
+describe('fleet-map gap filter', () => {
   it('counts each gap kind and lights the nodes that carry it', async () => {
     const el = await fixture<FleetMap>(
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
     await allAgents(el);
     const chip = el.shadowRoot!.querySelector<HTMLButtonElement>(
-      '.gap-chip[data-gap="discovered_agent"]'
+      '[data-testid="fleet-map-gap-select"]'
     )!;
-    expect(chip.textContent!.replace(/\s+/g, ' ').trim()).to.equal(
-      '1not onboarded'
-    );
-    chip.click();
+    expect(chip.textContent).to.contain('1 Not onboarded');
+    (chip as unknown as { value: string }).value = 'discovered_agent';
+    chip.dispatchEvent(new Event('sl-change'));
     await el.updateComplete;
-    expect(chip.getAttribute('aria-pressed')).to.equal('true');
+    expect((chip as unknown as { value: string }).value).to.equal(
+      'discovered_agent'
+    );
     expect(node(el, 'agent:cursor').classList.contains('focus')).to.equal(true);
     expect(node(el, 'agent:claude').classList.contains('dim')).to.equal(true);
     expect(
@@ -115,7 +121,7 @@ describe('fleet-map gap strip', () => {
     ).to.equal('Not onboarded');
   });
 
-  it('says so when the map has no gaps', async () => {
+  it('draws no gap control when the map has no gaps', async () => {
     const graph = sampleFleetMap();
     const el = await fixture<FleetMap>(
       html`<fleet-map
@@ -125,10 +131,8 @@ describe('fleet-map gap strip', () => {
         }}
       ></fleet-map>`
     );
-    expect(
-      el.shadowRoot!.querySelector('[data-testid="fleet-map-gaps"]')!
-        .textContent
-    ).to.contain('No governance gaps');
+    expect(el.shadowRoot!.querySelector('[data-testid="fleet-map-gap-select"]'))
+      .not.to.exist;
   });
 });
 
@@ -138,13 +142,16 @@ describe('fleet-map completeness and navigation', () => {
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
     await allAgents(el);
-    const modelToggle = [
-      ...el.shadowRoot!.querySelectorAll<HTMLButtonElement>(
-        'fieldset[aria-label="Show"] button'
-      ),
-    ].find((button) => button.textContent?.trim() === 'Models')!;
-    modelToggle.click();
+    el.shadowRoot!.querySelector('[data-type="model"]')!.dispatchEvent(
+      new Event('sl-change')
+    );
     await el.updateComplete;
+    if (!node(el, 'account:prod')) {
+      el.shadowRoot!.querySelector(
+        '[data-type="provider_account"]'
+      )!.dispatchEvent(new Event('sl-change'));
+      await el.updateComplete;
+    }
     node(el, 'account:prod').click();
     await el.updateComplete;
     const panel = el.shadowRoot!.querySelector(
@@ -161,6 +168,12 @@ describe('fleet-map completeness and navigation', () => {
         .graph=${{ ...sampleFleetMap(), truncated: true, unavailable: ['devices'] }}
       ></fleet-map>`
     );
+    if (!node(el, 'account:prod')) {
+      el.shadowRoot!.querySelector(
+        '[data-type="provider_account"]'
+      )!.dispatchEvent(new Event('sl-change'));
+      await el.updateComplete;
+    }
     node(el, 'account:prod').click();
     await el.updateComplete;
     expect(el.shadowRoot!.textContent).to.contain(
@@ -208,7 +221,10 @@ describe('fleet-map capped and narrow views', () => {
       .shadowRoot!.querySelector('.count')!
       .textContent!.replace(/\s+/g, ' ')
       .trim();
-    expect(count).to.equal('15 nodes · 1 summary group');
+    expect(count).to.equal('15 nodes');
+    expect(
+      el.shadowRoot!.querySelector('.count')!.getAttribute('title')
+    ).to.contain('1 summary groups');
   });
 
   it('keeps zoom controls and selection on screen when the panel is below the map', async () => {
@@ -218,6 +234,12 @@ describe('fleet-map capped and narrow views', () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
       );
+      if (!node(el, 'account:prod')) {
+        el.shadowRoot!.querySelector(
+          '[data-type="provider_account"]'
+        )!.dispatchEvent(new Event('sl-change'));
+        await el.updateComplete;
+      }
       node(el, 'account:prod').click();
       await el.updateComplete;
       const stage = el
@@ -241,15 +263,19 @@ describe('fleet-map capped and narrow views', () => {
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
     await allAgents(el);
-    el.shadowRoot!.querySelector<HTMLButtonElement>(
-      '[data-gap="discovered_agent"]'
-    )!.click();
-    const owner = el.shadowRoot!.querySelector('select')!;
+    const gap = el.shadowRoot!.querySelector(
+      '[data-testid="fleet-map-gap-select"]'
+    ) as HTMLSelectElement;
+    gap.value = 'discovered_agent';
+    gap.dispatchEvent(new Event('sl-change'));
+    const owner = el.shadowRoot!.querySelector(
+      '.owner-select'
+    ) as HTMLSelectElement;
     owner.value = 'user:maya';
-    owner.dispatchEvent(new Event('change'));
+    owner.dispatchEvent(new Event('sl-change'));
     await el.updateComplete;
-    expect(el.shadowRoot!.querySelector('[data-gap="discovered_agent"]')).to.not
-      .exist;
+    expect(el.shadowRoot!.querySelector('sl-option[value="discovered_agent"]'))
+      .to.not.exist;
     expect(node(el, 'agent:claude').classList.contains('dim')).to.equal(false);
   });
 });
@@ -333,11 +359,15 @@ describe('fleet-map v2 readability', () => {
     const discovered = el.shadowRoot!.querySelector<HTMLButtonElement>(
       '[data-state="discovered"]'
     )!;
-    expect(discovered.querySelector('.n')!.textContent).to.equal('1');
-    expect(el.shadowRoot!.querySelector('.count')!.textContent).to.contain(
-      '4 decommissioned agents not shown'
-    );
-    discovered.click();
+    expect(discovered.textContent).to.contain('Discovered 1');
+    expect(
+      el.shadowRoot!.querySelector('.count')!.getAttribute('title')
+    ).to.contain('4 decommissioned agents not shown');
+    const states = el.shadowRoot!.querySelector(
+      '[data-testid="fleet-map-states"]'
+    ) as unknown as { value: string[]; dispatchEvent(e: Event): void };
+    states.value = ['onboarded', 'discovered'];
+    states.dispatchEvent(new Event('sl-change'));
     await el.updateComplete;
     expect(node(el, 'agent:cursor')).to.exist;
   });
@@ -346,6 +376,10 @@ describe('fleet-map v2 readability', () => {
     const el = await fixture<FleetMap>(
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
+    el.shadowRoot!.querySelector(
+      '[data-type="provider_account"]'
+    )!.dispatchEvent(new Event('sl-change'));
+    await el.updateComplete;
     const provider = node(el, 'provider:openai').getBoundingClientRect();
     const account = node(el, 'account:prod').getBoundingClientRect();
     expect(account.top).to.be.greaterThan(provider.top);
@@ -403,15 +437,22 @@ describe('fleet-map v2 readability', () => {
     const el = await fixture<FleetMap>(
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
-    const input = el.shadowRoot!.querySelector<HTMLInputElement>(
-      'input[type="search"]'
-    )!;
+    const toolbar = el.shadowRoot!.querySelector('list-toolbar')!;
+    const input = toolbar
+      .shadowRoot!.querySelector('sl-input')!
+      .shadowRoot!.querySelector('input')!;
     input.value = 'codex';
-    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     await el.updateComplete;
     expect(node(el, 'agent:codex').classList.contains('match')).to.equal(true);
     expect(node(el, 'user:maya').classList.contains('dim')).to.equal(true);
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        composed: true,
+      })
+    );
     await el.updateComplete;
     expect(el.hasSelection()).to.be.true;
     expect(
@@ -439,9 +480,11 @@ describe('fleet-map v2 readability', () => {
     const el = await fixture<FleetMap>(
       html`<fleet-map .graph=${sampleFleetMap()}></fleet-map>`
     );
-    el.shadowRoot!.querySelector<HTMLButtonElement>(
-      '[data-testid="gaps-only"]'
-    )!.click();
+    const gap = el.shadowRoot!.querySelector(
+      '[data-testid="fleet-map-gap-select"]'
+    ) as HTMLSelectElement;
+    gap.value = 'all';
+    gap.dispatchEvent(new Event('sl-change'));
     await el.updateComplete;
     expect(node(el, 'runner:r2')).to.exist;
     expect(node(el, 'agent:codex')).to.not.exist;
@@ -503,7 +546,7 @@ describe('fleet-map labels', () => {
         '[data-testid="fleet-map-window"]'
       )!;
       select.value = 'any';
-      select.dispatchEvent(new Event('change'));
+      select.dispatchEvent(new Event('sl-change'));
       await el.updateComplete;
       expect(changed.firstCall.args[0].detail).to.deep.equal({
         window: 'any',
@@ -532,7 +575,7 @@ describe('fleet-map labels', () => {
         '[data-testid="fleet-map-window"]'
       )!;
       select.value = 'any';
-      select.dispatchEvent(new Event('change'));
+      select.dispatchEvent(new Event('sl-change'));
       expect(changed.firstCall.args[0].detail.minutes).to.equal(null);
     });
 
@@ -785,7 +828,9 @@ describe('fleet-map labels', () => {
         localStorage.getItem('preloop:fleet-map:positions:fleet:u1')!
       );
       // Codex sits inside maya-laptop, so the machine moved and is stored.
-      expect(Object.keys(stored)).to.deep.equal(['device:mbp']);
+      expect(Object.keys(stored)).to.have.length(
+        el.shadowRoot!.querySelectorAll('[data-node]').length
+      );
       expect(stored['device:mbp'].x).to.equal(machineX + 60);
       // The drop click lands on the stage, not the node; the next real
       // node click still selects.

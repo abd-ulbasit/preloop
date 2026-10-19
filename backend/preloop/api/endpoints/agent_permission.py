@@ -344,6 +344,10 @@ def _record_native_tool_call(
                 "runtime_principal_name": identity.managed_agent_name,
                 "last_activity_at": timestamp,
                 "activity_id": activity_id,
+                "managed_agent_id": str(identity.managed_agent_id)
+                if identity.managed_agent_id
+                else None,
+                "flow_id": str(identity.flow_id) if identity.flow_id else None,
                 "activity_type": "tool_call",
                 "tool_name": payload.tool_name,
                 "server_name": source,
