@@ -1018,8 +1018,83 @@ export class FlowView extends LitElement {
       <div class="column-layout wide">
         <div class="main-column">
           ${this.renderReferenceDataWarning()}
+
+          <!-- Recent executions come before the prompt (#1692): the runs are
+               why the page is opened, the prompt is reference. -->
+          <sl-card data-recent-executions>
+            <div slot="header">
+              <sl-icon name="clock-history"></sl-icon>
+              Recent executions
+            </div>
+            ${
+              this.recentExecutions.length === 0
+                ? html`<p>No executions yet. Run now starts one.</p>`
+                : html`
+                    <div class="table-scroll">
+                      <table class="styled-table executions-table">
+                        <thead>
+                          <tr>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${this.recentExecutions.map(
+                            (exec) => html`
+                              <!-- The Started cell is the anchor to the run and
+                                 the whole row is a convenience on top of it,
+                                 as on the executions list, so the keyboard
+                                 and cmd-click keep a route the View column
+                                 used to provide. -->
+                              <tr
+                                class="execution-row"
+                                @click=${(event: MouseEvent) =>
+                                  this.openExecution(event, exec.id)}
+                              >
+                                <!-- Every row on this page is the same flow, so
+                                   the subject is the only column that says
+                                   which run is which; it keeps its link to
+                                   the pull request or issue it came from. -->
+                                <td class="subject-cell">
+                                  ${renderExecutionSubject(exec)}
+                                </td>
+                                <td>
+                                  <sl-badge
+                                    class="chip"
+                                    pill
+                                    variant=${this.getStatusVariant(exec.status)}
+                                  >
+                                    ${executionStatusLabel(exec.status)}
+                                  </sl-badge>
+                                </td>
+                                <!-- Relative, absolute in the title, as every
+                                   other list in the console states a time. -->
+                                <td
+                                  title=${formatLocalDateTime(exec.start_time)}
+                                >
+                                  <a
+                                    class="row-link"
+                                    href=${`/console/flows/executions/${exec.id}`}
+                                    >${formatRelativeTime(exec.start_time)}</a
+                                  >
+                                </td>
+                                <td>${executionDurationText(exec) || 'n/a'}</td>
+                              </tr>
+                            `
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    ${this.renderAllExecutionsLink()}
+                  `
+            }
+          </sl-card>
+
+          <!-- #1692: the definition follows the runs. -->
           <!-- Flow Info Card -->
-          <sl-card>
+          <sl-card data-flow-details>
             <div slot="header">
               <sl-icon name="info-circle"></sl-icon>
               Flow details
@@ -1114,79 +1189,6 @@ export class FlowView extends LitElement {
                   : ''
               }
             </div>
-          </sl-card>
-
-          <!-- Recent executions come before the prompt (#1692): the runs are
-               why the page is opened, the prompt is reference. -->
-          <sl-card data-recent-executions>
-            <div slot="header">
-              <sl-icon name="clock-history"></sl-icon>
-              Recent executions
-            </div>
-            ${
-              this.recentExecutions.length === 0
-                ? html`<p>No executions yet. Run now starts one.</p>`
-                : html`
-                    <div class="table-scroll">
-                      <table class="styled-table executions-table">
-                        <thead>
-                          <tr>
-                            <th>Subject</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                            <th>Duration</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          ${this.recentExecutions.map(
-                            (exec) => html`
-                              <!-- The Started cell is the anchor to the run and
-                                 the whole row is a convenience on top of it,
-                                 as on the executions list, so the keyboard
-                                 and cmd-click keep a route the View column
-                                 used to provide. -->
-                              <tr
-                                class="execution-row"
-                                @click=${(event: MouseEvent) =>
-                                  this.openExecution(event, exec.id)}
-                              >
-                                <!-- Every row on this page is the same flow, so
-                                   the subject is the only column that says
-                                   which run is which; it keeps its link to
-                                   the pull request or issue it came from. -->
-                                <td class="subject-cell">
-                                  ${renderExecutionSubject(exec)}
-                                </td>
-                                <td>
-                                  <sl-badge
-                                    class="chip"
-                                    pill
-                                    variant=${this.getStatusVariant(exec.status)}
-                                  >
-                                    ${executionStatusLabel(exec.status)}
-                                  </sl-badge>
-                                </td>
-                                <!-- Relative, absolute in the title, as every
-                                   other list in the console states a time. -->
-                                <td
-                                  title=${formatLocalDateTime(exec.start_time)}
-                                >
-                                  <a
-                                    class="row-link"
-                                    href=${`/console/flows/executions/${exec.id}`}
-                                    >${formatRelativeTime(exec.start_time)}</a
-                                  >
-                                </td>
-                                <td>${executionDurationText(exec) || 'n/a'}</td>
-                              </tr>
-                            `
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    ${this.renderAllExecutionsLink()}
-                  `
-            }
           </sl-card>
 
           ${

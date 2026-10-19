@@ -259,6 +259,21 @@ describe('FlowView detail page language', () => {
     }
   });
 
+  it('puts recent executions before the flow details (#1692)', async () => {
+    const element = await renderDetail({ prompt_template: 'Review it' });
+    try {
+      const runs = element.shadowRoot.querySelector('[data-recent-executions]');
+      const details = element.shadowRoot.querySelector('[data-flow-details]');
+      expect(runs).to.exist;
+      expect(details).to.exist;
+      expect(
+        runs.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).to.not.equal(0);
+    } finally {
+      element.remove();
+    }
+  });
+
   it('shows effective saved publication policy without claiming verification passed', async () => {
     const element = await renderDetail({
       effective_publication_policy: {

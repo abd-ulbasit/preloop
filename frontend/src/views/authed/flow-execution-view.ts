@@ -102,7 +102,10 @@ import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import '@shoelace-style/shoelace/dist/components/details/details.js';
 import '@shoelace-style/shoelace/dist/components/copy-button/copy-button.js';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
-import { billingAttribution } from '../../utils/billing-attribution';
+import {
+  BILLING_NOT_RECORDED,
+  billingAttribution,
+} from '../../utils/billing-attribution';
 
 interface FlowExecutionUpdate {
   execution_id: string;
@@ -469,7 +472,30 @@ export class FlowExecutionView extends LitElement {
       .resume-line a:hover {
         text-decoration: underline;
       }
+      /* #1692: the issue and PR links are one line, not a boxed card; the
+         box only appears when there are follow-up runs to list. */
+      .status-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 24px;
+        /* Tucked under the summary strip: it reads as the strip's last line. */
+        margin: -16px 0 -8px;
+      }
+      .status-row:not(:has(*)) {
+        display: none;
+      }
+      .status-row > * {
+        margin: 0;
+      }
       .continuation-navigation {
+        margin: 0;
+      }
+      .continuation-navigation:not(.has-follow-ups) sl-button::part(base) {
+        height: auto;
+        line-height: 1.6;
+      }
+      .continuation-navigation.has-follow-ups {
         margin-bottom: var(--sl-spacing-medium);
         border: 1px solid var(--sl-color-neutral-200);
         border-radius: var(--sl-border-radius-medium);
@@ -519,7 +545,7 @@ export class FlowExecutionView extends LitElement {
         padding: 12px 0;
         border-top: 1px solid var(--console-hairline);
         border-bottom: 1px solid var(--console-hairline);
-        margin-bottom: 16px;
+        margin-bottom: 4px;
       }
       .host-sessions {
         display: flex;
@@ -607,14 +633,19 @@ export class FlowExecutionView extends LitElement {
         white-space: normal;
       }
       /* The line plus its "Show full error" control, which opens Output. */
+      /* #1692: the error and its "Show full error" share one line. */
       .error-block-line {
-        margin: -4px 0 16px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 8px;
+        margin: -4px 0 12px;
       }
       .error-block-line .error-line {
         margin: 0;
       }
       .error-block-line .show-full-error::part(base) {
-        padding-left: 24px;
+        padding-left: 0;
         height: auto;
         line-height: 1.6;
       }
@@ -719,7 +750,8 @@ export class FlowExecutionView extends LitElement {
         display: grid;
         grid-template-columns: 76px minmax(0, 1fr);
         gap: 12px;
-        padding: 8px 0;
+        /* #1692: rows are dense so a long run stays within three screens. */
+        padding: 4px 0;
         border-bottom: 1px solid var(--console-hairline);
       }
       .timeline-row:last-child {
@@ -2936,7 +2968,10 @@ export class FlowExecutionView extends LitElement {
         row.item.kind === 'gateway' ? row.item.gatewayEvent : undefined;
       if (!event) continue;
       const billing = billingAttribution(event.payload || {});
-      if (billing === previous) repeated.add(row.key);
+      // "Billing path not recorded" says nothing a reader can act on, and
+      // printed under every call it doubled the timeline's height (#1692).
+      if (billing === previous || billing === BILLING_NOT_RECORDED)
+        repeated.add(row.key);
       previous = billing;
     }
     return repeated;
@@ -3792,7 +3827,7 @@ ${execution.resolved_input_prompt}</pre>
     if (!followUps.length && !navigation.issue_url && !navigation.pr_url)
       return nothing;
     return html`<section
-      class="continuation-navigation"
+      class="continuation-navigation ${followUps.length ? 'has-follow-ups' : ''}"
       data-testid="continuation-navigation"
       aria-label="Issue and pull request follow-up"
     >
@@ -4009,47 +4044,51 @@ ${execution.resolved_input_prompt}</pre>
           <!-- Why the run is waiting, failed or stopped comes first: it is
                the first question a reader of this page has. -->
           ${this.renderWaitingLine(execution)}
-          ${
-            errorLine
-              ? html`<div class="error-block-line">
-                  <div
-                    class="error-line"
-                    role="alert"
-                    data-testid="error-line"
-                    title=${execution.error_message || ''}
+          <!-- #1692: the error (or stop) line and the issue/PR links share
+               one row, so the timeline starts within the first screenful. -->
+          <div class="status-row">
+            ${
+              errorLine
+                ? html`<div class="error-block-line">
+                    <div
+                      class="error-line"
+                      role="alert"
+                      data-testid="error-line"
+                      title=${execution.error_message || ''}
+                    >
+                      <sl-icon name="exclamation-triangle"></sl-icon>
+                      <span class="error-text">${errorLine}</span>
+                    </div>
+                    ${
+                      execution.error_message
+                        ? html`<sl-button
+                            variant="text"
+                            size="small"
+                            class="show-full-error"
+                            data-testid="show-full-error"
+                            @click=${this.showFullError}
+                            >Show full error</sl-button
+                          >`
+                        : nothing
+                    }
+                  </div>`
+                : ''
+            }
+            ${
+              stopLine
+                ? html`<div
+                    class="stop-line"
+                    role="status"
+                    data-testid="stop-line"
                   >
-                    <sl-icon name="exclamation-triangle"></sl-icon>
-                    <span class="error-text">${errorLine}</span>
-                  </div>
-                  ${
-                    execution.error_message
-                      ? html`<sl-button
-                          variant="text"
-                          size="small"
-                          class="show-full-error"
-                          data-testid="show-full-error"
-                          @click=${this.showFullError}
-                          >Show full error</sl-button
-                        >`
-                      : nothing
-                  }
-                </div>`
-              : ''
-          }
-          ${
-            stopLine
-              ? html`<div
-                  class="stop-line"
-                  role="status"
-                  data-testid="stop-line"
-                >
-                  <sl-icon name="stop-circle"></sl-icon>
-                  <span>${stopLine}</span>
-                </div>`
-              : ''
-          }
+                    <sl-icon name="stop-circle"></sl-icon>
+                    <span>${stopLine}</span>
+                  </div>`
+                : ''
+            }
+            ${this.renderContinuationNavigation(execution)}
+          </div>
           ${this.renderHostSessions()}
-          ${this.renderContinuationNavigation(execution)}
           <!-- What this run delegated, and what that cost. Renders nothing
                for the overwhelming majority of runs, which delegate
                nothing. -->

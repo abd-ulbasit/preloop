@@ -604,6 +604,35 @@ describe('FlowExecutionView', () => {
     expect(shown.length).to.equal(rows.length - 2);
   });
 
+  it('never prints "Billing path not recorded" in the timeline (#1692)', async () => {
+    const element = (await fixture(
+      html`<flow-execution-view></flow-execution-view>`
+    )) as FlowExecutionView;
+    element.executionId = 'exec-1';
+    await element.updateComplete;
+    await waitUntil(
+      () =>
+        (element as any).execution?.id === 'exec-1' &&
+        !(element as any).isLoading,
+      'Execution view did not finish loading'
+    );
+    (element as any).gatewayEvents = Array.from({ length: 3 }, (_, i) => ({
+      id: `unbilled-${i}`,
+      execution_id: 'exec-1',
+      timestamp: new Date(
+        Date.parse('2026-03-09T10:00:00Z') + i * 1000
+      ).toISOString(),
+      type: 'model_gateway_call',
+      payload: { api_usage_id: `usage-u${i}`, request_id: `req-u${i}` },
+    }));
+    await element.updateComplete;
+    const rows = Array.from(
+      element.shadowRoot!.querySelectorAll('preloop-gateway-event')
+    ) as Array<HTMLElement & { hideBilling: boolean }>;
+    expect(rows.length).to.be.at.least(3);
+    expect(rows.every((row) => row.hideBilling)).to.equal(true);
+  });
+
   it('puts what the run was about under the flow name (wave 4)', async () => {
     const element = (await fixture(
       html`<flow-execution-view></flow-execution-view>`
