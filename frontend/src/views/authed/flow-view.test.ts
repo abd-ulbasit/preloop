@@ -218,10 +218,13 @@ describe('FlowView detail page language', () => {
       ) as HTMLElement;
       expect(pre.classList.contains('collapsed')).to.equal(true);
       const lineHeight = parseFloat(getComputedStyle(pre).lineHeight);
-      // Ten lines plus padding, and no inner scroll region.
-      expect(pre.getBoundingClientRect().height).to.be.below(
-        lineHeight * 10 + 60
-      );
+      // Exactly ten visible lines: the box minus its padding is 10 lines.
+      const style = getComputedStyle(pre);
+      const visible =
+        pre.getBoundingClientRect().height -
+        parseFloat(style.paddingTop) -
+        parseFloat(style.paddingBottom);
+      expect(visible / lineHeight).to.be.closeTo(10, 0.05);
       const toggle = element.shadowRoot.querySelector(
         '[data-prompt-toggle]'
       ) as HTMLElement;
