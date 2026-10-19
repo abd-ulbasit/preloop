@@ -212,3 +212,26 @@ def test_agent_page_skips_fallback_on_a_partial_agent_window() -> None:
     ]
     agents.append(_agent(enrollment_hostname="example-laptop"))
     assert _agent_page(agents, _laptop()) == []
+
+
+def test_agent_page_skips_fallback_past_the_device_window() -> None:
+    from preloop.services.fleet_map import SOURCE_LIMIT
+
+    user = models.User(id=uuid4(), account_id=uuid4(), is_superuser=True)
+    service = MagicMock()
+    service.devices_for_agent.return_value = []
+    extra = [_device(f"fp:{n}", f"other-{n}") for n in range(SOURCE_LIMIT)]
+    service.read.return_value = dict(truncated=False, items=[_laptop(), *extra])
+    module = "preloop.services.agent_device_links"
+    with (
+        patch(f"{module}.get_plugin_manager") as manager,
+        patch(f"{module}.crud"),
+        patch(
+            f"{module}.list_resources",
+            return_value=[_agent(enrollment_hostname="example-laptop")],
+        ),
+        patch(f"{module}.filter_viewable", side_effect=lambda db, u, k, rows: rows),
+        patch("preloop.services.fleet_map._allowed", return_value=True),
+    ):
+        manager.return_value.get_service.return_value = service
+        assert agent_device_links(MagicMock(), user=user, agent_id="agent-a") == []

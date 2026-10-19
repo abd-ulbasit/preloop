@@ -70,10 +70,11 @@ def _hostname_device_links(
     if not any(str(row.id) == str(agent_id) for row in agents):
         return []
     projection = read(db, account_id=user.account_id)
-    if projection.get("truncated"):
-        # A partial window cannot prove the hostname match is unique.
-        return []
     devices = projection["items"]
+    if projection.get("truncated") or len(devices) > SOURCE_LIMIT:
+        # A partial window cannot prove the match is unique; the fleet map
+        # applies the same two checks.
+        return []
     device_key = resolve_hostname_devices(devices, agents).get(str(agent_id))
     return [
         ManagedAgentDeviceSummary.model_validate(
