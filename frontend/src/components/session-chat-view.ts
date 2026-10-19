@@ -665,7 +665,7 @@ export class SessionChatView extends LitElement {
       padding: 0;
     }
     .load-earlier[disabled] {
-      color: var(--sl-color-neutral-500);
+      color: var(--console-meta-color);
       cursor: progress;
     }
 
