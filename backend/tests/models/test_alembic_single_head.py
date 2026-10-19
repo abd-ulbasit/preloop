@@ -458,4 +458,4 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     }
     customer_usage = script.get_revision("20261101_customer_usage_idx")
     assert customer_usage.down_revision == "20261031_activity_merge"
-    assert script.get_heads() == ["20261101_customer_usage_idx"]
+    assert script.get_heads() == ["20261102_restore_usage_action"]
