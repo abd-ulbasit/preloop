@@ -1049,14 +1049,14 @@ class ApprovalService:
         from fastapi import HTTPException
         from preloop.models.crud.owner_consent import get_by_approval_async
 
-        workflow = approval_request.approval_workflow
-        bound_user = (
-            (workflow.approval_config or {}).get("note_caller_user_id")
-            if workflow is not None
-            else None
-        )
-        if approval_request.tool_name == "send_note" and bound_user:
-            if user_id is None or str(user_id) != str(bound_user):
+        if approval_request.tool_name == "send_note":
+            workflow = approval_request.approval_workflow
+            bound_user = (
+                (workflow.approval_config or {}).get("note_caller_user_id")
+                if workflow is not None
+                else None
+            )
+            if bound_user and (user_id is None or str(user_id) != str(bound_user)):
                 raise HTTPException(
                     status_code=403,
                     detail="Only the sending agent's human can decide this note",
