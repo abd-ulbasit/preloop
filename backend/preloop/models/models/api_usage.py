@@ -11,7 +11,10 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Boolean, DateTime, Float, Integer, String
 
-from preloop.models.gateway_usage import AGENT_GATEWAY_PREDICATE
+from preloop.models.gateway_usage import (
+    AGENT_GATEWAY_PREDICATE,
+    CUSTOMER_GATEWAY_PREDICATE,
+)
 
 from .base import Base
 
@@ -342,6 +345,27 @@ class ApiUsage(Base):
                 "((meta_data ->> 'purpose') IS NULL OR "
                 "(meta_data ->> 'purpose') <> 'replay_validation')"
             ),
+        ),
+        # Reporting excludes governance analysis without fetching wide metadata.
+        # Old indexes remain for replay-only operational readers during rollout.
+        Index(
+            "ix_api_usage_customer_totals",
+            "account_id",
+            "timestamp",
+            postgresql_include=GATEWAY_TOTALS_INCLUDE,
+            postgresql_where=text(CUSTOMER_GATEWAY_PREDICATE),
+        ),
+        Index(
+            "ix_api_usage_customer_model_totals",
+            "account_id",
+            "ai_model_id",
+            "timestamp",
+            postgresql_include=[
+                column
+                for column in GATEWAY_TOTALS_INCLUDE
+                if column not in ("ai_model_id", "flow_id")
+            ],
+            postgresql_where=text(CUSTOMER_GATEWAY_PREDICATE),
         ),
         # Subscription-billed gateway rows (Spend subscription block). Few
         # rows, and without it the block was a sequential scan of the table.

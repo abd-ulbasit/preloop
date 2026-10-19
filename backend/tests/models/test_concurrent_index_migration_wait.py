@@ -64,7 +64,7 @@ def index_database() -> Iterator[Engine]:
                     "estimated_cost numeric, ai_model_id bigint, status_code integer, "
                     "prompt_tokens bigint, completion_tokens bigint, total_tokens bigint, "
                     "cache_read_tokens bigint, cache_creation_tokens bigint, "
-                    "model_alias text, provider_name text)"
+                    "model_alias text, provider_name text, flow_id bigint)"
                 )
             )
             connection.execute(
@@ -141,6 +141,18 @@ def index_database() -> Iterator[Engine]:
             "20261030_gateway_model_idx.py",
             "api_usage",
             "ix_api_usage_gateway_model_totals",
+            True,
+        ),
+        (
+            "20261101_customer_usage_idx.py",
+            "api_usage",
+            "ix_api_usage_customer_totals",
+            False,
+        ),
+        (
+            "20261101_customer_usage_idx.py",
+            "api_usage",
+            "ix_api_usage_customer_totals",
             True,
         ),
     ],
