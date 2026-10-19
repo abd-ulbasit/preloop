@@ -7,7 +7,9 @@ The agents registry sums each principal's gateway usage and reads its latest
 request. ``ix_api_usage_account_principal_ts`` finds the rows but every one
 was a heap fetch: 175k buffers for the founder account, 2.2 s on a cold cache
 in prod (#1694). This index carries the summed columns so both LATERAL reads
-stay inside the index. Built concurrently; restartable.
+stay inside the index. Built concurrently; restartable. Run
+``VACUUM (ANALYZE) api_usage`` after the build so the visibility map covers
+existing rows and the index-only scans skip the heap.
 """
 
 from alembic import op

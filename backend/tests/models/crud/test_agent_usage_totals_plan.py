@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from typing import Any, Callable
 
 from sqlalchemy import event, text
 from sqlalchemy.orm import Session
@@ -19,10 +20,12 @@ from preloop.models.crud.managed_agent import _usage_aggregates_for_principals
 
 INDEX = "ix_api_usage_principal_totals"
 ACCOUNT = "00000000-0000-0000-0000-0000000000a1"
-PRINCIPALS = [("claude_code", "claude-code-1"), ("codex", "codex-1")]
+PRINCIPALS = [("claude_code", "principal-1"), ("codex", "principal-2")]
 
 
-def _captured_usage_select(db_session: Session) -> tuple[str, dict]:
+def _captured_usage_select(
+    db_session: Session, account_id: str = ACCOUNT
+) -> tuple[str, dict]:
     statements: list[tuple[str, dict]] = []
 
     def _record(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
@@ -34,7 +37,7 @@ def _captured_usage_select(db_session: Session) -> tuple[str, dict]:
     try:
         _usage_aggregates_for_principals(
             db_session,
-            account_id=ACCOUNT,
+            account_id=account_id,
             principals=PRINCIPALS,
             start_date=datetime(2026, 1, 1, tzinfo=UTC),
         )
@@ -57,27 +60,44 @@ def test_gateway_predicate_is_a_literal(db_session: Session) -> None:
     assert "model_gateway" not in parameters.values()
 
 
-def test_principal_totals_plan_is_index_only(db_session: Session) -> None:
-    """Totals and latest-request LATERALs both stay inside the covering index."""
-    statement, parameters = _captured_usage_select(db_session)
+def test_principal_totals_plan_is_index_only(
+    db_session: Session, create_account: Callable[..., Any]
+) -> None:
+    """The planner picks the covering index over every valid competitor.
+
+    All ``api_usage`` indexes stay valid, including the principal-keyed
+    ``ix_api_usage_account_principal_ts`` and ``..._principal_id_ts``, on a
+    populated, analysed table; only sequential and bitmap scans are off.
+    """
+    account = create_account()
+    db_session.execute(
+        text(
+            """
+            INSERT INTO api_usage (
+                id, account_id, endpoint, method, status_code, duration,
+                action_type, runtime_principal_type, runtime_principal_id,
+                prompt_tokens, completion_tokens, total_tokens,
+                estimated_cost, model_alias, provider_name, timestamp
+            )
+            SELECT gen_random_uuid(), :account, '/v1/messages', 'POST',
+                   CASE WHEN n % 20 = 0 THEN 500 ELSE 200 END, 0.1,
+                   CASE WHEN n % 5 = 0 THEN 'api_request' ELSE 'model_gateway' END,
+                   (ARRAY['claude_code', 'codex', 'flow_execution'])[n % 3 + 1],
+                   'principal-' || (n % 7),
+                   10, 5, 15, 0.001, 'model', 'provider',
+                   now() - n * interval '1 minute'
+            FROM generate_series(1, 5000) AS n
+            """
+        ),
+        {"account": str(account.id)},
+    )
+    db_session.execute(text("ANALYZE api_usage"))
+    statement, parameters = _captured_usage_select(db_session, str(account.id))
     inlined = re.sub(
         r"%\(([^)]+)\)s", lambda m: _literal(parameters[m.group(1)]), statement
     )
     db_session.execute(text("SET LOCAL enable_seqscan = off"))
     db_session.execute(text("SET LOCAL enable_bitmapscan = off"))
-    db_session.execute(
-        text(
-            """
-            UPDATE pg_index AS i SET indisvalid = false
-            FROM pg_class AS c
-            WHERE c.oid = i.indexrelid
-              AND i.indrelid = 'api_usage'::regclass
-              AND c.relname NOT IN (:keep, 'ix_api_usage_account_principal_ts')
-            """
-        ),
-        {"keep": INDEX},
-    )
     rows = db_session.connection().exec_driver_sql("EXPLAIN " + inlined)
     plan = "\n".join(row[0] for row in rows)
     assert plan.count(f"Index Only Scan using {INDEX}") == 2, plan
-    assert "Index Scan using ix_api_usage_account_principal_ts" not in plan, plan

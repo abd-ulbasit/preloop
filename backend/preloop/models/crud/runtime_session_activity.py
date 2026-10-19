@@ -973,8 +973,9 @@ class CRUDRuntimeSessionActivity(CRUDBase[RuntimeSessionActivity]):
             self.model.runtime_session_id == runtime_session_id,
             self.model.activity_type.notin_(HOOK_TURN_ACTIVITY_TYPES),
         )
-        # Pick the newest ids first from the session/timestamp index, then
-        # project (and strip) metadata only for those rows. Computing the slim
+        # Pick the newest ids first (the runtime_session_id index finds the
+        # rows; the sort reads only id and timestamp), then project (and
+        # strip) metadata only for those rows. Computing the slim
         # CASE before the top-N sort detoasted every row of a long session:
         # 8,178 rows and 1.78 GB of metadata took 10 s on prod (#1689).
         newest_ids = (
