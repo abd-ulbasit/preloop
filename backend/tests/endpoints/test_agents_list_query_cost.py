@@ -170,3 +170,75 @@ def test_list_statement_does_not_group_the_account_usage(
         and "api_usage.runtime_session_id IN" in sql
     ]
     assert len(usage_by_session) == 1, statements
+
+
+def test_principal_usage_is_read_per_principal(
+    db_session: Session, test_user: Any
+) -> None:
+    """Totals and latest model per agent principal, one LATERAL pair each.
+
+    Grouping every listed principal's rows in one statement sorted all of
+    them (215k spilled to disk on the founder account) and ran a window over
+    the same rows for the latest model: ~0.6 s of the agents list on prod.
+    """
+    from preloop.models.crud.managed_agent import _usage_aggregates_for_principals
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+
+    def usage(principal_id: str, minutes_ago: int, alias: str, status: int = 200):
+        db_session.add(
+            models.ApiUsage(
+                account_id=test_user.account_id,
+                endpoint="/v1/messages",
+                method="POST",
+                status_code=status,
+                duration=0.1,
+                action_type="model_gateway",
+                runtime_principal_type="claude_code",
+                runtime_principal_id=principal_id,
+                model_alias=alias,
+                provider_name="anthropic",
+                prompt_tokens=10,
+                completion_tokens=2,
+                total_tokens=12,
+                estimated_cost=0.5,
+                timestamp=now - timedelta(minutes=minutes_ago),
+            )
+        )
+
+    usage("busy", 30, "old-model")
+    usage("busy", 5, "new-model")
+    usage("busy", 10, "mid-model", status=500)
+    db_session.flush()
+
+    statements: List[str] = []
+
+    def record(conn, cursor, statement, *args):
+        statements.append(" ".join(statement.split()))
+
+    engine = db_session.get_bind().engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        result = _usage_aggregates_for_principals(
+            db_session,
+            account_id=str(test_user.account_id),
+            principals=[("claude_code", "busy"), ("claude_code", "idle")],
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    busy = result[("claude_code", "busy")]
+    assert busy["total_requests"] == 3
+    assert busy["successful_requests"] == 2
+    assert busy["failed_requests"] == 1
+    assert busy["total_tokens"] == 36
+    assert busy["estimated_cost"] == 1.5
+    assert busy["latest_model_alias"] == "new-model"
+    idle = result[("claude_code", "idle")]
+    assert idle["total_requests"] == 0
+    assert idle["latest_model_alias"] is None
+
+    usage_reads = [sql for sql in statements if "FROM api_usage" in sql]
+    assert len(usage_reads) == 1
+    assert "LATERAL" in usage_reads[0]
+    assert "row_number" not in usage_reads[0]

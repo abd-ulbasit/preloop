@@ -7,7 +7,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import DateTime, and_, case, cast, func, or_, tuple_
+from sqlalchemy import (
+    DateTime,
+    String,
+    and_,
+    case,
+    cast,
+    column,
+    func,
+    or_,
+    select,
+    true,
+    tuple_,
+    values,
+)
 from sqlalchemy.orm import Session
 
 from preloop.utils.agent_kind import normalize_agent_kind
@@ -241,14 +254,33 @@ def _usage_aggregates_for_principals(
         if key in results:
             results[key]["session_count"] = int(row.session_count or 0)
 
-    usage_principal_filter = tuple_(
-        ApiUsage.runtime_principal_type,
-        ApiUsage.runtime_principal_id,
-    ).in_(unique_principals)
-    usage_q = (
-        db.query(
-            ApiUsage.runtime_principal_type,
-            ApiUsage.runtime_principal_id,
+    # One LATERAL pair per principal: its totals (a plain aggregate over its
+    # own index range) and its latest request (the head of
+    # ix_api_usage_account_principal_ts). Grouping every principal's rows in
+    # one statement sorted all of them first: 215k rows spilled to disk and a
+    # window over the same rows, ~0.6 s for the founder account on prod
+    # (#1694).
+    principal_rows = values(
+        column("principal_type", String),
+        column("principal_id", String),
+        name="listed_principals",
+    ).data(unique_principals)
+
+    def _principal_usage_filter() -> list[Any]:
+        conditions = [
+            ApiUsage.account_id == account_id,
+            ApiUsage.action_type == "model_gateway",
+            ApiUsage.runtime_principal_type == principal_rows.c.principal_type,
+            ApiUsage.runtime_principal_id == principal_rows.c.principal_id,
+        ]
+        if start_date:
+            conditions.append(ApiUsage.timestamp >= start_date)
+        if end_date:
+            conditions.append(ApiUsage.timestamp <= end_date)
+        return conditions
+
+    totals = (
+        select(
             func.count(ApiUsage.id).label("request_count"),
             func.coalesce(
                 func.sum(case((ApiUsage.status_code < 400, 1), else_=0)), 0
@@ -266,67 +298,45 @@ def _usage_aggregates_for_principals(
             ),
             *cache_split_columns(),
         )
-        .filter(
-            ApiUsage.account_id == account_id,
-            ApiUsage.action_type == "model_gateway",
-            usage_principal_filter,
-        )
-        .group_by(
-            ApiUsage.runtime_principal_type,
-            ApiUsage.runtime_principal_id,
-        )
+        .where(*_principal_usage_filter())
+        .lateral("principal_usage_totals")
     )
-    if start_date:
-        usage_q = usage_q.filter(ApiUsage.timestamp >= start_date)
-    if end_date:
-        usage_q = usage_q.filter(ApiUsage.timestamp <= end_date)
-    for row in usage_q.all():
-        key = (row.runtime_principal_type, row.runtime_principal_id)
+    latest = (
+        select(
+            ApiUsage.model_alias.label("latest_model_alias"),
+            ApiUsage.provider_name.label("latest_provider_name"),
+            ApiUsage.timestamp.label("last_request_at"),
+        )
+        .where(*_principal_usage_filter())
+        .order_by(ApiUsage.timestamp.desc(), ApiUsage.id.desc())
+        .limit(1)
+        .lateral("principal_latest_usage")
+    )
+    usage_rows = db.execute(
+        select(
+            principal_rows.c.principal_type,
+            principal_rows.c.principal_id,
+            totals,
+            latest,
+        ).select_from(principal_rows.join(totals, true()).outerjoin(latest, true()))
+    ).all()
+    for row in usage_rows:
+        key = (row.principal_type, row.principal_id)
         if key not in results:
             continue
-        results[key].update(
-            {
-                "total_requests": int(row.request_count or 0),
-                "successful_requests": int(row.success_count or 0),
-                "failed_requests": int(row.error_count or 0),
-                "prompt_tokens": int(row.prompt_tokens or 0),
-                "completion_tokens": int(row.completion_tokens or 0),
-                "total_tokens": int(row.total_tokens or 0),
-                "estimated_cost": float(row.estimated_cost or 0.0),
-                **cache_split_from_row(row),
-            }
-        )
-
-    latest_base = db.query(
-        ApiUsage.runtime_principal_type,
-        ApiUsage.runtime_principal_id,
-        ApiUsage.model_alias.label("latest_model_alias"),
-        ApiUsage.provider_name.label("latest_provider_name"),
-        ApiUsage.timestamp.label("last_request_at"),
-        func.row_number()
-        .over(
-            partition_by=(
-                ApiUsage.runtime_principal_type,
-                ApiUsage.runtime_principal_id,
-            ),
-            order_by=(ApiUsage.timestamp.desc(), ApiUsage.id.desc()),
-        )
-        .label("rn"),
-    ).filter(
-        ApiUsage.account_id == account_id,
-        ApiUsage.action_type == "model_gateway",
-        usage_principal_filter,
-    )
-    if start_date:
-        latest_base = latest_base.filter(ApiUsage.timestamp >= start_date)
-    if end_date:
-        latest_base = latest_base.filter(ApiUsage.timestamp <= end_date)
-    latest_subq = latest_base.subquery()
-    latest_rows = db.query(latest_subq).filter(latest_subq.c.rn == 1).all()
-    for row in latest_rows:
-        key = (row.runtime_principal_type, row.runtime_principal_id)
-        if key not in results:
-            continue
+        if int(row.request_count or 0):
+            results[key].update(
+                {
+                    "total_requests": int(row.request_count or 0),
+                    "successful_requests": int(row.success_count or 0),
+                    "failed_requests": int(row.error_count or 0),
+                    "prompt_tokens": int(row.prompt_tokens or 0),
+                    "completion_tokens": int(row.completion_tokens or 0),
+                    "total_tokens": int(row.total_tokens or 0),
+                    "estimated_cost": float(row.estimated_cost or 0.0),
+                    **cache_split_from_row(row),
+                }
+            )
         results[key]["latest_model_alias"] = row.latest_model_alias
         results[key]["latest_provider_name"] = row.latest_provider_name
         results[key]["last_request_at"] = row.last_request_at

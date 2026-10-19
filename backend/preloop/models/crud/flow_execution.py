@@ -16,6 +16,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     true,
+    union,
 )
 from sqlalchemy.orm import (
     Session,
@@ -1817,26 +1818,32 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
 
         resume_root = literal_column(RESUME_ROOT_SQL, type_=String)
         chain_key = func.coalesce(resume_root, cast(FlowExecution.id, String))
-        members = (
-            select(
-                chain_key.label("chain_root"),
-                FlowExecution.id.label("execution_id"),
-                FlowExecution.total_tokens.label("stored_tokens"),
-                FlowExecution.estimated_cost.label("stored_cost"),
+
+        def _members(condition: Any) -> Any:
+            return (
+                select(
+                    chain_key.label("chain_root"),
+                    FlowExecution.id.label("execution_id"),
+                    FlowExecution.total_tokens.label("stored_tokens"),
+                    FlowExecution.estimated_cost.label("stored_cost"),
+                )
+                .join(Flow, Flow.id == FlowExecution.flow_id)
+                .where(Flow.account_id == account_id, condition)
             )
-            .join(Flow, Flow.id == FlowExecution.flow_id)
-            .where(
-                Flow.account_id == account_id,
-                or_(
-                    FlowExecution.id.in_(list(roots)),
-                    resume_root.in_(list(root_texts)),
-                ),
-            )
-            .subquery()
-        )
+
+        # Two branches, each an index lookup: the publishing runs by primary
+        # key, the repair turns through the partial resume-root index (whose
+        # predicate the IS NOT NULL repeats). One OR across both made the
+        # planner filter every execution of the account's flows instead.
+        members = union(
+            _members(FlowExecution.id.in_(list(roots))),
+            _members(and_(resume_root.isnot(None), resume_root.in_(list(root_texts)))),
+        ).subquery()
+        # LATERAL: one ix_api_usage_flow_execution_id range per member. As a
+        # semi join the planner walked that whole index (every execution's
+        # usage) and kept the page's rows: ~450 ms on prod for 100 rows.
         usage = (
             select(
-                ApiUsage.flow_execution_id.label("execution_id"),
                 func.count(ApiUsage.id).label("requests"),
                 func.coalesce(func.sum(ApiUsage.total_tokens), 0).label("tokens"),
                 func.round(cast(func.sum(ApiUsage.estimated_cost), Numeric), 4).label(
@@ -1844,12 +1851,11 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
                 ),
             )
             .where(
+                ApiUsage.flow_execution_id == members.c.execution_id,
                 ApiUsage.action_type == "model_gateway",
-                ApiUsage.flow_execution_id.in_(select(members.c.execution_id)),
                 exclude_replay_usage_condition(),
             )
-            .group_by(ApiUsage.flow_execution_id)
-            .subquery()
+            .lateral("usage")
         )
         has_usage = func.coalesce(usage.c.requests, 0) > 0
         member_tokens = case(
@@ -1874,9 +1880,7 @@ class CRUDFlowExecution(CRUDBase[FlowExecution]):
                 func.count(members.c.execution_id),
                 func.coalesce(func.sum(unpriced_member), 0).label("unpriced"),
             )
-            .select_from(
-                members.outerjoin(usage, usage.c.execution_id == members.c.execution_id)
-            )
+            .select_from(members.outerjoin(usage, true()))
             .group_by(members.c.chain_root)
         ).all()
 
