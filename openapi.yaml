@@ -12562,34 +12562,6 @@ paths:
           description: Credential verification unavailable
       x-restricted-ci: deny
   /api/v1/ai-models:
-    get:
-      tags:
-      - AI Models
-      - AI Models
-      summary: List AI Models
-      description: List all AI Models associated with the authenticated user's account.
-      operationId: list_ai_models_api_v1_ai_models_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  anyOf:
-                  - $ref: '#/components/schemas/SharedResourceRead'
-                  - $ref: '#/components/schemas/AIModelRead'
-                type: array
-                title: Response List Ai Models Api V1 Ai Models Get
-        '401':
-          description: Invalid or expired credential
-        '403':
-          description: Operation or resource denied for restricted CI credentials
-        '503':
-          description: Credential verification unavailable
-      security:
-      - bearerAuth: []
-      x-restricted-ci: deny
     post:
       tags:
       - AI Models
@@ -12597,12 +12569,14 @@ paths:
       summary: Create AI Model
       description: Create a new AI Model for the authenticated user's account.
       operationId: create_ai_model_api_v1_ai_models_post
+      security:
+      - bearerAuth: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/AIModelCreate'
-        required: true
       responses:
         '201':
           description: Successful Response
@@ -12622,8 +12596,54 @@ paths:
           description: Operation or resource denied for restricted CI credentials
         '503':
           description: Credential verification unavailable
+      x-restricted-ci: deny
+    get:
+      tags:
+      - AI Models
+      - AI Models
+      summary: List AI Models
+      description: List all AI Models associated with the authenticated user's account.
+      operationId: list_ai_models_api_v1_ai_models_get
       security:
       - bearerAuth: []
+      parameters:
+      - name: default_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Only the models marked default. The Tools list asks this to
+            know whether a default model exists, instead of reading every model with
+            its pricing (75 KB of its first load on prod, #1695).'
+          default: false
+          title: Default Only
+        description: 'Only the models marked default. The Tools list asks this to
+          know whether a default model exists, instead of reading every model with
+          its pricing (75 KB of its first load on prod, #1695).'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  anyOf:
+                  - $ref: '#/components/schemas/SharedResourceRead'
+                  - $ref: '#/components/schemas/AIModelRead'
+                title: Response List Ai Models Api V1 Ai Models Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
       x-restricted-ci: deny
   /api/v1/ai-models/overview:
     get:

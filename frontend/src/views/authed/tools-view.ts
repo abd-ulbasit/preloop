@@ -678,7 +678,10 @@ export class ToolsView extends LitElement {
         getApprovalWorkflows().catch(() => this.approvalPolicies),
         getFeatures().catch(() => ({ features: this.features })),
         getUserProfile().catch(() => this.currentUser),
-        getAIModels().catch(() => []),
+        // Only "is there a default model" is read from this, so only the
+        // default models are fetched: the full catalog was a third of the
+        // page's first load (#1695).
+        getAIModels({ defaultOnly: true }).catch(() => []),
       ]);
 
       if (generation !== this.toolsLoadGeneration) return;

@@ -1423,3 +1423,45 @@ def test_stored_bedrock_metadata_region_overrides_imported_secret(
         "aws_bearer_token_bedrock": "synthetic-key",
         "aws_region_name": "us-west-2" if metadata_region else "us-east-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_ai_models_default_only(
+    mock_account: Account, mocker: MockerFixture
+) -> None:
+    """The Tools list asks for the default models only, not the catalog (#1695)."""
+    from types import SimpleNamespace
+
+    own = [
+        SimpleNamespace(
+            id=uuid.uuid4(), account_id=mock_account.account_id, is_default=flag
+        )
+        for flag in (False, True, False)
+    ]
+    crud = mocker.patch("preloop.api.endpoints.ai_models.crud_ai_model")
+    crud.get_selectable_for_account.return_value = own
+    crud.configured_account_default_kinds.return_value = set()
+    mocker.patch(
+        "preloop.models.crud.resource_share.crud_resource_share.public_list",
+        return_value=[],
+    )
+    mocker.patch(
+        "preloop.plugins.account_hooks.filter_viewable",
+        side_effect=lambda db, user, kind, rows: rows,
+    )
+    mocker.patch(
+        "preloop.api.endpoints.ai_models._apply_tariff_visibility",
+        side_effect=lambda rows, is_admin: rows,
+    )
+
+    everything = await maybe_await(
+        ai_models.list_ai_models(db=MagicMock(), current_user=mock_account)
+    )
+    defaults = await maybe_await(
+        ai_models.list_ai_models(
+            db=MagicMock(), current_user=mock_account, default_only=True
+        )
+    )
+
+    assert len(everything) == 3
+    assert defaults == [own[1]]

@@ -4309,8 +4309,17 @@ export async function getApiKeyGatewayUsageSummary(
 }
 
 // AI Models
-export async function getAIModels(): Promise<AIModel[]> {
-  const response = await fetchWithAuth('/api/v1/ai-models');
+export async function getAIModels(
+  options: {
+    /** Only the default models: for "is there a default?" checks (#1695). */
+    defaultOnly?: boolean;
+  } = {}
+): Promise<AIModel[]> {
+  const response = await fetchWithAuth(
+    options.defaultOnly
+      ? '/api/v1/ai-models?default_only=true'
+      : '/api/v1/ai-models'
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch AI models');
   }
