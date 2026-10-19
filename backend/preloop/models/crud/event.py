@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..models.event import Event
@@ -16,6 +17,45 @@ from .base import CRUDBase
 
 class CRUDEvent(CRUDBase[Event]):
     """CRUD operations for events."""
+
+    def report_operator_events(
+        self,
+        db: Session,
+        *,
+        start: datetime,
+        end: datetime,
+        account_id: UUID | None = None,
+    ) -> list[Event]:
+        """Return private assembly failures in a half-open operator window.
+
+        Callers must require platform administrator access. Customer analytics
+        must never use this ledger. A timestamp/id order makes results stable.
+        """
+        query = db.query(Event).filter(
+            Event.event_type == "report_operator_failure",
+            Event.timestamp >= start,
+            Event.timestamp < end,
+        )
+        if account_id is not None:
+            query = query.filter(Event.account_id == account_id)
+        return query.order_by(Event.timestamp.desc(), Event.id).all()
+
+    def operator_digest_sent(self, db: Session, *, day: str) -> bool:
+        """Serialize operator delivery globally and check the durable day marker.
+
+        The transaction must remain open through delivery and marker creation.
+        This lock is independent of whichever accounts happened to fail today.
+        """
+        db.execute(text("SELECT pg_advisory_xact_lock(190245, 1)"))
+        return (
+            db.query(Event.id)
+            .filter(
+                Event.event_type == "report_operator_email",
+                Event.event_data["day"].astext == day,
+            )
+            .first()
+            is not None
+        )
 
     def log_event(
         self,
