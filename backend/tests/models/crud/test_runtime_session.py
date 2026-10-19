@@ -455,3 +455,114 @@ def test_session_list_and_detail_support_unmigrated_optional_columns(
     assert detail["parent_session_id"] is None
     if not summary_available:
         assert detail["summary"] is None
+
+
+def _gateway_usage(account_id, *, session_id=None, execution_id=None, tokens=10):
+    return ApiUsage(
+        id=uuid4(),
+        account_id=account_id,
+        endpoint="/v1/messages",
+        method="POST",
+        status_code=200,
+        duration=0.1,
+        action_type="model_gateway",
+        runtime_session_id=session_id,
+        flow_execution_id=execution_id,
+        prompt_tokens=tokens,
+        completion_tokens=0,
+        total_tokens=tokens,
+        estimated_cost=0.01,
+        timestamp=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+
+def test_session_summary_matches_usage_by_the_sessions_own_ids(
+    db_session, create_account
+) -> None:
+    """The detail summary names the session in its usage join (#1689).
+
+    Matched through the correlated OR, Postgres read every gateway row of the
+    account to keep one session's: 0.39 s on the founder's 294k rows, 13 ms
+    with the ids as constants. Totals stay the same, legacy flow-execution
+    usage included.
+    """
+    from sqlalchemy import event
+
+    from preloop.models.crud import crud_flow, crud_flow_execution
+    from preloop.models.schemas.flow import FlowCreate
+    from preloop.models.schemas.flow_execution import FlowExecutionCreate
+
+    account = create_account()
+    started = datetime.now(UTC) - timedelta(hours=1)
+    flow = crud_flow.create(
+        db=db_session,
+        flow_in=FlowCreate(
+            name="Summary join flow",
+            prompt_template="Test",
+            trigger_event_source="github",
+            trigger_event_types=["test"],
+            agent_type="codex",
+            agent_config={},
+            allowed_mcp_servers=[],
+            allowed_mcp_tools=[],
+            account_id=account.id,
+        ),
+        account_id=account.id,
+    )
+    execution_id = crud_flow_execution.create(
+        db_session, FlowExecutionCreate(flow_id=flow.id, status="RUNNING")
+    ).id
+    session = RuntimeSession(
+        id=uuid4(),
+        account_id=account.id,
+        session_source_type="flow_execution",
+        session_source_id=str(execution_id),
+        started_at=started,
+        last_activity_at=started,
+    )
+    other = RuntimeSession(
+        id=uuid4(),
+        account_id=account.id,
+        session_source_type="managed_agent",
+        session_source_id="other",
+        started_at=started,
+        last_activity_at=started,
+    )
+    db_session.add_all([session, other])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _gateway_usage(account.id, session_id=session.id, tokens=10),
+            # Legacy rows: bound to the execution, not the session.
+            _gateway_usage(account.id, execution_id=execution_id, tokens=20),
+            _gateway_usage(account.id, session_id=other.id, tokens=400),
+        ]
+    )
+    db_session.flush()
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, *args):
+        statements.append(" ".join(statement.split()))
+
+    engine = db_session.get_bind().engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        summary = crud_runtime_session.get_account_session_summary(
+            db_session, account_id=str(account.id), runtime_session_id=str(session.id)
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert summary["total_requests"] == 2
+    assert summary["total_tokens"] == 30
+    aggregate = next(sql for sql in statements if "count(api_usage.id)" in sql)
+    assert "api_usage.runtime_session_id = runtime_session.id" not in aggregate
+    assert "api_usage.runtime_session_id = %(" in aggregate
+
+    assert (
+        crud_runtime_session.get_account_session_summary(
+            db_session, account_id=str(account.id), runtime_session_id=str(uuid4())
+        )
+        is None
+    )

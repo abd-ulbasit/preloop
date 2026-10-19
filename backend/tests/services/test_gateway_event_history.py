@@ -155,3 +155,68 @@ def test_no_window_leaves_the_oldest_event_whole():
     result = elide_replayed_history(events)
     preview = result[-1]["payload"]["conversation_preview"]
     assert "history_window_start" not in preview["metadata"]
+
+
+def _with_activity(events: list[dict]) -> list[dict]:
+    """Give each event the structured tool activity its replayed history holds."""
+    oldest_first = sorted(events, key=lambda event: event["timestamp"])
+    entries: list[dict] = []
+    for index, event in enumerate(oldest_first):
+        entries = [
+            *entries,
+            {"id": f"c{index}", "direction": "call", "name": "bash", "arguments": "ls"},
+            {"id": f"c{index}", "direction": "result", "name": "bash", "result": "ok"},
+            # An entry without a provider id is never merged or elided.
+            {"id": None, "direction": "call", "name": "bash", "arguments": "pwd"},
+        ]
+        event["payload"]["tool_activity"] = {
+            "entries": list(entries),
+            "truncated": False,
+            "dialect": "openai",
+        }
+    return events
+
+
+def test_tool_activity_already_carried_is_dropped():
+    """Replayed tool activity was 662 of 762 KB on a heavy page (#1689)."""
+    events = _with_activity(_session(4))
+    result = elide_replayed_history(events)
+    by_id = {event["id"]: event["payload"]["tool_activity"] for event in result}
+    oldest, newest = by_id["event-0"], by_id["event-3"]
+    assert [e["id"] for e in oldest["entries"]] == ["c0", "c0", None]
+    assert oldest["history_elided_count"] == 0
+    # The newest event keeps only its own call, plus every id-less entry.
+    kept = [(e["id"], e["direction"]) for e in newest["entries"]]
+    assert ("c3", "call") in kept and ("c3", "result") in kept
+    assert not [k for k in kept if k[0] in ("c0", "c1", "c2")]
+    assert sum(1 for k in kept if k[0] is None) == 4
+    assert newest["history_elided_count"] == 6
+    # Every call and result is still on the page exactly once.
+    seen = [
+        (e["id"], e["direction"])
+        for activity in by_id.values()
+        for e in activity["entries"]
+        if e["id"]
+    ]
+    assert sorted(seen) == sorted(
+        (f"c{i}", d) for i in range(4) for d in ("call", "result")
+    )
+
+
+def test_tool_activity_with_new_content_is_kept():
+    events = _with_activity(_session(2))
+    newest = max(events, key=lambda event: event["timestamp"])
+    newest["payload"]["tool_activity"]["entries"][1] = {
+        "id": "c0",
+        "direction": "result",
+        "name": "bash",
+        "result": "a later, different result",
+    }
+    result = elide_replayed_history(events)
+    newest_out = max(result, key=lambda event: event["timestamp"])
+    results = [
+        e["result"]
+        for e in newest_out["payload"]["tool_activity"]["entries"]
+        if e.get("direction") == "result" and e.get("id") == "c0"
+    ]
+    assert results == ["a later, different result"]

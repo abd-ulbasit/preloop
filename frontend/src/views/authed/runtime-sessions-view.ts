@@ -2982,11 +2982,18 @@ export class RuntimeSessionsView extends LitElement {
                 <sl-option value="document">Document</sl-option>
                 <sl-option value="audio">Audio</sl-option>
               </sl-select>
-              <div class="filter-actions">
-                <sl-button variant="default" @click=${this.clearFilters}>
-                  Clear filters
-                </sl-button>
-              </div>
+              ${
+                // Only when there is something to clear: on the default view
+                // the button wrapped the filters onto a second row and pushed
+                // the conversation down (#1689).
+                this.hasActiveFilters()
+                  ? html`<div class="filter-actions">
+                      <sl-button variant="default" @click=${this.clearFilters}>
+                        Clear filters
+                      </sl-button>
+                    </div>`
+                  : nothing
+              }
               <span slot="count">${this.sessionCountLabel}</span>
             </list-toolbar>
             ${this.renderEmbeddingSettings()}

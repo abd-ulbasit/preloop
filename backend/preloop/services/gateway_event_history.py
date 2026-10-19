@@ -42,6 +42,33 @@ def _tool_signature(entry: Any) -> str | None:
     )
 
 
+def _tool_activity_signature(entry: Any) -> str | None:
+    """Identity of one ``tool_activity`` entry, or None when it has none.
+
+    Only entries with the provider's call id are elided, and only when their
+    content is identical: the console merges entries by that id across the
+    events of a page (``normalizeToolCalls``), so a repeat adds nothing.
+    """
+    if not isinstance(entry, dict):
+        return None
+    call_id = entry.get("id")
+    if not isinstance(call_id, str) or not call_id.strip():
+        return None
+    return json.dumps(
+        [
+            call_id,
+            entry.get("direction"),
+            entry.get("name"),
+            entry.get("arguments"),
+            entry.get("result"),
+            entry.get("is_error"),
+            entry.get("redacted"),
+            entry.get("truncated"),
+        ],
+        default=str,
+    )
+
+
 def _last_user_index(messages: list[Any]) -> int | None:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
@@ -78,6 +105,7 @@ def elide_replayed_history(
     """
     seen_messages: set[str] = set()
     seen_tools: set[str] = set()
+    seen_activity: set[str] = set()
     oldest_first = sorted(
         range(len(events)),
         key=lambda i: (str(events[i].get("timestamp") or ""), i),
@@ -146,6 +174,29 @@ def elide_replayed_history(
                     seen_tools.add(signature)
                 new_tools.append(entry)
             new_payload["tools"] = new_tools
+
+        # Structured tool activity is recovered from the request body, which
+        # replays the conversation, so every event repeats the calls before
+        # it: 662 of 762 KB on a page of the heaviest prod session (#1689).
+        # A repeat of an entry an older event on the page carried is elided.
+        activity = payload.get("tool_activity")
+        entries = activity.get("entries") if isinstance(activity, dict) else None
+        if isinstance(activity, dict) and isinstance(entries, list):
+            new_entries: list[Any] = []
+            activity_elided = 0
+            for entry in entries:
+                signature = _tool_activity_signature(entry)
+                if signature is not None:
+                    if signature in seen_activity:
+                        activity_elided += 1
+                        continue
+                    seen_activity.add(signature)
+                new_entries.append(entry)
+            new_payload["tool_activity"] = {
+                **activity,
+                "entries": new_entries,
+                "history_elided_count": activity_elided,
+            }
 
         result[position] = {**event, "payload": new_payload}
     return result

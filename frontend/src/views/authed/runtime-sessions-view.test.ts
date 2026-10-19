@@ -1040,18 +1040,24 @@ describe('RuntimeSessionsView', () => {
       const toolbar = element.shadowRoot!.querySelector('list-toolbar') as any;
       await toolbar.updateComplete;
       await new Promise((resolve) => requestAnimationFrame(resolve));
+      // Nothing to clear on the default view, so no Clear filters button:
+      // in the real 1440 layout it wrapped onto a second row.
+      expect(toolbar.querySelector('.filter-actions')).to.equal(null);
       const controls = [
         toolbar.shadowRoot!.querySelector('sl-input.search-input'),
         ...Array.from(toolbar.querySelectorAll('sl-select')),
-        toolbar.querySelector('.filter-actions'),
       ] as HTMLElement[];
-      expect(controls.length).to.equal(6);
+      expect(controls.length).to.equal(5);
       const bottoms = controls.map((node) =>
         Math.round(node.getBoundingClientRect().bottom)
       );
       for (const bottom of bottoms) {
         expect(Math.abs(bottom - bottoms[0])).to.be.at.most(2);
       }
+      // A filter that differs from the default brings the button back.
+      (element as any).status = 'active';
+      await element.updateComplete;
+      expect(toolbar.querySelector('.filter-actions')).to.not.equal(null);
     } finally {
       await setViewport({ width: 1280, height: 800 });
     }
