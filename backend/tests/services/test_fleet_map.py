@@ -1145,3 +1145,29 @@ def test_ambiguous_inventory_entry_keeps_its_discovered_node(
     assert _hosted(edges, "fp:laptop") == {"agent:discovered:runner:cursor_cli"}
     for aid in ("agent:agent-one", "agent:agent-two"):
         assert "unknown_device" in nodes[aid].gaps
+
+
+def test_partial_agent_window_places_nothing_by_hostname(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    from preloop.services.fleet_map import SOURCE_LIMIT
+
+    agents = [agent("agent-x", enrollment_hostname="dimitriss-macbook-pro")]
+    agents += [agent(f"agent-{n}", agent_kind="cursor") for n in range(SOURCE_LIMIT)]
+    # The capped graph may drop the node, so check the resolver is never asked.
+    with patch(f"{MODULE}.resolve_hostname_devices") as resolve:
+        _fleet(sources, agents, [_laptop(user_ids=())])
+    resolve.assert_not_called()
+
+
+def test_truncated_device_projection_places_nothing_by_hostname(
+    sources: tuple[MagicMock, MagicMock],
+) -> None:
+    crud, manager = sources
+    crud.crud_managed_agent.get_multi.return_value = [
+        agent("agent-x", enrollment_hostname="dimitriss-macbook-pro")
+    ]
+    service = manager.return_value.get_service.return_value = MagicMock()
+    service.read.return_value = dict(truncated=True, items=[_laptop(user_ids=())])
+    graph = build_fleet_map(MagicMock(), user=viewer())
+    assert not any(e.kind == "hosts" for e in graph.edges)

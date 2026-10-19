@@ -57,20 +57,17 @@ def _hostname_device_links(
         return []
     # Resolve against the same agent source the fleet map reads, so sibling
     # agents make a match ambiguous here exactly as they do on the map.
-    agents = filter_viewable(
+    rows = list_resources(
         db,
-        user,
-        VISIBLE_MANAGED_AGENT,
-        list_resources(
-            db,
-            source="agents",
-            account_id=str(user.account_id),
-            limit=SOURCE_LIMIT + 1,
-        ),
+        source="agents",
+        account_id=str(user.account_id),
+        limit=SOURCE_LIMIT + 1,
     )
-    if len(agents) > SOURCE_LIMIT or not any(
-        str(row.id) == str(agent_id) for row in agents
-    ):
+    if len(rows) > SOURCE_LIMIT:
+        # The fleet map skips the fallback on a partial window too.
+        return []
+    agents = filter_viewable(db, user, VISIBLE_MANAGED_AGENT, rows)
+    if not any(str(row.id) == str(agent_id) for row in agents):
         return []
     projection = read(db, account_id=user.account_id)
     if projection.get("truncated"):

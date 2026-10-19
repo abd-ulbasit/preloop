@@ -202,3 +202,13 @@ def test_two_plausible_agents_of_one_kind_are_not_folded() -> None:
     one = _agent(id="agent-1", agent_kind="cursor", enrollment_hostname="laptop")
     two = _agent(id="agent-2", agent_kind="cursor", enrollment_hostname=None)
     assert resolve_hostname_devices([_inventory_device("cursor_cli")], [one, two]) == {}
+
+
+def test_agent_page_skips_fallback_on_a_partial_agent_window() -> None:
+    from preloop.services.fleet_map import SOURCE_LIMIT
+
+    agents = [
+        _agent(id=f"agent-{n}", enrollment_hostname=None) for n in range(SOURCE_LIMIT)
+    ]
+    agents.append(_agent(enrollment_hostname="example-laptop"))
+    assert _agent_page(agents, _laptop()) == []

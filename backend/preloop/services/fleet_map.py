@@ -565,8 +565,14 @@ def build_fleet_map(
         # Agents with no fingerprint link are placed by enrollment hostname,
         # only on an unambiguous, owner-consistent match.
         by_hostname: dict[str, list[str]] = {}
-        for agent_id, device_key in resolve_hostname_devices(
-            devices[:SOURCE_LIMIT], agents
+        # A partial agent or device window cannot prove a match is unique.
+        complete = (
+            "agents" not in partial_sources
+            and not projection["truncated"]
+            and len(devices) <= SOURCE_LIMIT
+        )
+        for agent_id, device_key in (
+            resolve_hostname_devices(devices, agents) if complete else {}
         ).items():
             by_hostname.setdefault(device_key, []).append(agent_id)
         for device in devices[:SOURCE_LIMIT]:
