@@ -507,14 +507,14 @@ describe('Device fleet', () => {
     ) as HTMLSelectElement;
     expect(select.value).to.equal('30d');
     select.value = '24h';
-    select.dispatchEvent(new Event('change'));
+    select.dispatchEvent(new Event('sl-change'));
     await waitUntil(() => api.callsTo('/api/v1/fleet/map').length === 2);
     expect(api.callsTo('/api/v1/fleet/map')[1].search).to.equal(
       '?active_within_minutes=1440'
     );
     expect(localStorage.getItem('preloop:fleet-map:window')).to.equal('24h');
     select.value = 'any';
-    select.dispatchEvent(new Event('change'));
+    select.dispatchEvent(new Event('sl-change'));
     await waitUntil(() => api.callsTo('/api/v1/fleet/map').length === 3);
     expect(api.callsTo('/api/v1/fleet/map')[2].search).to.equal('');
     localStorage.removeItem('preloop:fleet-map:window');

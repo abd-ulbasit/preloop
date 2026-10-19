@@ -5,7 +5,7 @@ import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 import type { FleetMapGraph } from '../fleet-map-api';
 
 const call = {
-  type: 'model_gateway_call',
+  type: 'model_gateway_request_started',
   payload: { managed_agent_id: 'codex', model_alias: 'gpt-6.1' },
 };
 
@@ -105,7 +105,9 @@ describe('fleet-map canvas: machines hold their agents', () => {
         'preloop:fleet-map:positions:canvas-test:u-canvas-drag'
       )!
     );
-    expect(Object.keys(stored)).to.deep.equal(['device:mbp']);
+    expect(Object.keys(stored)).to.have.length(
+      el.shadowRoot!.querySelectorAll('[data-node]').length
+    );
   });
 });
 
@@ -271,7 +273,7 @@ describe('fleet-map canvas: bubbles and a bare map', () => {
     const bubble = el.shadowRoot!.querySelector<HTMLElement>(
       '[data-bubble="agent:codex"]'
     )!;
-    expect(bubble.textContent!.trim()).to.equal('asks gpt-6.1');
+    expect(bubble.textContent!.trim()).to.equal('gpt-6.1  thinking');
     expect(
       localStorage.getItem(
         'preloop:fleet-map:bubbles:canvas-test:u-canvas-bubbles'
@@ -279,7 +281,7 @@ describe('fleet-map canvas: bubbles and a bare map', () => {
     ).to.equal('on');
   });
 
-  it('never shows more than six bubbles or eight lit nodes', async () => {
+  it('never shows more than four bubbles or eight lit nodes', async () => {
     const graph = sampleFleetMap();
     const many = Array.from({ length: 10 }, (_, i) => ({
       ...graph.nodes.find((n) => n.id === 'agent:codex')!,
@@ -309,12 +311,12 @@ describe('fleet-map canvas: bubbles and a bare map', () => {
     );
     for (const n of many)
       el.recordActivity('gateway_activity', {
-        type: 'model_gateway_call',
+        type: 'model_gateway_request_started',
         payload: { managed_agent_id: n.resource_id, model_alias: 'gpt-6.1' },
       });
     await el.updateComplete;
     expect(el.litNodes.length).to.equal(8);
-    expect(el.shadowRoot!.querySelectorAll('.bubble').length).to.equal(6);
+    expect(el.shadowRoot!.querySelectorAll('.bubble').length).to.equal(4);
   });
 
   it('a bare map shows only the canvas, and an empty one is a blank stage', async () => {

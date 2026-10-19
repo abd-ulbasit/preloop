@@ -63,11 +63,79 @@ export class ListToolbar extends LitElement {
    * giving up their height.
    */
   @property({ type: Boolean, reflect: true }) selecting = false;
+  /** Dense canvas controls use the same collection bar within a bounded host. */
+  @property({ type: Boolean, reflect: true }) compact = false;
 
   static styles = css`
     :host {
       display: block;
       width: 100%;
+    }
+    :host([compact]) {
+      container-type: inline-size;
+    }
+    :host([compact]) .list-toolbar {
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 12px;
+    }
+    :host([compact]) .filters {
+      flex: 1 1 auto;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      padding: 2px;
+    }
+    :host([compact]) .filters sl-input {
+      flex: 1 0 150px;
+      min-width: 150px;
+    }
+    :host([compact]) .filters ::slotted(sl-select) {
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    :host([compact]) .view-switcher-group {
+      width: auto;
+      flex: 0 0 auto;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .filter-controls {
+      display: contents;
+    }
+    :host([compact]) .filter-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    @container (max-width: 899px) {
+      :host([compact]) .list-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+      :host([compact]) .filters {
+        display: contents;
+      }
+      :host([compact]) .search-input {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        width: 100%;
+      }
+      :host([compact]) .filter-controls {
+        grid-column: 1;
+        grid-row: 2;
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: thin;
+      }
+      :host([compact]) .view-switcher-group {
+        grid-column: 2;
+        grid-row: 2;
+      }
     }
 
     /* Names the search field for assistive tech without a visible label. */
@@ -219,6 +287,7 @@ export class ListToolbar extends LitElement {
               ? html`
                   <sl-input
                     class="search-input"
+                    size=${this.compact ? 'small' : 'medium'}
                     label=${this.searchLabel || this.searchPlaceholder}
                     placeholder=${this.searchPlaceholder}
                     clearable
@@ -231,7 +300,7 @@ export class ListToolbar extends LitElement {
                 `
               : nothing
           }
-          <slot></slot>
+          <div class="filter-controls"><slot></slot></div>
         </form>
 
         <div class="view-switcher-group">
@@ -265,6 +334,7 @@ export class ListToolbar extends LitElement {
                 `
               : nothing
           }
+          <slot name="actions"></slot>
         </div>
       </div>
     `;

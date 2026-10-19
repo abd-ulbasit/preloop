@@ -147,6 +147,7 @@ from preloop.services.managed_credentials import (
     ManagedCredentialError,
 )
 from preloop.sync.event_normalizer import attach_trigger_subject
+from preloop.services.fleet_flow_context import build_fleet_flow_context
 from preloop.sync.trackers.base import BaseTracker
 from preloop.services.model_runtime_resolver import resolve_ai_model_runtime
 from preloop.utils.git_credentials import (
@@ -1520,6 +1521,19 @@ class FlowExecutionOrchestrator:
             return
 
         try:
+            if message_type in {"execution_started", "status_update"}:
+                payload = {
+                    **payload,
+                    "fleet_context": build_fleet_flow_context(
+                        flow_name=self.flow.name if self.flow else None,
+                        trigger_details=self.execution_log.trigger_event_details,
+                        trigger_event_id=self.execution_log.trigger_event_id,
+                        parent_execution_id=self.execution_log.parent_execution_id,
+                        root_execution_id=self.execution_log.root_execution_id,
+                        retry_of_execution_id=self.execution_log.retry_of_execution_id,
+                        resume_execution_id=self.execution_log.resume_execution_id,
+                    ),
+                }
             message = {
                 "execution_id": str(self.execution_log.id),
                 "flow_id": str(self.flow_id),

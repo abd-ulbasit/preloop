@@ -11,6 +11,7 @@ export type FleetMapResourceType =
   | 'runner'
   | 'agent'
   | 'flow'
+  | 'work'
   | 'model'
   | 'provider_account'
   | 'provider';
@@ -22,7 +23,8 @@ export type FleetMapEdgeType =
   | 'uses_model'
   | 'uses_account'
   | 'account_of_provider'
-  | 'provided_by';
+  | 'provided_by'
+  | 'caused';
 export type FleetMapGapCode =
   | 'discovered_agent'
   | 'unknown_device'
@@ -58,6 +60,9 @@ export interface FleetMapNode {
   /** Agents only. Missing on older servers, read as onboarded. */
   agent_state?: FleetMapAgentState | null;
   last_seen_at?: string | null;
+  /** Work object kind and the observed review state, never inferred. */
+  work_kind?: 'issue' | 'pull_request';
+  review_state?: string | null;
 }
 export type FleetMapAgentState = 'onboarded' | 'discovered' | 'inactive';
 export interface FleetMapEdge {
@@ -95,9 +100,11 @@ export const FLEET_MAP_TYPES: readonly FleetMapResourceType[] = [
   'model',
   'provider_account',
   'provider',
+  'work',
 ];
 
-export type FleetMapColumn = 'user' | 'device' | 'agent' | 'model' | 'provider';
+export type FleetMapColumn =
+  'user' | 'device' | 'agent' | 'model' | 'provider' | 'work';
 
 /**
  * Columns left to right: a person, the machines they own (runners sit inside
@@ -110,6 +117,7 @@ export const FLEET_MAP_COLUMNS: readonly FleetMapColumn[] = [
   'agent',
   'model',
   'provider',
+  'work',
 ];
 
 export const FLEET_MAP_COLUMN_LABEL: Record<
@@ -121,6 +129,7 @@ export const FLEET_MAP_COLUMN_LABEL: Record<
   runner: 'Runners',
   agent: 'Agents',
   flow: 'Flows',
+  work: 'Work',
   model: 'Models',
   provider_account: 'Provider accounts',
   provider: 'Providers',
@@ -133,6 +142,7 @@ export const FLEET_MAP_TYPE_LABEL: Record<FleetMapNodeType, string> = {
   runner: 'Runner',
   agent: 'Agent',
   flow: 'Flow',
+  work: 'Work',
   model: 'Model',
   provider_account: 'Provider account',
   provider: 'Provider',
@@ -147,6 +157,7 @@ export const FLEET_MAP_EDGE_LABEL: Record<FleetMapEdgeType, string> = {
   uses_account: 'uses account',
   account_of_provider: 'account of provider',
   provided_by: 'provided by',
+  caused: 'observed activity with',
 };
 
 const COLUMN_OF: Record<FleetMapResourceType, FleetMapColumn> = {
@@ -155,6 +166,7 @@ const COLUMN_OF: Record<FleetMapResourceType, FleetMapColumn> = {
   runner: 'device',
   agent: 'agent',
   flow: 'agent',
+  work: 'work',
   model: 'model',
   provider_account: 'provider',
   provider: 'provider',
@@ -290,22 +302,39 @@ export function filterGraph(
     (filters.states && filters.states.size < 3) ||
     nodes.length < graph.nodes.length;
   if (narrowed && nodes.some((node) => node.type === 'agent')) {
-    const ids = new Set(nodes.map((node) => node.id));
-    const edges = edgesOf(ids);
-    const reached = new Set<string>();
-    for (const edge of edges)
-      if (edge.source.startsWith('agent:')) reached.add(edge.target);
-    // A model reached by an agent keeps its providers; an account keeps its own.
-    for (const edge of edges)
-      if (edge.kind === 'provided_by' && reached.has(edge.source))
-        reached.add(edge.target);
-    for (const node of nodes)
-      if (node.type === 'provider_account' && reached.has(node.id))
-        for (const pid of node.parent_id ? [node.parent_id] : node.provider_ids)
-          reached.add(pid);
-    for (const edge of edges)
-      if (edge.kind === 'account_of_provider' && reached.has(edge.source))
-        reached.add(edge.target);
+    const reached = new Set(
+      nodes
+        .filter((n) => n.type === 'agent' || n.type === 'flow')
+        .map((n) => n.id)
+    );
+    // Hidden accounts still connect their models to providers. Filtered-out
+    // agents do not contribute reachability, even when their account is shared.
+    const downstream = new Set([
+      'uses_model',
+      'uses_account',
+      'provided_by',
+      'account_of_provider',
+    ]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of graph.edges)
+        if (
+          downstream.has(edge.kind) &&
+          reached.has(edge.source) &&
+          !reached.has(edge.target)
+        ) {
+          reached.add(edge.target);
+          changed = true;
+        }
+      for (const node of graph.nodes)
+        if (reached.has(node.id))
+          for (const id of node.provider_ids)
+            if (!reached.has(id)) {
+              reached.add(id);
+              changed = true;
+            }
+    }
     nodes = nodes.filter(
       (node) =>
         !['model', 'provider_account', 'provider'].includes(node.type) ||
@@ -326,6 +355,14 @@ export function containers(
   const ids = new Map(graph.nodes.map((node) => [node.id, node]));
   const parent = new Map<string, string>();
   for (const node of graph.nodes) {
+    if (
+      node.type === 'work' &&
+      node.parent_id &&
+      ids.get(node.parent_id)?.type === 'work'
+    ) {
+      parent.set(node.id, node.parent_id);
+      continue;
+    }
     if (node.type !== 'provider_account') continue;
     const candidate =
       node.parent_id ??

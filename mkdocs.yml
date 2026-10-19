@@ -192,6 +192,7 @@ nav:
       - Attaching to a session: guide/sessions-attach.md
 
   - Sessions, search and audit:
+      - Fleet Map: guide/fleet-map.md
       - Session artifacts: guide/artifacts.md
       - Session search for agents: guide/agent-session-search.md
       - Saved session searches: guide/session-saved-searches.md

@@ -15,7 +15,10 @@ import {
  */
 
 export type FleetMapArrangement = 'columns' | 'spatial';
-export type FleetMapPoints = Record<string, { x: number; y: number }>;
+export type FleetMapPoints = Record<
+  string,
+  { x: number; y: number; w?: number }
+>;
 
 const ARRANGEMENT_KEY = 'preloop:fleet-map:arrangement';
 const POSITIONS_KEY = 'preloop:fleet-map:positions';
@@ -54,10 +57,26 @@ export function loadPositions(user: string, scope = 'fleet'): FleetMapPoints {
     const parsed = raw ? JSON.parse(raw) : {};
     if (!parsed || typeof parsed !== 'object') return {};
     const points: FleetMapPoints = {};
+    const seen = JSON.parse(
+      localStorage.getItem(`${keyFor(POSITIONS_KEY, user, scope)}:seen`) ?? '{}'
+    );
     for (const [id, value] of Object.entries(parsed)) {
-      const point = value as { x?: unknown; y?: unknown };
+      if (
+        typeof seen?.[id] === 'number' &&
+        Date.now() - seen[id] > 7 * 86400_000
+      )
+        continue;
+      const point = value as { x?: unknown; y?: unknown; w?: unknown };
       if (Number.isFinite(point?.x) && Number.isFinite(point?.y))
-        points[id] = { x: Number(point.x), y: Number(point.y) };
+        points[id] = {
+          x: Number(point.x),
+          y: Number(point.y),
+          ...(Number.isFinite(point.w) &&
+          Number(point.w) >= 180 &&
+          Number(point.w) <= 300
+            ? { w: Number(point.w) }
+            : {}),
+        };
     }
     return points;
   } catch {
@@ -68,39 +87,55 @@ export function loadPositions(user: string, scope = 'fleet'): FleetMapPoints {
 export function savePositions(
   user: string,
   points: FleetMapPoints,
-  scope = 'fleet'
+  scope = 'fleet',
+  activeIds = Object.keys(points)
 ): void {
   try {
     localStorage.setItem(
       keyFor(POSITIONS_KEY, user, scope),
       JSON.stringify(points)
     );
+    const key = `${keyFor(POSITIONS_KEY, user, scope)}:seen`;
+    const stored = JSON.parse(localStorage.getItem(key) ?? '{}');
+    const seen: Record<string, number> = {};
+    for (const id of Object.keys(points))
+      seen[id] = typeof stored?.[id] === 'number' ? stored[id] : Date.now();
+    for (const id of activeIds) seen[id] = Date.now();
+    localStorage.setItem(key, JSON.stringify(seen));
   } catch {
     // A preference, not a requirement.
   }
 }
 
-const ISLAND_ROW = 60;
-const ISLAND_INDENT = 28;
-const ISLAND_WIDTH = FLEET_MAP_NODE_WIDTH + ISLAND_INDENT;
-const TYPE_ORDER = ['user', 'device', 'runner', 'agent', 'flow', 'cluster'];
+export interface FleetMapViewport {
+  width: number;
+  height: number;
+}
+
+const GUTTER = 24;
+const TYPE_ORDER = [
+  'user',
+  'device',
+  'runner',
+  'agent',
+  'flow',
+  'work',
+  'cluster',
+];
 
 /**
- * Starting points by group. The models and providers everyone shares sit in
- * the middle, models beside the provider behind them. Around them, on an
- * ellipse that fills a wide screen, each group is a compact island: the
- * person on top, each machine under them and the agents on it indented under
- * the machine. Flows and anything unattached form their own islands.
- * Deterministic for a given graph.
+ * Pack measured islands beside a shared model/provider core. The stage's
+ * aspect ratio decides the shelves; overflow adds columns, never a distant
+ * ring that makes every label shrink. Stable ordering makes reset repeatable.
  */
 export function clusterSeed(
   ids: string[],
   clusters: Map<string, string>,
   graph?: Pick<FleetMapGraph, 'nodes' | 'edges'>,
-  heightOf: (id: string) => number = () => FLEET_MAP_NODE_HEIGHT
+  heightOf: (id: string) => number = () => FLEET_MAP_NODE_HEIGHT,
+  viewport: FleetMapViewport = { width: 1200, height: 720 },
+  nodeWidth = FLEET_MAP_NODE_WIDTH
 ): Map<string, { x: number; y: number }> {
-  const rowOf = (id: string) =>
-    heightOf(id) + ISLAND_ROW - FLEET_MAP_NODE_HEIGHT;
   const byId = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
   const typeOf = (id: string) => byId.get(id)?.type ?? id.split(':')[0];
   const members = new Map<string, string[]>();
@@ -109,7 +144,6 @@ export function clusterSeed(
     members.set(key, [...(members.get(key) ?? []), id]);
   }
   const seed = new Map<string, { x: number; y: number }>();
-  // The shared core: models in one column, providers in the next.
   const shared = members.get('shared') ?? [];
   const providerOf = (id: string) =>
     graph?.edges.find(
@@ -117,78 +151,93 @@ export function clusterSeed(
         edge.source === id &&
         (edge.kind === 'provided_by' || edge.kind === 'account_of_provider')
     )?.target ?? '';
-  const right = shared.filter((id) => typeOf(id) === 'provider');
-  const left = shared
+  const providers = shared.filter((id) => typeOf(id) === 'provider').sort();
+  const models = shared
     .filter((id) => typeOf(id) !== 'provider')
     .sort(
       (a, b) => providerOf(a).localeCompare(providerOf(b)) || a.localeCompare(b)
     );
-  const coreRows = Math.max(left.length, right.length, 1);
-  left.forEach((id, i) =>
+  const width = Math.max(viewport.width, nodeWidth * 4 + GUTTER * 5);
+  const roomHeight = Math.max(320, viewport.height - GUTTER * 2);
+  const coreX = width / 2 - nodeWidth - GUTTER / 2;
+  const work = members.get('work') ?? [];
+  const workHeight = work.length
+    ? Math.ceil(work.length / 2) * (Math.max(...work.map(heightOf)) + GUTTER)
+    : 0;
+  const coreHeight = Math.max(240, roomHeight - workHeight);
+  const column = (list: string[], x: number) => {
+    const natural = list.reduce((sum, id) => sum + heightOf(id), 0);
+    const gap =
+      list.length > 1
+        ? Math.max(
+            12,
+            Math.min(72, (coreHeight * 0.82 - natural) / (list.length - 1))
+          )
+        : 0;
+    const height = natural + Math.max(0, list.length - 1) * gap;
+    let y = GUTTER + Math.max(0, (coreHeight - height) / 2);
+    for (const id of list) {
+      seed.set(id, { x, y });
+      y += heightOf(id) + gap;
+    }
+  };
+  column(models, coreX);
+  column(providers, coreX + nodeWidth + GUTTER);
+  work.forEach((id, i) =>
     seed.set(id, {
-      x: -FLEET_MAP_NODE_WIDTH - 30,
-      y: (i - (left.length - 1) / 2) * ISLAND_ROW,
+      x: coreX + (i % 2) * (nodeWidth + GUTTER),
+      y:
+        GUTTER +
+        coreHeight +
+        Math.floor(i / 2) * (Math.max(...work.map(heightOf)) + GUTTER),
     })
   );
-  right.forEach((id, i) =>
-    seed.set(id, { x: 30, y: (i - (right.length - 1) / 2) * ISLAND_ROW * 1.4 })
-  );
-  // Islands, each stacked person > machine > agents.
   const hostOf = new Map<string, string>();
   for (const edge of graph?.edges ?? [])
     if (edge.kind === 'hosts') hostOf.set(edge.target, edge.source);
-  const ring = [...members.keys()]
-    .filter((key) => key !== 'shared')
-    .sort((a, b) => {
-      const late = (key: string) =>
-        key === 'flows' || key === 'other' ? 1 : 0;
-      return late(a) - late(b) || a.localeCompare(b);
-    });
-  const islands = ring.map((key) => {
-    const list = members.get(key) ?? [];
-    const rank = (id: string) => TYPE_ORDER.indexOf(typeOf(id));
-    const top = list
-      .filter((id) => !hostOf.has(id) || !list.includes(hostOf.get(id)!))
-      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-    const rows: { id: string; depth: number }[] = [];
-    const place = (id: string, depth: number) => {
-      rows.push({ id, depth });
-      list
-        .filter((other) => hostOf.get(other) === id)
-        .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
-        .forEach((other) => place(other, depth + 1));
-    };
-    top.forEach((id) =>
-      place(id, typeOf(id) === 'user' || typeOf(id) === 'flow' ? 0 : 1)
-    );
-    return {
-      key,
-      rows,
-      height: rows.reduce((sum, row) => sum + rowOf(row.id), 0),
-    };
-  });
-  const tallest = Math.max(ISLAND_ROW, ...islands.map((item) => item.height));
-  const coreHeight = coreRows * ISLAND_ROW * 1.4;
-  const count = Math.max(1, islands.length);
-  const rx = Math.max(
-    FLEET_MAP_NODE_WIDTH + 30 + ISLAND_WIDTH + 80,
-    (count * (ISLAND_WIDTH + 70)) / Math.PI
-  );
-  const ry = Math.max(coreHeight / 2 + tallest / 2 + 40, tallest * 1.1);
-  islands.forEach((island, k) => {
-    // Start on the left and go round. Two groups sit left and right of the
-    // shared models, never above and below them; from five on, the ring
-    // turns half a step so no group sits straight above the core.
-    const angle =
-      Math.PI + (2 * Math.PI * k) / count + (count >= 5 ? Math.PI / count : 0);
-    const cx = Math.cos(angle) * rx - ISLAND_WIDTH / 2;
-    const cy = Math.sin(angle) * ry - island.height / 2;
-    let y = cy;
-    for (const { id, depth } of island.rows) {
-      seed.set(id, { x: cx + Math.min(depth, 2) * ISLAND_INDENT * 0.5, y });
-      y += rowOf(id);
+  const islands = [...members]
+    .filter(([key]) => key !== 'shared' && key !== 'work')
+    .map(([key, list]) => {
+      const rank = (id: string) => TYPE_ORDER.indexOf(typeOf(id));
+      const rows = [...list].sort(
+        (a, b) => rank(a) - rank(b) || a.localeCompare(b)
+      );
+      return {
+        key,
+        rows,
+        height: rows.reduce((sum, id) => sum + heightOf(id) + 12, 0) - 12,
+      };
+    })
+    .sort((a, b) => b.height - a.height || a.key.localeCompare(b.key));
+  const sides = [
+    { x: coreX - nodeWidth - GUTTER, y: GUTTER, area: 0, direction: -1 },
+    { x: coreX + 2 * (nodeWidth + GUTTER), y: GUTTER, area: 0, direction: 1 },
+  ];
+  for (const island of islands) {
+    const side = sides[0].area <= sides[1].area ? sides[0] : sides[1];
+    if (side.y > GUTTER && side.y + island.height > roomHeight + GUTTER) {
+      side.x += side.direction * (nodeWidth + GUTTER);
+      side.y = GUTTER;
     }
-  });
+    for (const id of island.rows) {
+      seed.set(id, { x: side.x, y: side.y });
+      side.y += heightOf(id) + 12;
+    }
+    side.y += GUTTER - 12;
+    side.area += island.height + GUTTER;
+  }
+  // Spread occupied shelves through available width, keeping the core tight
+  // to its neighbours instead of leaving an empty ring around it.
+  const xs = [...new Set([...seed.values()].map((p) => p.x))].sort(
+    (a, b) => a - b
+  );
+  if (xs.length > 1) {
+    const natural = xs[xs.length - 1] - xs[0] + nodeWidth;
+    const target = Math.max(natural, viewport.width - 2 * GUTTER);
+    const gap = (target - nodeWidth) / (xs.length - 1);
+    const placed = new Map(xs.map((x, i) => [x, GUTTER + i * gap]));
+    for (const p of seed.values()) p.x = placed.get(p.x)!;
+  }
   return seed;
 }
 
@@ -198,10 +247,11 @@ function separate(
   ys: Float64Array,
   fixed: boolean[],
   hs?: number[],
-  passes = 40
+  passes = 40,
+  nodeWidth = FLEET_MAP_NODE_WIDTH
 ): void {
   const n = xs.length;
-  const w = FLEET_MAP_NODE_WIDTH + 16;
+  const w = nodeWidth + 16;
   const h = (i: number) => (hs ? hs[i] : FLEET_MAP_NODE_HEIGHT);
   for (let pass = 0; pass < passes; pass++) {
     let moved = false;
@@ -256,6 +306,22 @@ function arrivalSeed(
   });
   ids.forEach((id, i) => {
     if (id in pinned) return;
+    const type = graph.nodes.find((node) => node.id === id)?.type;
+    if (type === 'model') {
+      const models = graph.nodes
+        .filter((node) => node.type === 'model' && node.id in pinned)
+        .map((node) => pinned[node.id]);
+      if (models.length) {
+        out.set(id, {
+          x: models[0].x,
+          y:
+            Math.max(...models.map((p) => p.y)) +
+            FLEET_MAP_NODE_HEIGHT * 1.25 +
+            24,
+        });
+        return;
+      }
+    }
     const linked = graph.edges
       .filter((edge) => edge.source === id || edge.target === id)
       .map((edge) => (edge.source === id ? edge.target : edge.source))
@@ -328,24 +394,76 @@ export function spatialLayout(
   seed: Map<string, FleetMapPosition>,
   pinned: FleetMapPoints = {},
   clusters?: Map<string, string>,
-  collapsed: Set<string> = new Set()
+  collapsed: Set<string> = new Set(),
+  viewport: FleetMapViewport = { width: 1200, height: 720 }
 ): FleetMapLayout {
   // On a grouped map a machine is a box holding its agents: only the boxes
   // are placed, and what they hold is laid out inside them.
   const contained = clusters ? hostedBy(graph) : new Map<string, string[]>();
+  for (const node of graph.nodes)
+    if (
+      node.type === 'work' &&
+      node.parent_id &&
+      graph.nodes.some((n) => n.id === node.parent_id)
+    )
+      contained.set(node.parent_id, [
+        ...(contained.get(node.parent_id) ?? []),
+        node.id,
+      ]);
   const kidOf = new Map<string, string>();
   for (const [host, list] of contained)
     for (const kid of list) kidOf.set(kid, host);
-  const heightOf = (id: string) =>
+  const baseHeightOf = (id: string) =>
     collapsed.has(id)
       ? FLEET_MAP_NODE_HEIGHT
       : containerHeight(contained.get(id)?.length ?? 0);
   const ids = graph.nodes.map((node) => node.id).filter((id) => !kidOf.has(id));
+  // Choose the largest cards that fit the measured shelves without shrinking
+  // below their design size. Crowded fleets retain the base width and pan.
+  let nodeWidth = FLEET_MAP_NODE_WIDTH;
+  if (clusters && !Object.keys(pinned).length) {
+    for (
+      let candidate = FLEET_MAP_NODE_WIDTH;
+      candidate <= 300;
+      candidate += 12
+    ) {
+      const factor = Math.min(1.25, candidate / FLEET_MAP_NODE_WIDTH);
+      const trial = clusterSeed(
+        ids,
+        clusters,
+        graph,
+        (id) => baseHeightOf(id) * factor,
+        viewport,
+        candidate
+      );
+      const boxes = ids.map((id) => ({
+        ...trial.get(id)!,
+        h: baseHeightOf(id) * factor,
+      }));
+      const w =
+        Math.max(...boxes.map((b) => b.x + candidate)) -
+        Math.min(...boxes.map((b) => b.x));
+      const h =
+        Math.max(...boxes.map((b) => b.y + b.h)) -
+        Math.min(...boxes.map((b) => b.y));
+      if (w <= viewport.width - 48 && h <= viewport.height - 48)
+        nodeWidth = candidate;
+    }
+  } else if (clusters) {
+    nodeWidth = Math.max(
+      216,
+      ...Object.values(pinned).map((point) => point.w ?? 216)
+    );
+  }
+  const factor = Math.min(1.25, nodeWidth / FLEET_MAP_NODE_WIDTH);
+  const heightOf = (id: string) => baseHeightOf(id) * factor;
   const index = new Map(ids.map((id, i) => [id, i]));
   const n = ids.length;
   const xs = new Float64Array(n);
   const ys = new Float64Array(n);
-  const grouped = clusters ? clusterSeed(ids, clusters, graph, heightOf) : null;
+  const grouped = clusters
+    ? clusterSeed(ids, clusters, graph, heightOf, viewport, nodeWidth)
+    : null;
   const hs = ids.map(heightOf);
   const near = arrivalSeed(graph, ids, pinned, clusters);
   ids.forEach((id, i) => {
@@ -356,6 +474,34 @@ export function spatialLayout(
     xs[i] = start.x;
     ys[i] = start.y;
   });
+  // A growing machine may push the immediately following boxes in its own
+  // island. Other owned islands and the camera stay exactly where they were.
+  for (const [host, kids] of contained) {
+    const i = index.get(host);
+    if (
+      i === undefined ||
+      !(host in pinned) ||
+      !kids.some((kid) => !(kid in pinned))
+    )
+      continue;
+    let bottom = ys[i] + hs[i];
+    const below = ids
+      .map((id, j) => ({ id, j }))
+      .filter(
+        ({ id, j }) =>
+          j !== i &&
+          id in pinned &&
+          clusters?.get(id) === clusters?.get(host) &&
+          Math.abs(xs[j] - xs[i]) < nodeWidth &&
+          ys[j] > ys[i]
+      )
+      .sort((a, b) => ys[a.j] - ys[b.j]);
+    for (const { j } of below) {
+      if (ys[j] >= bottom + 12) break;
+      ys[j] = bottom + 12;
+      bottom = ys[j] + hs[j];
+    }
+  }
   const fixed = ids.map((id) => id in pinned);
   const links = graph.edges
     .map((edge) => [index.get(edge.source), index.get(edge.target)])
@@ -365,7 +511,7 @@ export function spatialLayout(
     );
   const ideal = 300;
   // Grouped maps are laid out by island; only overlaps are resolved.
-  if (clusters) separate(xs, ys, fixed, hs);
+  if (clusters) separate(xs, ys, fixed, hs, 40, nodeWidth);
   const iterations =
     fixed.every(Boolean) || clusters ? 0 : n > 250 ? 60 : n > 80 ? 120 : 220;
   let heat = 60;
@@ -424,7 +570,7 @@ export function spatialLayout(
       xs[i] = Math.max(24, xs[i]);
       ys[i] = Math.max(24, ys[i]);
     }
-    if (clusters) separate(xs, ys, fixed, hs);
+    if (clusters) separate(xs, ys, fixed, hs, 40, nodeWidth);
   }
   const positions = new Map<string, FleetMapPosition>();
   const groups = new Map<string, string[]>();
@@ -434,8 +580,8 @@ export function spatialLayout(
     const x = Math.round(xs[i] - minX);
     const y = Math.round(ys[i] - minY);
     const h = hs[i];
-    positions.set(id, { x, y, w: FLEET_MAP_NODE_WIDTH, h });
-    width = Math.max(width, x + FLEET_MAP_NODE_WIDTH + 24);
+    positions.set(id, { x, y, w: nodeWidth, h });
+    width = Math.max(width, x + nodeWidth + 24);
     height = Math.max(height, y + h + 24);
     const kids = contained.get(id);
     if (!kids) return;
@@ -445,9 +591,9 @@ export function spatialLayout(
     kids.forEach((kid, k) =>
       positions.set(kid, {
         x: x + CHILD_INSET,
-        y: y + FLEET_MAP_NODE_HEIGHT + k * CHILD_ROW,
-        w: FLEET_MAP_NODE_WIDTH - 2 * CHILD_INSET,
-        h: FLEET_MAP_CHILD_HEIGHT,
+        y: y + (FLEET_MAP_NODE_HEIGHT + k * CHILD_ROW) * factor,
+        w: nodeWidth - 2 * CHILD_INSET,
+        h: FLEET_MAP_CHILD_HEIGHT * factor,
       })
     );
   });
