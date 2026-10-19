@@ -1115,3 +1115,57 @@ def test_failed_segment_attempt_counter_cannot_be_reset_implicitly(
         )
     db_session.refresh(stored)
     assert stored.digest["summary_attempts"] == 3
+
+
+@pytest.mark.parametrize("same_claim", [True, False])
+def test_active_format_rejection_can_refund_only_its_own_attempt(
+    db_session: Session, test_user: User, same_claim: bool
+) -> None:
+    runtime = _session(db_session, test_user.account_id)
+    start, end = _window()
+    claim = {
+        "summary_status": "summarizing",
+        "summary_attempts": 2,
+        "summary_attempted_at": end.isoformat(),
+    }
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest=claim,
+        commit=False,
+    )
+    refunded = {
+        **claim,
+        "summary_attempts": 1,
+        "provider_status_code": 400,
+        "provider_error_class": "BadRequestError",
+    }
+    if not same_claim:
+        refunded["summary_attempted_at"] = start.isoformat()
+        with pytest.raises(GovernanceReviewValidationError, match="summary attempts"):
+            crud_governance_session_digest.upsert(
+                db_session,
+                account_id=test_user.account_id,
+                runtime_session_id=runtime.id,
+                window_start=start,
+                window_end=end,
+                digest=refunded,
+                commit=False,
+            )
+        db_session.refresh(stored)
+        assert stored.digest["summary_attempts"] == 2
+        return
+    crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest=refunded,
+        commit=False,
+    )
+    db_session.refresh(stored)
+    assert stored.digest["summary_attempts"] == 1

@@ -892,15 +892,25 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
         if "digest" in updates:
             # A caller's stale snapshot cannot buy another retry allowance by
             # resetting a failed segment's durable provider-attempt counter.
+            incoming = updates["digest"]
+            stored_attempts = func.coalesce(
+                GovernanceSessionDigest.digest["summary_attempts"].astext.cast(Integer),
+                0,
+            )
+            incoming_attempts = incoming.get("summary_attempts", 0)
+            same_claim_refund = and_(
+                status == "summarizing",
+                incoming.get("summary_status") == "summarizing",
+                GovernanceSessionDigest.digest["summary_attempted_at"].astext
+                == incoming.get("summary_attempted_at"),
+                incoming.get("summary_attempted_at") is not None,
+                incoming.get("provider_status_code") == 400,
+                bool(incoming.get("provider_error_class")),
+                stored_attempts == incoming_attempts + 1,
+            )
             writable = and_(
                 writable,
-                func.coalesce(
-                    GovernanceSessionDigest.digest["summary_attempts"].astext.cast(
-                        Integer
-                    ),
-                    0,
-                )
-                <= updates["digest"].get("summary_attempts", 0),
+                or_(stored_attempts <= incoming_attempts, same_claim_refund),
             )
         statement = pg_insert(GovernanceSessionDigest).values(**values)
         statement = statement.on_conflict_do_update(
