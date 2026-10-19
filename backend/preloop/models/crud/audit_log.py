@@ -143,8 +143,14 @@ def _count_rows(db: Session, filters: List[Any], limit: Optional[int]) -> int:
 
 
 def _is_statement_timeout(exc: OperationalError) -> bool:
-    """Whether ``exc`` is Postgres cancelling a statement for its timeout."""
-    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "57014"
+    """Whether ``exc`` is Postgres cancelling a statement for its timeout.
+
+    Read through ``postgres_sqlstate``: psycopg2 exposes the code as
+    ``pgcode``, psycopg3 as ``sqlstate``.
+    """
+    from .audit_chain import postgres_sqlstate
+
+    return postgres_sqlstate(exc) == "57014"
 
 
 def _account_actions(db: Session, account_id: str) -> List[str]:
@@ -751,12 +757,12 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             )
             if counted is None:
                 # Past the cap means "more than the cap", which a count that
-                # ran out of time on a large trail is. Without a cap: what
-                # the page proves, plus one when the page is full.
+                # ran out of time on a large trail is. Without a cap: the
+                # groups the page proves, a lower bound.
                 total = (
                     count_limit + 1
                     if count_limit is not None
-                    else skip + len(primary_events) + int(len(primary_events) == limit)
+                    else skip + len(primary_events)
                 )
 
         if not primary_events:

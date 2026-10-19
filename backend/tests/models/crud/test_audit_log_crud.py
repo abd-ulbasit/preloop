@@ -1085,24 +1085,30 @@ class TestGroupedTotalDegradesOnTimeout:
             )
 
     @staticmethod
-    def _time_out(monkeypatch):
+    def _time_out(monkeypatch, *, code_attribute: str = "pgcode"):
+        """Make every count raise the driver's statement-timeout error.
+
+        psycopg2 (the sync engine's driver for ``postgresql://``) exposes the
+        SQLSTATE as ``pgcode``, psycopg3 as ``sqlstate``; both must degrade.
+        """
+        from types import SimpleNamespace
+
         from sqlalchemy.exc import OperationalError
 
         from preloop.models.crud import audit_log as audit_log_module
 
-        class _CancelledError(Exception):
-            sqlstate = "57014"
-
         def _cancelled(*args, **kwargs):
-            raise OperationalError("SELECT count(*)", {}, _CancelledError())
+            orig = SimpleNamespace(**{code_attribute: "57014"})
+            raise OperationalError("SELECT count(*)", {}, orig)
 
         monkeypatch.setattr(audit_log_module, "_count_rows", _cancelled)
 
+    @pytest.mark.parametrize("code_attribute", ["pgcode", "sqlstate"])
     def test_capped_total_reads_more_than_the_cap(
-        self, db_session: Session, test_account, monkeypatch
+        self, db_session: Session, test_account, monkeypatch, code_attribute
     ):
         self._rows(db_session, test_account, 3)
-        self._time_out(monkeypatch)
+        self._time_out(monkeypatch, code_attribute=code_attribute)
         groups, total = crud_audit_log.get_grouped_by_correlation(
             db_session, account_id=test_account.id, limit=2, count_limit=100
         )
@@ -1118,7 +1124,8 @@ class TestGroupedTotalDegradesOnTimeout:
             db_session, account_id=test_account.id, limit=2
         )
         assert len(groups) == 2
-        assert total == 3  # a full page: at least one more
+        # What the page proves, nothing more: a lower bound.
+        assert total == 2
         groups, total = crud_audit_log.get_grouped_by_correlation(
             db_session, account_id=test_account.id, limit=5
         )
