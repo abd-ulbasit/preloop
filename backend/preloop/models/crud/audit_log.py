@@ -1,9 +1,21 @@
 """CRUD operations for AuditLog model."""
 
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, case, false, func, or_, text
@@ -126,6 +138,40 @@ def _hydrate_groups(db: Session, groups: List[Dict[str, Any]]) -> None:
         primary = full.get(group["primary_event"].id, group["primary_event"])
         group["primary_event"] = primary
         group["sub_events"] = [full.get(sub.id, sub) for sub in group["sub_events"]]
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _without_jit(func: _F) -> _F:
+    """Run a grouped read with Postgres JIT off for its own statements.
+
+    The anti-join probes of the grouped timeline are estimated at millions
+    of cost units, far past ``jit_above_cost``, so every count and page was
+    JIT-compiled: 150-270 ms of LLVM per statement on prod, more on a fresh
+    backend, for statements that then execute in 20-100 ms (#1693). The
+    previous value is restored afterwards, transaction-locally, so the rest
+    of the request keeps the server's setting.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self: Any, db: Session, *args: Any, **kwargs: Any) -> Any:
+        previous = db.execute(
+            text("SELECT current_setting('jit'), set_config('jit', 'off', true)")
+        ).scalar()
+        try:
+            return func(self, db, *args, **kwargs)
+        finally:
+            try:
+                db.execute(
+                    text("SELECT set_config('jit', :previous, true)"),
+                    {"previous": previous},
+                )
+            except Exception:
+                # An aborted transaction drops the local setting with it.
+                logger.debug("Could not restore jit after a grouped read")
+
+    return cast(_F, wrapper)
 
 
 def _count_rows(db: Session, filters: List[Any], limit: Optional[int]) -> int:
@@ -500,6 +546,7 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             for row in result
         ]
 
+    @_without_jit
     def get_grouped_by_correlation(
         self,
         db: Session,
@@ -729,10 +776,18 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 # A savepoint, so a count the database cancels leaves the
                 # transaction usable for the page below.
                 with db.begin_nested():
-                    counted = sum(
-                        _count_rows(db, [*scope_filters, condition], count_limit)
-                        for condition in count_conditions
-                    )
+                    counted = 0
+                    for condition in count_conditions:
+                        counted += _count_rows(
+                            db, [*scope_filters, condition], count_limit
+                        )
+                        # Past the cap the total is reported as cap + 1
+                        # whatever the other branches hold, so they are not
+                        # counted. The plain-action branch goes first and is
+                        # an index-only count; the anti-join branches after
+                        # it were the cold tail of the Audit page (#1693).
+                        if count_limit is not None and counted > count_limit:
+                            break
             except OperationalError as exc:
                 if not _is_statement_timeout(exc):
                     raise
