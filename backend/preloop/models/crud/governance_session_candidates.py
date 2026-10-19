@@ -101,15 +101,15 @@ def list_session_digest_retries(
     )
     parse_failures = select(*columns).where(
         digest.account_id == account_id,
-        status == "parse_failed",
+        text(gov.SESSION_DIGEST_PARSE_RETRY_PREDICATE),
     )
     if runtime_session_id is not None:
         statement = statement.where(digest.runtime_session_id == runtime_session_id)
         parse_failures = parse_failures.where(
             digest.runtime_session_id == runtime_session_id
         )
-    # Keep the existing retry queue index usable. An OR with parse_failed would
-    # defeat its partial predicate and scan completed history on every sweep.
+    # Each branch has its own partial index. An OR would defeat the existing
+    # queue predicate and scan completed history on every sweep.
     candidates = statement.union_all(parse_failures).subquery()
     return list(
         db.scalars(

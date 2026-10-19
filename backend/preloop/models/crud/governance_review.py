@@ -13,7 +13,8 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Integer, and_, func, or_, text
+from sqlalchemy import Integer, and_, func, literal, or_, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -814,6 +815,9 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             raise GovernanceReviewValidationError(
                 "summary overrides require a caller and reason"
             )
+        paired = _pair_digest(digest, summary)
+        if paired is not None:
+            digest, summary = paired
         review_start = _digest_review_start()
         if review_window_start is not None:
             # A narrower caller window is useful; an older boundary must not
@@ -905,12 +909,28 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
                 == incoming.get("summary_attempted_at"),
                 incoming.get("summary_attempted_at") is not None,
                 incoming.get("provider_status_code") == 400,
-                bool(incoming.get("provider_error_class")),
+                incoming.get("summary_stop_reason") == "response_format_rejected",
                 stored_attempts == incoming_attempts + 1,
             )
+            retiring = and_(
+                incoming.get("summary_status") == "outside_review_window",
+                GovernanceSessionDigest.window_start == window_start,
+                GovernanceSessionDigest.window_end == window_end,
+            )
+            if incoming.get("summary_status") == "outside_review_window":
+                # Retirement spends nothing, but must retain the durable count
+                # even when the caller supplies only a minimal diagnostic.
+                for column in ("digest", "summary"):
+                    updates[column] = func.jsonb_set(
+                        literal(updates[column], type_=JSONB),
+                        text("'{summary_attempts}'::text[]"),
+                        func.to_jsonb(
+                            func.greatest(stored_attempts, incoming_attempts)
+                        ),
+                    )
             writable = and_(
                 writable,
-                or_(stored_attempts <= incoming_attempts, same_claim_refund),
+                or_(stored_attempts <= incoming_attempts, same_claim_refund, retiring),
             )
         statement = pg_insert(GovernanceSessionDigest).values(**values)
         statement = statement.on_conflict_do_update(

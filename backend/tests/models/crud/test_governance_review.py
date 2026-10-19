@@ -1121,8 +1121,9 @@ def test_failed_segment_attempt_counter_cannot_be_reset_implicitly(
 
 
 @pytest.mark.parametrize("same_claim", [True, False])
+@pytest.mark.parametrize("format_rejected", [True, False])
 def test_active_format_rejection_can_refund_only_its_own_attempt(
-    db_session: Session, test_user: User, same_claim: bool
+    db_session: Session, test_user: User, same_claim: bool, format_rejected: bool
 ) -> None:
     runtime = _session(db_session, test_user.account_id)
     start, end = _window()
@@ -1146,8 +1147,11 @@ def test_active_format_rejection_can_refund_only_its_own_attempt(
         "provider_status_code": 400,
         "provider_error_class": "BadRequestError",
     }
+    if format_rejected:
+        refunded["summary_stop_reason"] = "response_format_rejected"
     if not same_claim:
         refunded["summary_attempted_at"] = start.isoformat()
+    if not same_claim or not format_rejected:
         with pytest.raises(GovernanceReviewValidationError, match="summary attempts"):
             crud_governance_session_digest.upsert(
                 db_session,
@@ -1172,3 +1176,58 @@ def test_active_format_rejection_can_refund_only_its_own_attempt(
     )
     db_session.refresh(stored)
     assert stored.digest["summary_attempts"] == 1
+
+
+@pytest.mark.parametrize("alias", ["digest", "summary"])
+@pytest.mark.parametrize("status", ["provider_failed", "budget_limited"])
+def test_historical_retirement_preserves_attempts(
+    db_session: Session, test_user: User, alias: str, status: str
+) -> None:
+    """Retirement needs no history override and cannot reset spent attempts."""
+    from datetime import timedelta
+
+    runtime = _session(db_session, test_user.account_id)
+    old = _window()[0] - timedelta(days=30)
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=old,
+        window_end=old,
+        digest={"summary_status": status, "summary_attempts": 3},
+        include_history=True,
+        override_caller="test",
+        override_reason="Seed a failed historical segment",
+        commit=False,
+    )
+    crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=old,
+        window_end=old,
+        **{alias: {"summary_status": "outside_review_window"}},
+        commit=False,
+    )
+    db_session.refresh(stored)
+    assert (
+        stored.digest
+        == stored.summary
+        == {
+            "summary_status": "outside_review_window",
+            "summary_attempts": 3,
+        }
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="summary attempts"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=old,
+            window_end=old,
+            digest={"summary_status": "pending"},
+            include_history=True,
+            override_caller="test",
+            override_reason="Attempt to restart with a stale counter",
+            commit=False,
+        )
