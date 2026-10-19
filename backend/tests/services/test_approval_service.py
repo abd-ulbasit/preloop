@@ -4131,3 +4131,49 @@ async def test_note_approval_requires_bound_human(approval_service, decision):
     with pytest.raises(HTTPException) as exc:
         await getattr(approval_service, decision)(request.id, user_id=uuid.uuid4())
     assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("bypass_kind", ["standing", "time_boxed", "ai_driven"])
+async def test_bound_note_ignores_automatic_bypasses(
+    approval_service: ApprovalService,
+    sample_approval_request: ApprovalRequest,
+    sample_approval_workflow: ApprovalWorkflow,
+    bypass_kind: str,
+) -> None:
+    sample_approval_workflow.approval_config = {
+        "note_caller_user_id": str(uuid.uuid4())
+    }
+    sample_approval_workflow.approval_mode = (
+        "ai_driven" if bypass_kind == "ai_driven" else "standard"
+    )
+    approval_service.create_approval_request = AsyncMock(
+        return_value=sample_approval_request
+    )
+    approval_service.update_approval_request = AsyncMock(
+        return_value=sample_approval_request
+    )
+    approval_service.send_notifications = AsyncMock()
+    approval_service._resolve_bypass = AsyncMock(return_value=MagicMock())
+    approval_service._auto_approve_without_review = AsyncMock()
+    approval_service._auto_approve_via_bypass = AsyncMock()
+    with patch(
+        "preloop.services.approval_summary.generate_approval_summary",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await approval_service.create_and_notify(
+            account_id="test-account",
+            tool_configuration_id=uuid.uuid4(),
+            approval_workflow=sample_approval_workflow,
+            tool_name="send_note",
+            tool_args={"text": "Report progress."},
+            standing_bypass_reason=(
+                "native_tool_approvals_off" if bypass_kind == "standing" else None
+            ),
+        )
+    assert result.status == "pending"
+    approval_service.send_notifications.assert_awaited_once_with(
+        sample_approval_request, sample_approval_workflow
+    )
+    approval_service._resolve_bypass.assert_not_awaited()
+    approval_service._auto_approve_without_review.assert_not_awaited()
+    approval_service._auto_approve_via_bypass.assert_not_awaited()

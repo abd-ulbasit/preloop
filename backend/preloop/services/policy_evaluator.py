@@ -1638,7 +1638,11 @@ async def evaluate_policy_async(
 
         # send_note evaluates the same rules after resolving every target and
         # authenticating its caller lineage. Raw tool input lacks those facts.
-        if defer_note_scope and tool_name == "send_note":
+        if (
+            defer_note_scope
+            and tool_name == "send_note"
+            and server_name == "preloop-mcp"
+        ):
             return PolicyDecision("allow", None, None)
 
         scoped_rules = get_scoped_tool_rules(

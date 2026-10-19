@@ -45,6 +45,7 @@ const agentSessionStartPath = "/api/v1/agents/session-start"
 // parentSessionEnvVar carries the runtime session id of the spawning run.
 const parentSessionEnvVar = "PRELOOP_PARENT_SESSION_ID"
 const sessionAliasEnvVar = "PRELOOP_SESSION_ALIAS"
+const currentSessionEnvVar = "PRELOOP_CURRENT_SESSION_ID"
 
 // sessionHookHTTPTimeout bounds the one request the hook makes.
 const sessionHookHTTPTimeout = 5 * time.Second

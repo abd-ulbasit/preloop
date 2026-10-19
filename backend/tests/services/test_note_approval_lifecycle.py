@@ -27,11 +27,12 @@ class ApprovalTestSession(SyncApprovalSession):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("decision_path", ["console", "token"])
 @pytest.mark.parametrize(
-    "decision", ["approved", "declined", "expired", "owner_changed"]
+    "decision", ["approved", "declined", "expired", "owner_changed", "rate_limited"]
 )
 async def test_note_approval_lifecycle(
-    db_session: Session, test_user: models.User, decision: str
+    db_session: Session, test_user: models.User, decision: str, decision_path: str
 ) -> None:
     author = crud_managed_agent.create_custom_agent(
         db_session,
@@ -102,6 +103,10 @@ async def test_note_approval_lifecycle(
             side_effect=lambda: iter([db_session]),
         ),
         patch("preloop.models.db.session.get_async_db_session", new=async_session),
+        patch(
+            "preloop.api.endpoints.public_approval.get_async_db_session",
+            new=async_session,
+        ),
         patch.object(db_session, "close"),
         patch(
             "preloop.services.approval_summary.generate_approval_summary",
@@ -109,7 +114,7 @@ async def test_note_approval_lifecycle(
         ),
         patch.object(
             ApprovalService, "send_notifications", new=AsyncMock(return_value={})
-        ),
+        ) as notify,
         patch.object(ApprovalService, "_broadcast_approval_update", new=AsyncMock()),
         patch.object(ApprovalService, "_enqueue_approval_webhook", new=AsyncMock()),
         patch(
@@ -142,8 +147,53 @@ async def test_note_approval_lifecycle(
             == 0
         )
         service = ApprovalService(approval_db, "https://example.com")
+        if decision == "rate_limited":
+            for _ in range(2):
+                more = json.loads(
+                    await note_tool.fn(text="Report progress.", alias="worker")
+                )
+                assert more["status"] == "pending_approval", more
+            limited = json.loads(
+                await note_tool.fn(text="Report progress.", alias="worker")
+            )
+            assert limited["error"]["code"] == "note_approval_rate_limited", limited
+            assert notify.await_count == 3
+            assert db_session.query(models.AgentControlCommand).count() == 0
+            assert (
+                db_session.query(models.ApprovalRequest)
+                .filter_by(account_id=test_user.account_id)
+                .count()
+                == 3
+            )
+            await service.decline_request(request_id, user_id=test_user.id)
+            retry = json.loads(
+                await note_tool.fn(text="Report progress.", alias="worker")
+            )
+            assert retry["status"] == "pending_approval", retry
+            assert notify.await_count == 4
+            assert db_session.query(models.AgentControlCommand).count() == 0
+            return
+
+        async def decide(action: str) -> None:
+            if decision_path == "token":
+                from preloop.api.endpoints.public_approval import (
+                    ApprovalDecisionRequest,
+                    _decide_with_token,
+                )
+
+                await _decide_with_token(
+                    request_id,
+                    ApprovalDecisionRequest(action=action),
+                    request.approval_token,
+                    db_session,
+                )
+            elif action == "approve":
+                await service.approve_request(request_id, user_id=test_user.id)
+            else:
+                await service.decline_request(request_id, user_id=test_user.id)
+
         if decision in ("approved", "owner_changed"):
-            await service.approve_request(request_id, user_id=test_user.id)
+            await decide("approve")
             if decision == "owner_changed":
                 new_owner = crud_user.create(
                     db_session,
@@ -159,7 +209,7 @@ async def test_note_approval_lifecycle(
                 author.owner_user_id = new_owner.id
                 db_session.commit()
         elif decision == "declined":
-            await service.decline_request(request_id, user_id=test_user.id)
+            await decide("decline")
         else:
             request.expires_at = datetime.utcnow() - timedelta(seconds=1)
             db_session.flush()

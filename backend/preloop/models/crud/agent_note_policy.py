@@ -1,29 +1,41 @@
 """Provision editable note rules and caller-bound human approval workflows."""
 
+import logging
 from typing import Any
 from uuid import UUID, NAMESPACE_URL, uuid5
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from preloop.models import models
 
 SEED_KEY = "send_note_lineage_policy_v1"
 CALLER_APPROVER = "note_caller"
+logger = logging.getLogger(__name__)
 
 
-def seed_note_policy(db: Session, *, account_id: Any) -> bool:
-    """Seed once, preserving existing rules and subsequent user edits."""
-    account = db.query(models.Account).filter_by(id=account_id).with_for_update().one()
-    config = (
+def _note_config(db: Session, account_id: Any) -> models.ToolConfiguration | None:
+    """Read the seed marker, refreshing a row cached before the account lock."""
+    return (
         db.query(models.ToolConfiguration)
         .filter_by(
-            account_id=account.id,
+            account_id=account_id,
             tool_name="send_note",
             tool_source="builtin",
             managed_agent_id=None,
         )
+        .populate_existing()
         .first()
     )
+
+
+def seed_note_policy(db: Session, *, account_id: Any) -> bool:
+    """Seed once, preserving existing rules and subsequent user edits."""
+    config = _note_config(db, account_id)
+    if config is not None and (config.custom_config or {}).get(SEED_KEY):
+        return False
+    account = db.query(models.Account).filter_by(id=account_id).with_for_update().one()
+    config = _note_config(db, account_id)
     if config is not None and (config.custom_config or {}).get(SEED_KEY):
         return False
     if config is None:
@@ -100,12 +112,17 @@ def seed_note_policy(db: Session, *, account_id: Any) -> bool:
 
 
 def seed_all_note_policies(db: Session) -> int:
-    """Backfill existing accounts on startup in one transaction."""
-    count = sum(
-        seed_note_policy(db, account_id=row.id)
-        for row in db.query(models.Account).order_by(models.Account.id).all()
-    )
-    db.commit()
+    """Backfill independently; failed accounts are logged and retried next boot."""
+    account_ids = [row.id for row in db.query(models.Account.id).all()]
+    count = 0
+    for account_id in account_ids:
+        try:
+            seeded = seed_note_policy(db, account_id=account_id)
+            db.commit()
+            count += int(seeded)
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("Failed to seed note policy for account %s", account_id)
     return count
 
 

@@ -33,7 +33,9 @@ func spawnEnvironment(sessionID, alias string, inherited []string) ([]string, er
 	}
 	env := []string{}
 	for _, entry := range inherited {
-		if strings.HasPrefix(entry, parentSessionEnvVar+"=") || strings.HasPrefix(entry, sessionAliasEnvVar+"=") {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case parentSessionEnvVar, sessionAliasEnvVar, currentSessionEnvVar, "CODEX_THREAD_ID", "CURSOR_CONVERSATION_ID":
 			continue
 		}
 		env = append(env, entry)
@@ -42,7 +44,7 @@ func spawnEnvironment(sessionID, alias string, inherited []string) ([]string, er
 }
 
 func runSpawn(cmd *cobra.Command, args []string) error {
-	sessionID := firstNonEmptyString(mustFlagString(cmd, "session"), os.Getenv("CODEX_THREAD_ID"), os.Getenv("CURSOR_CONVERSATION_ID"), os.Getenv("PRELOOP_CURRENT_SESSION_ID"))
+	sessionID := firstNonEmptyString(mustFlagString(cmd, "session"), os.Getenv("CODEX_THREAD_ID"), os.Getenv("CURSOR_CONVERSATION_ID"), os.Getenv(currentSessionEnvVar))
 	env, err := spawnEnvironment(sessionID, mustFlagString(cmd, "alias"), os.Environ())
 	if err != nil {
 		return err

@@ -268,8 +268,10 @@ radius of this channel is the other agent's behaviour, not just its transcript.
 The default is therefore narrow enough that turning `send_note` on is not
 itself a decision that needs a threat model.
 
-**The default policy allows self and descendants.** Every account receives
-editable tool access rules for `send_note`:
+**The default policy allows self and descendants.** New accounts and existing
+accounts whose startup backfill succeeds receive editable tool access rules for
+`send_note`. A failed account is logged separately and retried on the next
+startup; its existing rules remain in effect until seeding succeeds:
 
 | Target | Default decision |
 | --- | --- |
@@ -288,6 +290,10 @@ Approval uses the existing workflow service and push/email notification channels
 An asynchronous workflow returns `pending_approval`; `get_approval_status` delivers
 the note once approved. Decline and expiry write no note. The request records the
 resolved target, relation and human permission facts in its rule context.
+The request's token link authorizes that bound human's approve or decline
+decision without requiring sign-in. Automatic approval bypasses do not decide
+these requests. A sender can queue at most three live approvals per target;
+pending or declined requests do not spend the hourly note delivery allowance.
 
 A refusal is a structured answer the model can act on, naming the scope the
 call would have needed, and each one has its own code:
@@ -298,6 +304,7 @@ call would have needed, and each one has its own code:
 | `note_scope_no_lineage` | The call carries no execution lineage, so it reaches nothing |
 | `note_scope_denied_by_rule` | A tool access rule denied it |
 | `note_scope_grant_unavailable` | The approval workflow is unavailable, or policy could not be evaluated. Scope widening fails closed |
+| `note_approval_rate_limited` | Three live note approvals from this sender are already pending for the target |
 
 Every refusal writes one `agent.note_scope_denied` audit row carrying that code,
 the target, the calling run and the rule that decided, so "my agent says it
@@ -335,7 +342,7 @@ worked out, never anything the calling agent asserted:
 | `args.note_default_scope` | `descendants` |
 | `args.same_owner` | Author and target agents have the same human owner |
 | `args.caller_user_can_steer_target` | The sender's human passes the console operator-note permission check |
-| `args.note_target_relation` | `self`, `ancestor`, `same_tree`, `unrelated` or `no_lineage` |
+| `args.note_target_relation` | `self`, `descendant`, `ancestor`, `same_tree`, `unrelated` or `no_lineage` |
 | `args.note_author_managed_agent_id`, `args.note_author_execution_id` | Who is asking, and from which run |
 | `args.note_target_managed_agent_id`, `args.note_target_runtime_session_id`, `args.note_target_execution_id` | What it wants to reach |
 | `args.text`, `args.agent_id`, `args.runtime_session_id`, `args.execution_id` | `text` is the caller's. On the grant path the id keys are the target as the platform resolved it, under the names the tool uses, and can be present even when the caller never named them. Key on the `note_*` facts, which name author and target unambiguously. |

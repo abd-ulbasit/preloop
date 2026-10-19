@@ -185,11 +185,16 @@ func TestSpawnUsesCurrentSessionHandoff(t *testing.T) {
 	if err := writeSessionHandoff(sessionHandoffFile{ExternalSessionID: "codex-thread", RuntimeSessionID: "11111111-2222-3333-4444-555555555555"}); err != nil {
 		t.Fatal(err)
 	}
-	env, err := spawnEnvironment("codex-thread", "api-worker", []string{"KEEP=yes", "PRELOOP_PARENT_SESSION_ID=stale", "PRELOOP_SESSION_ALIAS=old"})
+	env, err := spawnEnvironment("codex-thread", "api-worker", []string{"KEEP=yes", "PRELOOP_PARENT_SESSION_ID=stale", "PRELOOP_SESSION_ALIAS=old", "PRELOOP_CURRENT_SESSION_ID=conductor", "CODEX_THREAD_ID=conductor-codex", "CURSOR_CONVERSATION_ID=conductor-cursor"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(env, "\n")
+	for _, key := range []string{currentSessionEnvVar, "CODEX_THREAD_ID", "CURSOR_CONVERSATION_ID"} {
+		if strings.Contains(got, key+"=") {
+			t.Fatalf("child inherited conductor identity: %s", got)
+		}
+	}
 	if !strings.Contains(got, "PRELOOP_PARENT_SESSION_ID=11111111-2222-3333-4444-555555555555") || !strings.Contains(got, "PRELOOP_SESSION_ALIAS=api-worker") || strings.Contains(got, "stale") || !strings.Contains(got, "KEEP=yes") {
 		t.Fatalf("incorrect child environment: %s", got)
 	}

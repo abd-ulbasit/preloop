@@ -337,8 +337,14 @@ its credential principal before evaluating standard tool access rules. Seeded,
 editable rules allow self and descendants, request human approval for other runs
 the sender's owner can control, and deny the rest. Scope facts are recorded with
 the approval; async polling executes the approved call against its resolved
-target. `preloop spawn` passes the registered conductor session and worker alias
-to child processes. See [Spawning workers](docs/guide/spawning-workers.md).
+target. Request tokens authorize decisions by the bound human, while automatic
+approval bypasses leave these requests pending for that human. Pending note
+approvals have a separate per-sender/target cap, checked under the account's
+approval admission lock. Startup seeds unconfigured accounts independently,
+preserving progress and logging each failure for a later retry.
+`preloop spawn` passes the registered conductor session and worker alias to
+child processes and drops the conductor's harness identity variables. See
+[Spawning workers](docs/guide/spawning-workers.md).
 
 ### Telemetry export
 

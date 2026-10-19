@@ -710,6 +710,19 @@ class ApprovalService:
                 session, account_id=account_id
             )
         )
+        if tool_name == "send_note" and rule_context and "note_facts" in rule_context:
+            from preloop.models.crud.approval_request import (
+                ensure_note_approval_capacity,
+            )
+
+            await self.db.run_sync(
+                lambda session: ensure_note_approval_capacity(
+                    session,
+                    account_id=account_id,
+                    author_agent_id=managed_agent_id,
+                    note_facts=rule_context["note_facts"],
+                )
+            )
         expires_at = datetime.utcnow() + timedelta(seconds=timeout)
 
         # A request that knows its agent must never render as "AI agent".
@@ -2283,6 +2296,15 @@ class ApprovalService:
                 persist_error,
                 exc_info=True,
             )
+
+        # A note's caller-bound workflow requires this human even when a
+        # subject has a standing/time-boxed bypass or the template was edited
+        # to use AI. Notify normally instead of raising after committing a row.
+        if tool_name == "send_note" and (approval_workflow.approval_config or {}).get(
+            "note_caller_user_id"
+        ):
+            await self.send_notifications(approval_request, approval_workflow)
+            return approval_request
 
         # Standing configured bypass. The operator has turned approvals off for
         # this subject in governance config, which is a durable setting rather
