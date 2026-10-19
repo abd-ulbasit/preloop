@@ -5,6 +5,7 @@ with real-time progress updates via FastMCP Context.
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastmcp import Context
 from preloop.config import settings
 from preloop.models import models
+from preloop.models.crud.approval_request import NoteApprovalLimitError
 from preloop.tools.builtin_defs import TOOL_NAME_ALIASES
 
 logger = logging.getLogger(__name__)
@@ -813,8 +815,6 @@ async def require_approval(
 
                 # Check if async approval mode is enabled
                 if workflow_async_enabled:
-                    import json
-
                     # An async workflow returns here, roughly seventy lines
                     # before the poll loop where the park handshake lives, so
                     # on an async workflow the park was simply unreachable:
@@ -1387,6 +1387,16 @@ async def require_approval(
                     return await approved_result(final_comment or "", fresh=True)
                 return await approved_result(fresh=True)
 
+            except NoteApprovalLimitError as exc:
+                return False, json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "note_approval_rate_limited",
+                            "message": str(exc),
+                        },
+                    }
+                )
             except Exception as e:
                 logger.error(
                     f"Approval flow error for tool {tool_name}: {e}", exc_info=True

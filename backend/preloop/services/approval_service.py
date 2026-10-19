@@ -710,6 +710,19 @@ class ApprovalService:
                 session, account_id=account_id
             )
         )
+        if tool_name == "send_note" and rule_context and "note_facts" in rule_context:
+            from preloop.models.crud.approval_request import (
+                ensure_note_approval_capacity,
+            )
+
+            await self.db.run_sync(
+                lambda session: ensure_note_approval_capacity(
+                    session,
+                    account_id=account_id,
+                    author_agent_id=managed_agent_id,
+                    note_facts=rule_context["note_facts"],
+                )
+            )
         expires_at = datetime.utcnow() + timedelta(seconds=timeout)
 
         # A request that knows its agent must never render as "AI agent".
@@ -1049,6 +1062,18 @@ class ApprovalService:
         from fastapi import HTTPException
         from preloop.models.crud.owner_consent import get_by_approval_async
 
+        if approval_request.tool_name == "send_note":
+            workflow = approval_request.approval_workflow
+            bound_user = (
+                (workflow.approval_config or {}).get("note_caller_user_id")
+                if workflow is not None
+                else None
+            )
+            if bound_user and (user_id is None or str(user_id) != str(bound_user)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the sending agent's human can decide this note",
+                )
         consent = await get_by_approval_async(self.db, approval_request.id)
         if consent is None and approval_request.tool_name != "owner_consent":
             return
@@ -2271,6 +2296,15 @@ class ApprovalService:
                 persist_error,
                 exc_info=True,
             )
+
+        # A note's caller-bound workflow requires this human even when a
+        # subject has a standing/time-boxed bypass or the template was edited
+        # to use AI. Notify normally instead of raising after committing a row.
+        if tool_name == "send_note" and (approval_workflow.approval_config or {}).get(
+            "note_caller_user_id"
+        ):
+            await self.send_notifications(approval_request, approval_workflow)
+            return approval_request
 
         # Standing configured bypass. The operator has turned approvals off for
         # this subject in governance config, which is a durable setting rather

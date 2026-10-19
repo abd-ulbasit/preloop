@@ -636,7 +636,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 run_default_approval_workflow_startup_repair,
             )
 
+            from preloop.models.crud.agent_note_policy import seed_all_note_policies
+            from preloop.models.db.session import get_session_factory
+
             stats = run_default_approval_workflow_startup_repair()
+            with get_session_factory()() as note_policy_db:
+                seed_all_note_policies(note_policy_db)
             if stats["broken"] or stats["missing"]:
                 logger.info(
                     "Default approval workflow repair pass complete: "

@@ -278,9 +278,10 @@ SEND_NOTE_TOOL: Dict[str, Any] = {
         "children='latest' / 'all' for the live runs your session started. "
         "Delivered at its next turn boundary, recorded with you as author. "
         "Name exactly one target; none or two is refused and writes nothing. "
-        "Scope: the runs you started, at any depth. A sibling, the run that "
-        "started you, and anything outside your account are refused unless "
-        "an access rule grants more. Rate limited per author, per target, "
+        "Scope: your own run and the runs you started, at any depth. Other "
+        "runs require your human's approval when that human can control them; "
+        "tool access rules can change this. Other accounts are never reachable. "
+        "Rate limited per author, per target, "
         "per hour."
     ),
     "source": "builtin",
@@ -295,6 +296,11 @@ SEND_NOTE_TOOL: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "preloop_caller_session_id": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "Harness session id supplied by the Preloop hook; validated against your credential.",
+            },
             "text": {
                 "type": "string",
                 "description": (
@@ -615,6 +621,11 @@ LIST_SESSIONS_TOOL: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "preloop_caller_session_id": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "Harness session id supplied by the Preloop hook; validated against your credential.",
+            },
             "parent_session_id": {
                 "type": "string",
                 "description": (

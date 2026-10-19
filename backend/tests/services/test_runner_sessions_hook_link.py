@@ -115,11 +115,23 @@ def test_state_then_hook_resolves_to_runner_session(db_session, runner, test_use
         principal_type=PRINCIPAL_TYPE,
         principal_id="agent-1",
     ) == [only]
+    # Registration can attach hooks to a hosted session without changing its
+    # principal. An MCP caller must still authenticate as that principal.
+    assert (
+        caller_session_ids(
+            db_session,
+            account_id=test_user.account_id,
+            principal_type=PRINCIPAL_TYPE,
+            principal_id="agent-1",
+            headers={"x-mcp-client-session-id": hs},
+        )
+        == []
+    )
     assert caller_session_ids(
         db_session,
         account_id=test_user.account_id,
-        principal_type=PRINCIPAL_TYPE,
-        principal_id="agent-1",
+        principal_type="user",
+        principal_id=str(test_user.id),
         headers={"x-mcp-client-session-id": hs},
     ) == [only.id]
 

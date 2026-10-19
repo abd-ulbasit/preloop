@@ -96,8 +96,9 @@ type permissionCheckResponse struct {
 // Central enforcement returns allow or deny. The renderer also understands
 // native "ask" envelopes for callers that explicitly need a local prompt.
 type hookDecision struct {
-	Behavior string // "allow", "deny", or "ask"
-	Reason   string
+	UpdatedInput map[string]interface{}
+	Behavior     string // "allow", "deny", or "ask"
+	Reason       string
 	// OperatorNote is the rendered operator-note block this response carries
 	// back to the model, empty on the (overwhelmingly common) turn with no
 	// pending note. See agents_permission_hook_notes.go for the per-harness
@@ -202,6 +203,9 @@ func runAgentsPermissionHook(cmd *cobra.Command, args []string) error {
 	// of its hooks from one command, so only the payload names the event.
 	var eventRaw []byte
 	writeDecision := func(decision hookDecision) error {
+		if decision.Behavior == "allow" || decision.Behavior == hookBehaviorPass {
+			decision.UpdatedInput = callerLineageInput(eventRaw)
+		}
 		decision = applyOperatorNoteDelivery(
 			decision,
 			source,
@@ -870,13 +874,18 @@ func writeCodexPreToolUseDecision(out io.Writer, decision hookDecision) error {
 			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": decision.Reason,
 		}
 	}
-	if decision.OperatorNote != "" {
+	if decision.OperatorNote != "" || decision.UpdatedInput != nil {
 		specific, ok := payload["hookSpecificOutput"].(map[string]interface{})
 		if !ok {
 			specific = map[string]interface{}{"hookEventName": "PreToolUse"}
 			payload["hookSpecificOutput"] = specific
 		}
-		specific["additionalContext"] = decision.OperatorNote
+		if decision.OperatorNote != "" {
+			specific["additionalContext"] = decision.OperatorNote
+		}
+		if decision.UpdatedInput != nil {
+			specific["updatedInput"] = decision.UpdatedInput
+		}
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -890,6 +899,18 @@ func writeCodexPreToolUseDecision(out io.Writer, decision hookDecision) error {
 // hook response format and writes it to out.
 func writeHookDecision(out io.Writer, source string, decision hookDecision) error {
 	payload := renderHookDecision(source, decision)
+	if decision.UpdatedInput != nil {
+		if source == permissionSourceClaudeCode {
+			specific, ok := payload["hookSpecificOutput"].(map[string]interface{})
+			if !ok {
+				specific = map[string]interface{}{"hookEventName": "PreToolUse"}
+				payload["hookSpecificOutput"] = specific
+			}
+			specific["updatedInput"] = decision.UpdatedInput
+		} else if source == permissionSourceCursor {
+			payload["updatedInput"] = decision.UpdatedInput
+		}
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to encode hook decision: %w", err)

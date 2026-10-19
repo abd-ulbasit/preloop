@@ -1598,6 +1598,7 @@ async def evaluate_policy_async(
     resolve_tool_configuration: bool = True,
     record: bool = True,
     trace: Optional[list[dict[str, Any]]] = None,
+    defer_note_scope: bool = False,
 ) -> PolicyDecision:
     """Async version of evaluate_policy.
 
@@ -1634,6 +1635,15 @@ async def evaluate_policy_async(
             return PolicyDecision(
                 "deny", None, "Tool disabled by agent or API key configuration"
             )
+
+        # send_note evaluates the same rules after resolving every target and
+        # authenticating its caller lineage. Raw tool input lacks those facts.
+        if (
+            defer_note_scope
+            and tool_name == "send_note"
+            and server_name == "preloop-mcp"
+        ):
+            return PolicyDecision("allow", None, None)
 
         scoped_rules = get_scoped_tool_rules(
             account_meta_data,

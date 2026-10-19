@@ -1,6 +1,7 @@
 """Tests for DynamicFastMCP."""
 
 import inspect
+from typing import AsyncIterator
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -8,7 +9,9 @@ from uuid import uuid4
 from mcp import types
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
+from sqlalchemy.orm import Session
 
+from preloop.models import models
 from preloop.services.dynamic_fastmcp import (
     DynamicFastMCP,
     _python_type_for_schema,
@@ -2783,6 +2786,102 @@ class TestSendNoteToolExposure:
         assert isinstance(result, ToolResult)
         assert result.is_error
         assert "disabled" in result.content[0].text.lower()
+
+
+@pytest.mark.parametrize("server_name", ["example-upstream", "preloop-mcp"])
+async def test_proxied_send_note_enforces_deny_before_dispatch(
+    dynamic_mcp: DynamicFastMCP,
+    user_context: UserContext,
+    db_session: Session,
+    test_user: models.User,
+    server_name: str,
+) -> None:
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from preloop.models.db.session import SyncApprovalSession
+    from preloop.services import policy_evaluator
+
+    user_context.account_id = str(test_user.account_id)
+    user_context.user_id = str(test_user.id)
+    user_context.allowed_flow_tools = ["send_note"]
+    dynamic_mcp._user_context_provider = lambda: user_context
+    dynamic_mcp._proxied_tool_servers["send_note"] = str(uuid4())
+    dynamic_mcp._proxied_tool_server_names["send_note"] = server_name
+    config = models.ToolConfiguration(
+        account_id=test_user.account_id,
+        tool_name="send_note",
+        tool_source="mcp",
+        is_enabled=True,
+    )
+    db_session.add(config)
+    db_session.flush()
+    db_session.add(
+        models.ToolAccessRule(
+            account_id=test_user.account_id,
+            tool_configuration_id=config.id,
+            action="deny",
+            condition_expression="true",
+            description="Upstream notes are blocked",
+        )
+    )
+    db_session.flush()
+
+    @asynccontextmanager
+    async def session() -> AsyncIterator[SyncApprovalSession]:
+        yield SyncApprovalSession(db_session)
+
+    with (
+        patch(
+            "preloop.services.dynamic_fastmcp._prepare_grant_dispatch",
+            new=AsyncMock(
+                return_value=(SimpleNamespace(server_name=server_name), None)
+            ),
+        ),
+        patch.object(dynamic_mcp, "_audit_refused_tool_call"),
+        patch.object(dynamic_mcp, "_persist_tool_call_activity"),
+        patch("preloop.services.dynamic_fastmcp.get_db", lambda: iter([MagicMock()])),
+        patch(
+            "preloop.services.dynamic_fastmcp.kill_switch_service.tools_halted",
+            return_value=False,
+        ),
+        patch(
+            "preloop.services.dynamic_fastmcp._load_sensitive_data_policy",
+            return_value=(None, None),
+        ),
+        patch(
+            "preloop.services.dynamic_fastmcp._shared_tool_ceiling", return_value=None
+        ),
+        patch(
+            "preloop.services.dynamic_fastmcp.crud_tool_configuration.get_multi_by_account",
+            return_value=[],
+        ),
+        patch("preloop.models.db.session.get_async_db_session", new=session),
+        patch.object(
+            dynamic_mcp,
+            "list_tools",
+            new=AsyncMock(
+                return_value=[
+                    Tool(name="send_note", description="Upstream", parameters={})
+                ]
+            ),
+        ),
+        patch.object(
+            dynamic_mcp, "_restricted_runtime_denial", new=AsyncMock(return_value=None)
+        ),
+        patch.object(policy_evaluator, "_log_policy_decision_async"),
+        patch.object(
+            policy_evaluator,
+            "evaluate_policy_async",
+            wraps=policy_evaluator.evaluate_policy_async,
+        ) as evaluate,
+        patch.object(FastMCP, "call_tool", new=AsyncMock()) as dispatch,
+    ):
+        result = await dynamic_mcp.call_tool("send_note", {"text": "Report progress."})
+    assert result.is_error
+    assert "Upstream notes are blocked" in result.content[0].text
+    assert evaluate.call_args.kwargs["defer_note_scope"] is False
+    dispatch.assert_not_awaited()
 
 
 class TestToolCallUsageOutcome:
