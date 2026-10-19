@@ -28,6 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from preloop.models.concurrent_index_ddl import concurrent_index_ddl
+
 revision: str = "20261031_live_activity"
 down_revision: Union[str, None] = "20261030_gateway_model_idx"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -60,7 +62,7 @@ def upgrade() -> None:
     # Build existing-table indexes before creating the feature tables. Entering
     # autocommit commits prior DDL; a canceled build must leave no tables behind
     # that would make the next upgrade fail with DuplicateTable.
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         bind = op.get_bind()
         for name, definition in CONCURRENT_INDEXES.items():
             valid = bind.execute(
@@ -214,7 +216,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop the indexes and the four tables."""
-    with op.get_context().autocommit_block():
+    with concurrent_index_ddl(op.get_context()):
         for name in CONCURRENT_INDEXES:
             op.execute(sa.text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
     op.drop_table("activity_settings")

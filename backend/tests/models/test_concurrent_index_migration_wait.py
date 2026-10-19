@@ -52,6 +52,11 @@ def index_database() -> Iterator[Engine]:
     )
     try:
         with engine.begin() as connection:
+            connection.execute(text("CREATE TABLE account (id uuid PRIMARY KEY)"))
+            connection.execute(text('CREATE TABLE "user" (id uuid PRIMARY KEY)'))
+            connection.execute(
+                text("CREATE TABLE approval_request (resolved_at timestamptz)")
+            )
             connection.execute(
                 text(
                     "CREATE TABLE api_usage (id bigint, account_id bigint, "
@@ -113,6 +118,18 @@ def index_database() -> Iterator[Engine]:
             "runtime_session_activity",
             "ix_runtime_session_activity_code_tools",
             False,
+        ),
+        (
+            "20261031_live_activity.py",
+            "runtime_session_activity",
+            "ix_rsa_account_turn_events",
+            False,
+        ),
+        (
+            "20261031_live_activity.py",
+            "runtime_session_activity",
+            "ix_rsa_account_turn_events",
+            True,
         ),
         (
             "20261018_governance_spend_idx.py",
