@@ -7052,7 +7052,7 @@ paths:
       - Approval Bypasses
       - approval_bypasses
       summary: Revoke Bypass
-      description: "End a bypass early.\n\nAny user who can view approvals in the\
+      description: "End a bypass early.\n\nAny user who can decide approvals in the\
         \ account may revoke a bypass, even\none they did not create. Re-tightening\
         \ a control is always safe, so it\nshould never be blocked on ownership.\n\
         \nArgs:\n    bypass_id: The bypass to revoke.\n    current_user: Current authenticated\

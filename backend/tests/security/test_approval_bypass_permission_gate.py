@@ -39,6 +39,24 @@ import pytest
 from fastapi import HTTPException
 from preloop.api.endpoints import approval_bypass as bypass_endpoints
 
+
+@pytest.fixture(autouse=True)
+def _restore_permission_modules():
+    """Undo the module reloads and authorizer changes made by these tests.
+
+    Autouse, so it is set up before ``monkeypatch`` and torn down after it:
+    by then the stand-in plugin is gone from ``sys.modules`` and reloading
+    restores the real OSS state for later test files.
+    """
+    from preloop.plugins import account_hooks
+
+    authorizer = account_hooks.get_authorizer()
+    yield
+    account_hooks.register_authorizer(authorizer)
+    importlib.reload(importlib.import_module("preloop.utils.permissions"))
+    importlib.reload(bypass_endpoints)
+
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
