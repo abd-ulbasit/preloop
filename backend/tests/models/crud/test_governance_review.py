@@ -362,6 +362,9 @@ def test_upsert_digest_is_per_segment(db_session: Session, test_user: User) -> N
         window_end=closed,
         policy_document_version=2,
         summary={"intent": "revised"},
+        force_resummarize=True,
+        override_caller="operator/test",
+        override_reason="Explicitly revise the fixture",
         commit=False,
     )
     second = crud_governance_session_digest.upsert(
@@ -900,10 +903,10 @@ def test_category_filter_precedes_paging_and_keeps_scope(
 
 
 @pytest.mark.parametrize(
-    "status", ["complete", "deterministic_only", "deterministic_only_small"]
+    "status", ["complete", "deterministic_only", "deterministic_only_small", None]
 )
 def test_completed_segment_cannot_be_overwritten(
-    db_session: Session, test_user: User, status: str
+    db_session: Session, test_user: User, status: str | None
 ) -> None:
     runtime = _session(db_session, test_user.account_id)
     start, end = _window()
@@ -1084,3 +1087,31 @@ def test_older_review_boundary_cannot_implicitly_allow_history(
             review_window_start=old,
             commit=False,
         )
+
+
+def test_failed_segment_attempt_counter_cannot_be_reset_implicitly(
+    db_session: Session, test_user: User
+) -> None:
+    runtime = _session(db_session, test_user.account_id)
+    start, end = _window()
+    stored = crud_governance_session_digest.upsert(
+        db_session,
+        account_id=test_user.account_id,
+        runtime_session_id=runtime.id,
+        window_start=start,
+        window_end=end,
+        digest={"summary_status": "provider_failed", "summary_attempts": 3},
+        commit=False,
+    )
+    with pytest.raises(GovernanceReviewValidationError, match="summary attempts"):
+        crud_governance_session_digest.upsert(
+            db_session,
+            account_id=test_user.account_id,
+            runtime_session_id=runtime.id,
+            window_start=start,
+            window_end=end,
+            digest={"summary_status": "pending", "summary_attempts": 0},
+            commit=False,
+        )
+    db_session.refresh(stored)
+    assert stored.digest["summary_attempts"] == 3

@@ -13,7 +13,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import Integer, and_, func, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -137,6 +137,12 @@ def validate_digest(digest: Any) -> dict[str, Any]:
     if _json_size(digest) > gov.DIGEST_MAX_BYTES:
         raise GovernanceReviewValidationError(
             f"digest exceeds {gov.DIGEST_MAX_BYTES} bytes"
+        )
+    if "summary_attempts" in digest and (
+        type(digest["summary_attempts"]) is not int or digest["summary_attempts"] < 0
+    ):
+        raise GovernanceReviewValidationError(
+            "digest.summary_attempts must be a non-negative integer"
         )
     intent = digest.get("intent")
     if intent is not None and (
@@ -877,23 +883,35 @@ class CRUDGovernanceSessionDigest(CRUDBase[GovernanceSessionDigest]):
             funding=funding,
             truncated=truncated,
         )
+        status = GovernanceSessionDigest.digest["summary_status"].astext
+        intent = GovernanceSessionDigest.digest["intent"].astext
+        writable = or_(
+            and_(status.is_not(None), status.notin_(FINISHED_SUMMARY_STATUSES)),
+            and_(status.is_(None), or_(intent.is_(None), func.btrim(intent) == "")),
+        )
+        if "digest" in updates:
+            # A caller's stale snapshot cannot buy another retry allowance by
+            # resetting a failed segment's durable provider-attempt counter.
+            writable = and_(
+                writable,
+                func.coalesce(
+                    GovernanceSessionDigest.digest["summary_attempts"].astext.cast(
+                        Integer
+                    ),
+                    0,
+                )
+                <= updates["digest"].get("summary_attempts", 0),
+            )
         statement = pg_insert(GovernanceSessionDigest).values(**values)
         statement = statement.on_conflict_do_update(
             constraint="uq_governance_session_digest_segment",
             set_=updates,
-            where=None
-            if force_resummarize
-            else or_(
-                GovernanceSessionDigest.digest["summary_status"].astext.is_(None),
-                GovernanceSessionDigest.digest["summary_status"].astext.notin_(
-                    FINISHED_SUMMARY_STATUSES
-                ),
-            ),
+            where=None if force_resummarize else writable,
         ).returning(GovernanceSessionDigest.id)
         identifier = db.execute(statement).scalar_one_or_none()
         if identifier is None:
             raise GovernanceReviewValidationError(
-                "cannot overwrite a complete segment without force_resummarize"
+                "cannot overwrite a complete segment or reset summary attempts without force_resummarize"
             )
         if overrides:
             from preloop.services.session_search_index import redact_text
