@@ -179,7 +179,12 @@ export function codeHitFromRealtime(message: unknown): FleetCodeHit | null {
 }
 
 export const codeLabel = (hit: Pick<FleetCodeHit, 'action' | 'pr'>): string =>
-  hit.pr ? `${CODE_LABEL[hit.action]} ${hit.pr}` : CODE_LABEL[hit.action];
+  // Merge counters credit contributors, not the actor who pressed Merge.
+  hit.action === 'merged'
+    ? `contributed to merged ${hit.pr || 'PR'}`
+    : hit.pr
+      ? `${CODE_LABEL[hit.action]} ${hit.pr}`
+      : CODE_LABEL[hit.action];
 
 /** Add one event to the counts of the nodes that acted and their owners. */
 export function countCode(

@@ -192,7 +192,9 @@ describe('fleet-map live canvas', () => {
     const toasts = [...el.shadowRoot!.querySelectorAll('[data-toast]')].map(
       (t) => t.textContent!.replace(/\s+/g, ' ').trim()
     );
-    expect(toasts).to.deep.equal(['PR Reviewer merged acme/api#7']);
+    expect(toasts).to.deep.equal([
+      'PR Reviewer contributed to merged acme/api#7',
+    ]);
     expect(el.shadowRoot!.querySelector('[data-testid="code-truncated"]')).to
       .exist;
     // The same events on the next refresh are not listed again.
@@ -584,7 +586,7 @@ describe('fleet-map live canvas', () => {
     ).to.contain('2 opened');
   });
 
-  it('surfaces a live code event on the node and in the corner', async () => {
+  it('credits merge contributions without claiming the flow was the merger', async () => {
     const el = await spatialMap({ codeActivity: activity() });
     el.recordActivity('code_activity', {
       type: 'code_activity',
@@ -593,10 +595,13 @@ describe('fleet-map live canvas', () => {
     await el.updateComplete;
     expect(
       el.shadowRoot!.querySelector('[data-pip]')!.textContent!.trim()
-    ).to.equal('merged acme/api#42');
+    ).to.equal('contributed to merged acme/api#42');
     const toast = el.shadowRoot!.querySelector('[data-toast]')!;
     expect(toast.textContent).to.contain('PR Reviewer');
     expect(toast.textContent).to.contain('merged acme/api#42');
+    expect(toast.textContent!.replace(/\s+/g, ' ')).to.contain(
+      'PR Reviewer contributed to merged acme/api#42'
+    );
     const merged = el.shadowRoot!.querySelector<HTMLElement>(
       '[data-code="flow:reviewer"] [data-action="merged"]'
     )!;
