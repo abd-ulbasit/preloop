@@ -72,13 +72,23 @@ status: `new`, `onboarded` or `ignored`.
 
 - A new row fires the [`agent.discovered`](webhooks.md) webhook once. A
   re-report of the same tool only moves `last_seen_at` and emits nothing.
-- For current-user discovery, when an agent from the same workstation is onboarded and its enrollment
-  validates, the CLI sends the same two hashes with the validation and the
-  matching candidate becomes `onboarded`, linked to the managed agent. When
-  no report was ever sent for that install, the validation records an
-  `onboarded` candidate itself (the two hashes plus the OS family and CLI
-  version, nothing else), so onboarding alone places the agent on its device
-  in the device fleet. Re-onboarding updates the same row.
+- For current-user discovery, every enrollment write for an agent from the
+  same workstation (applied, validated or failing validation, for any agent
+  kind including MCP-only and IDE-config agents) carries the same two hashes,
+  and the matching candidate becomes `onboarded`, linked to the managed
+  agent. A restore carries no link. When no report was ever sent for that
+  install, the enrollment records an `onboarded` candidate itself (the two
+  hashes plus the OS family and CLI version, nothing else), so onboarding
+  alone places the agent on its device in the device fleet. Re-onboarding
+  updates the same row.
+- Agents enrolled by an older CLI have no such link. The fleet map and the
+  agent page then place the agent on a device by evidence already held, never
+  rewriting it: first a runner-reported harness of the agent's kind on a
+  device its owner uses, when exactly one managed agent fits; otherwise the
+  agent's enrollment hostname, when exactly one device has that hostname
+  (compared case-insensitively, ignoring `.local` or a domain, with `-`, `_`
+  and spaces alike) and the agent's owner, when known, uses that device.
+  Ambiguous matches stay unplaced.
 - **Mark ignored** in the console hides a candidate. **Copy onboard command**
   copies `preloop agents onboard <kind>` to run on that workstation.
 - Candidates nobody has reported for 90 days are deleted by a daily purge,
