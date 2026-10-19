@@ -719,6 +719,132 @@ class TestGroupedStandalonePolicyDecisions:
         assert probes
         assert all("OFFSET" in s for s in probes)
 
+    def test_approval_chain_orphans_are_counted_through_nested_probes(
+        self, db_session: Session, test_account, events
+    ):
+        # approval_approved carries the approval_id but no correlation_id:
+        # chained to an anchored approval_created it is a sub-event, with no
+        # such approval it is an orphan and anchors its own group.
+        self._log(
+            db_session,
+            test_account,
+            "approval_approved",
+            "send_email",
+            None,
+            approval_id="a-1",
+        )
+        self._log(
+            db_session,
+            test_account,
+            "approval_approved",
+            "send_email",
+            None,
+            approval_id="a-unknown",
+        )
+        from sqlalchemy import event as sa_event
+
+        statements: list[str] = []
+
+        def _capture(conn, cursor, statement, *args):
+            statements.append(" ".join(statement.split()))
+
+        bind = db_session.get_bind()
+        sa_event.listen(bind, "before_cursor_execute", _capture)
+        try:
+            groups, total = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id
+            )
+        finally:
+            sa_event.remove(bind, "before_cursor_execute", _capture)
+
+        orphans = [
+            g["primary_event"].details.get("approval_id")
+            for g in groups
+            if g["primary_event"].action == "approval_approved"
+        ]
+        assert orphans == ["a-unknown"]
+        assert total == len(groups) == 5
+        # As one join the approval probe was driven from a sequential scan of
+        # every approval_created row, per candidate: past the 30 s statement
+        # timeout on prod (#1693). Each probe is its own EXISTS now.
+        probes = [s for s in statements if "EXISTS" in s]
+        assert probes
+        assert not [s for s in probes if " JOIN audit_log AS " in s]
+
+    def test_other_event_families_are_listed_by_name_not_by_exclusion(
+        self, db_session: Session, test_account, events
+    ):
+        # Actions outside the grouped families still anchor their own group.
+        # They are matched as an IN list of the account's actions: a NOT IN
+        # walked every row in range of the account index (#1693).
+        self._log(db_session, test_account, "runner.inventory_changed", "r", None)
+        from sqlalchemy import event as sa_event
+
+        statements: list[str] = []
+
+        def _capture(conn, cursor, statement, *args):
+            statements.append(" ".join(statement.split()))
+
+        bind = db_session.get_bind()
+        sa_event.listen(bind, "before_cursor_execute", _capture)
+        try:
+            groups, total = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id, count_limit=100
+            )
+        finally:
+            sa_event.remove(bind, "before_cursor_execute", _capture)
+
+        actions = [g["primary_event"].action for g in groups]
+        assert "runner.inventory_changed" in actions
+        assert total == len(groups) == 5
+        assert not [s for s in statements if "audit_log.action NOT IN" in s]
+
+    def test_no_other_event_families_counts_nothing_for_that_branch(
+        self, db_session: Session, test_account, events
+    ):
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id
+        )
+        assert total == len(groups) == 4
+
+    def test_sub_events_are_probed_by_correlation_only(
+        self, db_session: Session, test_account, events
+    ):
+        # With an action list or ORDER BY timestamp in the sub-event read the
+        # planner walked the timestamp or action index across the account
+        # (18 s, then the statement timeout on prod, #1693). Only the id probe
+        # goes to SQL; the action filter and the order are applied in Python.
+        from sqlalchemy import event as sa_event
+
+        statements: list[str] = []
+
+        def _capture(conn, cursor, statement, *args):
+            statements.append(" ".join(statement.split()))
+
+        bind = db_session.get_bind()
+        sa_event.listen(bind, "before_cursor_execute", _capture)
+        try:
+            groups, _ = crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id
+            )
+        finally:
+            sa_event.remove(bind, "before_cursor_execute", _capture)
+
+        sub_reads = [
+            s
+            for s in statements
+            if "(audit_log.details ->> " in s
+            and ") IN (" in s
+            and "count(" not in s
+            and "EXISTS" not in s
+        ]
+        assert sub_reads
+        for sql in sub_reads:
+            assert "audit_log.action IN" not in sql
+            assert "ORDER BY" not in sql
+        by_cid = {g["correlation_id"]: g for g in groups}
+        assert [s.action for s in by_cid["c-both"]["sub_events"]] == ["policy_deny"]
+
     def test_tool_name_filter_matches_standalone_deny(
         self, db_session: Session, test_account, events
     ):
@@ -940,3 +1066,84 @@ def test_grouped_total_branches_are_disjoint():
     )
 
     assert not set(PRIMARY_ACTIONS) & set(STANDALONE_POLICY_ACTIONS)
+
+
+class TestGroupedTotalDegradesOnTimeout:
+    """A total the database cancels must not take the page down (#1693)."""
+
+    @staticmethod
+    def _rows(db_session: Session, account, count: int) -> None:
+        for index in range(count):
+            crud_audit_log.log_action(
+                db_session,
+                account_id=account.id,
+                action="tool_call",
+                resource_type="tool",
+                resource_id=f"t-{index}",
+                status="success",
+                details={"correlation_id": f"c-{index}"},
+            )
+
+    @staticmethod
+    def _time_out(monkeypatch, *, code_attribute: str = "pgcode"):
+        """Make every count raise the driver's statement-timeout error.
+
+        psycopg2 (the sync engine's driver for ``postgresql://``) exposes the
+        SQLSTATE as ``pgcode``, psycopg3 as ``sqlstate``; both must degrade.
+        """
+        from types import SimpleNamespace
+
+        from sqlalchemy.exc import OperationalError
+
+        from preloop.models.crud import audit_log as audit_log_module
+
+        def _cancelled(*args, **kwargs):
+            orig = SimpleNamespace(**{code_attribute: "57014"})
+            raise OperationalError("SELECT count(*)", {}, orig)
+
+        monkeypatch.setattr(audit_log_module, "_count_rows", _cancelled)
+
+    @pytest.mark.parametrize("code_attribute", ["pgcode", "sqlstate"])
+    def test_capped_total_reads_more_than_the_cap(
+        self, db_session: Session, test_account, monkeypatch, code_attribute
+    ):
+        self._rows(db_session, test_account, 3)
+        self._time_out(monkeypatch, code_attribute=code_attribute)
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, limit=2, count_limit=100
+        )
+        assert len(groups) == 2
+        assert total == 101
+
+    def test_uncapped_total_is_what_the_page_proves(
+        self, db_session: Session, test_account, monkeypatch
+    ):
+        self._rows(db_session, test_account, 3)
+        self._time_out(monkeypatch)
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, limit=2
+        )
+        assert len(groups) == 2
+        # What the page proves, nothing more: a lower bound.
+        assert total == 2
+        groups, total = crud_audit_log.get_grouped_by_correlation(
+            db_session, account_id=test_account.id, limit=5
+        )
+        assert len(groups) == 3
+        assert total == 3
+
+    def test_other_database_errors_still_raise(
+        self, db_session: Session, test_account, monkeypatch
+    ):
+        from sqlalchemy.exc import OperationalError
+
+        from preloop.models.crud import audit_log as audit_log_module
+
+        def _broken(*args, **kwargs):
+            raise OperationalError("SELECT count(*)", {}, Exception("gone"))
+
+        monkeypatch.setattr(audit_log_module, "_count_rows", _broken)
+        with pytest.raises(OperationalError):
+            crud_audit_log.get_grouped_by_correlation(
+                db_session, account_id=test_account.id
+            )

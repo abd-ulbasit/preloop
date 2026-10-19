@@ -1,16 +1,20 @@
 """CRUD operations for AuditLog model."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, false, func, or_, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, aliased
 
 from ..models.audit_log import AuditLog
 from ..models.user import User
 from .base import CRUDBase
+
+logger = logging.getLogger(__name__)
 
 # Policy decisions that can stand alone in the grouped timeline when no
 # tool_call row was written for the same correlation_id.
@@ -136,6 +140,47 @@ def _count_rows(db: Session, filters: List[Any], limit: Optional[int]) -> int:
         )
     capped = db.query(AuditLog.id).filter(*filters).limit(limit + 1).subquery()
     return db.query(func.count()).select_from(capped).scalar() or 0
+
+
+def _is_statement_timeout(exc: OperationalError) -> bool:
+    """Whether ``exc`` is Postgres cancelling a statement for its timeout.
+
+    Read through ``postgres_sqlstate``: psycopg2 exposes the code as
+    ``pgcode``, psycopg3 as ``sqlstate``.
+    """
+    from .audit_chain import postgres_sqlstate
+
+    return postgres_sqlstate(exc) == "57014"
+
+
+def _account_actions(db: Session, account_id: str) -> List[str]:
+    """Every distinct ``action`` the account's trail holds.
+
+    A loose index scan of ``ix_audit_log_account_action_status_ts_ip``: one
+    probe per distinct action (a few dozen), not a read of the trail. The
+    grouped timeline uses it to turn "any action not otherwise grouped" into
+    an ``IN`` list, because the ``NOT IN`` it replaces cannot narrow the
+    index by action and walked every row in range: 627k index entries and
+    5.8 s for 868 matches on the founder account (#1693).
+    """
+    rows = db.execute(
+        text(
+            """
+            WITH RECURSIVE present(action) AS (
+                SELECT min(action) FROM audit_log WHERE account_id = :account_id
+                UNION ALL
+                SELECT (
+                    SELECT min(action) FROM audit_log
+                    WHERE account_id = :account_id AND action > present.action
+                )
+                FROM present WHERE present.action IS NOT NULL
+            )
+            SELECT action FROM present WHERE action IS NOT NULL
+            """
+        ),
+        {"account_id": account_id},
+    ).all()
+    return [row[0] for row in rows]
 
 
 def audit_row_id(details: Optional[Dict[str, Any]]) -> UUID:
@@ -592,8 +637,18 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
             )
             # Keep unknown/core event families visible without duplicating the
             # known children that the grouping pass attaches below.
-            other_condition = AuditLog.action.notin_(
-                (*PRIMARY_ACTIONS, *STANDALONE_POLICY_ACTIONS, *GROUP_CHILD_ACTIONS)
+            grouped_actions = {
+                *PRIMARY_ACTIONS,
+                *STANDALONE_POLICY_ACTIONS,
+                *GROUP_CHILD_ACTIONS,
+            }
+            other_actions = sorted(
+                action
+                for action in _account_actions(db, account_id_str)
+                if action not in grouped_actions
+            )
+            other_condition = (
+                AuditLog.action.in_(other_actions) if other_actions else false()
             )
             parent = aliased(AuditLog)
             has_direct_parent = (
@@ -607,22 +662,34 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 .offset(0)
                 .exists()
             )
+            # Nested, not a join: "an approval_created row for this
+            # approval_id, which itself has an anchor". As one join the
+            # planner drove it from a sequential scan of every
+            # approval_created row in the table, once per candidate row; the
+            # count then outlived the 30 s statement timeout on prod (#1693).
+            # Nested, each probe is its own partial-index lookup
+            # (ix_audit_log_account_approval, then the correlation index).
             created = aliased(AuditLog)
             approval_parent = aliased(AuditLog)
-            has_approval_parent = (
-                db.query(created.id)
-                .join(
-                    approval_parent,
+            created_has_parent = (
+                db.query(approval_parent.id)
+                .filter(
+                    approval_parent.account_id == account_id_str,
+                    approval_parent.action.in_(_GROUP_ANCHOR_ACTIONS),
                     approval_parent.details["correlation_id"].astext
                     == created.details["correlation_id"].astext,
                 )
+                .offset(0)
+                .exists()
+            )
+            has_approval_parent = (
+                db.query(created.id)
                 .filter(
                     created.account_id == account_id_str,
                     created.action == "approval_created",
                     created.details["approval_id"].astext
                     == AuditLog.details["approval_id"].astext,
-                    approval_parent.account_id == account_id_str,
-                    approval_parent.action.in_(_GROUP_ANCHOR_ACTIONS),
+                    created_has_parent,
                 )
                 .offset(0)
                 .exists()
@@ -657,10 +724,28 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         else:
             # Count total before pagination. The branches are disjoint
             # (different actions), so their counts add up.
-            total = sum(
-                _count_rows(db, [*scope_filters, condition], count_limit)
-                for condition in count_conditions
-            )
+            counted: Optional[int]
+            try:
+                # A savepoint, so a count the database cancels leaves the
+                # transaction usable for the page below.
+                with db.begin_nested():
+                    counted = sum(
+                        _count_rows(db, [*scope_filters, condition], count_limit)
+                        for condition in count_conditions
+                    )
+            except OperationalError as exc:
+                if not _is_statement_timeout(exc):
+                    raise
+                # The total is a label; the page is the content. A count
+                # past the statement timeout used to 500 the whole Audit
+                # page (#1693), so it degrades to a bound instead.
+                logger.warning(
+                    "Grouped audit total timed out for account %s; "
+                    "reporting a lower bound",
+                    account_id_str,
+                )
+                counted = None
+            total = counted or 0
             if count_limit is not None:
                 total = min(total, count_limit + 1)
 
@@ -670,6 +755,15 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                 .offset(skip)
                 .limit(limit)
             )
+            if counted is None:
+                # Past the cap means "more than the cap", which a count that
+                # ran out of time on a large trail is. Without a cap: the
+                # groups the page proves, a lower bound.
+                total = (
+                    count_limit + 1
+                    if count_limit is not None
+                    else skip + len(primary_events)
+                )
 
         if not primary_events:
             return [], total if not outcome_filter else 0
@@ -686,18 +780,28 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
         sub_events_map: Dict[str, List[_GroupingRow]] = {}
         if correlation_ids:
             # 3a: Fetch events that directly carry a correlation_id
-            direct_subs = _narrow_audit_rows(
-                db.query(AuditLog)
-                .filter(
-                    AuditLog.account_id == account_id_str,
-                    AuditLog.details["correlation_id"].astext.in_(
-                        list(correlation_ids)
-                    ),
-                    AuditLog.action.in_(
-                        (*STANDALONE_POLICY_ACTIONS, *GROUP_CHILD_ACTIONS)
-                    ),
-                )
-                .order_by(AuditLog.timestamp.asc())
+            # Only the correlation ids in SQL; action and order are applied
+            # here. A correlation id holds a handful of rows, but the planner
+            # estimates thousands per id, so given an action list or an
+            # ORDER BY timestamp it walked ix_audit_log_timestamp or the
+            # action index across the account instead of probing
+            # ix_audit_log_account_correlation: 18 s and then the statement
+            # timeout for the Overview's exceptions on prod (#1693).
+            sub_actions = {*STANDALONE_POLICY_ACTIONS, *GROUP_CHILD_ACTIONS}
+            direct_subs = sorted(
+                (
+                    sub
+                    for sub in _narrow_audit_rows(
+                        db.query(AuditLog).filter(
+                            AuditLog.account_id == account_id_str,
+                            AuditLog.details["correlation_id"].astext.in_(
+                                list(correlation_ids)
+                            ),
+                        )
+                    )
+                    if sub.action in sub_actions
+                ),
+                key=lambda sub: sub.timestamp,
             )
 
             for sub in direct_subs:
@@ -721,17 +825,24 @@ class CRUDAuditLog(CRUDBase[AuditLog]):
                         approval_id_to_cid[aid] = cid
 
             if approval_id_to_cid:
-                chained_subs = _narrow_audit_rows(
-                    db.query(AuditLog)
-                    .filter(
-                        AuditLog.account_id == account_id_str,
-                        AuditLog.details["approval_id"].astext.in_(
-                            list(approval_id_to_cid.keys())
-                        ),
-                        AuditLog.action.in_(GROUP_CHILD_ACTIONS),
-                        AuditLog.action != "approval_created",  # already fetched
-                    )
-                    .order_by(AuditLog.timestamp.asc())
+                # The same shape as the direct sub-events, for the same
+                # reason: only the approval-id probe in SQL.
+                chained_subs = sorted(
+                    (
+                        sub
+                        for sub in _narrow_audit_rows(
+                            db.query(AuditLog).filter(
+                                AuditLog.account_id == account_id_str,
+                                AuditLog.details["approval_id"].astext.in_(
+                                    list(approval_id_to_cid.keys())
+                                ),
+                            )
+                        )
+                        if sub.action in GROUP_CHILD_ACTIONS
+                        # approval_created was fetched with the direct subs.
+                        and sub.action != "approval_created"
+                    ),
+                    key=lambda sub: sub.timestamp,
                 )
 
                 for sub in chained_subs:

@@ -596,6 +596,9 @@ describe('activity-feed', () => {
       }
       expect(audit[2]).to.contain(`skip=${AUDIT_PAGE_SIZE}`);
       expect(audit[3]).to.contain(`skip=${AUDIT_PAGE_SIZE * 2}`);
+      // The feed never shows a total, so it never asks for an exact one: an
+      // uncapped count of a long trail failed the request on prod (#1693).
+      for (const url of audit) expect(url).to.contain('count_limit=1');
       restore();
       localStorage.removeItem('accessToken');
     });

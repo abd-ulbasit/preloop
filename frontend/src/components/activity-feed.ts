@@ -1803,6 +1803,10 @@ export class ActivityFeed extends LitElement {
   ): Promise<AuditGroupLike[] | null> {
     const params = new URLSearchParams();
     params.set('limit', String(AUDIT_PAGE_SIZE));
+    // The feed never reads the total. Without a cap the server counts the
+    // whole matching trail, which on a long one ran past the statement
+    // timeout and failed the page (#1693).
+    params.set('count_limit', '1');
     if (skip) params.set('skip', String(skip));
     if (since) params.set('start_date', since);
     for (const action of actions ?? []) params.append('event_type', action);
