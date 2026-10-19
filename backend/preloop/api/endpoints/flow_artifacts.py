@@ -20,6 +20,7 @@ from preloop.models.crud import (
     crud_flow_execution,
     flow_artifact,
 )
+from preloop.models.crud.audit_chain import postgres_sqlstate
 from preloop.models.db.session import get_db_session
 from preloop.models.schemas.flow_artifact import ArtifactReference
 from preloop.services.flow_artifacts import (
@@ -265,7 +266,7 @@ def record_artifact_rejection(
 
 def is_retryable_lock_conflict(exc: OperationalError) -> bool:
     """True for a deadlock or serialization abort PostgreSQL rolled back."""
-    return getattr(exc.orig, "sqlstate", None) in _RETRYABLE_SQLSTATES
+    return postgres_sqlstate(exc) in _RETRYABLE_SQLSTATES
 
 
 def _put_with_retry(

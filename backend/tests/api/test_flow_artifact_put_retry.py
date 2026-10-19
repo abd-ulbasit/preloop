@@ -74,3 +74,24 @@ def test_other_operational_errors_are_not_replayed(
     with pytest.raises(OperationalError):
         endpoint._put_with_retry(MagicMock(), uuid4(), CLAIMS, b"archive")
     assert len(calls) == 1
+
+
+class _Psycopg2DeadlockError(Exception):
+    """psycopg2 exposes the SQLSTATE as ``pgcode`` and has no ``sqlstate``."""
+
+    pgcode = "40P01"
+
+
+def test_psycopg2_deadlock_is_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    reference = object()
+
+    def put(*_args: Any, **_kwargs: Any) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            raise _operational(_Psycopg2DeadlockError("deadlock detected"))
+        return reference
+
+    monkeypatch.setattr(endpoint, "put_artifact", put)
+    assert endpoint._put_with_retry(MagicMock(), uuid4(), CLAIMS, b"x") is reference
+    assert len(calls) == 2
