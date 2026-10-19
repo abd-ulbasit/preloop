@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 import importlib
+from collections.abc import Callable
+
+import pytest
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,8 +26,12 @@ def test_operator_day_marker_is_global(db_session: Session) -> None:
     assert not crud_event.operator_digest_sent(db_session, day="2099-01-02")
 
 
+@pytest.mark.parametrize("prior_action", ["governance_analysis", None])
 def test_relabel_restore_roundtrip(
-    db_session: Session, create_account, monkeypatch
+    db_session: Session,
+    create_account: Callable[..., models.Account],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_action: str | None,
 ) -> None:
     migration = importlib.import_module(
         "preloop.models.alembic.versions.20261102_restore_usage_action"
@@ -43,7 +50,7 @@ def test_relabel_restore_roundtrip(
         row = models.ApiUsage(
             account_id=account.id,
             timestamp=datetime.now(timezone.utc),
-            action_type="governance_analysis",
+            action_type=prior_action,
             endpoint="/test",
             method="POST",
             status_code=200,
@@ -58,13 +65,13 @@ def test_relabel_restore_roundtrip(
     assert [r.action_type for r in rows] == [
         "model_gateway",
         "model_gateway",
-        "governance_analysis",
-        "governance_analysis",
+        prior_action,
+        prior_action,
     ]
     migration.upgrade()
     migration.downgrade()
     db_session.expire_all()
-    assert all(r.action_type == "governance_analysis" for r in rows)
+    assert all(r.action_type == prior_action for r in rows)
     assert all("report_restore_action_type" not in r.meta_data for r in rows)
     migration.upgrade()
     db_session.expire_all()
