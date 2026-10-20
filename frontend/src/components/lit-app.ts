@@ -412,8 +412,10 @@ export class LitApp extends LitElement {
                 path: 'dependencies',
                 component: 'issues-dependencies-view',
               },
-              { path: 'duplicates', component: 'duplicates-view' },
-              { path: 'assignments', component: 'assignments-view' },
+              // Legacy stubs ("Issues Dashboard", "Coming Soon") that no nav
+              // entry leads to; an old bookmark lands on Similar issues.
+              { path: 'duplicates', redirect: '/console/issues' },
+              { path: 'assignments', redirect: '/console/issues' },
             ],
           },
           {

@@ -30,6 +30,12 @@ import type {
 } from '../types';
 import type { LiveToolCall } from './live-session';
 import { normalizeToolCalls } from './live-session';
+import { isHarnessSideRequestEvent } from './harness-side-request';
+
+export {
+  HARNESS_SIDE_REQUEST_PREFIXES,
+  isHarnessSideRequest,
+} from './harness-side-request';
 
 export type TranscriptStepKind =
   'tool_call' | 'tool_result' | 'system' | 'injected' | 'intermediate';
@@ -433,6 +439,7 @@ export function buildConversation(
       stats.eventsWithPartialToolResults += 1;
     }
     const failed = eventIsFailure(event);
+    const sideRequest = isHarnessSideRequestEvent(event);
 
     previewMessages(event).forEach((message, messageIndex) => {
       const text = (message.text || '').trim();
@@ -466,6 +473,22 @@ export function buildConversation(
         truncated: Boolean(message.truncated),
         toolCallIds: message.tool_call_ids,
       };
+
+      if (sideRequest && (source === 'response' || role === 'user')) {
+        stats.injectedCount += 1;
+        atoms.push({
+          type: 'step',
+          order: order++,
+          step: {
+            kind: 'injected',
+            label: 'Harness side request',
+            injectedPatternId: 'harness_side_request',
+            detectionExact: false,
+            ...base,
+          },
+        });
+        return;
+      }
 
       if (source === 'response') {
         // Provisional agent response; the grouping pass demotes all but the

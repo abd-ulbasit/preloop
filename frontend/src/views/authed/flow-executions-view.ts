@@ -844,7 +844,7 @@ export class FlowExecutionsView extends AuthedElement {
       count: (usage: GatewayTokenUsage | null) => number
     ) => {
       const usage = row.token_usage || null;
-      if (!usage) return '\u2014';
+      if (!usage) return '-';
       return formatTokenCount(count(usage));
     };
     return [
@@ -912,15 +912,13 @@ export class FlowExecutionsView extends AuthedElement {
         cellClass: 'duration-cell',
         value: (row) => durationOf(row),
         cell: (row) => {
-          const label =
-            executionDurationText(row, this.durationNow) || '\u2014';
+          const label = executionDurationText(row, this.durationNow) || '-';
           // The span gives the layout test the text box to measure; the
           // cell's ellipsis already clips the row when an operator drags the
           // column narrower.
           return html`<span class="duration-text">${label}</span>`;
         },
-        cellTitle: (row) =>
-          executionDurationText(row, this.durationNow) || '\u2014',
+        cellTitle: (row) => executionDurationText(row, this.durationNow) || '-',
       },
       {
         id: 'model',
@@ -1346,6 +1344,7 @@ export class FlowExecutionsView extends AuthedElement {
         }
 
         <time-range-select
+          size="medium"
           ariaLabel="Executions time range"
           .value=${this.range}
           .options=${RANGE_OPTIONS.map(({ value, label }) => ({
@@ -1545,7 +1544,14 @@ export class FlowExecutionsView extends AuthedElement {
         <!-- "Failed" says that it broke; the category says what broke, which
              is the difference between a provider hiccup and a flow that never
              confirms it finished. -->
-        ${renderFailureCategoryChip(exec.failure_category)}
+        ${
+          // A stopped run whose category is "cancelled" said the same thing
+          // twice ("Stopped" over "Cancelled"): one chip is enough (U-14).
+          ['STOPPED', 'CANCELLED'].includes(exec.status) &&
+          String(exec.failure_category || '').toLowerCase() === 'cancelled'
+            ? nothing
+            : renderFailureCategoryChip(exec.failure_category)
+        }
         ${this.renderResumeLine(exec)}
       </div>
     `;
@@ -1586,7 +1592,7 @@ export class FlowExecutionsView extends AuthedElement {
    */
   private renderCachedCell(exec: FlowExecution) {
     const split = cacheSplitOf(exec.token_usage || null);
-    if (!split) return '\u2014';
+    if (!split) return '-';
     return formatTokenCount(split.hit);
   }
 

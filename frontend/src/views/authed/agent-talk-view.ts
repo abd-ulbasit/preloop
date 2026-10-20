@@ -57,7 +57,11 @@ import {
   openTalkChannel,
   postTalkChannelMessage,
 } from '../../utils/talk-channel';
-import { saveTalkWindowGeometry, talkRoutePath } from '../../utils/talk-window';
+import {
+  saveTalkWindowGeometry,
+  talkRoutePath,
+  talkWindowTitle,
+} from '../../utils/talk-window';
 import type { PendingTalkMessage } from '../../components/session-chat-view';
 import { TALK_RETRY_EVENT } from '../../components/session-chat-view';
 import type { TalkComposer } from '../../components/talk-composer';
@@ -452,9 +456,10 @@ export class AgentTalkView extends LitElement {
    * them, so it names the agent and the session, not the product.
    */
   private syncDocumentTitle(): void {
-    const name = this.agent?.display_name || 'Agent';
-    const subject = this.sessionSubject;
-    document.title = subject ? `${name} · ${subject}` : `${name} · Talk`;
+    document.title = talkWindowTitle(
+      this.agent?.display_name || 'Agent',
+      this.sessionSubject
+    );
   }
 
   private pickSession(sessions: RuntimeSessionSummary[]): string | null {

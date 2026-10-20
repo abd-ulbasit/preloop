@@ -1,4 +1,5 @@
 import { parseUTCDate } from './date';
+import { isHarnessSideRequestEvent } from './harness-side-request';
 import type { FlowGatewayEvent, RuntimeSessionActivityItem } from '../types';
 
 export type ToolPhase =
@@ -198,7 +199,47 @@ export function sessionWork(
     };
   if ([...requests].some(([id]) => !finished.has(id)))
     return { label: 'Activity unavailable' };
+  // How the newest model call finished says whose turn it is: a reply that
+  // ended the turn waits for the operator, a reply asking for tools means
+  // the agent is running them. Older events without a reason keep the old
+  // neutral label rather than guessing.
+  const reason = lastFinishReason(events);
+  if (reason === 'turn_end') return { label: 'Your turn' };
+  if (reason === 'tool') return { label: 'Agent working' };
   return { label: events.length ? 'Waiting for agent' : 'Idle' };
+}
+
+const TURN_END_REASONS = new Set(['stop', 'end_turn', 'stop_sequence']);
+const TOOL_REASONS = new Set(['tool_calls', 'tool_use', 'function_call']);
+
+/**
+ * `turn_end` or `tool` for the newest finished model call that stated a
+ * finish reason, or null when none did.
+ */
+export function lastFinishReason(
+  events: FlowGatewayEvent[]
+): 'turn_end' | 'tool' | null {
+  let newest: { at: number; reason: string } | null = null;
+  for (const event of events) {
+    const type = event.type || '';
+    if (
+      !type.startsWith('model_gateway') ||
+      type === 'model_gateway_request_started'
+    )
+      continue;
+    // A harness side request (title or status summariser) ends with "stop"
+    // without the agent having finished anything.
+    if (isHarnessSideRequestEvent(event)) continue;
+    const reason = event.payload?.finish_reason;
+    if (typeof reason !== 'string' || !reason) continue;
+    const at = Date.parse(event.timestamp || '') || 0;
+    if (!newest || at >= newest.at) newest = { at, reason };
+  }
+  if (!newest) return null;
+  const reason = newest.reason.toLowerCase();
+  if (TURN_END_REASONS.has(reason)) return 'turn_end';
+  if (TOOL_REASONS.has(reason)) return 'tool';
+  return null;
 }
 
 export function readablePayload(value: string | undefined): string {

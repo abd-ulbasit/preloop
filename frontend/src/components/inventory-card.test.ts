@@ -1195,10 +1195,10 @@ describe('inventory-card Agents columns', () => {
       };
     };
     const table = el.agentTable;
-    expect(table.widthOfColumn('name')).to.equal(280);
+    expect(table.widthOfColumn('name')).to.equal(240);
     table.resizeBy('name', -1000);
     await el.updateComplete;
-    expect(table.widthOfColumn('name')).to.equal(180);
+    expect(table.widthOfColumn('name')).to.equal(160);
     const link = el.shadowRoot!.querySelector('a.row-name') as HTMLElement;
     expect(link.getAttribute('title')).to.equal(
       'a-very-long-agent-name-on-a-build-host'
@@ -1215,12 +1215,12 @@ describe('inventory-card Agents columns', () => {
       new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })
     );
     await el.updateComplete;
-    expect(readTablePreferences(LIST)?.columnSizing?.name).to.equal(296);
+    expect(readTablePreferences(LIST)?.columnSizing?.name).to.equal(256);
 
     const again = (await card({ agentRows: [agentRow()] })) as HTMLElement & {
       agentTable: { widthOfColumn(id: string): number };
     };
-    expect(again.agentTable.widthOfColumn('name')).to.equal(296);
+    expect(again.agentTable.widthOfColumn('name')).to.equal(256);
   });
 });
 
@@ -1347,5 +1347,65 @@ describe('inventory-card spatial map', () => {
     expect(
       api.callsTo('/api/v1/fleet/code-activity')[0]?.search ?? ''
     ).to.contain('active_within_minutes=43200');
+  });
+});
+
+describe('inventory-card agents table at 1440 (B-07)', () => {
+  beforeEach(() => {
+    localStorage.removeItem(INVENTORY_TAB_STORAGE_KEY);
+  });
+
+  it('fits the card with Last seen and Model visible', async () => {
+    // The Overview main column is 735px wide at a 1440 viewport.
+    const host = await fixture<HTMLElement>(
+      html`<div style="width: 735px">
+        <inventory-card
+          .agentRows=${[
+            agentRow({
+              name: 'A coding agent with a long display name',
+              lastSeenAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
+            }),
+          ]}
+          .agentsTotal=${1}
+          rangeLabel="30d"
+        ></inventory-card>
+      </div>`
+    );
+    const el = host.querySelector('inventory-card') as InventoryCard;
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const table = el.shadowRoot!.querySelector(
+      'table.inventory-table'
+    ) as HTMLElement;
+    const scroll = table.parentElement as HTMLElement;
+    expect(table.scrollWidth, 'the table fits its card').to.be.at.most(
+      scroll.clientWidth + 1
+    );
+    const model = table.querySelector('thead th.col-model') as HTMLElement;
+    expect(model.getBoundingClientRect().width).to.be.at.least(56);
+  });
+});
+
+describe('inventory-card view announcements (F-04)', () => {
+  it('announces the Map and Table views so the page can lay them out', async () => {
+    const el = await fixture<InventoryCard>(
+      html`<inventory-card
+        instanceAdmin
+        .userId=${'user-f04'}
+        .agentRows=${[agentRow()]}
+        rangeLabel="30d"
+      ></inventory-card>`
+    );
+    const seen: string[] = [];
+    el.addEventListener('inventory-view-change', (event) =>
+      seen.push((event as CustomEvent).detail.view)
+    );
+    const button = el.shadowRoot!.querySelector(
+      'button[data-inventory-view="map"]'
+    ) as HTMLButtonElement;
+    button.click();
+    await el.updateComplete;
+    expect(seen).to.deep.equal(['map']);
+    localStorage.removeItem('preloop:inventory:view:user-f04');
   });
 });

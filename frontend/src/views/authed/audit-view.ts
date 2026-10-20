@@ -1,3 +1,4 @@
+import { humaniseAction } from '../../utils/outcome-label';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { formatUsd, formatUsdExact } from '../../utils/money';
 import {
@@ -1337,7 +1338,7 @@ export class AuditView extends AuthedElement {
       case 'runtime_session_ended':
         return 'Runtime session ended';
       default:
-        return sub.action.replace(/_/g, ' ');
+        return humaniseAction(sub.action.replace(/\./g, ' '));
     }
   }
 
@@ -1420,7 +1421,9 @@ export class AuditView extends AuthedElement {
       case 'role_removed':
         return `Role removed: ${event.details?.role || ''}`;
       default:
-        return event.action.replace(/_/g, ' ');
+        // Sentence case with acronyms kept ("API key created"), dotted
+        // types read word by word, as the Overview feed words them.
+        return humaniseAction(event.action.replace(/\./g, ' '));
     }
   }
 
@@ -1478,7 +1481,7 @@ export class AuditView extends AuthedElement {
   render() {
     return html`
       <view-header
-        headerText="Audit Timeline"
+        headerText="Audit timeline"
         description="The permanent record of governed activity: tool calls, approvals, and policy decisions, with outcomes and timestamps."
         width="wide"
       >
@@ -2326,24 +2329,21 @@ export class AuditView extends AuthedElement {
       .timeline {
         display: flex;
         flex-direction: column;
-        gap: 2px;
       }
 
       /* ── Group ─────────────────────────────── */
       /* No coloured left rule: the outcome lives in the pill, and forty green
          rules read as a wall of paint (DESIGN.md "Red lives in the pill"). */
+      /* A hairline row, not a white box per event (DESIGN.md "Surfaces":
+         what separates rows is a hairline). The hover tint is transient. */
       .timeline-group {
-        border-radius: 4px;
-        background: var(--sl-color-neutral-0);
-      }
-      .timeline-group.tool-call {
-        background: var(--sl-color-neutral-0);
+        border-bottom: 1px solid var(--console-hairline);
       }
       .timeline-group.standalone {
         opacity: 0.8;
       }
       .timeline-group:hover {
-        background: var(--sl-color-neutral-50);
+        background: var(--console-hover-tint);
       }
 
       /* The row a link asked for, said once. A tint and a ring for a couple

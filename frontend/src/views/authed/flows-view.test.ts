@@ -671,6 +671,9 @@ describe('FlowsView', () => {
       });
 
       expect(text).to.match(/Started .*· Running · \d+m \d+s/);
+      // Relative, with the absolute time in the title (U-02).
+      expect(text).to.match(/Started \d+m ago/);
+      expect(text).to.not.match(/\d+\/\d+\/\d{4}/);
     });
 
     it('appends nothing for a legacy terminal execution without an end time', async () => {
@@ -837,6 +840,31 @@ describe('FlowsView', () => {
           'tbody .flow-cell .row-link'
         ) || []),
       ].map((link) => (link.textContent || '').trim());
+
+    it('gives the name and the last run the room at 1440 (U-09)', async () => {
+      const host = document.createElement('div');
+      host.style.width = '1125px';
+      document.body.appendChild(host);
+      try {
+        fetchStub = stubFlowsApi();
+        const element = document.createElement('flows-view') as FlowsView;
+        host.appendChild(element);
+        await waitUntil(
+          () => !(element as any).isLoading,
+          'Flows view did not finish loading'
+        );
+        await element.updateComplete;
+        const width = (cls: string) =>
+          (
+            element.shadowRoot!.querySelector(`thead th.${cls}`) as HTMLElement
+          ).getBoundingClientRect().width;
+        expect(width('col-flow')).to.be.at.least(220);
+        expect(width('col-last-run')).to.be.at.least(220);
+        expect(width('col-trigger')).to.be.lessThan(width('col-flow'));
+      } finally {
+        host.remove();
+      }
+    });
 
     it('lists the flows in a table by default and counts them', async () => {
       const element = await renderFlows();
@@ -1143,6 +1171,13 @@ describe('FlowsView', () => {
         expect((row?.textContent || '').replace(/\s+/g, ' ')).to.contain(
           'GitHub Actions'
         );
+        // A narrow cell cuts the CI hint with an ellipsis, never mid-word
+        // ("GitHub Ac") with nothing to say it was cut (B-10).
+        const hint = link!.querySelector(
+          '.execution-subject-ci'
+        ) as HTMLElement;
+        expect(getComputedStyle(hint).textOverflow).to.equal('ellipsis');
+        expect(getComputedStyle(hint).overflow).to.equal('hidden');
         expect(
           fetchStub
             .getCalls()

@@ -150,7 +150,9 @@ describe('PoliciesView notify action', () => {
     const saved = (element as any)._modelIORules[0];
     expect(saved.conditions[0].action).to.equal('notify');
     expect(saved.approval_workflow).to.equal(null);
-    const badge = element.shadowRoot?.querySelector('sl-badge.action-notify');
+    const badge = element.shadowRoot?.querySelector(
+      'sl-badge[data-action="notify"]'
+    );
     expect(badge?.textContent?.trim()).to.equal('Notify');
   });
 });

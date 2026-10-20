@@ -79,6 +79,11 @@ describe('usage-rollup-panel', () => {
     expect((q(el, 'subaccount-filter') as HTMLSelectElement).value).to.equal(
       '__all__'
     );
+    // The table holds subaccounts only, so its total sits under a page total
+    // that also counts this account's own traffic; the title says so (U-18).
+    const title = el.shadowRoot!.querySelector('.head h3')!;
+    expect(title.textContent!.trim()).to.equal('Subaccounts only');
+    expect(title.getAttribute('title')).to.contain("This account's own");
   });
 
   it('contains a wide table at 390px and retains exact monetary values', async () => {

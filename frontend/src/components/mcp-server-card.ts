@@ -188,7 +188,7 @@ export class MCPServerCard extends LitElement {
 
     return html`
       <sl-dialog
-        label="Confirm Deletion"
+        label="Confirm deletion"
         ?open=${this.isConfirmingDelete}
         @sl-hide=${this.cancelDelete}
       >

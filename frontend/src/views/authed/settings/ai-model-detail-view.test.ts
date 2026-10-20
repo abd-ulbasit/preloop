@@ -717,11 +717,11 @@ describe('AIModelDetailView', () => {
     expect(content).to.contain('claude-sonnet-4');
     expect(content).to.contain('preloop/anthropic/claude-sonnet-4');
     expect(content).to.contain('Mini Claw');
-    expect(content).to.contain('Try Through Gateway');
+    expect(content).to.contain('Try through the gateway');
     expect(content).to.contain('18');
     expect(content).to.contain('$1.42');
-    expect(content).to.contain('8,500');
-    expect(content).to.contain('Session Observer');
+    expect(content).to.contain('8.5K');
+    expect(content).to.contain('Session observer');
 
     const observer = element.shadowRoot?.querySelector(
       'preloop-session-observer'

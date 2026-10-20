@@ -240,7 +240,12 @@ export class PoliciesView extends LitElement {
   @state() private _activeTab = 'rules';
   /** Rule cards are paged: a busy account had 14,000px of them (#1585). */
   @state() private _rulePage = 0;
-  @state() private _rulePageSize = 10;
+  /** 95 rules at 10 a page was ten pages to find one (F-05). */
+  @state() private _rulePageSize = 25;
+  /** Free text over the rule name, target and condition (F-05). */
+  @state() private _ruleQuery = '';
+  /** One decision, or '' for all (F-05). */
+  @state() private _ruleDecision = '';
   @state() private _ruleFilter:
     'all' | 'tools' | 'model.request' | 'model.response' = 'all';
   @state() private _showGenerateDialog = false;
@@ -381,30 +386,66 @@ export class PoliciesView extends LitElement {
       }
 
       /* Access Policies Tab */
+      /* Rules are hairline rows, not boxed cards with a gray header band
+         (DESIGN.md "Surfaces": depth limit two, no filled boxes inside a
+         card). The hover tint is transient. */
       .access-rules-list {
         display: flex;
         flex-direction: column;
-        gap: var(--sl-spacing-medium);
       }
 
       .access-rule-card {
-        border: 1px solid var(--sl-color-neutral-200);
-        border-radius: var(--sl-border-radius-medium);
-        overflow: hidden;
+        border-bottom: 1px solid var(--console-hairline);
+        cursor: pointer;
+        padding: var(--sl-spacing-small) var(--sl-spacing-x-small);
+      }
+
+      .access-rule-card:hover {
+        background: var(--console-hover-tint);
+      }
+
+      .access-rule-card.is-disabled .access-rule-name,
+      .access-rule-card.is-disabled .rule-condition {
+        color: var(--console-meta-color);
       }
 
       .access-rule-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: var(--sl-spacing-medium);
-        background: var(--sl-color-neutral-50);
-        cursor: pointer;
-        transition: background 0.2s;
       }
 
-      .access-rule-header:hover {
-        background: var(--sl-color-neutral-100);
+      .rule-search-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sl-spacing-small);
+        margin-bottom: var(--sl-spacing-small);
+      }
+
+      .rule-search {
+        flex: 0 1 320px;
+      }
+
+      .rule-decision {
+        width: 180px;
+      }
+
+      .rule-search::part(form-control-label),
+      .rule-decision::part(form-control-label) {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+      }
+
+      .rule-condition {
+        display: block;
+        font-family: var(--sl-font-mono);
+        font-size: var(--console-text-meta);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .access-rule-info {
@@ -436,9 +477,7 @@ export class PoliciesView extends LitElement {
       }
 
       .access-rule-details {
-        padding: var(--sl-spacing-medium);
-        border-top: 1px solid var(--sl-color-neutral-200);
-        background: var(--sl-color-neutral-0);
+        padding-top: 2px;
       }
 
       .rule-filters {
@@ -446,18 +485,6 @@ export class PoliciesView extends LitElement {
         flex-wrap: wrap;
         gap: var(--sl-spacing-x-small);
         margin-bottom: var(--sl-spacing-medium);
-      }
-
-      .action-allow {
-        --sl-color-success-600: #26d962;
-      }
-
-      .action-approval {
-        --sl-color-warning-600: #f2a93b;
-      }
-
-      .action-deny {
-        --sl-color-danger-600: #ff5d5d;
       }
 
       .model-io-hint {
@@ -603,23 +630,6 @@ export class PoliciesView extends LitElement {
         font-weight: var(--sl-font-weight-semibold);
         color: var(--sl-color-neutral-700);
         margin-bottom: var(--sl-spacing-x-small);
-      }
-
-      .rule-row {
-        display: flex;
-        align-items: center;
-        gap: var(--sl-spacing-medium);
-        padding: var(--sl-spacing-small) 0;
-      }
-
-      .rule-label {
-        font-size: var(--sl-font-size-small);
-        color: var(--sl-color-neutral-700);
-        min-width: 120px;
-      }
-
-      .rule-value {
-        flex: 1;
       }
 
       /* Policy Files Tab */
@@ -2132,9 +2142,61 @@ export class PoliciesView extends LitElement {
     `;
   }
 
+  /** The rules the search and the decision filter leave. */
+  private filteredRules<
+    T extends { id: string; target: string; condition: string; action: string },
+  >(rules: T[]): T[] {
+    const query = this._ruleQuery.trim().toLowerCase();
+    return rules.filter(
+      (rule) =>
+        (!this._ruleDecision || rule.action === this._ruleDecision) &&
+        (!query ||
+          `${rule.id} ${rule.target} ${rule.condition}`
+            .toLowerCase()
+            .includes(query))
+    );
+  }
+
   private renderRulesTab() {
-    const rules = this.unifiedRules();
+    const rules = this.filteredRules(this.unifiedRules());
     return html`
+      <div class="rule-search-row">
+        <sl-input
+          data-testid="rule-search"
+          size="small"
+          clearable
+          placeholder="Search rules, tools or conditions"
+          label="Search rules"
+          class="rule-search"
+          .value=${this._ruleQuery}
+          @sl-input=${(event: Event) => {
+            this._ruleQuery = (event.target as HTMLInputElement).value;
+            this._rulePage = 0;
+          }}
+        >
+          <sl-icon name="search" slot="prefix"></sl-icon>
+        </sl-input>
+        <sl-select
+          data-testid="rule-decision"
+          size="small"
+          clearable
+          placeholder="Any decision"
+          label="Decision"
+          class="rule-decision"
+          .value=${this._ruleDecision}
+          @sl-change=${(event: Event) => {
+            this._ruleDecision = (event.target as HTMLSelectElement).value;
+            this._rulePage = 0;
+          }}
+        >
+          ${['allow', 'deny', 'require_approval', 'notify'].map(
+            (action) =>
+              html`<sl-option value=${action}
+                >${ruleActionLabel(action)}</sl-option
+              >`
+          )}
+        </sl-select>
+      </div>
       <div class="rule-filters">
         ${(['all', 'tools', 'model.request', 'model.response'] as const).map(
           (filter) => html`
@@ -2189,7 +2251,7 @@ export class PoliciesView extends LitElement {
                   (rule) => rule.key,
                   (rule) => html`
                     <div
-                      class="access-rule-card"
+                      class="access-rule-card ${rule.enabled ? '' : 'is-disabled'}"
                       data-rule-id=${rule.id}
                       @click=${() =>
                         rule.modelRule
@@ -2206,16 +2268,12 @@ export class PoliciesView extends LitElement {
                           <div class="access-rule-source">${rule.target}</div>
                         </div>
                         <div class="access-rule-actions">
+                          <!-- A decision is a state, so a tint (DESIGN.md
+                               "Chips"); enabled is the default and says
+                               nothing, a disabled rule says so. -->
                           <sl-badge
-                            class=${
-                              rule.action === 'allow'
-                                ? 'action-allow'
-                                : rule.action === 'deny'
-                                  ? 'action-deny'
-                                  : rule.action === 'notify'
-                                    ? 'action-notify'
-                                    : 'action-approval'
-                            }
+                            class="chip"
+                            pill
                             variant=${ruleActionMeta(rule.action).variant}
                             data-action=${rule.action}
                           >
@@ -2223,24 +2281,34 @@ export class PoliciesView extends LitElement {
                           </sl-badge>
                           ${rule.detectors.map(
                             (chip) =>
-                              html`<sl-badge variant="neutral"
+                              html`<sl-badge class="chip" pill variant="neutral"
                                 >${chip}</sl-badge
                               >`
                           )}
-                          <sl-badge variant="neutral">
-                            ${rule.enabled ? 'Enabled' : 'Disabled'}
-                          </sl-badge>
+                          ${
+                            rule.enabled
+                              ? nothing
+                              : html`<sl-badge
+                                  class="chip"
+                                  pill
+                                  variant="neutral"
+                                  >Disabled</sl-badge
+                                >`
+                          }
                           ${this.renderRuleMenu(rule)}
                         </div>
                       </div>
-                      <div class="access-rule-details">
-                        <div class="rule-row">
-                          <span class="rule-label">Condition:</span>
-                          <span class="rule-value"
-                            ><code>${rule.condition}</code></span
-                          >
-                        </div>
-                      </div>
+                      ${
+                        rule.condition && rule.condition !== 'true'
+                          ? html`<div class="access-rule-details">
+                              <code
+                                class="rule-condition"
+                                title=${rule.condition}
+                                >${rule.condition}</code
+                              >
+                            </div>`
+                          : nothing
+                      }
                     </div>
                   `
                 )}
