@@ -19455,11 +19455,11 @@ paths:
         it.
 
 
-        The same permission as sending: whoever may send a command may watch
+        Returns delivery state for a command belonging to the requested agent
 
-        it land. Another agent''s command id is a 404, not a leak. A sync
+        in the current account. A command belonging to another agent returns
 
-        handler: FastAPI runs it in the threadpool, off the event loop.'
+        404. FastAPI runs this sync handler in the threadpool, off the event loop.'
       operationId: get_managed_agent_command_status_api_v1_agents__agent_id__control_commands__command_id__get
       security:
       - bearerAuth: []

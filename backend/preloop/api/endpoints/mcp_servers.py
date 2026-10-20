@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import get_current_active_user
+from preloop.api.loop_safety import run_db_off_loop
 from preloop.models.crud import crud_mcp_server
 from preloop.models.db.session import get_db_session
 from preloop.models.models.mcp_server import MCPServer
@@ -77,6 +78,9 @@ async def create_mcp_server(
     Raises:
         HTTPException: If creation fails or validation fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "create_mcp_servers")
+    )
     logger.info(
         f"Account {current_user.account_id} creating MCP server: {server_data.name} "
         f"(auth_type={server_data.auth_type!r})"
@@ -365,6 +369,9 @@ async def update_mcp_server(
     Raises:
         HTTPException: If server not found or update fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "edit_mcp_servers")
+    )
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
@@ -460,6 +467,9 @@ async def delete_mcp_server(
     Raises:
         HTTPException: If server not found or deletion fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "delete_mcp_servers")
+    )
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
@@ -545,6 +555,9 @@ async def scan_mcp_server(
     Raises:
         HTTPException: If server not found or scan fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_mcp_servers")
+    )
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )

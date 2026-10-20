@@ -1379,6 +1379,7 @@ def update_session_artifact_settings(
     audit row with the before and after value of each changed field; a
     request that changes nothing writes no row.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     from sqlalchemy.orm.attributes import flag_modified
 
     from preloop.services import audio_storage
@@ -1910,6 +1911,9 @@ async def replace_account_managed_agent_model_bindings(
     db: Session = Depends(get_db_session),
 ):
     """Replace explicit AI model bindings for one managed agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.get_for_account(
         db, account_id=str(account.id), agent_id=agent_id
     )
@@ -1985,6 +1989,9 @@ async def update_account_governance_defaults_endpoint(
     db: Session = Depends(get_db_session),
 ) -> AccountGovernanceDefaultsResponse:
     """Update account-wide native tool-approval defaults."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     if payload.approval_workflow_id:
         try:
             workflow_id = UUID(payload.approval_workflow_id)
@@ -2109,6 +2116,7 @@ def update_account_flow_governance(
     db: Session = Depends(get_db_session),
 ) -> FlowGovernanceResponse:
     """Store a governance override for one flow's executions."""
+    ensure_permission_in_oss(db, current_user, "edit_flows")
     _require_account_flow(db, account, flow_id)
     _validate_governance_workflow(db, account, payload.approval_workflow_id)
     account.meta_data = set_subject_governance(
@@ -2136,6 +2144,7 @@ def reset_account_flow_governance(
     db: Session = Depends(get_db_session),
 ) -> FlowGovernanceResponse:
     """Drop the flow's override so it inherits the account policy again."""
+    ensure_permission_in_oss(db, current_user, "edit_flows")
     _require_account_flow(db, account, flow_id)
     account.meta_data = set_subject_governance(
         account.meta_data or {},
@@ -2196,6 +2205,9 @@ async def update_account_managed_agent_governance(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db_session),
 ):
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.get_visible_target(
         db, account_id=str(account.id), agent_id=agent_id
     )
@@ -2265,6 +2277,9 @@ async def create_account_managed_agent(
     Returns:
         The managed-agent summary for the newly registered agent.
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.create_custom_agent(
         db,
         account_id=account.id,
@@ -2340,6 +2355,9 @@ async def create_account_managed_agent_credential(
     db: Session = Depends(get_db_session),
 ):
     """Create a durable credential for one managed agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.get_for_account(
         db, account_id=str(account.id), agent_id=agent_id
     )
@@ -2442,6 +2460,9 @@ async def revoke_account_managed_agent_credential(
     db: Session = Depends(get_db_session),
 ):
     """Revoke one durable credential for a managed agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     credential = crud_managed_agent_credential.revoke_for_agent(
         db,
         account_id=str(account.id),
@@ -2509,6 +2530,9 @@ async def create_account_managed_agent_enrollment(
     db: Session = Depends(get_db_session),
 ):
     """Persist one enrollment record for a managed agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.get_for_account(
         db, account_id=str(account.id), agent_id=agent_id
     )
@@ -2701,6 +2725,9 @@ async def validate_account_managed_agent_enrollment(
     The first time an enrollment reaches ``validated`` the agent counts as
     onboarded and ``agent.onboarded`` is enqueued in the same transaction.
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     existing = crud_managed_agent_enrollment.get_for_agent(
         db,
         account_id=str(account.id),
@@ -2772,6 +2799,9 @@ async def restore_account_managed_agent_enrollment(
     db: Session = Depends(get_db_session),
 ):
     """Persist restore state for one managed-agent enrollment."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     enrollment = crud_managed_agent_enrollment.mark_restored(
         db,
         account_id=str(account.id),
@@ -2816,6 +2846,9 @@ async def update_account_managed_agent(
     db: Session = Depends(get_db_session),
 ):
     """Update managed-agent ownership or lifecycle controls."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     # Locked for the whole handler: ``lifecycle_state`` is read here and the
     # credential restore/revoke decision below is made from that read, so a
     # concurrent operator action (a resume racing a decommission) must not
@@ -3053,6 +3086,9 @@ async def delete_account_managed_agent(
     db: Session = Depends(get_db_session),
 ):
     """Remove one managed-agent registry entry without touching the actual agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     agent = crud_managed_agent.get_for_account(
         db, account_id=str(account.id), agent_id=agent_id
     )
@@ -3131,6 +3167,9 @@ async def rekey_account_managed_agent(
     db: Session = Depends(get_db_session),
 ):
     """Rewrite one managed agent's durable principal id and dependent rows."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     identity = None
     if body.principal_identity is not None:
         identity = PrincipalIdentity(
@@ -3200,6 +3239,9 @@ async def merge_account_managed_agents(
     db: Session = Depends(get_db_session),
 ):
     """Merge a duplicate managed agent into a survivor (dry-run capable)."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     try:
         survivor, duplicate, counts = merge_managed_agents(
             db,
@@ -3897,6 +3939,9 @@ async def update_account_runtime_session(
     db: Session = Depends(get_db_session),
 ):
     """Update runtime-session lifecycle controls for the current account."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_runtime_sessions")
+    )
     session = crud_runtime_session.get_account_session(
         db, account_id=str(account.id), runtime_session_id=runtime_session_id
     )
@@ -4407,6 +4452,9 @@ async def upsert_attention_dismissal(
     Writing takes ``manage_agents``: an operator who may reconfigure the fleet
     may also declare that one of its states is expected.
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     if payload.reason == "snoozed" and not payload.snooze_days:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -4451,6 +4499,9 @@ async def delete_attention_dismissal(
     db: Session = Depends(get_db_session),
 ) -> None:
     """Restore a silenced item so it shows in the inbox again."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_agents")
+    )
     # Read before the delete commits: the row's attributes expire with it.
     existing = crud_attention_dismissal.get_by_item(
         db, account_id=account.id, item_id=item_id

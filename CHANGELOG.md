@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker, organization and project changes enforce their declared permissions
   on builds without the RBAC plugin, including tracker sync, webhook setup and
   readiness policies ([#1929](https://github.com/preloop/preloop/pull/1929)).
+- Account, agent, desktop and runner control routes enforce their declared
+  permissions on builds without the RBAC plugin
+  ([#1933](https://github.com/preloop/preloop/pull/1933)).
+- Approval decisions, policy controls, tool configuration and MCP server
+  management enforce consistent permissions on builds without the RBAC plugin
+  ([#1930](https://github.com/preloop/preloop/pull/1930)).
+
+- Flow and issue lifecycle writes consistently enforce their declared permissions
+  on builds without the RBAC plugin, and dependency commits use scoped pairs
+  ([#1931](https://github.com/preloop/preloop/pull/1931)).
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
   RBAC plugin, matching the other agent-control endpoints

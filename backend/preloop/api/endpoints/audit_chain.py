@@ -45,7 +45,7 @@ from preloop.schemas.audit_chain import (
     SigningKeyRotateRead,
 )
 from preloop.services import audit_chain, record_signing
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.api.heavy_routes import heavy_route
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,7 @@ def rotate_signing_key(
     invalidated them would revoke the customer's own evidence, which is the
     opposite of the point.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     try:
         retired, active = record_signing.rotate_key(
             db, account_id=account.id, user_id=current_user.id

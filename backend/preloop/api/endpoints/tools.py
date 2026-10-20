@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from preloop.api.auth import get_current_active_user
+from preloop.api.loop_safety import run_db_off_loop
 from preloop.api.common import get_account_for_user
 from preloop.models.models.user import User
 from preloop.models.crud import (
@@ -53,7 +54,7 @@ from preloop.services.tool_usage_stats import ToolUsageStatsService
 from preloop.schemas.gateway_usage import GatewayUsageByTool
 from preloop.schemas.tool_summary import ToolRuleIndexRow, ToolSummaryResponse
 from preloop.utils.audit import log_config_change
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 from preloop.tools.builtin_defs import (
     ASK_USER_TOOL,
@@ -926,6 +927,9 @@ async def create_tool_configuration(
     Raises:
         HTTPException: If configuration already exists or creation fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     _validate_tool_references(
         db,
         account_id=current_user.account_id,
@@ -1100,6 +1104,9 @@ async def update_tool_configuration(
     Raises:
         HTTPException: If configuration not found or update fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
     )
@@ -1186,6 +1193,9 @@ async def update_tool_approval_condition(
     Raises:
         HTTPException: If configuration not found or update fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
     )
@@ -1280,6 +1290,9 @@ async def delete_tool_configuration(
     Raises:
         HTTPException: If configuration not found or deletion fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
     )
@@ -1902,6 +1915,9 @@ async def create_or_update_tool_approval_condition(
     Raises:
         HTTPException: If tool configuration not found or creation fails
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     # Verify tool configuration exists and belongs to account
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
@@ -2017,6 +2033,9 @@ async def delete_tool_approval_condition(
     Raises:
         HTTPException: If tool configuration not found or no rules found
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     # Verify tool configuration exists and belongs to account
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
@@ -2245,6 +2264,9 @@ async def create_access_rule(
     db: Session = Depends(get_db_session),
 ) -> AccessRuleResponse:
     """Create a new access rule for a tool configuration."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     config = crud_tool_configuration.get(
         db, id=str(config_id), account_id=str(account.id)
     )
@@ -2338,6 +2360,9 @@ async def update_access_rule(
     db: Session = Depends(get_db_session),
 ) -> AccessRuleResponse:
     """Update an access rule."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     rule = crud_tool_access_rule.get(db, id=rule_id, account_id=str(account.id))
 
     if not rule:
@@ -2426,6 +2451,9 @@ async def delete_access_rule(
     db: Session = Depends(get_db_session),
 ) -> None:
     """Delete an access rule."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_tools")
+    )
     rule = crud_tool_access_rule.get(db, id=rule_id, account_id=str(account.id))
 
     if not rule:
