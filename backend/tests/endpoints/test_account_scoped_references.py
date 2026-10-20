@@ -20,6 +20,14 @@ from preloop.models.schemas.tool_configuration import (
 from tests.conftest import maybe_await
 
 
+@pytest.fixture(autouse=True)
+def _permission_fallback_passes(mocker: Any) -> None:
+    """Scope checks are exercised here; the OSS permission fallback is covered
+    by the permission test modules, so let it pass for these synthetic users."""
+    for module in (flows, tools):
+        mocker.patch.object(module, "ensure_permission_in_oss", create=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wrapped", [True, False])
 @pytest.mark.parametrize("scope", ["own", "global", "other", "ordinary"])
