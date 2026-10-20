@@ -327,6 +327,7 @@ func TestMain(m *testing.M) {
 	agentControlSidecarServiceInstaller = func(agentControlSidecarSpec, io.Writer) error {
 		return errAgentControlSidecarServiceUnsupported
 	}
+	runSidecarServiceManager = func(string, ...string) error { return nil }
 
 	// GitHub CLI CI sets this; GitLab OSS did not. Successful login posts
 	// /api/v1/events/batch unless telemetry is off, which fails hermetic

@@ -1065,7 +1065,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		}
 	}
 	pluginInstallResult := installAgentControlRuntimePlugin(agent, output)
-	maybeEnableCodexSidecarOnOnboard(agent, opts, output)
+	maybeEnableCodexSidecarOnOnboard(agent, opts, pluginInstallResult, output)
 	gatewayRestartResult := restartHermesGatewayAfterReconfig(agent, output)
 	if err := saveLocalEnrollmentState(backupState); err != nil {
 		return err

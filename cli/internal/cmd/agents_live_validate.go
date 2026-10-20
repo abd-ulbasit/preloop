@@ -1514,12 +1514,6 @@ func deferredLiveValidationPersistStatus(outcome *managedLiveValidationOutcome) 
 	return "validation_failed"
 }
 
-// resolveDeferredEnrollmentID finds the cli_managed_config enrollment ID
-// for “agent“, preferring the local enrollment-state file (which the
-// onboard loop just wrote) and falling back to a managed-agent detail
-// fetch. Returning “""“ causes the persistence step to no-op, which is
-// the correct behaviour when the agent was never actually onboarded
-// (e.g. the user passed “--dry-run“).
 // deferredLiveValidationRunner is the live-validation entry point used by the
 // deferred parallel phase. It is a variable so tests can stub the network.
 var deferredLiveValidationRunner = runManagedAgentLiveValidation
@@ -1561,6 +1555,12 @@ func deferredLiveValidationSeed(client *api.Client, agent AgentConfig) map[strin
 	)
 }
 
+// resolveDeferredEnrollmentID finds the cli_managed_config enrollment ID
+// for “agent“, preferring the local enrollment-state file (which the
+// onboard loop just wrote) and falling back to a managed-agent detail
+// fetch. Returning “""“ causes the persistence step to no-op, which is
+// the correct behaviour when the agent was never actually onboarded
+// (e.g. the user passed “--dry-run“).
 func resolveDeferredEnrollmentID(client *api.Client, agent AgentConfig) string {
 	if state, err := loadLocalEnrollmentState(agent); err == nil &&
 		strings.TrimSpace(state.EnrollmentID) != "" {
