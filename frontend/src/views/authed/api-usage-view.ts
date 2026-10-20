@@ -1770,7 +1770,11 @@ export class ApiUsageView extends LitElement {
         ${this.renderStatCard(
           `Tokens \u00b7 ${range}`,
           this.formatCompactNumber(tokenUsage.total_tokens),
-          html`<token-figures .usage=${tokenUsage} expanded></token-figures>`,
+          html`<token-figures
+            .usage=${tokenUsage}
+            expanded
+            wrap
+          ></token-figures>`,
           'cpu',
           this.formatNumber(tokenUsage.total_tokens)
         )}

@@ -300,3 +300,28 @@ describe('token figures when input excludes cache reads', () => {
     expect(tokenFiguresTitle(USAGE)).to.contain('12,400 input tokens');
   });
 });
+
+describe('token figures that wrap (B-17)', () => {
+  it('wraps inside a narrow stat card instead of running over its edge', async () => {
+    const usage: GatewayTokenUsage = {
+      prompt_tokens: 12_500_000_000,
+      completion_tokens: 115_800_000,
+      total_tokens: 12_615_800_000,
+      input_tokens: 12_500_000_000,
+      output_tokens: 115_800_000,
+      cache_read_tokens: 9_000_000_000,
+      cache_write_tokens: 0,
+      uncached_input_tokens: 3_500_000_000,
+      cache_hit_ratio: 0.72,
+    };
+    const host = await fixture<HTMLElement>(
+      html`<div style="width: 160px">
+        <token-figures .usage=${usage} expanded wrap></token-figures>
+      </div>`
+    );
+    const el = host.querySelector('token-figures') as TokenFigures;
+    await el.updateComplete;
+    const figures = el.shadowRoot!.querySelector('.figures') as HTMLElement;
+    expect(figures.scrollWidth).to.be.at.most(host.clientWidth);
+  });
+});
