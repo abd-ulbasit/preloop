@@ -94,7 +94,7 @@ def get_example_runtime_session_optimization(
     "/runtime-sessions/{runtime_session_id}/optimizations",
     response_model=RuntimeSessionOptimizationResponse,
 )
-@require_permission("view_cost")
+@require_permission("run_session_optimizations")
 def optimize_account_runtime_session(
     runtime_session_id: str,
     account: Annotated[Account, Depends(get_account_for_user)],
@@ -109,6 +109,7 @@ def optimize_account_runtime_session(
     returns the results in this response — semantics identical to before the
     async job endpoints existed (no submit-then-poll behind the scenes).
     """
+    ensure_permission_in_oss(db, current_user, "run_session_optimizations")
     response = run_session_optimization(
         db,
         account=account,
@@ -164,7 +165,7 @@ class RuntimeSessionOptimizationJobStatusResponse(BaseModel):
     response_model=RuntimeSessionOptimizationJobSubmitResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@require_permission("view_cost")
+@require_permission("run_session_optimizations")
 def submit_account_runtime_session_optimization_job(
     runtime_session_id: str,
     account: Annotated[Account, Depends(get_account_for_user)],
@@ -179,6 +180,7 @@ def submit_account_runtime_session_optimization_job(
     re-submitting returns THAT job instead of queuing a second model pass, so
     a double-click never spends the model budget twice.
     """
+    ensure_permission_in_oss(db, current_user, "run_session_optimizations")
     job = submit_session_optimization_job(
         db,
         account=account,

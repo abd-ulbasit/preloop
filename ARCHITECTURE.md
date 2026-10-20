@@ -460,6 +460,12 @@ A question worth repeating can be saved under a name in `session_saved_search`
 and re-run from `/runtime-sessions/search/saved`; a saved search stores the
 question and never the answer, is private until its author shares it with the
 account, and a run says which of its filters no longer resolve.
+Personal saved-search writes use `view_runtime_sessions`; creating or changing
+a search to account visibility also requires `share_session_searches`.
+Optimization submissions require `run_session_optimizations`, while replay
+requires `edit_ai_models`. The sharing and analysis permissions are granted to
+owner, admin, editor and executor by the system-role initializer and an Alembic
+data migration for existing databases.
 The same ranked search is reachable as the built-in `search_sessions` tool
 (default off, own-sessions scope unless an operator grants `account`) and from
 `preloop sessions search`. Every content search writes one audit row through

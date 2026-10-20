@@ -62,7 +62,11 @@ matched as a session id before it reached this module.
 ## Visibility
 
 A saved search is private to its author until the author sets `visibility` to
-`account`, which is a separate edit and is reversible. Anyone in the account
+`account`, either at creation or in a later edit, and this is reversible.
+Sharing requires `share_session_searches`, granted by default to owner, admin,
+editor and executor. Viewers and analysts can create, edit and delete personal
+searches with `view_runtime_sessions`. Authors can also unshare or delete their
+shared searches with that read permission. Anyone in the account
 who may read sessions can then see it and run it; only the author can rename
 it, change the question, share it again or delete it. A private search
 belonging to somebody else answers 404, because its existence and the name its
