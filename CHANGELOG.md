@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Update aiohttp to 3.14.4 to fix
+  [GHSA-2g87-pp6c-29x5](https://osv.dev/GHSA-2g87-pp6c-29x5),
+  [GHSA-5wr8-gcqf-gqf3](https://osv.dev/GHSA-5wr8-gcqf-gqf3), and
+  [GHSA-494j-54xm-rwp3](https://osv.dev/GHSA-494j-54xm-rwp3).
+
 - Require explicit permissions for account details, MCP OAuth setup, and
   optimization actions in all editions
   ([#1926](https://github.com/preloop/preloop/pull/1926)).
