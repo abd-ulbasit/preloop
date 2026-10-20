@@ -11,8 +11,13 @@ by default. State includes onboarded, discovered and inactive agents. Owner,
 Provider and Window narrow the loaded view. Gaps appears only when the view contains
 a governance gap. Select a node for dependencies, blast radius and resource links.
 
-Instance administrators can choose Columns or Spatial. The spatial layout packs
-machines and their agents beside the model/provider core. Drag a machine to move its
+Instance administrators can choose Columns or Spatial. Columns reads People,
+Devices, Agents, Models, Providers, Flows and Work, top-aligned under the headers;
+rows spread out to use the height of the stage. The spatial layout packs, left to
+right, the model/provider core (one short column per provider), each person with
+their machines and agents, and the flows beside the issues and pull requests they
+act on. Until you arrange it yourself, the map repacks and refits when something
+joins. Drag a machine to move its
 contents. Your first drag saves the whole visible arrangement for your user and map
 scope. Refreshes and membership changes preserve that arrangement; new resources
 join beside their links. Membership changes leave the camera alone once you own

@@ -800,8 +800,13 @@ with attached issue/PR rows in the work lane. The first drag stores the complete
 visible arrangement per user and scope. Membership updates preserve those positions
 and the camera, place arrivals beside their relationships and retain inactive slots
 for seven days. A growing machine moves only the following boxes in its island.
-Reset layout offers a six-second Undo. Unowned layouts can repack; the camera follows
-only when the layout leaves the viewport and the user has not recently navigated.
+Reset layout offers a six-second Undo. Unowned layouts repack on every membership
+change (core by provider, then people islands, then flows and work in adjacent
+shelves) and the camera refits when a node joins, unless the user has recently
+navigated. Columns gives flows their own column beside Work and stretches the row
+pitch (10px to 64px) to the stage height. Bubbles are placed by
+`utils/fleet-map-bubbles.ts`: beside their node, never on another node's box, at
+most two per node.
 
 Gateway starts light the sender; real completions light the model and show measured
 input/output tokens. Native permission activity identifies its managed agent
