@@ -1069,12 +1069,19 @@ func promptToOnboardDiscoveredAgents(
 	autoApprove bool,
 	skipLiveValidate bool,
 ) error {
+	return promptToOnboardDiscoveredAgentsWithIO(discovered, autoApprove, skipLiveValidate, os.Stdin, os.Stdout)
+}
+
+func promptToOnboardDiscoveredAgentsWithIO(
+	discovered []AgentConfig, autoApprove, skipLiveValidate bool, input io.Reader, output io.Writer,
+) error {
+	input = bufio.NewReader(input)
 	client, err := api.NewClient(FlagToken, FlagURL)
 	if err != nil {
 		return fmt.Errorf("failed to create API client: %w", err)
 	}
 	if !client.IsAuthenticated() {
-		fmt.Println("Tip: Run 'preloop login' to onboard discovered agents.")
+		fmt.Fprintln(output, "Tip: Run 'preloop login' to onboard discovered agents.")
 		return nil
 	}
 
@@ -1083,10 +1090,10 @@ func promptToOnboardDiscoveredAgents(
 	candidates := selectOnboardingRunCandidates(client, discovered)
 	var outcomes []agentOnboardingOutcome
 	defer func() {
-		printAgentOnboardingSummary(os.Stdout, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, outcomes)))
+		printAgentOnboardingSummary(output, appendServerOnlyDeviceAgents(client, discovered, completeDiscoveryOutcomes(discovered, outcomes)))
 	}()
 	if len(candidates) == 0 {
-		fmt.Println("No agents discovered.")
+		fmt.Fprintln(output, "No agents discovered.")
 		return nil
 	}
 
@@ -1095,7 +1102,7 @@ func promptToOnboardDiscoveredAgents(
 	// via the interactive prompts. Explicit `preloop agents onboard <name>`
 	// still works, with a warning.
 	candidates, configOnly := splitRuntimeMissingCandidates(candidates)
-	printRuntimeMissingOnboardingSkips(os.Stdout, configOnly)
+	printRuntimeMissingOnboardingSkips(output, configOnly)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -1108,7 +1115,7 @@ func promptToOnboardDiscoveredAgents(
 	// take ~5s) and a slow upstream for one agent never blocks subsequent
 	// agents from being touched.
 	deferLiveValidate := !skipLiveValidate
-	outcomes, err = promptToOnboardCandidatesTiered(os.Stdin, os.Stdout, client, candidates, autoApprove, true, func(agent AgentConfig, approvals bool) error {
+	outcomes, err = promptToOnboardCandidatesTiered(input, output, client, candidates, autoApprove, true, func(agent AgentConfig, approvals bool) error {
 		return executeManagedEnrollment(agent, managedEnrollmentOptions{
 			Client: client,
 			// AutoApprove carries the -y flag so per-agent sub-prompts
@@ -1120,8 +1127,8 @@ func promptToOnboardDiscoveredAgents(
 			SkipLiveValidate:  skipLiveValidate,
 			DeferLiveValidate: deferLiveValidate,
 			Approvals:         approvals,
-			Input:             os.Stdin,
-			Output:            os.Stdout,
+			Input:             input,
+			Output:            output,
 		})
 	})
 	if err != nil {
@@ -1136,7 +1143,7 @@ func promptToOnboardDiscoveredAgents(
 		}
 	}
 	if deferLiveValidate && len(enrolled) > 0 {
-		liveResults := runDeferredLiveValidationsParallel(client, enrolled, os.Stdout)
+		liveResults := runDeferredLiveValidationsParallel(client, enrolled, output)
 		applyLiveValidationOutcomesToSummary(outcomes, liveResults)
 	}
 	return agentOnboardingSummaryError(outcomes)

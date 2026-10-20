@@ -1973,6 +1973,10 @@ func readAgentConfigForGatewayResolution(agent AgentConfig) (map[string]interfac
 }
 
 func shouldPreferCurrentConfigForGatewayResolution(agent AgentConfig, current map[string]interface{}) bool {
+	if isHermesAgent(agent) {
+		model, _, _ := extractHermesModelSelection(current)
+		return model != ""
+	}
 	if !isCodexCLIAgent(agent) {
 		return false
 	}
