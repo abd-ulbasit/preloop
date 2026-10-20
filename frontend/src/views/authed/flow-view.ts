@@ -1490,7 +1490,10 @@ ${(this.flow.custom_commands.commands || []).join('\n')}</pre>
     const failed = finished.filter((exec: any) =>
       ['FAILED', 'TIMEOUT'].includes(String(exec.status || '').toUpperCase())
     ).length;
+    // Only runs that recorded both ends have a duration: parseUTCDate reads
+    // a missing end as now, which would turn a legacy row into days.
     const durations = finished
+      .filter((exec: any) => exec.start_time && exec.end_time)
       .map(
         (exec: any) =>
           parseUTCDate(exec.end_time).getTime() -

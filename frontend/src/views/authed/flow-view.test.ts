@@ -249,6 +249,8 @@ describe('FlowView summary strip (F-02)', () => {
         end_time: minutesAgo(118),
       },
       { id: 'e4', status: 'RUNNING', start_time: minutesAgo(1) },
+      // A legacy terminal run with no end time has no duration to average.
+      { id: 'e5', status: 'SUCCEEDED', start_time: minutesAgo(9000) },
     ];
     document.body.appendChild(element);
     await element.updateComplete;
@@ -261,14 +263,14 @@ describe('FlowView summary strip (F-02)', () => {
       expect(text).to.contain('2K runs');
       expect(text).to.contain('1 running');
       expect(text).to.contain('$42.50 est.');
-      // Three finished runs in the sample: one failed.
-      expect(text).to.contain('33% failed');
+      // Four finished runs in the sample: one failed.
+      expect(text).to.contain('25% failed');
       expect(text).to.contain('avg 2m 40s');
       expect(text).to.contain('last success 1h ago');
       const sample = strip.querySelector(
         '[data-testid="flow-summary-sample"]'
       )!;
-      expect(sample.getAttribute('title')).to.contain('last 3 finished runs');
+      expect(sample.getAttribute('title')).to.contain('last 4 finished runs');
     } finally {
       element.remove();
     }
