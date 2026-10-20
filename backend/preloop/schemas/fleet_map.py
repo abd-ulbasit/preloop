@@ -1,7 +1,7 @@
 """Public, credential-free fleet dependency graph."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -148,6 +148,41 @@ class FleetCodeEvent(BaseModel):
     url: str | None = None
 
 
+WorkAction = Literal[
+    "issue_opened",
+    "issue_labeled",
+    "issue_unlabeled",
+    "issue_updated",
+    "opened",
+    "commented",
+    "reviewed",
+    "pull_request_updated",
+    "merged",
+]
+
+
+class FleetWorkItem(BaseModel):
+    """One distinct issue or pull request active in the selected window."""
+
+    key: str
+    kind: Literal["issue", "pull_request"]
+    reference: str
+    repo: str | None = None
+    title: str | None = Field(default=None, max_length=160)
+    url: str | None = None
+    state: Literal["open", "closed", "merged"] | None = None
+    last_action: WorkAction
+    last_at: datetime
+    review_state: (
+        Literal["approved", "changes_requested", "commented", "dismissed"] | None
+    ) = None
+    labels: list[Annotated[str, Field(max_length=40)]] = Field(
+        default_factory=list, max_length=6
+    )
+    related_issue: str | None = None
+    node_ids: list[str] = Field(default_factory=list, max_length=5)
+
+
 class FleetCodeActivityResponse(BaseModel):
     """Bounded code activity for the Fleet Map, keyed by map node id."""
 
@@ -157,6 +192,15 @@ class FleetCodeActivityResponse(BaseModel):
     counts: dict[str, FleetCodeCounts] = Field(default_factory=dict)
     flows: list[FleetCodeFlow] = Field(default_factory=list)
     events: list[FleetCodeEvent] = Field(default_factory=list)
+    work: list[FleetWorkItem] = Field(
+        default_factory=list,
+        max_length=200,
+        description="Distinct issues and pull requests, newest activity first, at most 200.",
+    )
+    work_truncated: bool = Field(
+        default=False,
+        description="More work items exist, or a bounded source read was capped.",
+    )
 
 
 class FleetUsageTotals(BaseModel):
