@@ -135,7 +135,11 @@ export class UsageRollupPanel extends LitElement {
     if (this.filter === ALL && idle && !this.attention.length) return nothing;
     return html`<sl-card>
       <div class="head">
-        <h3>By subaccount</h3>
+        <h3
+          title="Spend and requests of subaccounts. This account's own traffic is in the totals above, not in this table."
+        >
+          Subaccounts only
+        </h3>
         <sl-select
           size="small"
           label="Subaccount"
