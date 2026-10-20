@@ -1878,12 +1878,16 @@ func TestHermesManagedFallbackReconciliation(t *testing.T) {
 			if model["temperature"] != 0.5 || updated.ManagedDocument["unrelated"] != "keep" {
 				t.Fatal("unrelated config changed")
 			}
-			// Repeated reconciliation is idempotent.
+			// Snapshot before the second apply, which mutates the document in place.
+			before, err := deepCopyMap(updated.ManagedDocument)
+			if err != nil {
+				t.Fatal(err)
+			}
 			again, err := applyHermesManagedGateway(updated, "https://example.com", "new-token", "openai/gpt-6.1-sol")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(updated.ManagedDocument, again.ManagedDocument) {
+			if !reflect.DeepEqual(before, again.ManagedDocument) {
 				t.Fatal("reconciliation is not idempotent")
 			}
 		})

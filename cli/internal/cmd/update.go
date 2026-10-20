@@ -136,10 +136,15 @@ var updateSetupLifecycle = func(cmd *cobra.Command, binary string, yes bool) err
 }
 
 var updateSetupCmd = &cobra.Command{
-	Use:              "post-update-setup",
-	Hidden:           true,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {},
-	RunE:             runUpdateSetup,
+	Use:    "post-update-setup",
+	Hidden: true,
+	// Initialize selection without the root update notice: this command is
+	// already running as part of an update and must never trigger another one.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		initializeCommandSelection(cmd)
+		silenceUsageForRuntimeErrors(cmd)
+	},
+	RunE: runUpdateSetup,
 }
 
 func runUpdateRunner(cmd *cobra.Command, args []string) error {

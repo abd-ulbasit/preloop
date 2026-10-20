@@ -559,7 +559,7 @@ export class ApprovalView extends AuthedElement {
 
   protected willUpdate(changed: PropertyValues) {
     super.willUpdate(changed);
-    if (changed.has('requestId') && this.requestId) {
+    if (changed.has('requestId')) {
       void this.loadApprovalRequest();
     }
   }
@@ -745,6 +745,16 @@ export class ApprovalView extends AuthedElement {
     this.publicOnly = false;
     this.loadFailure = null;
     this.approvalRequest = null;
+
+    // Backend IDs are UUIDs; synthetic IDs in clients also use letters,
+    // digits, underscores and hyphens. Reject decoded URL/path syntax before
+    // constructing any authenticated endpoint (including dot segments).
+    if (!/^[A-Za-z0-9_-]+$/.test(requestId)) {
+      this.loadFailure = { kind: 'not_found', message: '' };
+      this.loading = false;
+      this.stopTicking();
+      return;
+    }
 
     try {
       // Read the status directly (not through fetchData, which folds every

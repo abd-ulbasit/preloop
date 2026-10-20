@@ -477,12 +477,19 @@ preloop version                        # Show version info
 preloop version --check                # Check for updates
 preloop update                         # Install the latest CLI release
 preloop update --check                 # Print current vs latest and exit
-preloop update --yes                   # Install without prompting
+preloop update --yes                   # Install without prompting or new setup
 ```
 
 `preloop update` downloads the GitHub release asset for this OS/architecture
 (the same URL as `scripts/install-cli.sh`) and replaces the current binary
-in place. The daily update notice asks whether to upgrade when stdin is a
+in place. After an update, the installed CLI refreshes and restarts an existing
+runner service, including with `--yes`. Interactive updates without `--yes`
+offer runner setup and installation or refresh of discovered agent integrations
+(MCP configuration, managed hooks and plugins). Running `preloop update` when
+already current also offers interactive setup. `--yes` skips new runner setup
+and agent integration prompts; it is required when stdin is not a TTY.
+
+The daily update notice asks whether to upgrade when stdin is a
 TTY and the binary is writable; otherwise it stays silent. Version lookup
 is skipped when `PRELOOP_DISABLE_TELEMETRY` is set.
 

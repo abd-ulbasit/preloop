@@ -541,3 +541,64 @@ func TestUpdateUpToDateStillOffersInteractiveSetup(t *testing.T) {
 		t.Fatalf("up-to-date interactive update offered setup %d times", calls)
 	}
 }
+
+func TestPostUpdateSetupResolvesSelection(t *testing.T) {
+	home := testenv.SetTempHome(t)
+	for _, key := range []string{"PRELOOP_TOKEN", "PRELOOP_URL", "PRELOOP_PROFILE", "PRELOOP_ACCOUNT"} {
+		t.Setenv(key, "")
+	}
+	path := filepath.Join(home, "selected", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`access_token: wrong-default-token
+api_url: https://default.example.com
+profiles:
+  work:
+    api_url: https://work.example.com
+    access_token: wrong-profile-token
+    accounts:
+      example:
+        access_token: selected-account-token
+        refresh_token: selected-refresh-token
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldConfig, oldProfile, oldAccount, oldToken, oldURL := cfgFile, FlagProfile, FlagAccount, FlagToken, FlagURL
+	oldInstalled, oldInstall, oldAction, oldTTY := runnerServiceInstalled, setupInstallRunner, runnerServiceAction, loginTerminal
+	t.Cleanup(func() {
+		cfgFile, FlagProfile, FlagAccount, FlagToken, FlagURL = oldConfig, oldProfile, oldAccount, oldToken, oldURL
+		config.SetConfigFile(oldConfig)
+		config.Select(oldProfile, oldAccount)
+		runnerServiceInstalled, setupInstallRunner, runnerServiceAction, loginTerminal = oldInstalled, oldInstall, oldAction, oldTTY
+		rootCmd.SetArgs(nil)
+		updateSetupCmd.SetOut(nil)
+		updateSetupCmd.SetIn(nil)
+		_ = updateSetupCmd.Flags().Set("yes", "false")
+	})
+	runnerServiceInstalled = func() bool { return true }
+	loginTerminal = func() bool { return false }
+	runnerServiceAction = func(string) error { return nil }
+	called := false
+	setupInstallRunner = func(io.Writer) error {
+		called = true
+		cfg, err := config.Resolve(FlagToken, FlagURL)
+		if err != nil {
+			return err
+		}
+		if cfg.Profile != "work" || cfg.Account != "example" || cfg.AccessToken != "selected-account-token" || cfg.RefreshToken != "selected-refresh-token" || cfg.APIURL != "https://work.example.com" {
+			t.Fatalf("setup resolved the wrong context: %#v", cfg)
+		}
+		return nil
+	}
+	FlagToken, FlagURL = "", ""
+	updateSetupCmd.SetOut(io.Discard)
+	updateSetupCmd.SetIn(strings.NewReader(""))
+	rootCmd.SetArgs([]string{"update", "post-update-setup", "--yes", "--config", path, "--profile", "work", "--account", "example"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("runner refresh was not called")
+	}
+}

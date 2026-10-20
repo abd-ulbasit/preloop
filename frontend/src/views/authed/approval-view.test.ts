@@ -74,6 +74,58 @@ describe('ApprovalView', () => {
     element.remove();
   });
 
+  for (const id of [
+    '..%2F..%2Fusers',
+    'req%3Fadmin=true',
+    'req%23hash',
+    'req%5Cusers',
+  ]) {
+    it(`rejects an unsafe decoded router request ID: ${id}`, async () => {
+      fetchStub = createFetchStub();
+      const outlet = await fixture<HTMLElement>(html`<div></div>`);
+      const router = new Router(outlet);
+      await router.setRoutes(
+        [{ path: '/console/approval/:requestId', component: 'approval-view' }],
+        true
+      );
+      await router.render('/console/approval/req-1');
+      const element = outlet.querySelector('approval-view') as ApprovalView;
+      await waitUntil(() => !(element as any).loading);
+      fetchStub.resetHistory();
+      await router.render(`/console/approval/${id}`);
+      router.unsubscribe();
+      await element.updateComplete;
+      await aTimeout(20);
+      expect(
+        fetchStub
+          .getCalls()
+          .map((call) => String(call.args[0]))
+          .filter((url) => !url.startsWith('/assets/'))
+      ).to.deep.equal([]);
+      expect((element as any).approvalRequest).to.equal(null);
+      expect((element as any).loadFailure?.kind).to.equal('not_found');
+    });
+  }
+
+  for (const id of ['.', '..']) {
+    it(`rejects a dot path segment supplied to the view: ${id}`, async () => {
+      fetchStub = createFetchStub();
+      const element = await fixture<ApprovalView>(
+        html`<approval-view .requestId=${'req-1'}></approval-view>`
+      );
+      await waitUntil(() => !(element as any).loading);
+      fetchStub.resetHistory();
+      element.onAfterEnter({ params: { requestId: id } });
+      await element.updateComplete;
+      expect(
+        fetchStub
+          .getCalls()
+          .filter((call) => !String(call.args[0]).startsWith('/assets/'))
+      ).to.deep.equal([]);
+      expect((element as any).approvalRequest).to.equal(null);
+    });
+  }
+
   it('loads another approval on the same element after a decision', async () => {
     fetchStub = createFetchStub();
     fetchStub
