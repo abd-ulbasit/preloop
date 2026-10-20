@@ -540,8 +540,8 @@ export class NotificationPreferencesView extends AuthedElement {
             <div class="preference-description">
               Sends a clearly labelled test over the real delivery path and
               reports exactly what the push provider said. Nothing is gated on
-              it &mdash; no approval request is created, and responding to it on
-              the device has no effect.
+              it: no approval request is created, and responding to it on the
+              device has no effect.
             </div>
           </div>
         </div>
@@ -616,8 +616,7 @@ export class NotificationPreferencesView extends AuthedElement {
                   ? html`<div class="test-result-error">
                       ${
                         device.error_reason
-                          ? html`<strong>${device.error_reason}</strong>
-                              &mdash; `
+                          ? html`<strong>${device.error_reason}</strong>: `
                           : ''
                       }${device.error}
                     </div>`
