@@ -24,6 +24,7 @@ import {
   generatePolicy,
   getAccountGovernanceDefaults,
   updateAccountGovernanceDefaults,
+  getAccountAgent,
   getAccountAgents,
 } from '../../api';
 import type { AccountGovernanceDefaults } from '../../types';
@@ -780,9 +781,14 @@ export class ToolsView extends LitElement {
     return this.tools.filter((tool) => tool.source === 'agent');
   }
 
+  /**
+   * Only enabled rules count, as on the rows: a tool whose only rules are
+   * switched off reads "No rules" in its row, so the strip must not count it
+   * "with rules" either.
+   */
   private _toolHasRules(tool: ToolWithRules): boolean {
     return Boolean(
-      (tool.access_rules && tool.access_rules.length > 0) ||
+      (tool.access_rules || []).some((rule) => rule.is_enabled !== false) ||
       tool.approval_workflow_id ||
       tool.has_approval_condition
     );
@@ -1818,18 +1824,34 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
         // the link still works.
         try {
           const agents = await getAccountAgents({ limit: 100 });
-          const byId = new Map(
-            (agents.items || []).map((agent) => [agent.id, agent])
+          const names = new Map<string, string>(
+            (agents.items || []).map((agent) => [agent.id, agent.display_name])
+          );
+          // An override can belong to an agent the first list page did not
+          // return (retired, or past the first hundred). Ask for the ones the
+          // line actually shows, by id; anything still unknown is "Unnamed
+          // agent" with its id in the title, never a raw UUID in the text.
+          const shown = response.override_agent_ids.slice(0, 5);
+          await Promise.all(
+            shown
+              .filter((id) => !names.has(id))
+              .map(async (id) => {
+                try {
+                  const detail = await getAccountAgent(id, { include: [] });
+                  if (detail?.agent?.display_name) {
+                    names.set(id, detail.agent.display_name);
+                  }
+                } catch {
+                  // Unknown stays unnamed.
+                }
+              })
           );
           this.governanceOverrideAgents = response.override_agent_ids.map(
-            (id) => ({
-              id,
-              name: byId.get(id)?.display_name || id,
-            })
+            (id) => ({ id, name: names.get(id) || '' })
           );
         } catch {
           this.governanceOverrideAgents = response.override_agent_ids.map(
-            (id) => ({ id, name: id })
+            (id) => ({ id, name: '' })
           );
         }
       } else {
@@ -1995,7 +2017,8 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
                       (agent, index) =>
                         html`${index > 0 ? ', ' : ''}<a
                             href="/console/agents/${agent.id}"
-                            >${agent.name}</a
+                            title=${agent.name ? nothing : agent.id}
+                            >${agent.name || 'Unnamed agent'}</a
                           >`
                     )}${
                       hiddenOverrideCount > 0
