@@ -654,7 +654,7 @@ describe('fleet-map v3 pass 2', () => {
     expect(bubble.style.visibility).to.equal('hidden');
   });
 
-  it('draws no line between an issue and the PR inside it, and no text on story lines', async () => {
+  it('draws no line between an issue and the PR inside it, and labels work lines by their action', async () => {
     for (const arrangement of ['columns', 'spatial']) {
       const el = await map({
         spatialOnly: false,
@@ -700,12 +700,64 @@ describe('fleet-map v3 pass 2', () => {
         ).to.equal(false);
       }
       expect(
-        el.shadowRoot!.querySelector('path[data-edge="caused"].active'),
+        !!el.shadowRoot!.querySelector('path[data-edge="caused"].active'),
         arrangement
-      ).to.exist;
-      expect(el.shadowRoot!.querySelector('text.activity-label'), arrangement)
-        .not.to.exist;
+      ).to.equal(true);
+      // The lit line to the issue says the action that created it, in
+      // Columns; the spatial admin canvas stays quiet.
+      const texts = [
+        ...el.shadowRoot!.querySelectorAll('text.activity-label'),
+      ].map((t) => t.textContent);
+      expect(texts, arrangement).to.deep.equal(
+        arrangement === 'columns' ? ['opened issue #41'] : []
+      );
+      expect(texts.join(' ')).not.to.contain('Observed work');
     }
+  });
+
+  it('connects a flow to the model its run calls and names the call on that line', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'flow-model',
+    });
+    el.recordActivity('flow_executions', {
+      type: 'execution_started',
+      flow_id: 'triage',
+      execution_id: 'run-1',
+      payload: {
+        status: 'RUNNING',
+        fleet_context: { flow_name: 'Issue triage' },
+      },
+    });
+    await el.updateComplete;
+    expect(
+      el.shadowRoot!.querySelector(
+        'path[data-edge-id="flow:triage>uses_model>model:sonnet"]'
+      )
+    ).not.to.exist;
+    // The gateway names the flow on calls made inside its run.
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      flow_id: 'triage',
+      payload: {
+        model_alias: 'claude-sonnet-5-5',
+        prompt_tokens: 2100,
+        completion_tokens: 330,
+        api_usage_id: 'fm-1',
+      },
+    });
+    el.flushActivity();
+    await el.updateComplete;
+    await el.updateComplete;
+    const line = el.shadowRoot!.querySelector<SVGPathElement>(
+      'path[data-edge-id="flow:triage>uses_model>model:sonnet"]'
+    )!;
+    expect(line, 'flow to model line').to.exist;
+    expect(line.classList.contains('active')).to.equal(true);
+    expect(line.getAttribute('data-activity')).to.equal(
+      'claude-sonnet-5-5 · 2.1k in / 330 out'
+    );
   });
 
   it('places bubbles beside their node in Columns, never on another node', async () => {

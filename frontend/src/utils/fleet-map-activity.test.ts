@@ -57,7 +57,11 @@ describe('fleet map activity', () => {
         type: 'approval_created',
         managed_agent_id: 'a1',
       })
-    ).to.deep.equal({ kind: 'approval', agent: 'agent:a1' });
+    ).to.deep.equal({
+      kind: 'approval',
+      agent: 'agent:a1',
+      label: 'approval requested',
+    });
     expect(modelKey('anthropic/claude-opus-5-5-20261001')).to.equal(
       'claude-opus-5-5'
     );

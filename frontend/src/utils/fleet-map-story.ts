@@ -20,7 +20,8 @@ type Run = {
   start?: number;
   subject?: string;
 };
-type Link = { edge: FleetMapEdge; until: number };
+/** A lit association and what its line says while lit ('' says nothing). */
+type Link = { edge: FleetMapEdge; until: number; label: string };
 const TERMINAL = new Set([
   'SUCCEEDED',
   'COMPLETED',
@@ -30,6 +31,54 @@ const TERMINAL = new Set([
   'STOPPED',
   'EXPIRED',
 ]);
+
+/**
+ * What the line from an actor to a work item says while lit: the action
+ * that created it, by the event's own fields.
+ */
+export function codeLineLabel(
+  action: string,
+  ref: string,
+  payload: Record<string, unknown>,
+  node: Pick<FleetMapNode, 'work_kind' | 'review_state'>
+): string {
+  const kind = node.work_kind === 'issue' ? 'issue' : 'PR';
+  const on = ref ? ` ${kind} ${ref}` : '';
+  const labels = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .slice(0, 3)
+          .map((item) => text(item, 40))
+          .filter(Boolean)
+          .join(', ')
+      : '';
+  switch (action) {
+    case 'issue_opened':
+    case 'opened':
+      return `opened${on}`;
+    case 'issue_labeled':
+      return labels(payload.labels_added)
+        ? `labelled ${labels(payload.labels_added)}`
+        : 'labelled';
+    case 'issue_unlabeled':
+      return labels(payload.labels_removed)
+        ? `unlabelled ${labels(payload.labels_removed)}`
+        : 'unlabelled';
+    case 'issue_updated':
+    case 'pull_request_updated':
+      return `updated${on}`;
+    case 'reviewed': {
+      const state = text(payload.review_state).replace(/_/g, ' ');
+      return state ? `review: ${state}` : 'reviewed';
+    }
+    case 'commented':
+      return `commented on${on}`;
+    case 'merged':
+      return `merged${on}`;
+    default:
+      return '';
+  }
+}
 
 /** Labels after an update: removals first, then additions, at most six. */
 export function nextLabels(
@@ -130,11 +179,12 @@ export class FleetStory {
     return identity;
   }
 
-  private link(source: string, target: string, now: number): void {
+  private link(source: string, target: string, now: number, label = ''): void {
     if (!source || !target || source === target) return;
     const id = `story:${source}>${target}`;
     this.links.set(id, {
       until: now + 6000,
+      label,
       edge: {
         id,
         source,
@@ -216,7 +266,8 @@ export class FleetStory {
           at
         );
       this.runs.get(execution)!.subject = subject;
-      this.link(subject, flow, now);
+      // The work item started this run: say how, by the trigger's own kind.
+      this.link(subject, flow, now, triggerKind.replace(/_/g, ' '));
       const parent = this.runs.get(
         text(
           context.parent_execution_id ||
@@ -271,7 +322,8 @@ export class FleetStory {
           node.status = 'PR open';
           this.link(subject, prId, now);
         }
-        this.link(flow, prId, now);
+        const prRef = referenceFromUrl(prUrl);
+        this.link(flow, prId, now, prRef ? `opened PR ${prRef}` : 'opened PR');
         result.push({
           from: flow,
           to: prId,
@@ -297,7 +349,8 @@ export class FleetStory {
             reviewTarget.node.review_state.startsWith('Reported')
           )
             reviewTarget.node.review_state = `Reported ${reported}`;
-          this.link(flow, subject, now);
+          // The flow's own structured report, not a forge review state.
+          this.link(flow, subject, now, `reported review: ${reported}`);
           result.push({
             from: flow,
             to: subject,
@@ -383,11 +436,26 @@ export class FleetStory {
             p.labels_added,
             p.labels_removed
           );
-        this.link(actor, subject, now);
+        const ref =
+          text(object(fallback).reference) ||
+          referenceFromUrl(work.node.href) ||
+          '';
+        this.link(
+          actor,
+          subject,
+          now,
+          codeLineLabel(action, ref, p, work.node)
+        );
         // Merge contributors are association evidence, never a human merger.
         if (Array.isArray(p.flow_ids))
           for (const id of p.flow_ids.slice(0, 5))
-            if (text(id)) this.link(`flow:${text(id)}`, subject, now);
+            if (text(id))
+              this.link(
+                `flow:${text(id)}`,
+                subject,
+                now,
+                ref ? `contributed to PR ${ref}` : 'contributed'
+              );
       }
       const verb: Record<string, string> = {
         issue_opened: 'Opened',
@@ -497,10 +565,20 @@ export class FleetStory {
   }
 
   activeEdges(now = Date.now()): Set<string> {
-    return new Set(
-      [...this.links].filter(([, l]) => l.until > now).map(([id]) => id)
+    return new Set([...this.labels(now).keys()]);
+  }
+
+  /** Lit associations and what each line says while lit. */
+  labels(now = Date.now()): Map<string, string> {
+    return new Map(
+      [...this.links]
+        .filter(([, l]) => l.until > now)
+        .map(([id, l]) => [id, l.label])
     );
   }
+
+  /** Bumped by clear(), so session-scoped caches can follow a reset. */
+  epoch = 0;
 
   /** Used to expire runs and work without running an animation loop forever. */
   hasLiveActivity(minutes: number | null, now = Date.now()): boolean {
@@ -517,6 +595,7 @@ export class FleetStory {
     );
   }
   clear(): void {
+    this.epoch += 1;
     this.works.clear();
     this.runs.clear();
     this.links.clear();

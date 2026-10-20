@@ -60,6 +60,7 @@ import {
   windowRefreshMs,
   activityLabel,
   edgesForActivity,
+  modelKey,
   saveFleetMapWindow,
   windowMinutes,
   type FleetMapWindow,
@@ -145,8 +146,6 @@ const MIN_FIT_SCALE = 0.6;
 const MIN_SPATIAL_FIT_SCALE = 0.85;
 /** Nodes and the view glide to a new arrangement in this long (medium). */
 const GLIDE_MS = 400;
-/** The hover title of a lit work line; never drawn as text on the canvas. */
-const STORY_LINE = 'Observed work';
 /** Label tags drawn on a work chip; the rest are a +N count and in the title. */
 const LABELS_SHOWN = 2;
 /** After a pan or zoom by hand the view stops following the fleet a while. */
@@ -398,6 +397,7 @@ export class FleetMap extends LitElement {
       }
       if (notes.length) return;
     }
+    if (topic === 'gateway_activity') this.learnFlowModel(message);
     if (this.graph && this.instanceAdmin) {
       const messages = messagesForRealtime(this.shown(), topic, message);
       if (messages.length && !this.eventLog.record(messages, message)) return;
@@ -405,8 +405,17 @@ export class FleetMap extends LitElement {
     }
     const hit = activityFromRealtime(topic, message);
     if (!hit || !this.graph) return;
-    const edges = edgesForActivity(this.graph, hit);
-    if (edges.length) this.activity.add(edges, hit.kind);
+    const shown = this.shown();
+    const edges = edgesForActivity(shown, hit);
+    let label = hit.label ?? '';
+    if (hit.tokens && edges.length) {
+      // A completed model call says which model answered and what it cost.
+      const target = shown.edges.find((edge) => edge.id === edges[0])?.target;
+      const model = shown.nodes.find((node) => node.id === target)?.label;
+      label = `${model ? `${model} · ` : ''}${compactCount(hit.tokens.input)} in / ${compactCount(hit.tokens.output)} out`;
+    }
+    if (edges.length) this.activity.add(edges, hit.kind, label);
+    else if (hit.kind === 'tool call' && !hit.native) return;
     // Only an agent the map lacks makes the graph stale. A mapped agent with
     // no matching line (ambient model, no device) just shows no highlight,
     // and under Any time activity can't reveal anything new.
@@ -462,6 +471,83 @@ export class FleetMap extends LitElement {
   /** The graph as drawn: the server graph plus flows that did code work. */
   private shown(): FleetMapGraph {
     return this.filtered();
+  }
+
+  /** Models each flow was seen calling, from gateway traffic in this session. */
+  private flowModels = new Map<string, Set<string>>();
+  private flowModelsEpoch = 0;
+
+  /** Forget learned flow lines when the story is reset (a reopened map). */
+  private syncFlowModels(): void {
+    if (this.flowModelsEpoch === this.story.epoch) return;
+    this.flowModelsEpoch = this.story.epoch;
+    this.flowModels.clear();
+  }
+
+  /**
+   * A gateway call made inside a flow run names the flow and the model, so
+   * the flow gets an observed line to that model, as an agent has one.
+   */
+  private learnFlowModel(message: unknown): void {
+    const record = object(message);
+    const payload = object(record.payload);
+    const type = safeEventText(record.type);
+    if (
+      type !== 'model_gateway_call' &&
+      type !== 'model_gateway_request_started'
+    )
+      return;
+    const flowId =
+      safeEventText(record.flow_id) || safeEventText(payload.flow_id);
+    const alias =
+      safeEventText(payload.requested_model) ||
+      safeEventText(payload.model_alias);
+    if (!flowId || !alias || !this.graph) return;
+    this.syncFlowModels();
+    const key = modelKey(alias);
+    // The server's canonical key is the node's detail; older graphs carry
+    // it only as the label.
+    const model = this.graph.nodes.find(
+      (node) =>
+        node.type === 'model' &&
+        (node.detail
+          ? node.detail === key || node.detail.startsWith(`${key} `)
+          : modelKey(node.label) === key)
+    );
+    if (!model) return;
+    const flow = `flow:${flowId}`;
+    const known = this.flowModels.get(flow) ?? new Set<string>();
+    if (known.has(model.id)) return;
+    known.add(model.id);
+    this.flowModels.set(flow, known);
+    this.storyVersion++;
+  }
+
+  /** Observed flow-to-model lines for the flows and models on the map. */
+  private withFlowModels(graph: FleetMapGraph): FleetMapGraph {
+    this.syncFlowModels();
+    if (!this.flowModels.size) return graph;
+    const ids = new Set(graph.nodes.map((node) => node.id));
+    const have = new Set(graph.edges.map((edge) => edge.id));
+    const edges = [...graph.edges];
+    for (const [flow, models] of this.flowModels) {
+      if (!ids.has(flow)) continue;
+      for (const model of models) {
+        const id = `${flow}>uses_model>${model}`;
+        if (!ids.has(model) || have.has(id)) continue;
+        edges.push({
+          id,
+          source: flow,
+          target: model,
+          kind: 'uses_model',
+          provenance: 'observed',
+          impact_source: model,
+          impact_target: flow,
+          gaps: [],
+        });
+      }
+    }
+    return { ...graph, edges };
   }
 
   /**
@@ -2344,7 +2430,9 @@ export class FleetMap extends LitElement {
         ? activeGraph(this.graph, Date.now() - minutes * 60_000)
         : (this.graph ?? EMPTY);
     const view = filterGraph(
-      this.story.graph(withCodeFlows(source, this.codeActivity), minutes),
+      this.withFlowModels(
+        this.story.graph(withCodeFlows(source, this.codeActivity), minutes)
+      ),
       {
         types: this.types,
         owner: this.owner,
@@ -3562,12 +3650,16 @@ export class FleetMap extends LitElement {
     layout: FleetMapLayout
   ): Map<string, string> {
     const lines = new Map<string, string>();
-    for (const edge of view.edges)
-      if (this.story.activeEdges().has(edge.id)) {
-        const from = layout.anchor(edge.source),
-          to = layout.anchor(edge.target);
-        if (from && to) lines.set(`${from}>${to}`, STORY_LINE);
-      }
+    const story = this.story.labels();
+    // Work lines say what the action was; a lit line with nothing specific
+    // to say carries no text at all.
+    for (const edge of view.edges) {
+      const label = story.get(edge.id);
+      if (label === undefined) continue;
+      const from = layout.anchor(edge.source),
+        to = layout.anchor(edge.target);
+      if (from && to) lines.set(`${from}>${to}`, label);
+    }
     if (!this.activity.marks.size) return lines;
     const now = Date.now();
     const byId = new Map(view.edges.map((edge) => [edge.id, edge]));
@@ -3585,9 +3677,11 @@ export class FleetMap extends LitElement {
   render() {
     const graph =
       this.graph &&
-      this.story.graph(
-        withCodeFlows(this.graph, this.codeActivity),
-        windowMinutes(this.activityWindow)
+      this.withFlowModels(
+        this.story.graph(
+          withCodeFlows(this.graph, this.codeActivity),
+          windowMinutes(this.activityWindow)
+        )
       );
     if (!graph) return nothing;
     if (!graph.nodes.length && this.bare) {
@@ -3760,7 +3854,9 @@ export class FleetMap extends LitElement {
                 >
                   ${this.drawnEdges(view, layout, lit).map(
                     ({ edge, from, to, accounts }) => {
+                      // '' is a lit line with nothing specific to say.
                       const live = active.get(`${from}>${to}`);
+                      const glowing = live !== undefined;
                       const a = layout.positions.get(from)!;
                       const b = layout.positions.get(to)!;
                       const na = byId.get(edge.source)!;
@@ -3792,7 +3888,7 @@ export class FleetMap extends LitElement {
                         edge.provenance,
                         edge.gaps.length ? 'gap' : '',
                         inRadius ? 'lit' : '',
-                        live ? 'active' : '',
+                        glowing ? 'active' : '',
                         (lit && !inRadius) ||
                         (!lit && this.focusGap && !focused)
                           ? 'dim'
@@ -3803,9 +3899,9 @@ export class FleetMap extends LitElement {
                         .filter(Boolean)
                         .join(', ');
                       const path = svg`<path class=${cls} data-edge=${edge.kind} data-edge-id=${edge.id} data-activity=${live || nothing} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}${live ? ` · ${live}` : ''}</title></path>`;
-                      // Story lines light without text: the bubble says what
-                      // happened, and labels between columns overprint.
-                      if (!live || quiet || live === STORY_LINE) return path;
+                      // Text only when the line has something specific to
+                      // say; the spatial admin canvas stays quiet.
+                      if (!live || quiet) return path;
                       const mx = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
                       const my = (y1 + y2) / 2 - 6;
                       return svg`${path}<text class="activity-label" x=${mx} y=${my} text-anchor="middle">${live}</text>`;
