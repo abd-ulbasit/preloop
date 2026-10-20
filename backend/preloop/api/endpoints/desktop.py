@@ -101,7 +101,7 @@ def _authorize_operator(db: Session, user: models.User) -> None:
     if _is_machine_credential(user):
         raise _error(403, "forbidden", "Agent credentials cannot open desktop views")
     _desktop_permission(current_user=user, db=db)
-    ensure_permission_in_oss(db, user, "control_managed_agent")
+    ensure_permission_in_oss(db, user, PERMISSION)
 
 
 # ---------------------------------------------------------------------------

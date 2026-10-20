@@ -1876,9 +1876,9 @@ def get_managed_agent_command_status(
 ) -> AgentControlCommandStatusResponse:
     """Delivery state of one operator command, for clients that follow it.
 
-    The same permission as sending: whoever may send a command may watch
-    it land. Another agent's command id is a 404, not a leak. A sync
-    handler: FastAPI runs it in the threadpool, off the event loop.
+    Returns delivery state for a command belonging to the requested agent
+    in the current account. A command belonging to another agent returns
+    404. FastAPI runs this sync handler in the threadpool, off the event loop.
     """
     try:
         agent_uuid = uuid.UUID(agent_id)

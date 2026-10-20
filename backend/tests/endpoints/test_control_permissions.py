@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlalchemy.orm import Session
@@ -320,10 +320,49 @@ def test_control_without_permission_precedes_effects(
     assert service.mock_calls == []
 
 
+ALLOWED_CONTROL_ROUTES = [
+    pytest.param(
+        "PUT",
+        "/account/session-artifacts/settings",
+        {"audio_storage_enabled": True},
+        "manage_policies",
+        id="session-artifact-settings",
+    ),
+    pytest.param(
+        "PUT",
+        "/account/governance-defaults",
+        {},
+        "manage_policies",
+        id="governance-defaults",
+    ),
+    pytest.param(
+        "POST",
+        "/agents",
+        {"display_name": "Example agent"},
+        "manage_agents",
+        id="create-agent",
+    ),
+    pytest.param(
+        "PUT",
+        "/attention/dismissals/example-item",
+        {"fingerprint": "example", "reason": "expected"},
+        "manage_agents",
+        id="dismiss-attention-item",
+    ),
+    pytest.param(
+        "POST",
+        "/runners/register",
+        {"name": "Example runner"},
+        "execute_flows",
+        id="register-runner",
+    ),
+]
+
+
 @pytest.mark.parametrize("identity", ["primary", "holder", "superuser"])
 @pytest.mark.parametrize(
     "method,path,body,permission_name",
-    [CONTROL_ROUTES[i] for i in (0, 2, 6, 17, 35)],
+    ALLOWED_CONTROL_ROUTES,
 )
 def test_allowed_user_can_update_controls(
     control_client: TestClient,
@@ -379,6 +418,22 @@ def test_shared_control_helpers_allow_permitted_users(
         assert websockets._execution_command_permission(
             current_user=member, db=db_session
         )
+
+
+def test_desktop_uses_declared_control_permission(
+    db_session: Session,
+    member: models.User,
+    oss_checks: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grant_permission(db_session, member, "control_managed_agent")
+    monkeypatch.setattr(desktop, "PERMISSION", "manage_agents")
+    with pytest.raises(HTTPException) as exc:
+        desktop._authorize_operator(db_session, member)
+    assert exc.value.status_code == 403
+    assert "manage_agents" in exc.value.detail
+    grant_permission(db_session, member, "manage_agents")
+    desktop._authorize_operator(db_session, member)
 
 
 @pytest.mark.parametrize("identity", ["primary", "holder"])
