@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from preloop.api.auth.jwt import get_current_active_user
 from preloop.api.common import get_account_for_user
+from preloop.api.loop_safety import run_db_off_loop
 from preloop.models.db.session import get_db_session
 from preloop.models.models.account import Account
 from preloop.models.models.user import User
@@ -1305,7 +1306,9 @@ async def create_policy_version(
     Returns:
         The created policy version.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     snapshot = service.create_snapshot(
         description=request.description,
@@ -1354,7 +1357,9 @@ async def update_version_tag(
     Raises:
         HTTPException: If version not found.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     snapshot, error = service.update_tag(version_id, request.tag)
 
@@ -1399,7 +1404,9 @@ async def remove_version_tag(
     Raises:
         HTTPException: If version not found.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     snapshot, error = service.remove_tag(version_id)
 
@@ -1449,7 +1456,9 @@ async def rollback_to_version(
     Raises:
         HTTPException: If version not found.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     diff, success, error = service.rollback_to_snapshot(
         version_id,
@@ -1507,7 +1516,9 @@ async def delete_policy_version(
     Raises:
         HTTPException: If version not found or is active.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     try:
         deleted_ref = _snapshot_audit_ref(service.get_snapshot(version_id))
@@ -1565,7 +1576,9 @@ async def prune_policy_versions(
     Returns:
         PruneResponse with count of deleted versions.
     """
-    ensure_permission_in_oss(db, current_user, "manage_policies")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_policies")
+    )
     service = PolicyVersionService(db, str(account.id))
     deleted_count = service.prune_snapshots(
         older_than_days=request.older_than_days,

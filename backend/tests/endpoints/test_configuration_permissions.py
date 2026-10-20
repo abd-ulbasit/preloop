@@ -1,5 +1,7 @@
 """Permission consistency on approval, policy, tool and MCP configuration routes."""
 
+import asyncio
+import inspect
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -585,3 +587,42 @@ def test_batch_requires_global_permission_even_for_private_owner(
     assert response.status_code == 403
     belongs.assert_not_called()
     service.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        case
+        for case in ROUTES
+        if inspect.iscoroutinefunction(getattr(case.module, case.handler))
+    ],
+    ids=lambda case: case.handler,
+)
+def test_async_route_permission_check_runs_off_event_loop(
+    case: RouteCase,
+    route_client: TestClient,
+    mocker: MockerFixture,
+) -> None:
+    """Synchronous permission queries must not block the request event loop."""
+    real_holds_permission = permissions.user_holds_permission
+    query_on_loop: list[bool] = []
+
+    def holds_permission(
+        db: Session, current_user: models.User, permission_name: str
+    ) -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            query_on_loop.append(False)
+        else:
+            query_on_loop.append(True)
+        return real_holds_permission(db, current_user, permission_name)
+
+    checked = mocker.patch.object(
+        permissions, "user_holds_permission", side_effect=holds_permission
+    )
+    response = route_client.request(case.method, case.path, json=case.body)
+
+    assert response.status_code == 403, response.text
+    checked.assert_called_once()
+    assert query_on_loop == [False]
