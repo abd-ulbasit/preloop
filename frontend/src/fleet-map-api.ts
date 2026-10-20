@@ -63,6 +63,8 @@ export interface FleetMapNode {
   /** Work object kind and the observed review state, never inferred. */
   work_kind?: 'issue' | 'pull_request';
   review_state?: string | null;
+  /** Tracker labels on a work object, as reported by its events. */
+  labels?: string[];
 }
 export type FleetMapAgentState = 'onboarded' | 'discovered' | 'inactive';
 export interface FleetMapEdge {
@@ -104,7 +106,7 @@ export const FLEET_MAP_TYPES: readonly FleetMapResourceType[] = [
 ];
 
 export type FleetMapColumn =
-  'user' | 'device' | 'agent' | 'model' | 'provider' | 'work';
+  'user' | 'device' | 'agent' | 'model' | 'provider' | 'flow' | 'work';
 
 /**
  * Columns left to right: a person, the machines they own (runners sit inside
@@ -117,6 +119,7 @@ export const FLEET_MAP_COLUMNS: readonly FleetMapColumn[] = [
   'agent',
   'model',
   'provider',
+  'flow',
   'work',
 ];
 
@@ -165,7 +168,7 @@ const COLUMN_OF: Record<FleetMapResourceType, FleetMapColumn> = {
   device: 'device',
   runner: 'device',
   agent: 'agent',
-  flow: 'agent',
+  flow: 'flow',
   work: 'work',
   model: 'model',
   provider_account: 'provider',
@@ -425,6 +428,11 @@ export interface FleetMapLayoutOptions {
   collapsed?: ReadonlySet<string>;
   /** Nodes that must stay visible past the cap (selection, search hits). */
   pinned?: ReadonlySet<string>;
+  /**
+   * The stage the layout is fitted into. With it the row pitch stretches so
+   * the tallest column uses the height instead of the top third.
+   */
+  room?: { width: number; height: number; minScale?: number };
 }
 
 export interface FleetMapLayout {
@@ -443,7 +451,13 @@ export const FLEET_MAP_NODE_WIDTH = 216;
 export const FLEET_MAP_NODE_HEIGHT = 48;
 export const FLEET_MAP_CHILD_HEIGHT = 36;
 export const FLEET_MAP_COLUMN_GAP = 88;
+/** Seven columns (flows present) still fit 1920 px at 100%. */
+export const FLEET_MAP_DENSE_COLUMN_GAP = 52;
 export const FLEET_MAP_ROW_GAP = 10;
+/** The widest row pitch: room for a 26px bubble under its node. */
+export const FLEET_MAP_MAX_ROW_GAP = 64;
+/** Room under the plane for the legend and the zoom controls. */
+const FLEET_MAP_FOOTER = 64;
 export const FLEET_MAP_HEADER = 36;
 export const FLEET_MAP_CAP = 12;
 const CHILD_GAP = 6;
@@ -457,9 +471,11 @@ const CHILD_INSET = 10;
  * inside them. Past `cap` rows a column ends in a "+N more" row unless it is
  * expanded; pinned nodes always stay. Deterministic, so screenshots repeat.
  */
-export function layoutGraph(
+function layoutColumns(
   graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
-  options: FleetMapLayoutOptions = {}
+  options: FleetMapLayoutOptions,
+  rowGap: number,
+  columnGap: number
 ): FleetMapLayout {
   const cap = options.cap ?? Number.POSITIVE_INFINITY;
   const parentOf = containers(graph);
@@ -515,7 +531,7 @@ export function layoutGraph(
           options.pinned?.has(child.id)
         )
     );
-    const x = columns.length * (FLEET_MAP_NODE_WIDTH + FLEET_MAP_COLUMN_GAP);
+    const x = columns.length * (FLEET_MAP_NODE_WIDTH + columnGap);
     columns.push({ type, x, count: ordered.length });
     let y = FLEET_MAP_HEADER;
     for (const node of shown) {
@@ -553,14 +569,14 @@ export function layoutGraph(
       else
         for (const kid of kids)
           centre.set(kid.id, y + FLEET_MAP_NODE_HEIGHT / 2);
-      y += h + FLEET_MAP_ROW_GAP;
+      y += h + rowGap;
     }
     const hidden = ordered.length - shown.length;
     if (hidden > 0) {
       more.push({ column: type, hidden, x, y });
-      y += FLEET_MAP_CHILD_HEIGHT + FLEET_MAP_ROW_GAP;
+      y += FLEET_MAP_CHILD_HEIGHT + rowGap;
     }
-    height = Math.max(height, y - FLEET_MAP_ROW_GAP);
+    height = Math.max(height, y - rowGap);
   }
   const anchor = (id: string): string | undefined =>
     positions.has(id)
@@ -569,10 +585,58 @@ export function layoutGraph(
         ? parentOf.get(id)
         : undefined;
   const width = columns.length
-    ? columns.length * (FLEET_MAP_NODE_WIDTH + FLEET_MAP_COLUMN_GAP) -
-      FLEET_MAP_COLUMN_GAP
+    ? columns.length * (FLEET_MAP_NODE_WIDTH + columnGap) - columnGap
     : 0;
   return { positions, groups, columns, more, anchor, width, height };
+}
+
+/**
+ * Columns, top-aligned under their headers (#1880). Given the stage, the
+ * row pitch stretches (10px to 64px, the same in every column so rows stay
+ * level) until the tallest column reaches the bottom of the fitted view: a
+ * small fleet uses the height instead of the top third, and every node gets
+ * a lane under it for its bubble. With a Flows column the column gap tightens
+ * so seven columns still fit a 1920px screen at 100%.
+ */
+export function layoutGraph(
+  graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
+  options: FleetMapLayoutOptions = {}
+): FleetMapLayout {
+  const dense = graph.nodes.some((node) => nodeColumn(node) === 'flow');
+  const columnGap = dense ? FLEET_MAP_DENSE_COLUMN_GAP : FLEET_MAP_COLUMN_GAP;
+  const natural = layoutColumns(graph, options, FLEET_MAP_ROW_GAP, columnGap);
+  const room = options.room;
+  if (!room || !natural.width) return natural;
+  const scale = Math.max(
+    room.minScale ?? 0.6,
+    Math.min(1, (room.width - 48) / natural.width)
+  );
+  const usable = (room.height - 16 - FLEET_MAP_FOOTER) / scale;
+  // Rows per column (top-level boxes and "+N more" rows) and their height.
+  const rows = new Map<number, { count: number; bottom: number }>();
+  for (const column of natural.columns)
+    rows.set(column.x, { count: 0, bottom: 0 });
+  for (const [id, p] of natural.positions) {
+    const row = rows.get(p.x);
+    if (!row || natural.anchor(id) !== id || p.w !== FLEET_MAP_NODE_WIDTH)
+      continue;
+    row.count += 1;
+    row.bottom = Math.max(row.bottom, p.y + p.h);
+  }
+  for (const more of natural.more) {
+    const row = rows.get(more.x);
+    if (!row) continue;
+    row.count += 1;
+    row.bottom = Math.max(row.bottom, more.y + FLEET_MAP_CHILD_HEIGHT);
+  }
+  let gap = FLEET_MAP_MAX_ROW_GAP;
+  for (const { count, bottom } of rows.values())
+    if (count > 1)
+      gap = Math.min(gap, FLEET_MAP_ROW_GAP + (usable - bottom) / (count - 1));
+  gap = Math.floor(gap);
+  return gap > FLEET_MAP_ROW_GAP
+    ? layoutColumns(graph, options, gap, columnGap)
+    : natural;
 }
 
 export async function getFleetMap(
@@ -615,6 +679,27 @@ export interface FleetCodeEvent {
   url?: string | null;
 }
 
+/**
+ * One issue or pull request touched in the window, newest first (bounded).
+ * Contract: factory brief usage/contract-work.md; optional until the server
+ * sends it.
+ */
+export interface FleetWorkItem {
+  key: string;
+  kind: 'issue' | 'pull_request';
+  reference: string;
+  repo: string | null;
+  title: string | null;
+  url: string | null;
+  state: 'open' | 'closed' | 'merged' | null;
+  last_action: string;
+  last_at: string;
+  review_state: string | null;
+  labels: string[];
+  related_issue: string | null;
+  node_ids: string[];
+}
+
 /** Pull and merge requests per map node in the window (`/fleet/code-activity`). */
 export interface FleetCodeActivity {
   active_within_minutes: number | null;
@@ -623,6 +708,45 @@ export interface FleetCodeActivity {
   counts: Record<string, FleetCodeCounts>;
   flows: FleetCodeFlow[];
   events: FleetCodeEvent[];
+  /** Distinct work items in the window, so history shows on load. */
+  work?: FleetWorkItem[];
+  work_truncated?: boolean;
+}
+
+/** Gateway totals for one model or provider node in the window. */
+export interface FleetUsageTotals {
+  request_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  estimated_cost: number | null;
+  cost_is_estimate: true;
+  currency: string | null;
+  partial: boolean;
+}
+
+/** `GET /fleet/usage`: totals keyed by the fleet graph's own node ids. */
+export interface FleetUsageResponse {
+  active_within_minutes: number | null;
+  since: string;
+  until: string;
+  truncated: boolean;
+  partial: boolean;
+  models: Record<string, FleetUsageTotals>;
+  providers: Record<string, FleetUsageTotals>;
+}
+
+export async function getFleetUsage(
+  signal?: AbortSignal,
+  activeWithinMinutes: number | null = null
+): Promise<FleetUsageResponse> {
+  const url = activeWithinMinutes
+    ? `/api/v1/fleet/usage?active_within_minutes=${activeWithinMinutes}`
+    : '/api/v1/fleet/usage';
+  const response = await fetchWithAuth(url, { signal });
+  if (!response.ok) throw new Error('Usage totals could not be loaded.');
+  return response.json();
 }
 
 export async function getFleetCodeActivity(

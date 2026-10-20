@@ -130,7 +130,21 @@ export interface FleetActivityHit {
   agent: string;
   /** Model alias, for model requests. */
   model?: string;
+  /** Measured tokens on a completed model request. */
+  tokens?: { input: number; output: number };
+  /** What the line says while lit: the tool's own name, never a kind. */
+  label?: string;
+  /** A native tool runs on the agent's machine; MCP tools do not. */
+  native?: boolean;
 }
+
+const count = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : null;
+
+const clip = (value: unknown, max = 60): string =>
+  text(value).replace(/\s+/g, ' ').trim().slice(0, max);
 
 const text = (value: unknown): string =>
   typeof value === 'string' ? value : '';
@@ -152,13 +166,30 @@ export function activityFromRealtime(
     if (
       type === 'model_gateway_call' ||
       type === 'model_gateway_request_started'
-    )
+    ) {
+      const input = count(payload.prompt_tokens);
+      const output = count(payload.completion_tokens);
       return {
         kind: 'model request',
         agent,
         model: text(payload.requested_model) || text(payload.model_alias),
+        ...(type === 'model_gateway_call' && input !== null && output !== null
+          ? { tokens: { input, output } }
+          : {}),
       };
-    if (type === 'mcp_call') return { kind: 'tool call', agent };
+    }
+    if (type === 'mcp_call') {
+      // An MCP tool runs on its server, not on the agent's machine.
+      const tool = clip(payload.tool_name);
+      const server = clip(payload.server_name);
+      const agentOnly = text(payload.managed_agent_id);
+      return {
+        kind: 'tool call',
+        agent: agentOnly ? `agent:${agentOnly}` : agent,
+        label: tool ? (server ? `${tool} · ${server}` : tool) : '',
+        native: false,
+      };
+    }
     return null;
   }
   if (
@@ -168,14 +199,29 @@ export function activityFromRealtime(
   ) {
     const agent = text(payload.managed_agent_id);
     const flow = text(payload.flow_id) || text(record.flow_id);
+    const tool = clip(payload.tool_name);
+    const status = clip(payload.status, 20);
     return agent || flow
-      ? { kind: 'tool call', agent: agent ? `agent:${agent}` : `flow:${flow}` }
+      ? {
+          kind: 'tool call',
+          agent: agent ? `agent:${agent}` : `flow:${flow}`,
+          // A permission decision on a native tool, by the tool's name.
+          label: tool ? (status ? `${tool} ${status}` : tool) : '',
+          native: true,
+        }
       : null;
   }
   if (topic === 'approvals' && type === 'approval_created') {
     const agent =
       text(record.managed_agent_id) || text(payload.managed_agent_id);
-    return agent ? { kind: 'approval', agent: `agent:${agent}` } : null;
+    const tool = clip(record.tool_name) || clip(payload.tool_name);
+    return agent
+      ? {
+          kind: 'approval',
+          agent: `agent:${agent}`,
+          label: tool ? `approval: ${tool}` : 'approval requested',
+        }
+      : null;
   }
   return null;
 }
@@ -189,9 +235,12 @@ export function modelKey(alias: string): string {
 }
 
 /**
- * The relationships a hit travelled. A model request lights the agent's line
- * to that model (every model line when the alias is unknown); a tool call or
- * an approval lights the line into the agent from its device or owner.
+ * The relationships a hit travelled. A model request lights the agent's or
+ * flow's line to that model (every model line when the alias is unknown); a
+ * native tool lights the line from the machine it runs on; an approval
+ * lights the line from the person who owns the agent and decides it. An MCP
+ * tool runs on a server the map does not draw, so it lights no line: its
+ * node and bubble say it.
  */
 export function edgesForActivity(
   graph: Pick<FleetMapGraph, 'nodes' | 'edges'>,
@@ -211,28 +260,30 @@ export function edgesForActivity(
       : [];
     return (exact.length ? exact : lines).map((edge) => edge.id);
   }
+  if (hit.kind === 'tool call' && !hit.native) return [];
+  const via = hit.kind === 'approval' ? 'owns' : 'hosts';
   return graph.edges
-    .filter(
-      (edge) =>
-        edge.target === hit.agent &&
-        (edge.kind === 'hosts' || edge.kind === 'owns')
-    )
+    .filter((edge) => edge.target === hit.agent && edge.kind === via)
     .map((edge) => edge.id);
 }
 
 export interface FleetActivityMark {
   counts: Map<FleetActivityKind, number>;
   until: number;
+  /** The latest specific label ("Edit allowed", "Claude Fable 5.1 · 4.1k in / 380 out"). */
+  label?: string;
+  /** Labelled hits since the line lit. */
+  hits?: number;
 }
 
-/** Short label: "model request ×3 · tool call", at most two kinds named. */
+/**
+ * What a lit line says: the latest specific label and how many hits it
+ * stands for, or nothing. A kind ("model request", "tool call") is never a
+ * label: the line already says that much.
+ */
 export function activityLabel(mark: FleetActivityMark): string {
-  const parts = [...mark.counts]
-    .sort((a, b) => b[1] - a[1])
-    .map(([kind, n]) => (n > 1 ? `${kind} ×${n}` : kind));
-  return parts.length > 2
-    ? `${parts.slice(0, 2).join(' · ')} +${parts.length - 2}`
-    : parts.join(' · ');
+  if (!mark.label) return '';
+  return (mark.hits ?? 1) > 1 ? `${mark.label} ×${mark.hits}` : mark.label;
 }
 
 export interface FleetActivityOptions {
@@ -251,7 +302,11 @@ export interface FleetActivityOptions {
  */
 export class FleetActivityTracker {
   readonly marks = new Map<string, FleetActivityMark>();
-  private pending: { edges: string[]; kind: FleetActivityKind }[] = [];
+  private pending: {
+    edges: string[];
+    kind: FleetActivityKind;
+    label: string;
+  }[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private due = 0;
   private readonly holdMs: number;
@@ -269,9 +324,9 @@ export class FleetActivityTracker {
     this.now = options.now ?? Date.now;
   }
 
-  add(edges: string[], kind: FleetActivityKind): void {
+  add(edges: string[], kind: FleetActivityKind, label = ''): void {
     if (!edges.length) return;
-    this.pending.push({ edges, kind });
+    this.pending.push({ edges, kind, label });
     this.schedule(this.flushMs);
   }
 
@@ -279,17 +334,25 @@ export class FleetActivityTracker {
   flush(): void {
     this.timer = null;
     const now = this.now();
-    for (const { edges, kind } of this.pending)
+    for (const { edges, kind, label } of this.pending)
       for (const id of edges) {
         const mark = this.marks.get(id);
         if (!mark || mark.until <= now) {
           this.marks.set(id, {
             counts: new Map([[kind, 1]]),
             until: now + this.holdMs,
+            label,
+            hits: label ? 1 : 0,
           });
         } else {
           mark.counts.set(kind, (mark.counts.get(kind) || 0) + 1);
           mark.until = now + this.holdMs;
+          // Only hits that say something count: a start and its completion
+          // are one call.
+          if (label) {
+            mark.hits = (mark.hits ?? 0) + 1;
+            mark.label = label;
+          }
           // Re-insert so the map stays ordered stalest first.
           this.marks.delete(id);
           this.marks.set(id, mark);

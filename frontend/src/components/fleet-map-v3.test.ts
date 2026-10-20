@@ -419,7 +419,7 @@ describe('fleet-map work geometry', () => {
     expect(chip.getAttribute('data-status')).to.equal('Merged');
     expect(chip.textContent).to.contain('Merged');
   });
-  it('repacks new work into the bottom lane before the user owns a spatial layout', async () => {
+  it('repacks new work into the work shelf, right of the flows, before the user owns a spatial layout', async () => {
     const el = await map({ positionsScope: 'work-packing' });
     for (const id of [41, 42]) {
       el.recordActivity('flow_executions', {
@@ -442,9 +442,425 @@ describe('fleet-map work geometry', () => {
       ...el.shadowRoot!.querySelectorAll<HTMLElement>('[data-kind="work"]'),
     ];
     expect(work).to.have.length(2);
+    const left = (n: Element) => parseFloat((n as HTMLElement).style.left);
+    expect(Math.abs(left(work[0]) - left(work[1]))).to.be.below(2);
+    const flow = el.shadowRoot!.querySelector('[data-node="flow:triage"]')!;
+    expect(left(flow)).to.be.below(left(work[0]));
+    for (const node of el.shadowRoot!.querySelectorAll('[data-kind="user"]'))
+      expect(left(node)).to.be.below(left(flow));
+  });
+});
+
+const issue = (n: number) => ({
+  kind: 'issue',
+  key: `example/widgets#${n}`,
+  reference: `#${n}`,
+  title: `Issue ${n}`,
+  url: `https://example.com/example/widgets/issues/${n}`,
+});
+
+describe('fleet-map v3 pass 2', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+
+  it('keeps the search at a reading width and never clips a select', async () => {
+    const el = await map({ spatialOnly: false });
+    el.style.width = '1880px';
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const bar = el.shadowRoot!.querySelector('list-toolbar')!;
+    const search = bar.shadowRoot!.querySelector('sl-input')!;
+    expect(search.getBoundingClientRect().width).to.be.at.most(320);
+    const windows = el.shadowRoot!.querySelector<
+      HTMLElement & { value: string }
+    >('[data-testid="fleet-map-window"]')!;
+    for (const value of ['5m', '24h']) {
+      windows.value = value;
+      await (windows as unknown as { updateComplete: Promise<unknown> })
+        .updateComplete;
+      const input = windows.shadowRoot!.querySelector<HTMLInputElement>(
+        '.select__display-input'
+      )!;
+      expect(input.scrollWidth, value).to.be.at.most(input.clientWidth + 1);
+    }
+    for (const select of el.shadowRoot!.querySelectorAll(
+      'sl-select.secondary-filter'
+    ))
+      expect(select.getBoundingClientRect().width).to.be.at.least(136);
+  });
+
+  it('keeps tracker labels on the issue chip after the PR opens', async () => {
+    const el = await map({ positionsScope: 'labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: ['bug', 'p2'],
+      labels_removed: [],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = () =>
+      el.shadowRoot!.querySelector(
+        '[data-node="work:issue:example/widgets#41"]'
+      )!;
+    const tags = () =>
+      [...chip().querySelectorAll('[data-label]')].map((t) =>
+        t.textContent!.trim()
+      );
+    expect(tags()).to.deep.equal(['bug', 'p2']);
+    send({
+      event_id: 'p',
+      action: 'opened',
+      flow_id: 'implementation',
+      subject: {
+        kind: 'pull_request',
+        key: 'example/widgets#51',
+        reference: '#51',
+      },
+      related_issue: issue(41),
+    });
+    send({
+      event_id: 'u',
+      action: 'issue_unlabeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_removed: ['p2'],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(chip().textContent).to.contain('PR open');
+    expect(tags()).to.deep.equal(['bug']);
+  });
+
+  it('shows two label tags and a count, with every label in the title, inside the chip', async () => {
+    const el = await map({ positionsScope: 'many-labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: [
+        'bug',
+        'p2',
+        'needs-design-review-from-platform',
+        'area/checkout',
+      ],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = el.shadowRoot!.querySelector<HTMLElement>(
+      '[data-node="work:issue:example/widgets#41"]'
+    )!;
     expect(
-      Math.abs(parseFloat(work[0].style.top) - parseFloat(work[1].style.top))
-    ).to.be.below(2);
+      [...chip.querySelectorAll('[data-label]')].map((t) =>
+        t.textContent!.trim()
+      )
+    ).to.deep.equal(['bug', 'p2']);
+    expect(
+      chip.querySelector('[data-labels-more]')!.textContent!.trim()
+    ).to.equal('+2');
+    expect(chip.title).to.contain(
+      'Labels: bug, p2, needs-design-review-from-platform, area/checkout'
+    );
+    expect(chip.getAttribute('aria-label')).to.contain('labels bug, p2');
+    const box = chip.getBoundingClientRect();
+    for (const tag of chip.querySelectorAll('.tag')) {
+      const r = tag.getBoundingClientRect();
+      if (r.width) expect(r.left).to.be.at.least(box.left);
+    }
+    expect(
+      chip.querySelector('.sub')!.getBoundingClientRect().right
+    ).to.be.at.most(box.right);
+  });
+
+  it('fits two long label tags and the count inside the chip', async () => {
+    const el = await map({ positionsScope: 'long-labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: [
+        'needs-design-review-from-platform',
+        'customer-escalation-tier-one',
+        'p2',
+      ],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = el.shadowRoot!.querySelector<HTMLElement>(
+      '[data-node="work:issue:example/widgets#41"]'
+    )!;
+    const sub = chip.querySelector('.sub')!.getBoundingClientRect();
+    for (const tag of chip.querySelectorAll('.tag, [data-labels-more]'))
+      expect(tag.getBoundingClientRect().right).to.be.at.most(sub.right + 0.5);
+    const more = chip.querySelector<HTMLElement>('[data-labels-more]')!;
+    expect(more.textContent!.trim()).to.equal('+1');
+    expect(more.scrollWidth).to.be.at.most(more.clientWidth + 1);
+    expect(more.getBoundingClientRect().width).to.be.above(8);
+  });
+
+  it('hides a note the per-frame pass cannot place instead of leaving it in place', async () => {
+    const el = await map({ bubbles: true, positionsScope: 'hide-note' });
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: {
+        managed_agent_id: 'claude',
+        model_alias: 'claude-sonnet-5-5',
+        api_usage_id: 'h1',
+        prompt_tokens: 10,
+        completion_tokens: 2,
+        outcome: 'success',
+      },
+    });
+    await el.updateComplete;
+    const bubble = el.shadowRoot!.querySelector<HTMLElement>('.bubble')!;
+    expect(bubble.style.visibility).to.equal('');
+    const internals = el as unknown as {
+      placeNotes: () => unknown[];
+      applyTransform(): void;
+    };
+    // A zoom where the stage has no free spot left.
+    internals.placeNotes = () => [];
+    internals.applyTransform();
+    expect(bubble.style.visibility).to.equal('hidden');
+  });
+
+  it('draws no line between an issue and the PR inside it, and labels work lines by their action', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: `contain-${arrangement}`,
+      });
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: {
+          event_id: 'o',
+          action: 'issue_opened',
+          managed_agent_id: 'claude',
+          subject: issue(41),
+        },
+      });
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: {
+          event_id: 'p',
+          action: 'opened',
+          flow_id: 'implementation',
+          subject: {
+            kind: 'pull_request',
+            key: 'example/widgets#51',
+            reference: '#51',
+          },
+          related_issue: issue(41),
+        },
+      });
+      await el.updateComplete;
+      await el.updateComplete;
+      const issueId = 'work:issue:example/widgets#41';
+      const prId = 'work:pull_request:example/widgets#51';
+      expect(el.shadowRoot!.querySelector(`[data-node="${prId}"]`), arrangement)
+        .to.exist;
+      for (const path of el.shadowRoot!.querySelectorAll(
+        'path[data-edge="caused"]'
+      )) {
+        const id = path.getAttribute('data-edge-id') ?? '';
+        expect(
+          id.includes(issueId) && id.includes(prId),
+          `${arrangement} ${id}`
+        ).to.equal(false);
+      }
+      expect(
+        !!el.shadowRoot!.querySelector('path[data-edge="caused"].active'),
+        arrangement
+      ).to.equal(true);
+      // The lit line to the issue says the action that created it (drawn as
+      // text in Columns where it covers no node; always on the line).
+      const lines = [
+        ...el.shadowRoot!.querySelectorAll('path.edge.active'),
+      ].map((p) => p.getAttribute('data-activity'));
+      expect(lines, arrangement).to.include('opened issue #41');
+      const texts = [
+        ...el.shadowRoot!.querySelectorAll('text.activity-label'),
+      ].map((t) => t.textContent);
+      if (arrangement === 'spatial') expect(texts).to.deep.equal([]);
+      expect(texts.join(' ')).not.to.contain('Observed work');
+    }
+  });
+
+  it('connects a flow to the model its run calls and names the call on that line', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'flow-model',
+    });
+    el.recordActivity('flow_executions', {
+      type: 'execution_started',
+      flow_id: 'triage',
+      execution_id: 'run-1',
+      payload: {
+        status: 'RUNNING',
+        fleet_context: { flow_name: 'Issue triage' },
+      },
+    });
+    await el.updateComplete;
+    expect(
+      el.shadowRoot!.querySelector(
+        'path[data-edge-id="flow:triage>uses_model>model:sonnet"]'
+      )
+    ).not.to.exist;
+    // The gateway names the flow on calls made inside its run.
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      flow_id: 'triage',
+      payload: {
+        model_alias: 'claude-sonnet-5-5',
+        prompt_tokens: 2100,
+        completion_tokens: 330,
+        api_usage_id: 'fm-1',
+      },
+    });
+    el.flushActivity();
+    await el.updateComplete;
+    await el.updateComplete;
+    const line = el.shadowRoot!.querySelector<SVGPathElement>(
+      'path[data-edge-id="flow:triage>uses_model>model:sonnet"]'
+    )!;
+    expect(line, 'flow to model line').to.exist;
+    expect(line.classList.contains('active')).to.equal(true);
+    expect(line.getAttribute('data-activity')).to.equal(
+      'claude-sonnet-5-5 · 2.1k in / 330 out'
+    );
+  });
+
+  it('places bubbles beside their node in Columns, never on another node', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      bubbles: true,
+      positionsScope: 'bubbles-columns',
+    });
+    el.style.height = '900px';
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: {
+        managed_agent_id: 'claude',
+        model_alias: 'claude-sonnet-5-5',
+        api_usage_id: 'u1',
+        prompt_tokens: 2100,
+        completion_tokens: 330,
+        outcome: 'success',
+      },
+    });
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await el.updateComplete;
+    const bubble = el.shadowRoot!.querySelector<HTMLElement>('.bubble')!;
+    expect(bubble).to.exist;
+    const b = bubble.getBoundingClientRect();
+    const own = el
+      .shadowRoot!.querySelector(`[data-node="${bubble.dataset.bubble}"]`)!
+      .getBoundingClientRect();
+    // Next to its node, not in a corner stack.
+    expect(Math.abs(b.top - own.bottom)).to.be.below(own.height + 40);
+    for (const node of el.shadowRoot!.querySelectorAll<HTMLElement>(
+      '.node:not(.child), .column-title'
+    )) {
+      if (node.dataset.node === bubble.dataset.bubble) continue;
+      const r = node.getBoundingClientRect();
+      const hit =
+        b.left < r.right &&
+        r.left < b.right &&
+        b.top < r.bottom &&
+        r.top < b.bottom;
+      expect(hit, node.dataset.node).to.equal(false);
+    }
+  });
+
+  it('refits the camera when a node joins an unowned spatial layout, and not once it is owned', async () => {
+    const el = await map({ positionsScope: 'join-refit' });
+    const internals = el as unknown as {
+      userMovedAt: number;
+      points: Record<string, { x: number; y: number }>;
+      translateX: number;
+      translateY: number;
+      scale: number;
+      applyTransform(): void;
+    };
+    internals.userMovedAt = -Infinity;
+    const view = () => [
+      internals.translateX,
+      internals.translateY,
+      internals.scale,
+    ];
+    const join = async (n: number) => {
+      el.recordActivity('flow_executions', {
+        type: 'execution_started',
+        flow_id: `flow${n}`,
+        execution_id: `run${n}`,
+        payload: {
+          status: 'RUNNING',
+          fleet_context: { flow_name: `Flow ${n}` },
+        },
+      });
+      await el.updateComplete;
+      await el.updateComplete;
+      await el.updateComplete;
+    };
+    // The camera drifted (a previous fit, a resize) but every node is in view.
+    const nudge = () => {
+      internals.translateX -= 8;
+      internals.translateY -= 6;
+      internals.applyTransform();
+      return view();
+    };
+    await join(1);
+    const fitted = view();
+    const drifted = nudge();
+    await join(2);
+    expect(view()).not.to.deep.equal(drifted);
+    expect(view()[2]).to.be.closeTo(fitted[2], 0.05);
+    // Owned: the user's arrangement and camera stay put.
+    const shown = el.shadowRoot!.querySelectorAll<HTMLElement>('[data-node]');
+    internals.points = Object.fromEntries(
+      [...shown].map((n) => [
+        n.dataset.node!,
+        { x: parseFloat(n.style.left), y: parseFloat(n.style.top) },
+      ])
+    );
+    await el.updateComplete;
+    const owned = nudge();
+    await join(3);
+    expect(view()).to.deep.equal(owned);
   });
 });
 
@@ -471,5 +887,244 @@ describe('fleet-map hidden account layer', () => {
       el.shadowRoot!.querySelector('[data-testid="fleet-map-panel"]')
         ?.textContent
     ).not.to.contain('Claude Code');
+  });
+});
+
+describe('fleet-map window history', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+
+  const at = (secondsAgo: number) =>
+    new Date(Date.now() - secondsAgo * 1000).toISOString();
+  const item = (
+    kind: 'issue' | 'pull_request',
+    n: number,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    key: `acme/api#${n}`,
+    kind,
+    reference: `#${n}`,
+    repo: 'acme/api',
+    title: `${kind === 'issue' ? 'Issue' : 'PR'} ${n}`,
+    url: `https://example.com/acme/api/${kind === 'issue' ? 'issues' : 'pull'}/${n}`,
+    state: 'open' as const,
+    last_action: kind === 'issue' ? 'issue_labeled' : 'opened',
+    last_at: at(120),
+    review_state: null,
+    labels: [],
+    related_issue: null,
+    node_ids: ['agent:claude'],
+    ...extra,
+  });
+  const history = () => ({
+    active_within_minutes: 60,
+    since: at(3600),
+    truncated: false,
+    counts: {},
+    flows: ['triage', 'implementation'].map((id) => ({
+      id: `flow:${id}`,
+      resource_id: id,
+      label:
+        id === 'triage' ? 'Issue triage' : 'Automated Issue Implementation',
+      href: `/console/flows/${id}`,
+      model_node_id: 'model:sonnet',
+      last_active_at: at(300),
+    })),
+    events: [],
+    work: [
+      item('issue', 41, { labels: ['bug'] }),
+      item('issue', 42),
+      item('pull_request', 51, { related_issue: 'acme/api#41' }),
+    ],
+  });
+  const ids = [
+    'flow:triage',
+    'flow:implementation',
+    'work:issue:acme/api#41',
+    'work:issue:acme/api#42',
+    'work:pull_request:acme/api#51',
+  ];
+
+  it('shows every flow and work item of the window on load, in view, in both arrangements, with no live events', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: `history-${arrangement}`,
+        activityWindow: '1h',
+      });
+      el.codeActivity = history();
+      await el.updateComplete;
+      await el.updateComplete;
+      await el.updateComplete;
+      const stage = el
+        .shadowRoot!.querySelector('.stage')!
+        .getBoundingClientRect();
+      for (const id of ids) {
+        const node = el.shadowRoot!.querySelector(`[data-node="${id}"]`);
+        expect(!!node, `${arrangement} ${id}`).to.equal(true);
+        const r = node!.getBoundingClientRect();
+        expect(
+          r.left >= stage.left - 1 && r.right <= stage.right + 1,
+          `${arrangement} ${id} x`
+        ).to.equal(true);
+        expect(
+          r.top >= stage.top - 1 && r.bottom <= stage.bottom + 1,
+          `${arrangement} ${id} y`
+        ).to.equal(true);
+      }
+      const pr = el.shadowRoot!.querySelector<HTMLElement>(
+        '[data-node="work:pull_request:acme/api#51"]'
+      )!;
+      expect(
+        pr.classList.contains('child'),
+        `${arrangement} PR under issue`
+      ).to.equal(true);
+      expect(
+        el
+          .shadowRoot!.querySelector(
+            '[data-node="work:issue:acme/api#41"] [data-label]'
+          )
+          ?.textContent?.trim()
+      ).to.equal('bug');
+      // History is not traffic: nothing lit, no notes.
+      expect(
+        el.shadowRoot!.querySelectorAll('path.edge.active').length
+      ).to.equal(0);
+    }
+  });
+
+  it('hides and shows flows and work from the Show menu in both arrangements, and remembers it', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const scope = `show-${arrangement}`;
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: scope,
+        activityWindow: '1h',
+      });
+      el.codeActivity = history();
+      await el.updateComplete;
+      await el.updateComplete;
+      const box = (type: string) =>
+        el.shadowRoot!.querySelector<HTMLElement & { checked: boolean }>(
+          `sl-checkbox[data-type="${type}"]`
+        )!;
+      expect(box('flow').textContent!.trim()).to.equal('Flows');
+      expect(box('work').textContent!.trim()).to.equal('Work (issues, PRs)');
+      expect(box('flow').checked && box('work').checked).to.equal(true);
+      const count = (kind: string) =>
+        el.shadowRoot!.querySelectorAll(`[data-kind="${kind}"]`).length;
+      expect(count('flow')).to.equal(2);
+      expect(count('work')).to.equal(3);
+      for (const type of ['flow', 'work']) {
+        box(type).dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+      expect(count('flow'), arrangement).to.equal(0);
+      expect(count('work'), arrangement).to.equal(0);
+      // Remembered for this user and map.
+      const again = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: scope,
+        activityWindow: '1h',
+      });
+      again.codeActivity = history();
+      await again.updateComplete;
+      await again.updateComplete;
+      expect(
+        again.shadowRoot!.querySelectorAll('[data-kind="work"]').length
+      ).to.equal(0);
+      for (const type of ['flow', 'work']) {
+        box(type).dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+      expect(count('flow')).to.equal(2);
+      expect(count('work')).to.equal(3);
+    }
+  });
+});
+
+describe('fleet-map usage totals', () => {
+  const totals = (extra: Record<string, unknown> = {}) => ({
+    request_count: 12,
+    input_tokens: 41200,
+    output_tokens: 3800,
+    cache_read_tokens: 900,
+    cache_write_tokens: null,
+    estimated_cost: 0.42,
+    cost_is_estimate: true as const,
+    currency: 'USD',
+    partial: false,
+    ...extra,
+  });
+  it('shows window totals for a selected model or provider, with the estimate said', async () => {
+    const el = await map({ positionsScope: 'usage' });
+    el.usage = {
+      active_within_minutes: 60,
+      since: '2026-10-20T09:00:00Z',
+      until: '2026-10-20T10:00:00Z',
+      truncated: false,
+      partial: false,
+      models: { 'model:sonnet': totals() },
+      providers: {
+        'provider:openai': totals({
+          request_count: 1,
+          estimated_cost: null,
+          partial: true,
+        }),
+      },
+    };
+    const pick = async (id: string) => {
+      el.shadowRoot!.querySelector<HTMLElement>(`[data-node="${id}"]`)!.click();
+      await el.updateComplete;
+      return el
+        .shadowRoot!.querySelector('[data-testid="fleet-map-usage"]')
+        ?.textContent?.replace(/\s+/g, ' ')
+        .trim();
+    };
+    expect(await pick('model:sonnet')).to.equal(
+      'In this window: 12 requests, 41.2k in / 3.8k out tokens (est. $0.42)'
+    );
+    expect(await pick('provider:openai')).to.equal(
+      'In this window: 1 request, 41.2k in / 3.8k out tokens (partial)'
+    );
+    expect(await pick('model:gpt')).to.equal(
+      'No gateway requests in this window.'
+    );
+    expect(await pick('agent:claude')).to.equal(undefined);
+  });
+});
+
+describe('fleet-map Show memory', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+  it('remembers a choice that hides every type', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'hide-all',
+    });
+    for (const box of el.shadowRoot!.querySelectorAll<
+      HTMLElement & { checked: boolean }
+    >('sl-checkbox[data-type]'))
+      if (box.checked) {
+        box.dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+    expect(el.shadowRoot!.querySelectorAll('[data-node]').length).to.equal(0);
+    const again = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'hide-all',
+    });
+    expect(again.shadowRoot!.querySelectorAll('[data-node]').length).to.equal(
+      0
+    );
   });
 });

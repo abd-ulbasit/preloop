@@ -156,12 +156,25 @@ describe('fleet-map live canvas', () => {
         user-id="u-l"
       ></fleet-map>`
     );
+    // A started request has nothing specific to say; a completed one names
+    // the model that answered and the tokens it measured.
     columns.recordActivity('gateway_activity', call);
+    columns.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: {
+        managed_agent_id: 'codex',
+        model_alias: 'gpt-6.1',
+        prompt_tokens: 4100,
+        completion_tokens: 380,
+      },
+    });
     columns.flushActivity();
     await columns.updateComplete;
     expect(
-      columns.shadowRoot!.querySelector('.activity-label')!.textContent
-    ).to.contain('model request');
+      columns
+        .shadowRoot!.querySelector('path.edge.active')!
+        .getAttribute('data-activity')
+    ).to.equal('gpt-6.1 · 4.1k in / 380 out');
   });
 
   it('lists recent events from the endpoint on load and says when counts are capped', async () => {

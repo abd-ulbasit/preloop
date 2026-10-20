@@ -1,5 +1,5 @@
 import { expect } from '@open-wc/testing';
-import { FleetStory, workUrl } from './fleet-map-story';
+import { FleetStory, codeLineLabel, workUrl } from './fleet-map-story';
 import { sampleFleetMap } from '../test-helpers/fleet-map-graph';
 
 const issue = {
@@ -301,5 +301,96 @@ describe('Fleet Map current publication and repair metadata', () => {
     ).to.equal(true);
     expect(story.flowForExecution('repair')).to.equal('implementation');
     expect(JSON.stringify(notes)).not.to.contain('PRIVATE');
+  });
+});
+
+describe('fleet-map work line labels', () => {
+  it('says the action that created the work, never a kind', () => {
+    const issue = { work_kind: 'issue' as const, review_state: null };
+    const pr = { work_kind: 'pull_request' as const, review_state: null };
+    expect(codeLineLabel('issue_opened', '#41', {}, issue)).to.equal(
+      'opened issue #41'
+    );
+    expect(
+      codeLineLabel(
+        'issue_labeled',
+        '#41',
+        { labels_added: ['bug', 'p2'] },
+        issue
+      )
+    ).to.equal('labelled bug, p2');
+    expect(codeLineLabel('opened', '#51', {}, pr)).to.equal('opened PR #51');
+    expect(
+      codeLineLabel(
+        'reviewed',
+        '#51',
+        { review_state: 'changes_requested' },
+        pr
+      )
+    ).to.equal('review: changes requested');
+    expect(codeLineLabel('pull_request_updated', '#51', {}, pr)).to.equal(
+      'updated PR #51'
+    );
+    expect(codeLineLabel('merged', '#51', {}, pr)).to.equal('merged PR #51');
+    expect(codeLineLabel('something_else', '#51', {}, pr)).to.equal('');
+  });
+});
+
+describe('fleet-map window history seeding', () => {
+  const merged = (pr: string, url: string | null) => ({
+    id: `merge:${pr}`,
+    at: new Date(Date.now() - 60_000).toISOString(),
+    action: 'merged' as const,
+    node_id: 'flow:implementation',
+    pr,
+    url,
+  });
+  const base = {
+    active_within_minutes: 60,
+    since: new Date(Date.now() - 3_600_000).toISOString(),
+    truncated: false,
+    counts: {},
+    flows: [],
+  };
+  const works = (story: FleetStory) =>
+    story
+      .graph({ ...sampleFleetMap() }, 60)
+      .nodes.filter((n) => n.type === 'work');
+
+  it('seeds merged PRs from forge merges on a server without the work list', () => {
+    const story = new FleetStory();
+    expect(
+      story.seedWork({ ...base, events: [merged('acme/api#51', null)] })
+    ).to.equal(true);
+    const nodes = works(story);
+    expect(nodes.map((n) => [n.work_kind, n.status])).to.deep.equal([
+      ['pull_request', 'Merged'],
+    ]);
+  });
+
+  it('does not add a merge event PR twice when the work list has it', () => {
+    const story = new FleetStory();
+    story.seedWork({
+      ...base,
+      events: [merged('#51', null)],
+      work: [
+        {
+          key: 'acme/api#51',
+          kind: 'pull_request',
+          reference: '#51',
+          repo: 'acme/api',
+          title: 'Retry',
+          url: null,
+          state: 'merged',
+          last_action: 'merged',
+          last_at: new Date(Date.now() - 60_000).toISOString(),
+          review_state: null,
+          labels: [],
+          related_issue: null,
+          node_ids: [],
+        },
+      ],
+    });
+    expect(works(story)).to.have.length(1);
   });
 });

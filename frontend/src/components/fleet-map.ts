@@ -18,7 +18,9 @@ import {
   FLEET_MAP_CAP,
   FLEET_MAP_COLUMN_LABEL,
   FLEET_MAP_EDGE_LABEL,
+  FLEET_MAP_HEADER,
   FLEET_MAP_NODE_HEIGHT,
+  FLEET_MAP_NODE_WIDTH,
   FLEET_MAP_TYPES,
   FLEET_MAP_TYPE_LABEL,
   agentState,
@@ -37,11 +39,20 @@ import {
   type FleetMapNodeType,
   type FleetCodeAction,
   type FleetCodeActivity,
+  type FleetUsageResponse,
   type FleetMapPosition,
   getFleetCodeActivity,
+  getFleetUsage,
   withCodeFlows,
 } from '../fleet-map-api';
 import { formatRelativeTime } from '../utils/date';
+import { formatCurrencyAmount } from '../utils/money';
+import {
+  placeBubbles,
+  type BubbleRect,
+  type BubbleRequest,
+  type PlacedBubble,
+} from '../utils/fleet-map-bubbles';
 import {
   FLEET_ACTIVITY_TOPICS,
   FLEET_MAP_WINDOWS,
@@ -52,6 +63,7 @@ import {
   windowRefreshMs,
   activityLabel,
   edgesForActivity,
+  modelKey,
   saveFleetMapWindow,
   windowMinutes,
   type FleetMapWindow,
@@ -116,7 +128,7 @@ const TYPE_TOGGLE_LABEL: Record<(typeof FLEET_MAP_TYPES)[number], string> = {
   runner: 'Runners',
   agent: 'Agents',
   flow: 'Flows',
-  work: 'Issues and PRs',
+  work: 'Work (issues, PRs)',
   model: 'Models',
   provider_account: 'Accounts',
   provider: 'Providers',
@@ -137,6 +149,8 @@ const MIN_FIT_SCALE = 0.6;
 const MIN_SPATIAL_FIT_SCALE = 0.85;
 /** Nodes and the view glide to a new arrangement in this long (medium). */
 const GLIDE_MS = 400;
+/** Label tags drawn on a work chip; the rest are a +N count and in the title. */
+const LABELS_SHOWN = 2;
 /** After a pan or zoom by hand the view stops following the fleet a while. */
 const HANDS_OFF_MS = 15_000;
 const DEFAULT_TYPES = FLEET_MAP_TYPES.filter(
@@ -219,6 +233,8 @@ export class FleetMap extends LitElement {
    * itself from `/fleet/code-activity`; a host may set it instead.
    */
   @property({ attribute: false }) codeActivity: FleetCodeActivity | null = null;
+  /** Gateway totals per model and provider node for the window. */
+  @property({ attribute: false }) usage: FleetUsageResponse | null = null;
   /** Force the reduced-motion fallback (tests); the media query also does. */
   @property({ type: Boolean, attribute: 'reduced-motion' })
   reducedMotion = false;
@@ -386,6 +402,7 @@ export class FleetMap extends LitElement {
       }
       if (notes.length) return;
     }
+    if (topic === 'gateway_activity') this.learnFlowModel(message);
     if (this.graph && this.instanceAdmin) {
       const messages = messagesForRealtime(this.shown(), topic, message);
       if (messages.length && !this.eventLog.record(messages, message)) return;
@@ -393,8 +410,17 @@ export class FleetMap extends LitElement {
     }
     const hit = activityFromRealtime(topic, message);
     if (!hit || !this.graph) return;
-    const edges = edgesForActivity(this.graph, hit);
-    if (edges.length) this.activity.add(edges, hit.kind);
+    const shown = this.shown();
+    const edges = edgesForActivity(shown, hit);
+    let label = hit.label ?? '';
+    if (hit.tokens && edges.length) {
+      // A completed model call says which model answered and what it cost.
+      const target = shown.edges.find((edge) => edge.id === edges[0])?.target;
+      const model = shown.nodes.find((node) => node.id === target)?.label;
+      label = `${model ? `${model} · ` : ''}${compactCount(hit.tokens.input)} in / ${compactCount(hit.tokens.output)} out`;
+    }
+    if (edges.length) this.activity.add(edges, hit.kind, label);
+    else if (hit.kind === 'tool call' && !hit.native) return;
     // Only an agent the map lacks makes the graph stale. A mapped agent with
     // no matching line (ambient model, no device) just shows no highlight,
     // and under Any time activity can't reveal anything new.
@@ -450,6 +476,83 @@ export class FleetMap extends LitElement {
   /** The graph as drawn: the server graph plus flows that did code work. */
   private shown(): FleetMapGraph {
     return this.filtered();
+  }
+
+  /** Models each flow was seen calling, from gateway traffic in this session. */
+  private flowModels = new Map<string, Set<string>>();
+  private flowModelsEpoch = 0;
+
+  /** Forget learned flow lines when the story is reset (a reopened map). */
+  private syncFlowModels(): void {
+    if (this.flowModelsEpoch === this.story.epoch) return;
+    this.flowModelsEpoch = this.story.epoch;
+    this.flowModels.clear();
+  }
+
+  /**
+   * A gateway call made inside a flow run names the flow and the model, so
+   * the flow gets an observed line to that model, as an agent has one.
+   */
+  private learnFlowModel(message: unknown): void {
+    const record = object(message);
+    const payload = object(record.payload);
+    const type = safeEventText(record.type);
+    if (
+      type !== 'model_gateway_call' &&
+      type !== 'model_gateway_request_started'
+    )
+      return;
+    const flowId =
+      safeEventText(record.flow_id) || safeEventText(payload.flow_id);
+    const alias =
+      safeEventText(payload.requested_model) ||
+      safeEventText(payload.model_alias);
+    if (!flowId || !alias || !this.graph) return;
+    this.syncFlowModels();
+    const key = modelKey(alias);
+    // The server's canonical key is the node's detail; older graphs carry
+    // it only as the label.
+    const model = this.graph.nodes.find(
+      (node) =>
+        node.type === 'model' &&
+        (node.detail
+          ? node.detail === key || node.detail.startsWith(`${key} `)
+          : modelKey(node.label) === key)
+    );
+    if (!model) return;
+    const flow = `flow:${flowId}`;
+    const known = this.flowModels.get(flow) ?? new Set<string>();
+    if (known.has(model.id)) return;
+    known.add(model.id);
+    this.flowModels.set(flow, known);
+    this.storyVersion++;
+  }
+
+  /** Observed flow-to-model lines for the flows and models on the map. */
+  private withFlowModels(graph: FleetMapGraph): FleetMapGraph {
+    this.syncFlowModels();
+    if (!this.flowModels.size) return graph;
+    const ids = new Set(graph.nodes.map((node) => node.id));
+    const have = new Set(graph.edges.map((edge) => edge.id));
+    const edges = [...graph.edges];
+    for (const [flow, models] of this.flowModels) {
+      if (!ids.has(flow)) continue;
+      for (const model of models) {
+        const id = `${flow}>uses_model>${model}`;
+        if (!ids.has(model) || have.has(id)) continue;
+        edges.push({
+          id,
+          source: flow,
+          target: model,
+          kind: 'uses_model',
+          provenance: 'observed',
+          impact_source: model,
+          impact_target: flow,
+          gaps: [],
+        });
+      }
+    }
+    return { ...graph, edges };
   }
 
   /**
@@ -594,6 +697,62 @@ export class FleetMap extends LitElement {
     } catch {
       // Code activity is a layer on the map; the map stands without it.
     }
+    try {
+      const usage = await getFleetUsage(
+        controller.signal,
+        windowMinutes(this.activityWindow)
+      );
+      if (!controller.signal.aborted) this.usage = usage;
+    } catch {
+      // Totals are a detail of the side panel; an older server has none.
+      if (!controller.signal.aborted) this.usage = null;
+    }
+  }
+
+  /** "In this window: 12 requests, 41.2k in / 3.8k out tokens (est. $0.42)". */
+  private renderUsage(node: FleetMapNode) {
+    const totals =
+      node.type === 'model'
+        ? this.usage?.models[node.id]
+        : node.type === 'provider'
+          ? this.usage?.providers[node.id]
+          : undefined;
+    if (!this.usage || (node.type !== 'model' && node.type !== 'provider'))
+      return nothing;
+    if (!totals)
+      return html`<p class="meta usage" data-testid="fleet-map-usage">
+        No gateway requests in this window.
+      </p>`;
+    const tokens =
+      totals.input_tokens !== null || totals.output_tokens !== null
+        ? `, ${totals.input_tokens === null ? 'unknown' : compactCount(totals.input_tokens)} in / ${totals.output_tokens === null ? 'unknown' : compactCount(totals.output_tokens)} out tokens`
+        : '';
+    const cost =
+      totals.estimated_cost !== null
+        ? ` (est. ${formatCurrencyAmount(totals.estimated_cost, totals.currency || 'USD')})`
+        : '';
+    const title = [
+      `Gateway requests from ${this.usage.since} to ${this.usage.until}.`,
+      totals.cache_read_tokens !== null
+        ? `${totals.cache_read_tokens} cache read tokens.`
+        : '',
+      totals.partial || this.usage.partial
+        ? 'Some values are unknown, so totals may be low.'
+        : '',
+      'Cost is an estimate.',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return html`<p
+      class="meta usage"
+      data-testid="fleet-map-usage"
+      title=${title}
+    >
+      In this window: ${totals.request_count}
+      ${totals.request_count === 1 ? 'request' : 'requests'}${tokens}${cost}${
+        totals.partial ? ' (partial)' : ''
+      }
+    </p>`;
   }
 
   /** Run frames while anything moves; stop as soon as nothing does. */
@@ -797,6 +956,7 @@ export class FleetMap extends LitElement {
         this.defaultArrangement
       );
       this.points = loadPositions(this.userId, this.positionsScope);
+      this.types = loadTypes(this.userId, this.positionsScope);
       this.settled.clear();
       this.eventLog.clear();
       this.story.clear();
@@ -819,6 +979,14 @@ export class FleetMap extends LitElement {
         );
     }
     this.dropHiddenSelection();
+    // The window's history: every issue and PR active in it, not only those
+    // that move while the map is open.
+    if (
+      changed.has('codeActivity') &&
+      this.instanceAdmin &&
+      this.story.seedWork(this.codeActivity)
+    )
+      this.storyVersion++;
     if (
       changed.has('graph') ||
       changed.has('codeActivity') ||
@@ -878,13 +1046,24 @@ export class FleetMap extends LitElement {
       this.syncActivitySubscriptions();
       this.syncCodeSubscription();
     }
+    // Code activity lands after the graph: fit again so the flows and work
+    // it adds are in view, unless the user arranged or moved the map.
+    if (
+      changed.has('codeActivity') &&
+      !changed.get('codeActivity') &&
+      this.codeActivity &&
+      !this.layoutOwned &&
+      Date.now() - this.userMovedAt >= HANDS_OFF_MS
+    )
+      this.refit = true;
     if (this.refit && this.lastLayout) {
       this.refit = false;
       this.recenter = false;
       this.fit();
     } else if (this.recenter && this.spatial) {
       this.recenter = false;
-      this.follow();
+      this.follow(this.joined);
+      this.joined = false;
     } else if (!this.camera) this.applyTransform();
   }
 
@@ -982,6 +1161,7 @@ export class FleetMap extends LitElement {
   private camera?: { from: View; to: View; start: number };
   private shownLayout?: FleetMapLayout;
   private recenter = false;
+  private joined = false;
   private userMovedAt = -Infinity;
   private glidePoints?: FleetMapPoints;
 
@@ -1037,7 +1217,7 @@ export class FleetMap extends LitElement {
   private dragSnapshot: FleetMapPoints | null = null;
 
   /** Glide the view to the fleet's new centre of gravity. */
-  private follow(): void {
+  private follow(joined = false): void {
     const layout = this.lastLayout;
     if (
       this.layoutOwned ||
@@ -1047,6 +1227,7 @@ export class FleetMap extends LitElement {
       return;
     const boxes = [...layout.positions.values()];
     if (
+      !joined &&
       boxes.length &&
       boxes.every(
         (p) =>
@@ -1105,6 +1286,13 @@ export class FleetMap extends LitElement {
       if (dragged) this.tween = undefined;
       else if (previous && !samePositions(previous, target)) {
         this.recenter = true;
+        // Something joined an arrangement the user does not own: fit the
+        // grown picture even when the newcomer landed inside the old view.
+        if (
+          !this.layoutOwned &&
+          [...target.positions.keys()].some((id) => !previous.positions.has(id))
+        )
+          this.joined = true;
         if (!this.motionOff)
           this.tween = {
             from: this.tween
@@ -1313,20 +1501,22 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         clip-path: inset(50%);
       }
+      /* Each select is as wide as its longest option, caret and clear
+         button (DESIGN.md collection pages); text is never clipped. */
       .state-select {
-        width: 110px;
+        width: 168px;
       }
       .owner-select {
-        width: 100px;
+        width: 160px;
       }
       .provider-select {
-        width: 110px;
+        width: 168px;
       }
       .window-select {
-        width: 128px;
+        width: 160px;
       }
       .gap-select {
-        width: 100px;
+        width: 136px;
       }
       .gap-select::part(combobox) {
         background: color-mix(
@@ -1759,6 +1949,39 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* Tracker labels are tags, not states: an icon and the word. The row
+         is budgeted: status, tags and the +N count shrink and ellipsize
+         inside the chip; the count never shrinks. */
+      .node .sub.tagged {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .node .sub .sub-text,
+      .node .sub .tag-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .node .sub .sub-text {
+        flex: 0 1 auto;
+      }
+      .node .sub .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 72px;
+      }
+      .node .sub .tag.more {
+        flex: none;
+      }
+      .node .sub .tag sl-icon {
+        font-size: 11px;
+      }
       .node .sub.warn {
         color: var(--sl-color-warning-800);
       }
@@ -1917,6 +2140,9 @@ export class FleetMap extends LitElement {
       }
       .panel a {
         color: var(--console-link-color);
+      }
+      .panel .usage {
+        font-variant-numeric: tabular-nums;
       }
       .panel .meta {
         font-size: var(--console-text-meta);
@@ -2287,7 +2513,9 @@ export class FleetMap extends LitElement {
         ? activeGraph(this.graph, Date.now() - minutes * 60_000)
         : (this.graph ?? EMPTY);
     const view = filterGraph(
-      this.story.graph(withCodeFlows(source, this.codeActivity), minutes),
+      this.withFlowModels(
+        this.story.graph(withCodeFlows(source, this.codeActivity), minutes)
+      ),
       {
         types: this.types,
         owner: this.owner,
@@ -2396,6 +2624,7 @@ export class FleetMap extends LitElement {
     this.focusGap = '';
     this.query = '';
     this.types = new Set(DEFAULT_TYPES);
+    saveTypes(this.userId, this.positionsScope, this.types);
     this.states = new Set(['onboarded']);
   }
 
@@ -2480,6 +2709,7 @@ export class FleetMap extends LitElement {
                   .checked=${this.types.has(type)}
                   @sl-change=${() => {
                     this.types = this.toggle(this.types, type);
+                    saveTypes(this.userId, this.positionsScope, this.types);
                   }}
                   >${TYPE_TOGGLE_LABEL[type]}</sl-checkbox
                 >`
@@ -2650,10 +2880,14 @@ export class FleetMap extends LitElement {
       return node.detail ? agentKindLabel(node.detail) : 'Agent';
     }
     if (node.type === 'model') {
+      // Agents only: a flow's observed model line is not an agent.
       const agents = new Set(
         view.edges
           .filter(
-            (edge) => edge.kind === 'uses_model' && edge.target === node.id
+            (edge) =>
+              edge.kind === 'uses_model' &&
+              edge.target === node.id &&
+              byId.get(edge.source)?.type !== 'flow'
           )
           .map((edge) => edge.source)
       ).size;
@@ -2748,6 +2982,7 @@ export class FleetMap extends LitElement {
       ? this.childLabel(node, context.parent)
       : displayLabel(node);
     const sub = this.subtitle(node, context.view, layout.groups, context.byId);
+    const tags = node.type === 'work' ? (node.labels ?? []).join(', ') : '';
     const height = isHeader ? FLEET_MAP_NODE_HEIGHT : position.h;
     const entering = presenceStyle(this.presence, node.id, Date.now());
     const button = html`<button
@@ -2764,11 +2999,11 @@ export class FleetMap extends LitElement {
       }"
       aria-pressed=${node.id === this.selected ? 'true' : 'false'}
       aria-label="${FLEET_MAP_TYPE_LABEL[node.type]} ${node.label}${
-        gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''
-      }"
+        tags ? `, labels ${tags}` : ''
+      }${gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''}"
       title="${node.label}${node.detail ? `\n${node.detail}` : ''}${
-        gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''
-      }"
+        tags ? `\nLabels: ${tags}` : ''
+      }${gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''}"
       @click=${() => {
         if (this.suppressClick) {
           this.suppressClick = false;
@@ -2784,7 +3019,27 @@ export class FleetMap extends LitElement {
         ><span class="label">${label}</span>${
           child && node.type !== 'work'
             ? nothing
-            : html`<span class="sub ${gaps.length ? 'warn' : ''}">${sub}</span>`
+            : node.type === 'work' && node.labels?.length
+              ? html`<span class="sub tagged"
+                  ><span class="sub-text">${sub}</span>${node.labels
+                    .slice(0, LABELS_SHOWN)
+                    .map(
+                      (tag) =>
+                        html`<span class="tag" data-label=${tag}
+                          ><sl-icon name="tag" aria-hidden="true"></sl-icon
+                          ><span class="tag-text">${tag}</span></span
+                        >`
+                    )}${
+                    node.labels.length > LABELS_SHOWN
+                      ? html`<span class="tag more" data-labels-more
+                          >+${node.labels.length - LABELS_SHOWN}</span
+                        >`
+                      : nothing
+                  }</span
+                >`
+              : html`<span class="sub ${gaps.length ? 'warn' : ''}"
+                  >${sub}</span
+                >`
         }</span
       >
       ${
@@ -2906,40 +3161,22 @@ export class FleetMap extends LitElement {
       .filter((item) => item.label && positions.has(item.node))
       .slice(-4)
       .reverse();
-    const placed: { x: number; y: number; w: number }[] = [];
-    return lit.map((item) => {
-      const p = positions.get(item.node)!;
-      const w = Math.min(280, Math.max(140, item.label.length * 7 + 40));
-      const right = this.translateX + (p.x + p.w) * this.scale;
-      let x = right + 8;
-      let y = this.translateY + (p.y + p.h / 2) * this.scale - 13;
-      if (x + w > this.viewport.width - 12)
-        x = this.translateX + p.x * this.scale - w - 8;
-      x = Math.max(12, Math.min(this.viewport.width - w - 12, x));
-      // Column gutters are narrow. Put long notes in the upper event stack
-      // instead of covering a model's identity in the next column.
-      if (!this.spatial && w > 80 * this.scale) {
-        x = Math.max(12, this.viewport.width - w - (this.selected ? 364 : 12));
-        y = 12 + this.toasts.length * 48;
-      }
-      const initialY = y;
-      for (
-        let tries = 0;
-        tries < 8 &&
-        placed.some(
-          (b) => Math.abs(b.y - y) < 26 && x < b.x + b.w && x + w > b.x
-        );
-        tries++
-      )
-        y += 28;
-      y = Math.max(12, Math.min(this.viewport.height - 52, y));
-      placed.push({ x, y, w });
+    const placed = this.placeNotes(
+      positions,
+      lit.map((item) => ({
+        node: item.node,
+        w: Math.min(280, Math.max(140, item.label.length * 7 + 40)),
+        h: 26,
+      }))
+    );
+    return placed.map((spot) => {
+      const item = lit.find((entry) => entry.node === spot.node)!;
       return html`<div
         class="bubble speak-${item.kind}"
         data-bubble=${item.node}
-        data-stack=${y - initialY}
+        data-side=${spot.side}
         title=${item.label}
-        style="left:${x}px;top:${y}px;max-width:${w}px;animation:${this.motionOff ? 'none' : 'bubble-enter 150ms ease-out'}"
+        style="left:${spot.x}px;top:${spot.y}px;max-width:${spot.w}px;animation:${this.motionOff ? 'none' : 'bubble-enter 150ms ease-out'}"
       >
         <sl-icon name=${item.icon ?? 'activity'} aria-hidden="true"></sl-icon
         ><span>${item.label}</span>
@@ -2947,23 +3184,93 @@ export class FleetMap extends LitElement {
     });
   }
 
+  /**
+   * Screen spots for notes: beside their node, never on another node. In
+   * Columns the stretched row gap under a node is the first choice; on the
+   * spatial canvas the side away from the stage edge.
+   */
+  private placeNotes(
+    positions: Map<string, FleetMapPosition>,
+    requests: BubbleRequest[]
+  ): PlacedBubble[] {
+    const s = this.scale;
+    const nodes = new Map<string, BubbleRect>();
+    for (const [id, p] of positions)
+      nodes.set(id, {
+        x: this.translateX + p.x * s,
+        y: this.translateY + p.y * s,
+        w: p.w * s,
+        h: p.h * s,
+      });
+    const layout = this.lastLayout;
+    const groups = layout?.groups ?? new Map<string, string[]>();
+    let pitch = Number.POSITIVE_INFINITY;
+    if (!this.spatial && layout?.columns.length) {
+      // Column headers are part of the picture: a note never covers one.
+      for (const column of layout.columns)
+        nodes.set(`header:${column.type}`, {
+          x: this.translateX + column.x * s,
+          y: this.translateY,
+          w: FLEET_MAP_NODE_WIDTH * s,
+          h: FLEET_MAP_HEADER * s,
+        });
+      // A note fits its column and gutter, so it can sit under its node.
+      if (layout.columns.length > 1)
+        pitch = (layout.columns[1].x - layout.columns[0].x - 12) * s;
+    }
+    const panel =
+      this.selected && !window.matchMedia('(max-width: 900px)').matches
+        ? 364
+        : 0;
+    return placeBubbles(
+      requests.map((request) => ({
+        ...request,
+        w: Math.min(request.w, Math.max(140, pitch)),
+      })),
+      {
+        nodes,
+        bounds: {
+          x: 12,
+          y: 12,
+          w: Math.max(0, this.viewport.width - 24 - panel),
+          h: Math.max(0, this.viewport.height - 64),
+        },
+        sides: this.spatial
+          ? ['right', 'left', 'below', 'above']
+          : ['below', 'above', 'right', 'left'],
+        related: (node, other) =>
+          !!groups.get(other)?.includes(node) ||
+          !!groups.get(node)?.includes(other),
+      }
+    );
+  }
+
   private positionBubbles(): void {
-    for (const el of this.shadowRoot?.querySelectorAll<HTMLElement>(
-      '[data-bubble]'
-    ) ?? []) {
-      const p = this.lastLayout?.positions.get(el.dataset.bubble!);
-      if (!p || !this.spatial) continue;
-      const w = el.offsetWidth;
-      let x = this.translateX + (p.x + p.w) * this.scale + 8;
-      if (x + w > this.viewport.width - 12)
-        x = this.translateX + p.x * this.scale - w - 8;
-      el.style.left = `${Math.max(12, Math.min(this.viewport.width - w - 12, x))}px`;
-      const y =
-        this.translateY +
-        (p.y + p.h / 2) * this.scale -
-        13 +
-        Number(el.dataset.stack || 0);
-      el.style.top = `${Math.max(12, Math.min(this.viewport.height - 52, y))}px`;
+    const els = [
+      ...(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-bubble]') ??
+        []),
+    ];
+    const positions = (
+      this.spatial ? (this.shownLayout ?? this.lastLayout) : this.lastLayout
+    )?.positions;
+    if (!els.length || !positions) return;
+    const placed = this.placeNotes(
+      positions,
+      els.map((el) => ({
+        node: el.dataset.bubble!,
+        w: el.offsetWidth || 160,
+        h: el.offsetHeight || 26,
+      }))
+    );
+    for (const el of els) {
+      const spot = placed.find((item) => item.node === el.dataset.bubble);
+      // No free spot at this zoom: hide the note rather than leave it where
+      // it was, possibly on a node, until the next render drops it.
+      el.style.visibility = spot ? '' : 'hidden';
+      if (!spot) continue;
+      el.dataset.side = spot.side;
+      el.style.left = `${spot.x}px`;
+      el.style.top = `${spot.y}px`;
     }
   }
 
@@ -3152,6 +3459,13 @@ export class FleetMap extends LitElement {
       const from = layout.anchor(edge.source);
       const to = layout.anchor(edge.target);
       if (!from || !to || from === to) continue;
+      // A PR row inside its issue box needs no line: containment says it.
+      if (
+        edge.kind === 'caused' &&
+        (layout.groups.get(from)?.includes(to) ||
+          layout.groups.get(to)?.includes(from))
+      )
+        continue;
       const key = `${from}>${to}`;
       const existing = drawn.get(key);
       const account = edge.account_id ?? '';
@@ -3229,6 +3543,7 @@ export class FleetMap extends LitElement {
             </p>`
           : nothing
       }
+      ${this.renderUsage(node)}
       ${
         gaps.length
           ? html`<div class="chips">
@@ -3365,11 +3680,14 @@ export class FleetMap extends LitElement {
       return cached.layout;
     const seed = layoutGraph(view).positions;
     const clusters = clusterOf(view);
-    // Fresh layouts repack their shelves when island membership changes.
+    // Fresh layouts repack their shelves whenever a node joins or leaves.
     // Once the user owns the layout, existing nodes stay put and arrivals
     // are placed beside what they link to.
     const groups =
-      [...new Set(clusters.values())].sort().join('|') +
+      [...clusters]
+        .map(([id, key]) => `${id}:${key}`)
+        .sort()
+        .join('|') +
       '|' +
       view.nodes
         .filter((node) => node.type === 'work')
@@ -3422,12 +3740,16 @@ export class FleetMap extends LitElement {
     layout: FleetMapLayout
   ): Map<string, string> {
     const lines = new Map<string, string>();
-    for (const edge of view.edges)
-      if (this.story.activeEdges().has(edge.id)) {
-        const from = layout.anchor(edge.source),
-          to = layout.anchor(edge.target);
-        if (from && to) lines.set(`${from}>${to}`, 'Observed work');
-      }
+    const story = this.story.labels();
+    // Work lines say what the action was; a lit line with nothing specific
+    // to say carries no text at all.
+    for (const edge of view.edges) {
+      const label = story.get(edge.id);
+      if (label === undefined) continue;
+      const from = layout.anchor(edge.source),
+        to = layout.anchor(edge.target);
+      if (from && to) lines.set(`${from}>${to}`, label);
+    }
     if (!this.activity.marks.size) return lines;
     const now = Date.now();
     const byId = new Map(view.edges.map((edge) => [edge.id, edge]));
@@ -3445,9 +3767,11 @@ export class FleetMap extends LitElement {
   render() {
     const graph =
       this.graph &&
-      this.story.graph(
-        withCodeFlows(this.graph, this.codeActivity),
-        windowMinutes(this.activityWindow)
+      this.withFlowModels(
+        this.story.graph(
+          withCodeFlows(this.graph, this.codeActivity),
+          windowMinutes(this.activityWindow)
+        )
       );
     if (!graph) return nothing;
     if (!graph.nodes.length && this.bare) {
@@ -3504,6 +3828,9 @@ export class FleetMap extends LitElement {
           expanded: this.expanded,
           collapsed: this.collapsed,
           pinned,
+          room: this.viewport.height
+            ? { ...this.viewport, minScale: MIN_FIT_SCALE }
+            : undefined,
         });
     if (
       !this.spatial &&
@@ -3532,6 +3859,10 @@ export class FleetMap extends LitElement {
       );
     };
     const context = { view, layout, byId, lit, hits };
+    // Line labels never cover a node or another label; one that cannot fit
+    // is left to the line's title and the bubble.
+    const boxes = [...layout.positions.values()];
+    const labelRects: FleetMapPosition[] = [];
     const active = this.activityByLine(view, layout);
     // On an administrator's spatial canvas the lit node says where traffic
     // started; the line lights without a label, so a busy map stays legible.
@@ -3617,7 +3948,9 @@ export class FleetMap extends LitElement {
                 >
                   ${this.drawnEdges(view, layout, lit).map(
                     ({ edge, from, to, accounts }) => {
+                      // '' is a lit line with nothing specific to say.
                       const live = active.get(`${from}>${to}`);
+                      const glowing = live !== undefined;
                       const a = layout.positions.get(from)!;
                       const b = layout.positions.get(to)!;
                       const na = byId.get(edge.source)!;
@@ -3649,7 +3982,7 @@ export class FleetMap extends LitElement {
                         edge.provenance,
                         edge.gaps.length ? 'gap' : '',
                         inRadius ? 'lit' : '',
-                        live ? 'active' : '',
+                        glowing ? 'active' : '',
                         (lit && !inRadius) ||
                         (!lit && this.focusGap && !focused)
                           ? 'dim'
@@ -3660,10 +3993,19 @@ export class FleetMap extends LitElement {
                         .filter(Boolean)
                         .join(', ');
                       const path = svg`<path class=${cls} data-edge=${edge.kind} data-edge-id=${edge.id} data-activity=${live || nothing} d=${d}><title>${na.label} ${FLEET_MAP_EDGE_LABEL[edge.kind]} ${nb.label}${via ? ` via ${via}` : ''}${live ? ` · ${live}` : ''}</title></path>`;
+                      // Text only when the line has something specific to
+                      // say; the spatial admin canvas stays quiet.
                       if (!live || quiet) return path;
-                      const mx = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
-                      const my = (y1 + y2) / 2 - 6;
-                      return svg`${path}<text class="activity-label" x=${mx} y=${my} text-anchor="middle">${live}</text>`;
+                      const spot = labelSpot(
+                        live,
+                        [a.x + a.w, y1],
+                        [b.x, y2],
+                        a.x <= b.x,
+                        boxes,
+                        labelRects
+                      );
+                      if (!spot) return path;
+                      return svg`${path}<text class="activity-label" x=${spot.x} y=${spot.y} text-anchor="middle">${live}</text>`;
                     }
                   )}
                 </svg>
@@ -3791,7 +4133,76 @@ export class FleetMap extends LitElement {
   }
 }
 
+/**
+ * Where a lit line's label goes: on the line between the two boxes, at the
+ * middle or a third of the way along, wherever it covers no node and no
+ * label already placed. Null when no spot is free.
+ */
+function labelSpot(
+  text: string,
+  from: [number, number],
+  to: [number, number],
+  forward: boolean,
+  boxes: FleetMapPosition[],
+  placed: FleetMapPosition[]
+): { x: number; y: number } | null {
+  const [x1, y1] = forward ? from : to;
+  const [x2, y2] = forward ? to : from;
+  const w = text.length * 6 + 8;
+  const h = 14;
+  for (const t of [0.5, 0.33, 0.67]) {
+    const x = x1 + (x2 - x1) * t;
+    const y = y1 + (y2 - y1) * t - 6;
+    const rect = { x: x - w / 2, y: y - h + 3, w, h };
+    const hits = (b: FleetMapPosition) =>
+      rect.x < b.x + b.w &&
+      b.x < rect.x + rect.w &&
+      rect.y < b.y + b.h &&
+      b.y < rect.y + rect.h;
+    if (boxes.some(hits) || placed.some(hits)) continue;
+    placed.push(rect);
+    return { x, y };
+  }
+  return null;
+}
+
 const BUBBLES_KEY = 'preloop:fleet-map:bubbles';
+const TYPES_KEY = 'preloop:fleet-map:types';
+
+/** The Show choice, per user and map; unknown or broken values fall back. */
+function loadTypes(user: string, scope: string): Set<FleetMapNodeType> {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(`${TYPES_KEY}:${scope}:${user || 'anonymous'}`) ||
+        'null'
+    );
+    // A saved list is the user's choice, even when it hides everything.
+    if (Array.isArray(saved))
+      return new Set(
+        saved.filter((type): type is FleetMapNodeType =>
+          (FLEET_MAP_TYPES as readonly string[]).includes(type)
+        )
+      );
+  } catch {
+    // Private mode or a hand-edited value: the default applies.
+  }
+  return new Set(DEFAULT_TYPES);
+}
+
+function saveTypes(
+  user: string,
+  scope: string,
+  types: Set<FleetMapNodeType>
+): void {
+  try {
+    localStorage.setItem(
+      `${TYPES_KEY}:${scope}:${user || 'anonymous'}`,
+      JSON.stringify([...types])
+    );
+  } catch {
+    // Storage unavailable: the choice lasts for this page.
+  }
+}
 
 function loadBubbles(user: string, scope: string, fallback = false): boolean {
   try {

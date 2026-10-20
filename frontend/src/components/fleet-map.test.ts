@@ -20,6 +20,12 @@ async function allAgents(el: FleetMap): Promise<void> {
   await el.updateComplete;
 }
 
+// The Show choice is remembered per user and map: no test inherits another's.
+afterEach(() => {
+  for (const key of Object.keys(localStorage))
+    if (key.startsWith('preloop:fleet-map:types')) localStorage.removeItem(key);
+});
+
 describe('fleet-map', () => {
   it('says what to do when there is nothing to map', async () => {
     const el = await fixture<FleetMap>(
@@ -607,7 +613,7 @@ describe('fleet-map labels', () => {
   });
 
   describe('live activity', () => {
-    it('lights the line a model request travelled and names it', async () => {
+    it('lights each line by what travelled it, with the tool or model it names', async () => {
       const el = await fixture<FleetMap>(
         html`<fleet-map
           .graph=${sampleFleetMap()}
@@ -616,13 +622,30 @@ describe('fleet-map labels', () => {
       );
       const call = {
         type: 'model_gateway_call',
-        payload: { managed_agent_id: 'codex', model_alias: 'gpt-6.1' },
+        payload: {
+          managed_agent_id: 'codex',
+          model_alias: 'gpt-6.1',
+          prompt_tokens: 4100,
+          completion_tokens: 380,
+        },
       };
       el.recordActivity('gateway_activity', call);
       el.recordActivity('gateway_activity', call);
+      // An MCP tool runs on its server, which the map does not draw: it
+      // lights no device line.
       el.recordActivity('gateway_activity', {
         type: 'mcp_call',
         payload: { managed_agent_id: 'codex', tool_name: 'search' },
+      });
+      // A native tool runs on the agent's machine and is named on that line.
+      el.recordActivity('runtime_sessions', {
+        type: 'runtime_session_updated',
+        payload: {
+          activity_type: 'tool_call',
+          managed_agent_id: 'codex',
+          tool_name: 'Edit',
+          status: 'allowed',
+        },
       });
       el.recordActivity('approvals', { type: 'approval_created' });
       expect(el.shadowRoot!.querySelector('path.edge.active')).to.not.exist;
@@ -632,15 +655,31 @@ describe('fleet-map labels', () => {
         'path[data-edge-id="uses_model:agent:codex:model:gpt:configured"]'
       )!;
       expect(line.classList.contains('active')).to.equal(true);
-      expect(line.getAttribute('data-activity')).to.equal('model request ×2');
+      expect(line.getAttribute('data-activity')).to.equal(
+        'gpt-6.1 · 4.1k in / 380 out ×2'
+      );
       const hosted = el.shadowRoot!.querySelector<SVGPathElement>(
         'path[data-edge-id="hosts:device:mbp:agent:codex:observed"]'
       )!;
-      expect(hosted.getAttribute('data-activity')).to.equal('tool call');
+      expect(hosted.getAttribute('data-activity')).to.equal('Edit allowed');
       const labels = [
         ...el.shadowRoot!.querySelectorAll('.activity-label'),
       ].map((label) => label.textContent);
-      expect(labels).to.include('model request ×2');
+      // Text is drawn only where it covers no node; the line keeps it.
+      expect(labels.join(' ')).not.to.contain('tool call');
+      for (const text of el.shadowRoot!.querySelectorAll('.activity-label')) {
+        const t = text.getBoundingClientRect();
+        for (const node of el.shadowRoot!.querySelectorAll('.node')) {
+          const r = node.getBoundingClientRect();
+          const hit =
+            t.left < r.right &&
+            r.left < t.right &&
+            t.top < r.bottom &&
+            r.top < t.bottom;
+          expect(hit, text.textContent ?? '').to.equal(false);
+        }
+      }
+      expect(labels.join(' ')).not.to.contain('model request');
       expect(
         el.shadowRoot!.querySelectorAll('path.edge.active').length
       ).to.equal(2);

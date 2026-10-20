@@ -11,8 +11,13 @@ by default. State includes onboarded, discovered and inactive agents. Owner,
 Provider and Window narrow the loaded view. Gaps appears only when the view contains
 a governance gap. Select a node for dependencies, blast radius and resource links.
 
-Instance administrators can choose Columns or Spatial. The spatial layout packs
-machines and their agents beside the model/provider core. Drag a machine to move its
+Instance administrators can choose Columns or Spatial. Columns reads People,
+Devices, Agents, Models, Providers, Flows and Work, top-aligned under the headers;
+rows spread out to use the height of the stage. The spatial layout packs, left to
+right, the model/provider core (one short column per provider), each person with
+their machines and agents, and the flows beside the issues and pull requests they
+act on. Until you arrange it yourself, the map repacks and refits when something
+joins. Drag a machine to move its
 contents. Your first drag saves the whole visible arrangement for your user and map
 scope. Refreshes and membership changes preserve that arrangement; new resources
 join beside their links. Membership changes leave the camera alone once you own
@@ -34,11 +39,29 @@ the tool finished. Tool badges and the selected node's Recent section count even
 received since opening the map, within the selected window. They are bounded client
 samples, not historical totals.
 
+A lit line says what travelled it, never a kind: a model line names the model and
+its measured tokens on completion; a machine line names the native tool and its
+permission status (`Edit allowed`); an owner line names the approval. MCP tools run
+on a server the map does not draw, so they light their agent and bubble, not a
+line. A flow's model calls draw and light the flow's own line to that model. Lines
+to issues and PRs say the action (`opened PR #51`, `labelled bug, p2`,
+`review: approved`). Text is drawn only where it covers no node.
+
+Select a model or provider to see the window's gateway totals (requests, input and
+output tokens, estimated cost) on servers that provide `GET /api/v1/fleet/usage`;
+on others the panel omits them.
+
 The map selects metadata, never model prompts or replies. Approval command text
 comes from the existing display-redacted approval payload, with extra credential
 scrubbing. Generic command/path capture is not enabled by this UI.
 
 ## Observed work
+
+On load and on every window change the map shows the flows active in the window and
+the pull requests merged in it, not only what moves while it is open. Open issues
+and PRs from earlier in the window join them on servers that list the window's work
+items in code activity. Show > Flows and
+Show > Work (issues, PRs) hide or show them; the Show choice is remembered.
 
 Flow start/status metadata creates a work reference when it identifies an issue or
 PR. Concurrent executions share one flow node. A completed flow leaves after 60
