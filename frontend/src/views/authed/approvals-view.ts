@@ -1062,6 +1062,15 @@ export class ApprovalsView extends AuthedElement {
     void this.loadApprovalRequests();
   }
 
+  /**
+   * The default view lists pending requests only, so an empty list there
+   * says nothing about the history. The stats total does: "No approval
+   * requests yet" over a history of thousands is wrong.
+   */
+  private get hasApprovalHistory(): boolean {
+    return (this.stats?.total || 0) > 0 || (this.historyTotal || 0) > 0;
+  }
+
   private calculateStats() {
     const server = this.serverStats;
     if (server) {
@@ -1694,20 +1703,31 @@ export class ApprovalsView extends AuthedElement {
                       <sl-icon name="inbox"></sl-icon>
                       <p>
                         ${
-                          this.approvalRequests.length === 0
+                          this.approvalRequests.length === 0 &&
+                          !this.hasApprovalHistory
                             ? 'No approval requests yet. Configure tools to require approval in the Tools section.'
                             : this.showsHistory
                               ? 'No requests match your filters.'
-                              : 'Nothing is waiting for you. Pick a status to see the history.'
+                              : this.approvalRequests.length === 0
+                                ? 'Nothing is waiting for a decision.'
+                                : 'Nothing is waiting for you. Pick a status to see the history.'
                         }
                       </p>
                       ${
-                        this.approvalRequests.length === 0
+                        this.approvalRequests.length === 0 &&
+                        !this.hasApprovalHistory
                           ? html`<sl-button href="/console/tools">
                               <sl-icon slot="prefix" name="gear"></sl-icon>
                               Configure tools
                             </sl-button>`
-                          : ''
+                          : !this.showsHistory
+                            ? html`<sl-button
+                                data-testid="show-all-approvals"
+                                href="/console/approvals?status=all"
+                              >
+                                Show all
+                              </sl-button>`
+                            : ''
                       }
                     </div>
                   `
