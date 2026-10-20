@@ -1201,7 +1201,7 @@ describe('FlowExecutionView', () => {
           ?.getAttribute('title')
       ).to.contain('1,000 input tokens');
       expect(stripValue(element, 'strip-cost')).to.equal('$0.10');
-      expect(pageText(element)).to.contain('codex');
+      expect(pageText(element)).to.contain('Codex CLI');
       expect(
         strip.querySelector('sl-copy-button')?.getAttribute('value')
       ).to.equal('exec-1');
@@ -2616,6 +2616,8 @@ describe('FlowExecutionView', () => {
       '[data-testid="resume-line"]'
     ) as HTMLElement;
     expect(line.textContent).to.contain('$0.78');
+    // The runtime reads as the flow page names it, not its raw id (B-11).
+    expect(stripValue(element, 'strip-agent')).to.equal('Codex CLI');
   });
 
   describe('delegation tree', () => {

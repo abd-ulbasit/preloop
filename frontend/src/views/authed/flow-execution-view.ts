@@ -1,3 +1,4 @@
+import { flowRuntimeLabel } from '../../utils/flow-runtime';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { formatUsd } from '../../utils/money';
 import { errorHeadline } from '../../utils/attention';
@@ -3746,7 +3747,12 @@ ${execution.resolved_input_prompt}</pre>
         </div>
         <div class="strip-item">
           <span class="strip-label">Agent</span>
-          <span class="strip-value">${this.flow?.agent_type || '—'}</span>
+          <span
+            class="strip-value"
+            data-testid="strip-agent"
+            title=${this.flow?.agent_type || ''}
+            >${this.flow?.agent_type ? flowRuntimeLabel(this.flow.agent_type) : '—'}</span
+          >
         </div>
         <div class="strip-item">
           <span class="strip-label">Session</span>

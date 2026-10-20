@@ -32,7 +32,7 @@ import {
   executionStatusVariant,
 } from '../../utils/execution-presentation';
 import { flowTriggerSummary } from '../../utils/flow-trigger';
-import { getAgentKindPresentation } from '../../utils/agent-kinds';
+import { flowRuntimeLabel } from '../../utils/flow-runtime';
 import {
   executionSubjectCss,
   renderExecutionSubject,
@@ -120,24 +120,7 @@ export function referenceListsSentence(
   return joined.charAt(0).toUpperCase() + joined.slice(1);
 }
 
-const FLOW_RUNTIME_LABELS: Record<string, string> = {
-  codex: 'Codex CLI',
-  gemini: 'Gemini CLI',
-  opencode: 'OpenCode',
-  pi: 'Pi',
-  deepseek: 'DeepSeek Harness',
-};
-
-/** The label for a flow's `agent_type`. */
-export function flowRuntimeLabel(agentType: string | null | undefined): string {
-  const raw = (agentType || '').trim();
-  if (!raw) return 'Unknown';
-  return (
-    FLOW_RUNTIME_LABELS[raw.toLowerCase()] ||
-    getAgentKindPresentation(raw)?.label ||
-    raw
-  );
-}
+export { flowRuntimeLabel } from '../../utils/flow-runtime';
 
 @customElement('flow-view')
 export class FlowView extends LitElement {
