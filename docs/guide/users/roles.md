@@ -286,7 +286,10 @@ Permission names use `verb_resource` underscores (for example `view_cost`,
 `run_session_optimizations`; sharing saved searches uses `share_session_searches`.
 The system-role initializer reconciles the catalogue and grants. An Alembic data
 migration also installs these two permissions and their grants automatically
-when upgrading existing deployments.
+when upgrading existing deployments. The migration grants them to the system roles
+only. A custom role that should keep sharing saved searches or running session
+analysis needs an explicit `share_session_searches` or `run_session_optimizations`
+grant after the upgrade.
 
 **Notes:**
 

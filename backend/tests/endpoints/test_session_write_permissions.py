@@ -166,6 +166,9 @@ def test_saved_search_writes_require_session_read_permission(
         == 403
     )
     assert client.delete(f"{SAVED_URL}/{saved['id']}").status_code == 403
+    assert client.get(SAVED_URL).status_code == 403
+    assert client.get(f"{SAVED_URL}/{saved['id']}").status_code == 403
+    assert client.post(f"{SAVED_URL}/{saved['id']}/run").status_code == 403
     assert (
         crud.crud_session_saved_search.get_owned(
             db_session,
