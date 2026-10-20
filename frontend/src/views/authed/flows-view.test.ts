@@ -841,6 +841,31 @@ describe('FlowsView', () => {
         ) || []),
       ].map((link) => (link.textContent || '').trim());
 
+    it('gives the name and the last run the room at 1440 (U-09)', async () => {
+      const host = document.createElement('div');
+      host.style.width = '1125px';
+      document.body.appendChild(host);
+      try {
+        fetchStub = stubFlowsApi();
+        const element = document.createElement('flows-view') as FlowsView;
+        host.appendChild(element);
+        await waitUntil(
+          () => !(element as any).isLoading,
+          'Flows view did not finish loading'
+        );
+        await element.updateComplete;
+        const width = (cls: string) =>
+          (
+            element.shadowRoot!.querySelector(`thead th.${cls}`) as HTMLElement
+          ).getBoundingClientRect().width;
+        expect(width('col-flow')).to.be.at.least(220);
+        expect(width('col-last-run')).to.be.at.least(220);
+        expect(width('col-trigger')).to.be.lessThan(width('col-flow'));
+      } finally {
+        host.remove();
+      }
+    });
+
     it('lists the flows in a table by default and counts them', async () => {
       const element = await renderFlows();
 

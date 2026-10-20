@@ -432,30 +432,35 @@ export class FlowsView extends LitElement {
          sized to their widest plausible number and nothing more. A flow
          called "Release Sentinel db-migration" must be readable without a
          tooltip, which is what the first screenshot round got wrong. */
+        /* The fixed columns and the percentages used to add up to more than
+         the 1125px table at 1440, so the browser scaled the percentages down
+         and the name and the last run were cut to "Pull request review..."
+         and "exa..." (U-09). The counters now take what a compact value needs
+         and the two word columns share the rest; Trigger is the one that
+         gives way. */
         .col-flow {
-          width: 25%;
+          width: 26%;
         }
         .col-trigger {
-          width: 14%;
+          width: 10%;
         }
         .col-status {
           width: 96px;
         }
         .col-last-run {
-          width: 23%;
+          width: 26%;
         }
         .col-runs,
         .col-failed {
-          width: 84px;
+          width: 64px;
         }
-        /* One compact total ("12.4M"), the same width as the cost beside it.
-         The in/out/cache breakdown that used to need 170px here is in the
+        /* One compact total ("12.4M"). The in/out/cache breakdown is in the
          tooltip and on the flow's own page. */
         .col-tokens {
-          width: 96px;
+          width: 72px;
         }
         .col-cost {
-          width: 96px;
+          width: 80px;
         }
         /* First and last columns keep the card's own gutter. */
         .flows-table th:first-child .sort-button,
@@ -1825,6 +1830,7 @@ export class FlowsView extends LitElement {
         </sl-select>
 
         <time-range-select
+          size="medium"
           ariaLabel="Flows time range"
           .value=${this.range}
           .options=${[
