@@ -1,5 +1,6 @@
+import consoleStyles from '../../styles/console-styles.css?inline';
 import { ConsoleStatus } from '../../controllers/console-status';
-import { html, css } from 'lit';
+import { html, css, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { AuthedElement, getUserProfile } from '../../api';
 import { unifiedWebSocketManager } from '../../services/unified-websocket-manager';
@@ -121,6 +122,7 @@ export class NotificationPreferencesView extends AuthedElement {
 
   static styles = [
     consoleDialogStyles,
+    unsafeCSS(consoleStyles),
     css`
       /* No page geometry here: the shell owns the width and the side inset
          (styles/console-styles.css, "The page box"). */
@@ -535,7 +537,7 @@ export class NotificationPreferencesView extends AuthedElement {
           <div>
             <h2 class="section-title" style="margin: 0;">
               Test push delivery
-              <sl-badge variant="neutral" pill>Admin</sl-badge>
+              <sl-badge class="chip" variant="neutral" pill>Admin</sl-badge>
             </h2>
             <div class="preference-description">
               Sends a clearly labelled test over the real delivery path and
@@ -602,7 +604,11 @@ export class NotificationPreferencesView extends AuthedElement {
           (device) => html`
             <div class="test-result-item ${device.success ? 'ok' : 'failed'}">
               <div class="test-result-head">
-                <sl-badge variant=${device.success ? 'success' : 'danger'}>
+                <sl-badge
+                  class="chip"
+                  pill
+                  variant=${device.success ? 'success' : 'danger'}
+                >
                   ${device.success ? 'Delivered' : 'Failed'}
                 </sl-badge>
                 <span class="test-result-meta">
@@ -951,13 +957,9 @@ export class NotificationPreferencesView extends AuthedElement {
                                 }
                                 style="font-size: 1.5rem;"
                               ></sl-icon>
-                              <sl-badge
-                                variant=${
-                                  device.platform === 'ios'
-                                    ? 'primary'
-                                    : 'success'
-                                }
-                              >
+                              <!-- A platform is a label, not a state:
+                                   neutral, never a green or blue paint. -->
+                              <sl-badge class="chip" pill variant="neutral">
                                 ${device.platform === 'ios' ? 'iOS' : 'Android'}
                               </sl-badge>
                             </div>

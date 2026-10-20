@@ -1509,7 +1509,7 @@ export class AIModelsView extends LitElement {
     return html`
       <div class="cell-stack">
         <a class="model-link" href=${this.modelHref(model)}> ${model.name} </a>
-        ${model.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
+        ${model.is_built_in ? html`<sl-badge class="chip" pill variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
         ${unpricedBadge(model)}
         <div class="model-identifier" title=${alias || model.model_identifier}>
           ${alias || model.model_identifier}
@@ -1874,7 +1874,7 @@ export class AIModelsView extends LitElement {
             <a class="model-link" href=${this.modelHref(model)}>
               ${model.name}
             </a>
-            ${model.is_built_in ? html`<sl-badge variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
+            ${model.is_built_in ? html`<sl-badge class="chip" pill variant="neutral">Built-in</sl-badge>` : sharedFromBadge(model)}
             ${unpricedBadge(model)} ${this.renderDefaultControl(model)}
           </div>
           <div class="model-identifier">

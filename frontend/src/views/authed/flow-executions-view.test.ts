@@ -198,6 +198,27 @@ describe('FlowExecutionsView', () => {
     expect(cells[1].querySelectorAll('sl-badge').length).to.equal(1);
   });
 
+  it('states a stopped and cancelled run with one chip (U-14)', async () => {
+    fetchStub = stub([
+      {
+        id: 'exec-stopped',
+        flow_id: 'flow-1',
+        flow_name: 'Triage',
+        status: 'STOPPED',
+        failure_category: 'cancelled',
+        start_time: '2026-03-09T10:00:00Z',
+        end_time: '2026-03-09T10:01:00Z',
+      },
+    ]);
+    const el = (await fixture(
+      html`<flow-executions-view></flow-executions-view>`
+    )) as FlowExecutionsView;
+    await tick();
+    await el.updateComplete;
+    const cell = el.shadowRoot!.querySelector('tbody tr .status-cell')!;
+    expect(cell.querySelectorAll('sl-badge').length).to.equal(1);
+  });
+
   it('labels a review resumption and links the publishing execution', async () => {
     const publisherId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     fetchStub = stub([

@@ -171,7 +171,10 @@ export class AttentionView extends AuthedElement {
           margin-bottom: var(--sl-spacing-large);
         }
 
-        .chip {
+        /* Scoped to the strip: as a bare .chip it also boxed the category
+           chips inside the evidence rows, which follow the borderless chip
+           recipe (U-14). */
+        .chip-strip .chip {
           align-items: center;
           background: var(--console-surface);
           border: 1px solid var(--console-hairline);
@@ -185,7 +188,7 @@ export class AttentionView extends AuthedElement {
           padding: var(--sl-spacing-2x-small) var(--sl-spacing-small);
         }
 
-        .chip sl-icon {
+        .chip-strip .chip sl-icon {
           color: var(--console-meta-color);
         }
 

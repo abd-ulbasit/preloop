@@ -411,7 +411,7 @@ export class ApiKeysView extends LitElement {
             <a href="/console/settings/api-keys/${key.id}">${key.name}</a>
             ${
               key.managed_agent_id
-                ? html`<sl-badge variant="neutral" size="small"
+                ? html`<sl-badge class="chip" pill variant="neutral"
                     >Agent</sl-badge
                   >`
                 : ''

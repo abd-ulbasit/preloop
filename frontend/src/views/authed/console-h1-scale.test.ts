@@ -63,3 +63,31 @@ describe('audit rows are hairline rows (U-06)', () => {
     expect(group).to.contain('--console-hairline');
   });
 });
+
+describe('labels are soft chips, not paint (U-14)', () => {
+  it('renders Built-in, Agent and the device platform without a solid pill', async () => {
+    const sources = await Promise.all(
+      [
+        '/src/views/authed/settings/ai-models-view.ts',
+        '/src/views/authed/settings/api-keys-view.ts',
+        '/src/views/authed/notification-preferences-view.ts',
+      ].map(async (path) => [path, await (await fetch(path)).text()] as const)
+    );
+    for (const [path, code] of sources) {
+      // Every sl-badge in these views carries the chip recipe.
+      const badges = code.match(/<sl-badge(?![^>]*class=)[^>]*>/g) || [];
+      expect(badges, path).to.deep.equal([]);
+    }
+  });
+});
+
+describe('attention category chips are borderless (U-14)', () => {
+  it('keeps the boxed strip chip style off the category chips', async () => {
+    const { AttentionView } = await import('./attention-view');
+    const list = (AttentionView as unknown as { styles: unknown }).styles;
+    const text = (Array.isArray(list) ? list.flat(Infinity) : [list])
+      .map((style) => (style as { cssText?: string })?.cssText || '')
+      .join('\n');
+    expect(text).to.not.match(/(^|\n)\s*\.chip\s*\{[^}]*border:\s*1px/);
+  });
+});

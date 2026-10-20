@@ -1545,7 +1545,14 @@ export class FlowExecutionsView extends AuthedElement {
         <!-- "Failed" says that it broke; the category says what broke, which
              is the difference between a provider hiccup and a flow that never
              confirms it finished. -->
-        ${renderFailureCategoryChip(exec.failure_category)}
+        ${
+          // A stopped run whose category is "cancelled" said the same thing
+          // twice ("Stopped" over "Cancelled"): one chip is enough (U-14).
+          ['STOPPED', 'CANCELLED'].includes(exec.status) &&
+          String(exec.failure_category || '').toLowerCase() === 'cancelled'
+            ? nothing
+            : renderFailureCategoryChip(exec.failure_category)
+        }
         ${this.renderResumeLine(exec)}
       </div>
     `;
