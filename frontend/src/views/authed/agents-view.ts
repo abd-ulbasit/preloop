@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { formatUsd, formatUsdExact } from '../../utils/money';
@@ -3579,9 +3580,16 @@ export class AgentsView extends LitElement {
         numeric: true,
         sort: 'number',
         width: 110,
+        // The list totals are lifetime: the Last seen filter picks which
+        // agents are listed, not the window their numbers cover (U-16).
+        headerTitle: 'Requests, all time',
+        headerLabel: 'Requests, all time',
         value: (row) => row.requests || 0,
         searchText: () => '',
-        cell: (row) => (row.requests || 0).toLocaleString(),
+        cell: (row) =>
+          html`<span title=${formatCountExact(row.requests || 0)}
+            >${formatCount(row.requests || 0)}</span
+          >`,
       },
       {
         // The list states the total; in, out and the cache split are in the
@@ -3591,8 +3599,8 @@ export class AgentsView extends LitElement {
         numeric: true,
         sort: 'number',
         width: 110,
-        headerTitle: 'Total tokens, input plus output',
-        headerLabel: 'Total tokens, input plus output',
+        headerTitle: 'Total tokens, input plus output, all time',
+        headerLabel: 'Total tokens, input plus output, all time',
         value: (row) => totalTokensOf(row.tokenUsage),
         searchText: () => '',
         cell: (row) =>
@@ -3608,8 +3616,8 @@ export class AgentsView extends LitElement {
         numeric: true,
         sort: 'number',
         width: 110,
-        headerTitle: 'Estimated spend',
-        headerLabel: 'Estimated spend',
+        headerTitle: 'Estimated spend, all time',
+        headerLabel: 'Estimated spend, all time',
         value: (row) => row.spend,
         searchText: () => '',
         cell: (row) =>

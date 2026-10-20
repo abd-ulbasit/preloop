@@ -490,14 +490,24 @@ describe('AgentsView', () => {
 
     // "$ est." is short enough to read as "dollar est." out loud, so the
     // sort button carries the full name. Index 0 is the select-all checkbox.
+    // The totals are all time, whatever the Last seen filter says, so the
+    // headers say so (U-16).
     const spendButton = headers[5].querySelector('.sort-button');
-    expect(spendButton?.getAttribute('aria-label')).to.equal('Estimated spend');
-    expect(spendButton?.getAttribute('title')).to.equal('Estimated spend');
+    expect(spendButton?.getAttribute('aria-label')).to.equal(
+      'Estimated spend, all time'
+    );
+    expect(spendButton?.getAttribute('title')).to.equal(
+      'Estimated spend, all time'
+    );
     // The cell states one total, so the header names that rather than the
     // split it no longer shows.
     const tokensButton = headers[4].querySelector('.sort-button');
     expect(tokensButton?.getAttribute('aria-label')).to.equal(
-      'Total tokens, input plus output'
+      'Total tokens, input plus output, all time'
+    );
+    const requestsButton = headers[3].querySelector('.sort-button');
+    expect(requestsButton?.getAttribute('title')).to.equal(
+      'Requests, all time'
     );
 
     const lastSeen = headers[6];
@@ -587,7 +597,7 @@ describe('AgentsView', () => {
       .false;
 
     const numeric = el.shadowRoot?.querySelectorAll('tbody td.numeric');
-    expect(numeric?.[0].textContent?.trim()).to.equal((1234).toLocaleString());
+    expect(numeric?.[0].textContent?.trim()).to.equal('1.2K');
   });
 
   it('states the token total before cost, with the split in the tooltip', async () => {
