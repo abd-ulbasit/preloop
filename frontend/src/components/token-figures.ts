@@ -150,6 +150,18 @@ export function totalTokensOf(
 }
 
 /**
+ * The total to state beside `displayInputTokensOf`: when the reported input
+ * excludes the cache, the reported total does too, so it is rebuilt from the
+ * displayed input and the output and the figures on one card add up.
+ */
+export function displayTotalTokensOf(
+  usage: GatewayTokenUsage | null | undefined
+): number {
+  if (!usage || !inputExcludesCache(usage)) return totalTokensOf(usage);
+  return displayInputTokensOf(usage) + outputTokensOf(usage);
+}
+
+/**
  * Add up several aggregates into one.
  *
  * Counts add; a rate does not, so the combined hit rate is recomputed from
@@ -209,7 +221,7 @@ export function tokenFiguresTitle(
   if (!usage) return 'No token usage recorded';
   const input = displayInputTokensOf(usage);
   const output = outputTokensOf(usage);
-  const total = totalTokensOf(usage);
+  const total = displayTotalTokensOf(usage);
   const parts = [
     `${formatExactTokenCount(input)} input tokens`,
     `${formatExactTokenCount(output)} output tokens`,
@@ -340,7 +352,7 @@ export class TokenFigures extends LitElement {
       return html`<sl-tooltip content=${description} hoist>
         <span class="figures" title=${description}>
           <span class="direction"
-            >${formatTokenCount(totalTokensOf(usage))}</span
+            >${formatTokenCount(displayTotalTokensOf(usage))}</span
           >
         </span>
       </sl-tooltip>`;

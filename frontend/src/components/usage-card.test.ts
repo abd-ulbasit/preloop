@@ -793,3 +793,26 @@ describe('usage-card', () => {
     });
   });
 });
+
+describe('usage-card under cache-exclusive input (B-04 review)', () => {
+  it('headlines a total that the in and out beneath it add up to', async () => {
+    const summary = summaryFixture({
+      token_usage: {
+        prompt_tokens: 1200,
+        completion_tokens: 300,
+        total_tokens: 1500,
+        input_tokens: 1200,
+        output_tokens: 300,
+        cache_read_tokens: 16000,
+        cache_write_tokens: 800,
+        uncached_input_tokens: 0,
+        cache_hit_ratio: 1,
+      },
+    });
+    const el = await renderCard({ summary });
+    const content = (el.shadowRoot!.textContent || '').replace(/\s+/g, ' ');
+    // 1.2K reported input + 16K read + 800 written = 18K in; plus 300 out.
+    expect(content).to.contain('18.3K');
+    expect(content).to.not.contain('1.5K tokens');
+  });
+});

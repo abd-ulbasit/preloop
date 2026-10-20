@@ -325,3 +325,25 @@ describe('token figures that wrap (B-17)', () => {
     expect(figures.scrollWidth).to.be.at.most(host.clientWidth);
   });
 });
+
+describe('token figure totals under cache-exclusive input (B-04 review)', () => {
+  it('states a total that input plus output reconciles with', async () => {
+    const usage: GatewayTokenUsage = {
+      prompt_tokens: 1200,
+      completion_tokens: 300,
+      total_tokens: 1500,
+      input_tokens: 1200,
+      output_tokens: 300,
+      cache_read_tokens: 16000,
+      cache_write_tokens: 800,
+      uncached_input_tokens: 0,
+      cache_hit_ratio: 1,
+    };
+    expect(tokenFiguresTitle(usage)).to.contain('18,000 input tokens');
+    expect(tokenFiguresTitle(usage)).to.contain('18,300 total');
+    const el = await fixture<TokenFigures>(
+      html`<token-figures .usage=${usage} total-only></token-figures>`
+    );
+    expect(text(el)).to.equal('18.3K');
+  });
+});
