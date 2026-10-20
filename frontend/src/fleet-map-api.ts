@@ -679,6 +679,27 @@ export interface FleetCodeEvent {
   url?: string | null;
 }
 
+/**
+ * One issue or pull request touched in the window, newest first (bounded).
+ * Contract: factory brief usage/contract-work.md; optional until the server
+ * sends it.
+ */
+export interface FleetWorkItem {
+  key: string;
+  kind: 'issue' | 'pull_request';
+  reference: string;
+  repo: string | null;
+  title: string | null;
+  url: string | null;
+  state: 'open' | 'closed' | 'merged' | null;
+  last_action: string;
+  last_at: string;
+  review_state: string | null;
+  labels: string[];
+  related_issue: string | null;
+  node_ids: string[];
+}
+
 /** Pull and merge requests per map node in the window (`/fleet/code-activity`). */
 export interface FleetCodeActivity {
   active_within_minutes: number | null;
@@ -687,6 +708,45 @@ export interface FleetCodeActivity {
   counts: Record<string, FleetCodeCounts>;
   flows: FleetCodeFlow[];
   events: FleetCodeEvent[];
+  /** Distinct work items in the window, so history shows on load. */
+  work?: FleetWorkItem[];
+  work_truncated?: boolean;
+}
+
+/** Gateway totals for one model or provider node in the window. */
+export interface FleetUsageTotals {
+  request_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  estimated_cost: number | null;
+  cost_is_estimate: true;
+  currency: string | null;
+  partial: boolean;
+}
+
+/** `GET /fleet/usage`: totals keyed by the fleet graph's own node ids. */
+export interface FleetUsageResponse {
+  active_within_minutes: number | null;
+  since: string;
+  until: string;
+  truncated: boolean;
+  partial: boolean;
+  models: Record<string, FleetUsageTotals>;
+  providers: Record<string, FleetUsageTotals>;
+}
+
+export async function getFleetUsage(
+  signal?: AbortSignal,
+  activeWithinMinutes: number | null = null
+): Promise<FleetUsageResponse> {
+  const url = activeWithinMinutes
+    ? `/api/v1/fleet/usage?active_within_minutes=${activeWithinMinutes}`
+    : '/api/v1/fleet/usage';
+  const response = await fetchWithAuth(url, { signal });
+  if (!response.ok) throw new Error('Usage totals could not be loaded.');
+  return response.json();
 }
 
 export async function getFleetCodeActivity(

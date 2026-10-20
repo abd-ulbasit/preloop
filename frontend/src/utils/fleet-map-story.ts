@@ -1,4 +1,5 @@
 import type {
+  FleetCodeActivity,
   FleetMapEdge,
   FleetMapGraph,
   FleetMapNode,
@@ -527,9 +528,12 @@ export class FleetStory {
       if (run.at < since || (run.end && now - run.end >= 60_000)) continue;
       flows.set(run.flow, [...(flows.get(run.flow) ?? []), run]);
     }
-    // Live-run flows fade after their last run, including code-discovered flows.
+    // Live-run flows fade after their last run, unless the window's history
+    // (the base graph, from code activity) still lists them.
+    const listed = new Set(base.nodes.map((n) => n.id));
     const knownFlows = new Set([...this.runs.values()].map((r) => r.flow));
-    for (const id of knownFlows) if (!flows.has(id)) nodes.delete(id);
+    for (const id of knownFlows)
+      if (!flows.has(id) && !listed.has(id)) nodes.delete(id);
     for (const [id, runs] of flows) {
       const active = runs.filter((r) => !r.end).length;
       const latest = runs.reduce((a, b) => (a.at > b.at ? a : b));
@@ -579,6 +583,87 @@ export class FleetStory {
 
   /** Bumped by clear(), so session-scoped caches can follow a reset. */
   epoch = 0;
+
+  /**
+   * Seed the work items the window's history reports, so a freshly opened
+   * map shows every issue and PR active in the window, not only those that
+   * move while it is open. History is not traffic: no lit lines, no notes.
+   * Newer live state is never overwritten. True when anything changed.
+   */
+  seedWork(activity: FleetCodeActivity | null | undefined): boolean {
+    if (!activity) return false;
+    const items = (activity.work ?? []).slice(0, 50).map((item) => ({
+      ...item,
+      at: parseUTCDate(item.last_at).getTime(),
+    }));
+    // Until the server lists work items, forge merges name their PR.
+    for (const event of activity.events ?? [])
+      if (event.action === 'merged' && (event.pr || event.url))
+        items.push({
+          key: event.pr || event.url || '',
+          kind: 'pull_request',
+          reference: (event.pr ?? '').match(/[#!]\d+$/)?.[0] ?? '',
+          repo: null,
+          title: null,
+          url: event.url ?? null,
+          state: 'merged',
+          last_action: 'merged',
+          last_at: event.at,
+          review_state: null,
+          labels: [],
+          related_issue: null,
+          node_ids: [event.node_id],
+          at: parseUTCDate(event.at).getTime(),
+        });
+    let changed = false;
+    const ids = new Map<string, string>();
+    // Issues first, so pull requests can attach under them.
+    const ordered = [...items].sort(
+      (a, b) => Number(a.kind !== 'issue') - Number(b.kind !== 'issue')
+    );
+    for (const item of ordered) {
+      if (!Number.isFinite(item.at) || !item.key) continue;
+      const id = this.subject(
+        {
+          kind: item.kind,
+          key: item.key,
+          reference: item.reference,
+          repo: item.repo,
+          title: item.title,
+          url: item.url,
+        },
+        item.kind,
+        item.at
+      );
+      const work = this.works.get(id);
+      if (!work) continue;
+      ids.set(`${item.kind}:${item.key}`, id);
+      // Live state that is newer than this history entry wins.
+      if (work.at > item.at) continue;
+      work.node.status =
+        item.state === 'merged'
+          ? 'Merged'
+          : item.state === 'closed'
+            ? 'Closed'
+            : 'Open';
+      if (item.review_state) work.node.review_state = item.review_state;
+      if (item.labels?.length)
+        work.node.labels = nextLabels([], item.labels, []);
+      const issue =
+        item.kind === 'pull_request' && item.related_issue
+          ? ids.get(`issue:${item.related_issue}`)
+          : undefined;
+      const parent = issue ? this.works.get(issue) : undefined;
+      if (issue && parent) {
+        work.node.parent_id = issue;
+        if (parent.node.status !== 'Merged')
+          parent.node.status = item.state === 'merged' ? 'Merged' : 'PR open';
+      }
+      changed = true;
+    }
+    if (changed) this.trim();
+    return changed;
+  }
 
   /** Used to expire runs and work without running an animation loop forever. */
   hasLiveActivity(minutes: number | null, now = Date.now()): boolean {

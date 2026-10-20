@@ -39,11 +39,14 @@ import {
   type FleetMapNodeType,
   type FleetCodeAction,
   type FleetCodeActivity,
+  type FleetUsageResponse,
   type FleetMapPosition,
   getFleetCodeActivity,
+  getFleetUsage,
   withCodeFlows,
 } from '../fleet-map-api';
 import { formatRelativeTime } from '../utils/date';
+import { formatCurrencyAmount } from '../utils/money';
 import {
   placeBubbles,
   type BubbleRect,
@@ -125,7 +128,7 @@ const TYPE_TOGGLE_LABEL: Record<(typeof FLEET_MAP_TYPES)[number], string> = {
   runner: 'Runners',
   agent: 'Agents',
   flow: 'Flows',
-  work: 'Issues and PRs',
+  work: 'Work (issues, PRs)',
   model: 'Models',
   provider_account: 'Accounts',
   provider: 'Providers',
@@ -230,6 +233,8 @@ export class FleetMap extends LitElement {
    * itself from `/fleet/code-activity`; a host may set it instead.
    */
   @property({ attribute: false }) codeActivity: FleetCodeActivity | null = null;
+  /** Gateway totals per model and provider node for the window. */
+  @property({ attribute: false }) usage: FleetUsageResponse | null = null;
   /** Force the reduced-motion fallback (tests); the media query also does. */
   @property({ type: Boolean, attribute: 'reduced-motion' })
   reducedMotion = false;
@@ -692,6 +697,62 @@ export class FleetMap extends LitElement {
     } catch {
       // Code activity is a layer on the map; the map stands without it.
     }
+    try {
+      const usage = await getFleetUsage(
+        controller.signal,
+        windowMinutes(this.activityWindow)
+      );
+      if (!controller.signal.aborted) this.usage = usage;
+    } catch {
+      // Totals are a detail of the side panel; an older server has none.
+      if (!controller.signal.aborted) this.usage = null;
+    }
+  }
+
+  /** "In this window: 12 requests, 41.2k in / 3.8k out tokens (est. $0.42)". */
+  private renderUsage(node: FleetMapNode) {
+    const totals =
+      node.type === 'model'
+        ? this.usage?.models[node.id]
+        : node.type === 'provider'
+          ? this.usage?.providers[node.id]
+          : undefined;
+    if (!this.usage || (node.type !== 'model' && node.type !== 'provider'))
+      return nothing;
+    if (!totals)
+      return html`<p class="meta usage" data-testid="fleet-map-usage">
+        No gateway requests in this window.
+      </p>`;
+    const tokens =
+      totals.input_tokens !== null || totals.output_tokens !== null
+        ? `, ${totals.input_tokens === null ? 'unknown' : compactCount(totals.input_tokens)} in / ${totals.output_tokens === null ? 'unknown' : compactCount(totals.output_tokens)} out tokens`
+        : '';
+    const cost =
+      totals.estimated_cost !== null
+        ? ` (est. ${formatCurrencyAmount(totals.estimated_cost, totals.currency || 'USD')})`
+        : '';
+    const title = [
+      `Gateway requests from ${this.usage.since} to ${this.usage.until}.`,
+      totals.cache_read_tokens !== null
+        ? `${totals.cache_read_tokens} cache read tokens.`
+        : '',
+      totals.partial || this.usage.partial
+        ? 'Some values are unknown, so totals may be low.'
+        : '',
+      'Cost is an estimate.',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return html`<p
+      class="meta usage"
+      data-testid="fleet-map-usage"
+      title=${title}
+    >
+      In this window: ${totals.request_count}
+      ${totals.request_count === 1 ? 'request' : 'requests'}${tokens}${cost}${
+        totals.partial ? ' (partial)' : ''
+      }
+    </p>`;
   }
 
   /** Run frames while anything moves; stop as soon as nothing does. */
@@ -895,6 +956,7 @@ export class FleetMap extends LitElement {
         this.defaultArrangement
       );
       this.points = loadPositions(this.userId, this.positionsScope);
+      this.types = loadTypes(this.userId, this.positionsScope);
       this.settled.clear();
       this.eventLog.clear();
       this.story.clear();
@@ -917,6 +979,14 @@ export class FleetMap extends LitElement {
         );
     }
     this.dropHiddenSelection();
+    // The window's history: every issue and PR active in it, not only those
+    // that move while the map is open.
+    if (
+      changed.has('codeActivity') &&
+      this.instanceAdmin &&
+      this.story.seedWork(this.codeActivity)
+    )
+      this.storyVersion++;
     if (
       changed.has('graph') ||
       changed.has('codeActivity') ||
@@ -976,6 +1046,16 @@ export class FleetMap extends LitElement {
       this.syncActivitySubscriptions();
       this.syncCodeSubscription();
     }
+    // Code activity lands after the graph: fit again so the flows and work
+    // it adds are in view, unless the user arranged or moved the map.
+    if (
+      changed.has('codeActivity') &&
+      !changed.get('codeActivity') &&
+      this.codeActivity &&
+      !this.layoutOwned &&
+      Date.now() - this.userMovedAt >= HANDS_OFF_MS
+    )
+      this.refit = true;
     if (this.refit && this.lastLayout) {
       this.refit = false;
       this.recenter = false;
@@ -2061,6 +2141,9 @@ export class FleetMap extends LitElement {
       .panel a {
         color: var(--console-link-color);
       }
+      .panel .usage {
+        font-variant-numeric: tabular-nums;
+      }
       .panel .meta {
         font-size: var(--console-text-meta);
         color: var(--console-meta-color);
@@ -2541,6 +2624,7 @@ export class FleetMap extends LitElement {
     this.focusGap = '';
     this.query = '';
     this.types = new Set(DEFAULT_TYPES);
+    saveTypes(this.userId, this.positionsScope, this.types);
     this.states = new Set(['onboarded']);
   }
 
@@ -2625,6 +2709,7 @@ export class FleetMap extends LitElement {
                   .checked=${this.types.has(type)}
                   @sl-change=${() => {
                     this.types = this.toggle(this.types, type);
+                    saveTypes(this.userId, this.positionsScope, this.types);
                   }}
                   >${TYPE_TOGGLE_LABEL[type]}</sl-checkbox
                 >`
@@ -3454,6 +3539,7 @@ export class FleetMap extends LitElement {
             </p>`
           : nothing
       }
+      ${this.renderUsage(node)}
       ${
         gaps.length
           ? html`<div class="chips">
@@ -4033,6 +4119,41 @@ export class FleetMap extends LitElement {
 }
 
 const BUBBLES_KEY = 'preloop:fleet-map:bubbles';
+const TYPES_KEY = 'preloop:fleet-map:types';
+
+/** The Show choice, per user and map; unknown or broken values fall back. */
+function loadTypes(user: string, scope: string): Set<FleetMapNodeType> {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(`${TYPES_KEY}:${scope}:${user || 'anonymous'}`) ||
+        'null'
+    );
+    if (Array.isArray(saved)) {
+      const types = saved.filter((type): type is FleetMapNodeType =>
+        (FLEET_MAP_TYPES as readonly string[]).includes(type)
+      );
+      if (types.length) return new Set(types);
+    }
+  } catch {
+    // Private mode or a hand-edited value: the default applies.
+  }
+  return new Set(DEFAULT_TYPES);
+}
+
+function saveTypes(
+  user: string,
+  scope: string,
+  types: Set<FleetMapNodeType>
+): void {
+  try {
+    localStorage.setItem(
+      `${TYPES_KEY}:${scope}:${user || 'anonymous'}`,
+      JSON.stringify([...types])
+    );
+  } catch {
+    // Storage unavailable: the choice lasts for this page.
+  }
+}
 
 function loadBubbles(user: string, scope: string, fallback = false): boolean {
   try {

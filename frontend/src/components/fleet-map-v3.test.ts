@@ -887,3 +887,212 @@ describe('fleet-map hidden account layer', () => {
     ).not.to.contain('Claude Code');
   });
 });
+
+describe('fleet-map window history', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+
+  const at = (secondsAgo: number) =>
+    new Date(Date.now() - secondsAgo * 1000).toISOString();
+  const item = (
+    kind: 'issue' | 'pull_request',
+    n: number,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    key: `acme/api#${n}`,
+    kind,
+    reference: `#${n}`,
+    repo: 'acme/api',
+    title: `${kind === 'issue' ? 'Issue' : 'PR'} ${n}`,
+    url: `https://example.com/acme/api/${kind === 'issue' ? 'issues' : 'pull'}/${n}`,
+    state: 'open' as const,
+    last_action: kind === 'issue' ? 'issue_labeled' : 'opened',
+    last_at: at(120),
+    review_state: null,
+    labels: [],
+    related_issue: null,
+    node_ids: ['agent:claude'],
+    ...extra,
+  });
+  const history = () => ({
+    active_within_minutes: 60,
+    since: at(3600),
+    truncated: false,
+    counts: {},
+    flows: ['triage', 'implementation'].map((id) => ({
+      id: `flow:${id}`,
+      resource_id: id,
+      label:
+        id === 'triage' ? 'Issue triage' : 'Automated Issue Implementation',
+      href: `/console/flows/${id}`,
+      model_node_id: 'model:sonnet',
+      last_active_at: at(300),
+    })),
+    events: [],
+    work: [
+      item('issue', 41, { labels: ['bug'] }),
+      item('issue', 42),
+      item('pull_request', 51, { related_issue: 'acme/api#41' }),
+    ],
+  });
+  const ids = [
+    'flow:triage',
+    'flow:implementation',
+    'work:issue:acme/api#41',
+    'work:issue:acme/api#42',
+    'work:pull_request:acme/api#51',
+  ];
+
+  it('shows every flow and work item of the window on load, in view, in both arrangements, with no live events', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: `history-${arrangement}`,
+        activityWindow: '1h',
+      });
+      el.codeActivity = history();
+      await el.updateComplete;
+      await el.updateComplete;
+      await el.updateComplete;
+      const stage = el
+        .shadowRoot!.querySelector('.stage')!
+        .getBoundingClientRect();
+      for (const id of ids) {
+        const node = el.shadowRoot!.querySelector(`[data-node="${id}"]`);
+        expect(!!node, `${arrangement} ${id}`).to.equal(true);
+        const r = node!.getBoundingClientRect();
+        expect(
+          r.left >= stage.left - 1 && r.right <= stage.right + 1,
+          `${arrangement} ${id} x`
+        ).to.equal(true);
+        expect(
+          r.top >= stage.top - 1 && r.bottom <= stage.bottom + 1,
+          `${arrangement} ${id} y`
+        ).to.equal(true);
+      }
+      const pr = el.shadowRoot!.querySelector<HTMLElement>(
+        '[data-node="work:pull_request:acme/api#51"]'
+      )!;
+      expect(
+        pr.classList.contains('child'),
+        `${arrangement} PR under issue`
+      ).to.equal(true);
+      expect(
+        el
+          .shadowRoot!.querySelector(
+            '[data-node="work:issue:acme/api#41"] [data-label]'
+          )
+          ?.textContent?.trim()
+      ).to.equal('bug');
+      // History is not traffic: nothing lit, no notes.
+      expect(
+        el.shadowRoot!.querySelectorAll('path.edge.active').length
+      ).to.equal(0);
+    }
+  });
+
+  it('hides and shows flows and work from the Show menu in both arrangements, and remembers it', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const scope = `show-${arrangement}`;
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: scope,
+        activityWindow: '1h',
+      });
+      el.codeActivity = history();
+      await el.updateComplete;
+      await el.updateComplete;
+      const box = (type: string) =>
+        el.shadowRoot!.querySelector<HTMLElement & { checked: boolean }>(
+          `sl-checkbox[data-type="${type}"]`
+        )!;
+      expect(box('flow').textContent!.trim()).to.equal('Flows');
+      expect(box('work').textContent!.trim()).to.equal('Work (issues, PRs)');
+      expect(box('flow').checked && box('work').checked).to.equal(true);
+      const count = (kind: string) =>
+        el.shadowRoot!.querySelectorAll(`[data-kind="${kind}"]`).length;
+      expect(count('flow')).to.equal(2);
+      expect(count('work')).to.equal(3);
+      for (const type of ['flow', 'work']) {
+        box(type).dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+      expect(count('flow'), arrangement).to.equal(0);
+      expect(count('work'), arrangement).to.equal(0);
+      // Remembered for this user and map.
+      const again = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: scope,
+        activityWindow: '1h',
+      });
+      again.codeActivity = history();
+      await again.updateComplete;
+      await again.updateComplete;
+      expect(
+        again.shadowRoot!.querySelectorAll('[data-kind="work"]').length
+      ).to.equal(0);
+      for (const type of ['flow', 'work']) {
+        box(type).dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+      expect(count('flow')).to.equal(2);
+      expect(count('work')).to.equal(3);
+    }
+  });
+});
+
+describe('fleet-map usage totals', () => {
+  const totals = (extra: Record<string, unknown> = {}) => ({
+    request_count: 12,
+    input_tokens: 41200,
+    output_tokens: 3800,
+    cache_read_tokens: 900,
+    cache_write_tokens: null,
+    estimated_cost: 0.42,
+    cost_is_estimate: true as const,
+    currency: 'USD',
+    partial: false,
+    ...extra,
+  });
+  it('shows window totals for a selected model or provider, with the estimate said', async () => {
+    const el = await map({ positionsScope: 'usage' });
+    el.usage = {
+      active_within_minutes: 60,
+      since: '2026-10-20T09:00:00Z',
+      until: '2026-10-20T10:00:00Z',
+      truncated: false,
+      partial: false,
+      models: { 'model:sonnet': totals() },
+      providers: {
+        'provider:openai': totals({
+          request_count: 1,
+          estimated_cost: null,
+          partial: true,
+        }),
+      },
+    };
+    const pick = async (id: string) => {
+      el.shadowRoot!.querySelector<HTMLElement>(`[data-node="${id}"]`)!.click();
+      await el.updateComplete;
+      return el
+        .shadowRoot!.querySelector('[data-testid="fleet-map-usage"]')
+        ?.textContent?.replace(/\s+/g, ' ')
+        .trim();
+    };
+    expect(await pick('model:sonnet')).to.equal(
+      'In this window: 12 requests, 41.2k in / 3.8k out tokens (est. $0.42)'
+    );
+    expect(await pick('provider:openai')).to.equal(
+      'In this window: 1 request, 41.2k in / 3.8k out tokens (partial)'
+    );
+    expect(await pick('model:gpt')).to.equal(
+      'No gateway requests in this window.'
+    );
+    expect(await pick('agent:claude')).to.equal(undefined);
+  });
+});
