@@ -407,6 +407,20 @@ describe('LitApp routing', () => {
     expect(el.shadowRoot?.querySelector('console-shell')).to.equal(null);
   });
 
+  for (const legacy of ['duplicates', 'assignments']) {
+    it(`redirects the legacy /console/issues/${legacy} stub to Similar issues (B-20)`, async () => {
+      await fixture(html`<lit-app></lit-app>`);
+
+      Router.go(`/console/issues/${legacy}`);
+
+      await waitUntil(
+        () => window.location.pathname === '/console/issues',
+        `Expected /console/issues/${legacy} to redirect`,
+        { timeout: 5000 }
+      );
+    });
+  }
+
   it('redirects the old bell link to the executions list', async () => {
     await fixture(html`<lit-app></lit-app>`);
 
