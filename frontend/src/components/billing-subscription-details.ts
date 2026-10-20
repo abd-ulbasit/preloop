@@ -639,6 +639,24 @@ export class BillingSubscriptionDetails extends LitElement {
     .seat-warning {
       color: var(--sl-color-warning-700);
     }
+    /* The built-in usage figures: label over value, side by side across
+       the card. These classes had no rules at all, so the figures fell into
+       an unstyled stack of lines. */
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: var(--sl-spacing-medium);
+      margin-top: var(--sl-spacing-medium);
+    }
+    .usage-label {
+      color: var(--console-meta-color, var(--sl-color-neutral-600));
+      font-size: var(--console-text-meta, 13px);
+    }
+    .usage-value {
+      font-size: var(--console-text-body, 14px);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
     .usage-models {
       margin-top: 1rem;
     }
