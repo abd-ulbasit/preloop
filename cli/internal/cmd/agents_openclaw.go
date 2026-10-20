@@ -6917,6 +6917,9 @@ func findReusableManagedGatewayAIModel(
 	fingerprintMatches := make([]*aiModelResponse, 0)
 	aliasMatches := make([]*aiModelResponse, 0)
 	for i := range models {
+		if managedGatewayAliasConflictsWithIdentity(models[i]) {
+			continue
+		}
 		if models[i].ProviderName != upstream.ProviderName {
 			continue
 		}
