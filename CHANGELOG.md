@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the caller's account
   ([#1927](https://github.com/preloop/preloop/pull/1927)).
 - Model, cost and usage import controls consistently enforce their declared
-  permissions on builds without the RBAC plugin.
+  permissions on builds without the RBAC plugin
+  ([#1928](https://github.com/preloop/preloop/pull/1928)).
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
   RBAC plugin, matching the other agent-control endpoints
