@@ -2774,7 +2774,9 @@ async def retry_flow_execution(
     Returns:
         New execution details
     """
-    ensure_permission_in_oss(db, current_user, "execute_flows")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "execute_flows")
+    )
     # Get the original execution
     original = crud_flow_execution.get(
         db=db, id=execution_id, account_id=current_user.account_id

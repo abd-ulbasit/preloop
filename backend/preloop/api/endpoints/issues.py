@@ -43,6 +43,7 @@ from preloop.services.aux_model_retry import call_with_aux_retry_async
 from preloop.services.model_gateway_errors import ModelGatewayAPIError
 from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.config import settings
+from preloop.api.loop_safety import run_db_off_loop
 
 # Initialize CRUD operations
 crud_comment = CRUDComment(Comment)
@@ -620,7 +621,9 @@ async def create_issue(
     - Name (organization_name/project_name)
     - Slug (organization/project)
     """
-    ensure_permission_in_oss(db, current_user, "create_issues")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "create_issues")
+    )
     try:
         # Resolve organization and project using either ID, name, or identifier
         from preloop.models.crud import crud_organization, crud_project
@@ -1259,7 +1262,9 @@ async def update_issue(
     current_user: User = Depends(get_current_active_user),
 ):
     """Update an existing issue using its internal ID or external key."""
-    ensure_permission_in_oss(db, current_user, "edit_issues")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "edit_issues")
+    )
     # URL decode the issue_id in case it's still encoded
     from urllib.parse import unquote
 
