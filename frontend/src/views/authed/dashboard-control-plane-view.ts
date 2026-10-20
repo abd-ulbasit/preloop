@@ -176,6 +176,8 @@ interface GroupedAuditResponse {
 /** `GET /audit-logs/overview`: the four audit reads of this page in one. */
 interface AuditOverviewResponse {
   events_total: number | null;
+  /** True when the server stopped counting at its cap and more match. */
+  events_total_capped?: boolean;
   tool_calls_total: number;
   tool_calls_failed: number;
   exceptions: GroupedAuditResponse;
@@ -553,6 +555,7 @@ export class DashboardView extends AuthedElement {
    * or the ask failed. Never rendered as a zero when it is unknown.
    */
   @state() private auditEventCount: number | null = null;
+  @state() private auditEventCountCapped = false;
   /**
    * True while the figures on the Audit trail line are being measured for
    * the range on screen. It covers a range change too, which keeps the
@@ -2902,13 +2905,17 @@ export class DashboardView extends AuthedElement {
             if (!response.ok) {
               throw new Error('Failed to count audit events');
             }
-            return response.json() as Promise<{ total?: number }>;
+            return response.json() as Promise<{
+              total?: number;
+              total_capped?: boolean;
+            }>;
           }
         ),
         null
       );
       this.auditEventCount =
         count && typeof count.total === 'number' ? count.total : null;
+      this.auditEventCountCapped = count?.total_capped === true;
     } finally {
       // This is the last figure the line waits on: the sessions count landed
       // with the fold, above.
@@ -3160,6 +3167,7 @@ export class DashboardView extends AuthedElement {
             this.auditGroups = overview.exceptions.groups || [];
             this.auditExceptionsTotal = overview.exceptions.total || 0;
             this.auditEventCount = overview.events_total;
+            this.auditEventCountCapped = overview.events_total_capped === true;
             this.toolCallsCount = overview.tool_calls_total || 0;
             this.failedToolCallsCount = overview.tool_calls_failed || 0;
           })
@@ -3629,6 +3637,7 @@ export class DashboardView extends AuthedElement {
     this.auditGroups = overview.exceptions.groups || [];
     this.auditExceptionsTotal = overview.exceptions.total || 0;
     this.auditEventCount = overview.events_total;
+    this.auditEventCountCapped = overview.events_total_capped === true;
     this.toolCallsCount = overview.tool_calls_total || 0;
     this.failedToolCallsCount = overview.tool_calls_failed || 0;
   }
@@ -4899,11 +4908,19 @@ export class DashboardView extends AuthedElement {
           >`
         : nothing,
       // A figure we could not measure is omitted, never rendered as a zero.
+      // A count that stopped at the server's cap is a floor: "10K+", with
+      // the exact floor in the title, never "10,000" as if it were exact.
       events
-        ? html`<a href="/console/audit"
-            >${this.formatNumber(events)} audit
-            event${events === 1 ? '' : 's'}</a
-          >`
+        ? this.auditEventCountCapped
+          ? html`<a
+              href="/console/audit"
+              title=${`At least ${this.formatNumber(events)} audit events`}
+              >${this.formatCompactNumber(events)}+ audit events</a
+            >`
+          : html`<a href="/console/audit"
+              >${this.formatNumber(events)} audit
+              event${events === 1 ? '' : 's'}</a
+            >`
         : nothing,
     ].filter((item) => item !== nothing);
 

@@ -507,6 +507,7 @@ describe('DashboardView', () => {
           }
           return json({
             events_total: auditResponse.total,
+            events_total_capped: auditResponse.total_capped === true,
             tool_calls_total: auditResponse.total,
             tool_calls_failed: 0,
             exceptions: auditResponse,
@@ -1969,6 +1970,21 @@ describe('DashboardView', () => {
       expect(
         element.shadowRoot?.querySelectorAll('time-range-select').length
       ).to.equal(0);
+    });
+
+    it('states a capped audit count as a floor, not an exact figure (B-15)', async () => {
+      auditResponse = { ...auditResponse, total: 10000, total_capped: true };
+      const element = await mountLoaded();
+      await waitUntil(
+        () => element.shadowRoot?.querySelector('.audit-trail'),
+        'the audit trail line'
+      );
+      const link = Array.from(
+        element.shadowRoot!.querySelectorAll('.audit-trail a')
+      ).find((a) => a.getAttribute('href') === '/console/audit')!;
+      const text = (link.textContent || '').replace(/\s+/g, ' ').trim();
+      expect(text).to.equal('10K+ audit events');
+      expect(link.getAttribute('title')).to.contain('At least 10,000');
     });
 
     it('states the audit trail under the Inventory, in the page range', async () => {
