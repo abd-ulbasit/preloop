@@ -9,6 +9,8 @@ import '@shoelace-style/shoelace/dist/components/switch/switch.js';
 import { consoleDialogStyles } from '../styles/console-dialog';
 
 export interface MCPServer {
+  is_shared?: boolean;
+  read_only?: boolean;
   id: string;
   name: string;
   url: string;

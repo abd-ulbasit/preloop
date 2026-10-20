@@ -54,6 +54,13 @@ describe('PreloopFlowForm model routing roundtrip', () => {
           JSON.stringify([
             { id: MODEL_A, name: 'Fast model' },
             { id: MODEL_B, name: 'Default model' },
+            { id: 'shared-model', name: 'Shared model', is_shared: true },
+            {
+              id: 'global-model',
+              name: 'Built-in model',
+              is_built_in: true,
+              read_only: true,
+            },
           ])
         );
       }
@@ -97,6 +104,39 @@ describe('PreloopFlowForm model routing roundtrip', () => {
     expect(listener.callCount).to.equal(1);
     return listener.firstCall.args[0].detail.flow;
   };
+
+  it('offers owned and built-in models but excludes shared models from binding pickers', async () => {
+    const element = await mount();
+    (element as any).addRoutingRule();
+    await element.updateComplete;
+    const options = Array.from(
+      element.shadowRoot!.querySelectorAll('sl-option')
+    ).map((option: any) => option.value);
+    expect(options).to.include(MODEL_A);
+    expect(options).to.include('global-model');
+    expect(options).not.to.include('shared-model');
+  });
+
+  it('does not choose a shared model when populating preset defaults', async () => {
+    const element = await mount();
+    (element as any).models = [
+      { id: MODEL_A, name: 'Account model' },
+      { id: 'shared-model', name: 'Shared model', is_shared: true },
+    ];
+    await (element as any).selectPreset({ ...preset, agent_type: 'openhands' });
+    expect(element.flow.ai_model_id).to.equal(MODEL_A);
+  });
+
+  it('explains how to replace an existing shared model binding', async () => {
+    const element = await mount();
+    element.flow.ai_model_id = 'shared-model';
+    element.requestUpdate();
+    await element.updateComplete;
+    expect(
+      element.shadowRoot!.querySelector('[data-shared-binding-warning]')!
+        .textContent
+    ).to.include('Replace shared models');
+  });
 
   it('loads saved rules and preserves unrelated agent_config keys', async () => {
     const saved = {
@@ -212,6 +252,13 @@ describe('PreloopFlowForm model by label roundtrip', () => {
           JSON.stringify([
             { id: MODEL_A, name: 'Fast model' },
             { id: MODEL_B, name: 'Default model' },
+            { id: 'shared-model', name: 'Shared model', is_shared: true },
+            {
+              id: 'global-model',
+              name: 'Built-in model',
+              is_built_in: true,
+              read_only: true,
+            },
           ])
         );
       }

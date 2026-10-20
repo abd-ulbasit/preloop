@@ -3698,7 +3698,7 @@ export class PreloopFlowForm extends LitElement {
 
     if (!this.flow.ai_model_id && !this.hostExecAgentType()) {
       let selectableModels = this.models.filter(
-        (m) => m.model_kind !== 'stt' && m.model_kind !== 'tts'
+        (m) => !m.is_shared && m.model_kind !== 'stt' && m.model_kind !== 'tts'
       );
       if (this.flowExecutionPath === 'persistent' && this.targetAgentId) {
         const agent = this.longRunningAgents.find(
@@ -4490,7 +4490,7 @@ export class PreloopFlowForm extends LitElement {
     }
 
     let selectableModels = this.models.filter(
-      (m) => m.model_kind !== 'stt' && m.model_kind !== 'tts'
+      (m) => !m.is_shared && m.model_kind !== 'stt' && m.model_kind !== 'tts'
     );
     if (this.flowExecutionPath === 'persistent' && this.targetAgentId) {
       const agent = this.longRunningAgents.find(
@@ -4930,9 +4930,34 @@ export class PreloopFlowForm extends LitElement {
                         <div
                           style="display: flex; flex-direction: column; gap: var(--sl-spacing-2x-small); margin-bottom: var(--sl-spacing-medium);"
                         >
+                          ${
+                            this.models.some(
+                              (model) =>
+                                model.is_shared &&
+                                [
+                                  this.flow.ai_model_id,
+                                  ...this.routingRules.map(
+                                    (rule) => rule.ai_model_id
+                                  ),
+                                  ...this.labelRules.map(
+                                    (rule) => rule.ai_model_id
+                                  ),
+                                ].includes(model.id)
+                            )
+                              ? html`<sl-alert
+                                  variant="warning"
+                                  open
+                                  data-shared-binding-warning
+                                >
+                                  Replace shared models with account or built-in
+                                  models before saving or running this flow.
+                                </sl-alert>`
+                              : ''
+                          }
                           <sl-select
                             label="AI model"
                             placeholder="Select an AI model"
+                            help-text="Choose an account model or a built-in model. Shared models cannot be bound to flows."
                             .value=${this.flow.ai_model_id || ''}
                             @sl-change=${(e: any) => {
                               this.flow.ai_model_id = e.target.value;

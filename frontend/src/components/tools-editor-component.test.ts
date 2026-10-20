@@ -28,6 +28,35 @@ describe('ToolsEditorComponent – MCP server actions', () => {
     access_rules: [],
   };
 
+  it('shows shared server tools with read-only configuration controls', async () => {
+    const el = await fixture<ToolsEditorComponent>(html`
+      <tools-editor-component
+        mode="global"
+        .mcpServers=${[{ ...server, is_shared: true, read_only: true }]}
+        .tools=${[tool]}
+      ></tools-editor-component>
+    `);
+    const row = el.shadowRoot!.querySelector('tool-list-item') as any;
+    row.expanded = true;
+    await row.updateComplete;
+    expect(row.shadowRoot.querySelector('sl-switch').disabled).to.equal(true);
+    expect(row.shadowRoot.querySelector('[label="Tool settings"]')).not.to
+      .exist;
+    expect(el.shadowRoot!.querySelector('.section-actions')).not.to.exist;
+    expect(el.shadowRoot!.textContent).to.include('Shared server');
+    const editor = row.shadowRoot.querySelector('governance-rule-set-editor');
+    await editor.updateComplete;
+    expect(editor.shadowRoot.querySelector('sl-button').disabled).to.equal(
+      true
+    );
+    const toggle = sinon.spy();
+    el.addEventListener('toggle-enabled', toggle);
+    row.shadowRoot
+      .querySelector('sl-switch')
+      .dispatchEvent(new Event('sl-change'));
+    expect(toggle.called).to.equal(false);
+  });
+
   it('refresh dispatches scan-server only', async () => {
     const el = (await fixture(html`
       <tools-editor-component
