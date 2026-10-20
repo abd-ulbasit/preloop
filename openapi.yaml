@@ -31775,6 +31775,19 @@ components:
             $ref: '#/components/schemas/FleetCodeEvent'
           type: array
           title: Events
+        work:
+          items:
+            $ref: '#/components/schemas/FleetWorkItem'
+          type: array
+          maxItems: 200
+          title: Work
+          description: Distinct issues and pull requests, newest activity first, at
+            most 200.
+        work_truncated:
+          type: boolean
+          title: Work Truncated
+          description: More work items exist, or a bounded source read was capped.
+          default: false
       type: object
       required:
       - since
@@ -32219,6 +32232,99 @@ components:
       - request_count
       title: FleetUsageTotals
       description: Known ledger totals for one canonical model or provider node.
+    FleetWorkItem:
+      properties:
+        key:
+          type: string
+          title: Key
+        kind:
+          type: string
+          enum:
+          - issue
+          - pull_request
+          title: Kind
+        reference:
+          type: string
+          title: Reference
+        repo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Repo
+        title:
+          anyOf:
+          - type: string
+            maxLength: 160
+          - type: 'null'
+          title: Title
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        state:
+          anyOf:
+          - type: string
+            enum:
+            - open
+            - closed
+            - merged
+          - type: 'null'
+          title: State
+        last_action:
+          type: string
+          enum:
+          - issue_opened
+          - issue_labeled
+          - issue_unlabeled
+          - issue_updated
+          - opened
+          - commented
+          - reviewed
+          - pull_request_updated
+          - merged
+          title: Last Action
+        last_at:
+          type: string
+          format: date-time
+          title: Last At
+        review_state:
+          anyOf:
+          - type: string
+            enum:
+            - approved
+            - changes_requested
+            - commented
+            - dismissed
+          - type: 'null'
+          title: Review State
+        labels:
+          items:
+            type: string
+            maxLength: 40
+          type: array
+          maxItems: 6
+          title: Labels
+        related_issue:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Related Issue
+        node_ids:
+          items:
+            type: string
+          type: array
+          maxItems: 5
+          title: Node Ids
+      type: object
+      required:
+      - key
+      - kind
+      - reference
+      - last_action
+      - last_at
+      title: FleetWorkItem
+      description: One distinct issue or pull request active in the selected window.
     FlowArtifactKindUsage:
       properties:
         bytes:

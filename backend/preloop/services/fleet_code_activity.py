@@ -9,6 +9,9 @@ Two sources, both account-scoped and capped:
   runtime principal made it, and rolls up to the agent's owner.
 * Merges the forge reported by webhook (``issue_cost_pull_request``), which
   belong to the flows whose runs published or reviewed that pull request.
+
+The optional work history additionally joins bounded tracker snapshots and
+explicit execution subjects/links through ``fleet_work`` CRUD.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from preloop.models import crud, models
 from preloop.models.crud import fleet_map as fleet_crud
+from preloop.models.crud import fleet_work as work_crud
 from preloop.schemas.fleet_map import (
     CodeAction,
     FleetCodeActivityResponse,
@@ -33,6 +37,7 @@ from preloop.schemas.fleet_map import (
     FleetCodeFlow,
 )
 from preloop.services.fleet_map import _allowed, _reject_report_key, canonical_model
+from preloop.services.fleet_work import build_work_items
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +185,12 @@ def build_code_activity(
         return result
 
     calls = fleet_crud.list_code_tool_calls(
-        db, account_id=account_id, since=since, limit=CALL_LIMIT + 1
+        db,
+        account_id=account_id,
+        since=since,
+        until=current,
+        limit=CALL_LIMIT + 1,
+        include_work=True,
     )
     result.truncated = len(calls) > CALL_LIMIT
     calls = calls[:CALL_LIMIT]
@@ -215,7 +225,21 @@ def build_code_activity(
     flow_tool_merges: dict[str, list[FleetCodeEvent]] = defaultdict(list)
     flow_forge_merges: dict[str, int] = defaultdict(int)
     events: list[FleetCodeEvent] = []
-    last_flow: dict[str, datetime] = {}
+    work = build_work_items(
+        db,
+        account_id=account_id,
+        since=since,
+        until=current,
+        calls=calls,
+        flow_of_execution=flow_of_execution,
+        agents_by_principal=agents_by_principal,
+        see_flows=see_flows,
+        calls_truncated=result.truncated,
+        pull_request_limit=MERGE_LIMIT,
+    )
+    result.work, result.work_truncated = work.work, work.truncated
+    last_flow, pull_requests = work.flow_activity, work.merged_pull_requests
+    result.truncated |= work.pull_requests_truncated
 
     def count(node_id: str, action: CodeAction) -> None:
         item = counts[node_id]
@@ -253,22 +277,21 @@ def build_code_activity(
             events.append(event)
 
     if see_flows:
-        merges = fleet_crud.list_merged_pull_requests(
-            db, account_id=account_id, since=since, limit=MERGE_LIMIT + 1
-        )
-        keys = {row.pr_key for row in merges}
-        result.truncated |= len(keys) > MERGE_LIMIT
-        missing = {
-            row.flow_id
-            for row in merges
-            if row.flow_id and str(row.flow_id) not in flow_rows
-        }
+        merges = [
+            (row, flow_id)
+            for row in pull_requests[:MERGE_LIMIT]
+            if row.merged_at and since <= _aware(row.merged_at) <= current
+            for flow_id in (row.merge_flows or [])[:5]
+        ]
+        result.truncated |= any(len(row.merge_flows or []) > 5 for row in pull_requests)
+        missing = {flow_id for _, flow_id in merges if str(flow_id) not in flow_rows}
+        missing.update(flow_id for flow_id in last_flow if flow_id not in flow_rows)
         for flow_id, name, model_id in fleet_crud.flows_by_id(
             db, account_id=account_id, flow_ids=missing
         ):
             flow_rows[str(flow_id)] = (name, model_id)
-        for row in merges:
-            flow_id = str(row.flow_id) if row.flow_id else ""
+        for row, flow_id in merges:
+            flow_id = str(flow_id)
             if flow_id not in flow_rows:
                 continue
             at = _aware(row.merged_at)
@@ -383,25 +406,14 @@ def emit_merge_event(db: Session, *, account_id: Any, pr_key: str, at: Any) -> N
     pair. Never raises.
     """
     try:
-        from sqlalchemy import select
-
         from preloop.services.account_realtime import (
             ACCOUNT_TOPIC_CODE_ACTIVITY,
             build_account_event,
             emit_account_event,
         )
 
-        x = models.IssueCostExecution
-        flow_ids = sorted(
-            {
-                str(flow_id)
-                for flow_id in db.scalars(
-                    select(x.flow_id)
-                    .where(x.account_id == account_id, x.pr_key == pr_key)
-                    .limit(5)
-                )
-                if flow_id
-            }
+        flow_ids = work_crud.flows_for_pull_request(
+            db, account_id=account_id, pr_key=pr_key
         )
         emit_account_event(
             build_account_event(

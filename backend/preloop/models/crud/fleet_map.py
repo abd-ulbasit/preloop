@@ -7,6 +7,7 @@ from sqlalchemy import Row, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from preloop.models import models
+from preloop.models.crud.fleet_work import ASSIGNED_LINKS
 
 Source = Literal["agents", "models", "runners", "users"]
 Resource = models.ManagedAgent | models.AIModel | models.FlowRunner | models.User
@@ -103,9 +104,23 @@ CODE_ACTIVITY_TOOLS: tuple[str, ...] = (
     "update_pull_request",
 )
 
+# Work history also includes issue edits and PR edits without a review.
+WORK_ACTIVITY_TOOLS = (
+    *CODE_ACTIVITY_TOOLS,
+    "create_issue",
+    "update_issue",
+    "update_merge_request",
+)
+
 
 def list_code_tool_calls(
-    db: Session, *, account_id: str, since: datetime, limit: int
+    db: Session,
+    *,
+    account_id: str,
+    since: datetime,
+    limit: int,
+    until: datetime | None = None,
+    include_work: bool = False,
 ) -> list[Row[Any]]:
     """Read successful pull and merge request tool calls since ``since``.
 
@@ -117,6 +132,8 @@ def list_code_tool_calls(
         account_id: Selected membership's owning tenant.
         since: Oldest call to read.
         limit: Maximum rows, including a truncation sentinel.
+        until: Optional inclusive upper bound.
+        include_work: Include issue tools for the work-item projection.
 
     Returns:
         Rows of timestamp, tool name, arguments metadata, flow execution id and
@@ -138,11 +155,15 @@ def list_code_tool_calls(
             .where(
                 a.account_id == account_id,
                 a.activity_type == "tool_call",
-                a.tool_name.in_(CODE_ACTIVITY_TOOLS),
+                a.tool_name.in_(
+                    WORK_ACTIVITY_TOOLS if include_work else CODE_ACTIVITY_TOOLS
+                ),
                 a.timestamp >= since,
+                *([a.timestamp <= until] if until is not None else []),
+                s.account_id == account_id,
                 a.status == "succeeded",
             )
-            .order_by(a.timestamp.desc())
+            .order_by(a.timestamp.desc(), a.id)
             .limit(limit)
         ).all()
     )
@@ -233,7 +254,7 @@ def list_merged_pull_requests(
     """
     p, x = models.IssueCostPullRequest, models.IssueCostExecution
     merged = (
-        select(p.pr_key, p.merged_at)
+        select(p.pr_key, p.merged_at, p.ambiguous)
         .where(p.account_id == account_id, p.merged_at >= since)
         .order_by(p.merged_at.desc())
         .limit(limit)
@@ -245,7 +266,10 @@ def list_merged_pull_requests(
             .distinct()
             .outerjoin(
                 x,
-                (x.account_id == account_id) & (x.pr_key == merged.c.pr_key),
+                (x.account_id == account_id)
+                & (x.pr_key == merged.c.pr_key)
+                & x.link.in_(ASSIGNED_LINKS)
+                & merged.c.ambiguous.is_(False),
             )
             .order_by(merged.c.merged_at.desc())
         ).all()

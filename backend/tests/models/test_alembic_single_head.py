@@ -466,4 +466,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert parse_retry.down_revision == "20261102_restore_usage_action"
     session_permissions = script.get_revision("20261104_session_write_perms")
     assert session_permissions.down_revision == "20261103_gov_parse_retry"
-    assert script.get_heads() == ["20261104_session_write_perms"]
+    work_tools = script.get_revision("20261105_fleet_work_tools")
+    assert work_tools.down_revision == "20261104_session_write_perms"
+    assert script.get_heads() == ["20261105_fleet_work_tools"]

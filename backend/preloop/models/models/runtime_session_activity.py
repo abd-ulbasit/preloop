@@ -22,6 +22,23 @@ class RuntimeSessionActivity(Base):
 
     __tablename__ = "runtime_session_activity"
     __table_args__ = (
+        # Superset of the PR-only index for bounded Fleet Map work history.
+        Index(
+            "ix_runtime_session_activity_work_tools",
+            "account_id",
+            text("timestamp DESC"),
+            postgresql_include=["tool_name", "flow_execution_id", "runtime_session_id"],
+            postgresql_where=text(
+                "activity_type = 'tool_call' AND status = 'succeeded' AND "
+                "tool_name IN ('add_comment', 'add_comment_to_pending_review', "
+                "'approve_merge_request', 'create_merge_request', "
+                "'create_merge_request_note', 'create_pull_request', "
+                "'create_pull_request_review', 'merge_merge_request', "
+                "'merge_pull_request', 'pull_request_review_write', "
+                "'submit_pending_pull_request_review', 'update_pull_request', "
+                "'create_issue', 'update_issue', 'update_merge_request')"
+            ),
+        ),
         # Prompt, turn-end and session-end timestamps (#1889), kept small
         # next to the tool-call volume. Timestamp first: the live activity
         # worker reads them across every account by time range.
