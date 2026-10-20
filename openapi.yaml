@@ -8376,6 +8376,51 @@ paths:
         '503':
           description: Credential verification unavailable
       x-restricted-ci: deny
+  /api/v1/fleet/usage:
+    get:
+      tags:
+      - Fleet
+      summary: Read Fleet Usage
+      description: Gateway request, token and estimated cost totals per model and
+        provider node.
+      operationId: read_fleet_usage_api_v1_fleet_usage_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: active_within_minutes
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 527040
+            minimum: 1
+          - type: 'null'
+          description: Window in minutes; omitted or above 90 days reads the last
+            90 days.
+          title: Active Within Minutes
+        description: Window in minutes; omitted or above 90 days reads the last 90
+          days.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FleetUsageResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Invalid or expired credential
+        '403':
+          description: Operation or resource denied for restricted CI credentials
+        '503':
+          description: Credential verification unavailable
+      x-restricted-ci: deny
   /api/v1/retention/settings:
     get:
       tags:
@@ -32083,6 +32128,97 @@ components:
       type: object
       title: FleetMapResponse
       description: Bounded partial graph; incompleteness must stay visible to consumers.
+    FleetUsageResponse:
+      properties:
+        active_within_minutes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Active Within Minutes
+        since:
+          type: string
+          format: date-time
+          title: Since
+        until:
+          type: string
+          format: date-time
+          title: Until
+        truncated:
+          type: boolean
+          title: Truncated
+          default: false
+        partial:
+          type: boolean
+          title: Partial
+          default: false
+        models:
+          additionalProperties:
+            $ref: '#/components/schemas/FleetUsageTotals'
+          type: object
+          title: Models
+        providers:
+          additionalProperties:
+            $ref: '#/components/schemas/FleetUsageTotals'
+          type: object
+          title: Providers
+      type: object
+      required:
+      - since
+      - until
+      title: FleetUsageResponse
+      description: Bounded gateway usage joined to Fleet Map node identifiers.
+    FleetUsageTotals:
+      properties:
+        request_count:
+          type: integer
+          title: Request Count
+        input_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Input Tokens
+        output_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Output Tokens
+        cache_read_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Cache Read Tokens
+        cache_write_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Cache Write Tokens
+        estimated_cost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Estimated Cost
+        cost_is_estimate:
+          type: boolean
+          const: true
+          title: Cost Is Estimate
+          default: true
+        currency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currency
+          description: Ledger currency (legacy null is USD); null for mixed currencies.
+        partial:
+          type: boolean
+          title: Partial
+          description: A source cap, missing token/cost data or mixed currencies makes
+            totals incomplete. Optional cache fields sum known values only.
+          default: false
+      type: object
+      required:
+      - request_count
+      title: FleetUsageTotals
+      description: Known ledger totals for one canonical model or provider node.
     FlowArtifactKindUsage:
       properties:
         bytes:
