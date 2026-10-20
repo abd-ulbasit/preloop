@@ -904,6 +904,7 @@ func init() {
 	agentsEnrollCmd.Flags().StringSlice("tags", []string{}, "add key-value tags to the enrolled agent (e.g., --tags ext=true,env=prod)")
 	agentsEnrollCmd.Flags().Bool("approvals", false, "install native action gates for central policy and mobile/watch approvals (Claude Code, Cursor, Codex CLI, Copilot CLI, Devin, OpenCode, Pi, DeepSeek Harness)")
 	agentsEnrollCmd.Flags().Bool("no-usage-hooks", false, "Cursor only: do not install the usage hooks that store conversations as runtime sessions with a token estimate (installed by default)")
+	agentsEnrollCmd.Flags().Bool("no-sidecar", false, "Codex CLI only: do not install and start the Agent Control sidecar service (run preloop codex sidecar enable later)")
 	agentsEnrollCmd.Flags().Bool("store-transcript", false, "Cursor only: have the usage hooks also ship transcript text as session activities (default: counts, title and a short summary only)")
 	agentsEnrollCmd.Flags().String("model", "", "managed model alias to use for gateway routing (skips the interactive model picker)")
 	registerClaudeDesktopRouteFlags(agentsEnrollCmd)
@@ -1404,6 +1405,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 	runAll, _ := cmd.Flags().GetBool("all")
 	approvals, _ := cmd.Flags().GetBool("approvals")
 	noUsageHooks, _ := cmd.Flags().GetBool("no-usage-hooks")
+	noSidecar, _ := cmd.Flags().GetBool("no-sidecar")
 	storeTranscript, _ := cmd.Flags().GetBool("store-transcript")
 	preferredModel, _ := cmd.Flags().GetString("model")
 	pinModelFamilies, _ := cmd.Flags().GetBool("pin-model-families")
@@ -1432,6 +1434,7 @@ func runAgentsEnroll(cmd *cobra.Command, args []string) error {
 		SkipLiveValidate:    skipLiveValidate,
 		Approvals:           approvals,
 		NoUsageHooks:        noUsageHooks,
+		NoSidecar:           noSidecar,
 		StoreTranscript:     storeTranscript,
 		PreferredModel:      strings.TrimSpace(preferredModel),
 		PinModelFamilies:    pinModelFamilies,
