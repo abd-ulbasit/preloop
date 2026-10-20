@@ -1327,6 +1327,20 @@ describe('AuditView', () => {
     element.remove();
   });
 
+  it('humanises an event type it has no title for (U-13)', async () => {
+    const element = document.createElement('audit-view') as AuditView;
+    document.body.appendChild(element);
+    await waitUntil(
+      () => !(element as any)._loading,
+      'Audit view did not finish loading'
+    );
+    const label = (action: string) =>
+      (element as any)._getPrimaryLabel({ action, details: {} });
+    expect(label('api_key_created')).to.equal('API key created');
+    expect(label('user.switch_account.in')).to.equal('User switch account in');
+    element.remove();
+  });
+
   describe('tool-name search and policy rows (#1136)', () => {
     const groupedCalls = () =>
       fetchStub

@@ -49,3 +49,17 @@ describe('list headers are sentence case (U-13)', () => {
     expect(sortButton).to.contain('--console-text-meta');
   });
 });
+
+describe('audit rows are hairline rows (U-06)', () => {
+  it('draws no filled box per audit group', async () => {
+    const { AuditView } = await import('./audit-view');
+    const list = (AuditView as unknown as { styles: unknown }).styles;
+    const text = (Array.isArray(list) ? list.flat(Infinity) : [list])
+      .map((style) => (style as { cssText?: string })?.cssText || '')
+      .join('\n');
+    const group = /\.timeline-group\s*\{([^}]*)\}/.exec(text)?.[1] || '';
+    expect(group).to.not.contain('background');
+    expect(group).to.contain('border-bottom');
+    expect(group).to.contain('--console-hairline');
+  });
+});
