@@ -1097,3 +1097,35 @@ describe('session-chat-view live tools and activity', () => {
     );
   });
 });
+
+describe('session-chat-view session change', () => {
+  it('a new sessionId scrolls to the bottom and hides the jump pill', async () => {
+    const el = await fixture<SessionChatView>(
+      html`<session-chat-view
+        scrollable
+        followLive
+        sessionId="sess-1"
+        style="height: 200px"
+        .events=${manyEvents(12)}
+      ></session-chat-view>`
+    );
+    await el.updateComplete;
+    const thread = el.shadowRoot!.querySelector('.thread') as HTMLElement;
+    thread.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 }));
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event('scroll'));
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-testid="jump-latest"]')).to
+      .exist;
+
+    // Same node kept (no empty branch in between): only the id changes.
+    el.sessionId = 'sess-2';
+    el.events = manyEvents(11);
+    await el.updateComplete;
+    const next = el.shadowRoot!.querySelector('.thread') as HTMLElement;
+    await waitForStableScroll(next);
+    expect(el.shadowRoot!.querySelector('[data-testid="jump-latest"]')).to.not
+      .exist;
+    expect(distanceFromBottom(next)).to.be.lessThan(2);
+  });
+});

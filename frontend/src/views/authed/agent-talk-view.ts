@@ -25,6 +25,11 @@ import '@shoelace-style/shoelace/dist/components/icon/icon.js';
 import '@shoelace-style/shoelace/dist/components/spinner/spinner.js';
 import '../../components/session-chat-view';
 import '../../components/talk-composer';
+import '../../components/talk-session-picker';
+import {
+  TALK_SESSION_NEW_EVENT,
+  TALK_SESSION_SELECT_EVENT,
+} from '../../components/talk-session-picker';
 
 import {
   getAccountAgent,
@@ -38,6 +43,7 @@ import {
 } from '../../services/unified-websocket-manager';
 import consoleStyles from '../../styles/console-styles.css?inline';
 import type {
+  AgentControlCommandResponse,
   FlowGatewayEvent,
   ManagedAgentSummary,
   RuntimeSessionActivityItem,
@@ -63,7 +69,9 @@ import {
 } from '../../utils/session-artifacts';
 import {
   TALK_MESSAGE_SENT_EVENT,
+  TALK_NEW_SESSION_EVENT,
   TALK_PENDING_CHANGED_EVENT,
+  TALK_SWITCH_SESSION_EVENT,
 } from '../../components/talk-composer';
 
 const EVENT_PAGE_SIZE = 50;
@@ -77,8 +85,23 @@ export class AgentTalkView extends LitElement {
   @state() private sessionId: string | null = null;
   /** Browser step shown full size in the viewer, or -1. */
   @state() private browserStepViewerIndex = -1;
-  /** A session named in the URL is pinned: live traffic never moves it. */
+  /**
+   * A session named in the URL. Only the first resolution reads it: after
+   * that every window is pinned to whatever session it shows, and only the
+   * operator moves it (picker, notice, ended-session guard).
+   */
   @state() private pinnedSessionId: string | null = null;
+  /**
+   * Set by New session: the window waits for the session its next send
+   * creates and opens that one, instead of resolving the most recent.
+   */
+  @state() private awaitingNewSession = false;
+  /** Set once the window has resolved its session; nothing re-picks after. */
+  private sessionResolved = false;
+  /** Bumped on every switch so late responses for an old session are dropped. */
+  private sessionGeneration = 0;
+  /** Another session of this agent that reported activity, offered not followed. */
+  @state() private noticeSessionId: string | null = null;
   @state() private windowMode = false;
   /** The entry point that opened this window, for `requested_from`. */
   @state() private sourceContext: string | null = null;
@@ -90,7 +113,6 @@ export class AgentTalkView extends LitElement {
   @state() private events: FlowGatewayEvent[] = [];
   @state() private activity: RuntimeSessionActivityItem[] = [];
   @state() private pending: PendingTalkMessage[] = [];
-  @state() private followBanner: string | null = null;
   /** Pending approvals for the followed session only, never account-wide. */
   @state()
   private pendingApprovals: Array<{
@@ -110,7 +132,6 @@ export class AgentTalkView extends LitElement {
   private channel: BroadcastChannel | null = null;
   private heartbeatTimer: number | null = null;
   private reloadTimer: number | null = null;
-  private followBannerTimer: number | null = null;
   private geometryTimer: number | null = null;
 
   static styles = [
@@ -192,7 +213,45 @@ export class AgentTalkView extends LitElement {
         white-space: nowrap;
       }
 
-      .follow-banner {
+      .talk-error {
+        background: var(--console-surface);
+        border-bottom: 1px solid var(--console-hairline);
+        color: var(--sl-color-danger-700);
+        flex-shrink: 0;
+        font-size: var(--console-text-meta);
+        padding: var(--sl-spacing-2x-small) var(--sl-spacing-medium);
+      }
+
+      .session-notice button {
+        background: none;
+        border: 0;
+        color: var(--console-link-color);
+        cursor: pointer;
+        font: inherit;
+        padding: 0;
+        text-decoration: underline;
+      }
+
+      talk-session-picker .talk-session-option-title {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      talk-session-picker .talk-session-option-meta {
+        color: var(--console-meta-color);
+        display: flex;
+        font-size: var(--console-text-meta);
+        gap: var(--sl-spacing-x-small);
+      }
+
+      talk-session-picker .talk-session-live {
+        color: var(--sl-color-success-700);
+        font-weight: var(--sl-font-weight-semibold);
+      }
+
+      .session-notice.has-notice {
         background: var(--console-surface-raised, var(--sl-color-neutral-50));
         border-bottom: 1px solid var(--console-hairline);
         color: var(--console-meta-color);
@@ -295,9 +354,6 @@ export class AgentTalkView extends LitElement {
     this.unsubscribeRealtime = null;
     if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer);
     if (this.reloadTimer !== null) window.clearTimeout(this.reloadTimer);
-    if (this.followBannerTimer !== null) {
-      window.clearTimeout(this.followBannerTimer);
-    }
     this.postChannel('close');
     this.channel?.close();
     this.channel = null;
@@ -360,9 +416,35 @@ export class AgentTalkView extends LitElement {
   // -- data ----------------------------------------------------------------
 
   private get sessionSubject(): string | null {
-    const session = this.sessions.find((item) => item.id === this.sessionId);
+    return this.subjectOf(this.sessionId);
+  }
+
+  private subjectOf(sessionId: string | null): string | null {
+    const session = this.sessions.find((item) => item.id === sessionId);
     if (!session) return null;
     return normalizeObservedSession(session).title;
+  }
+
+  private get currentSession(): RuntimeSessionSummary | undefined {
+    return this.sessions.find((session) => session.id === this.sessionId);
+  }
+
+  /** The live session the ended-session guard offers, newest first. */
+  private get liveAlternative(): { id: string; subject: string } | null {
+    const live = this.sessions
+      .filter(
+        (session) =>
+          session.id !== this.sessionId &&
+          !session.ended_at &&
+          session.is_active_now
+      )
+      .sort((left, right) =>
+        (right.last_activity_at || right.started_at || '').localeCompare(
+          left.last_activity_at || left.started_at || ''
+        )
+      )[0];
+    if (!live) return null;
+    return { id: live.id, subject: normalizeObservedSession(live).title };
   }
 
   /**
@@ -388,24 +470,38 @@ export class AgentTalkView extends LitElement {
     return ranked[0]?.id ?? null;
   }
 
+  /**
+   * Read the agent and its sessions, then the open session's thread.
+   *
+   * The session is resolved once: an unpinned open takes the most recently
+   * active session and from then on the window stays there. Reloads refresh
+   * the session list (for the picker and the notice) without re-picking.
+   */
   private async load(): Promise<void> {
     if (!this.agentId) return;
     this.loading = true;
     this.error = null;
+    const generation = this.sessionGeneration;
     try {
-      const detail = await getAccountAgent(this.agentId);
+      // Sessions only: usage by model and activity are for the agent page
+      // and made every reload of a talk window several times heavier.
+      const detail = await getAccountAgent(this.agentId, {
+        include: ['sessions'],
+      });
+      if (generation !== this.sessionGeneration) return;
       this.agent = detail.agent;
       this.sessions = detail.sessions || [];
-      const nextSession = this.pickSession(this.sessions);
-      const changed = nextSession !== this.sessionId;
-      this.sessionId = nextSession;
-      if (changed) this.browserStepViewerIndex = -1;
+      if (!this.sessionResolved) {
+        this.sessionResolved = true;
+        if (!this.sessionId && !this.awaitingNewSession) {
+          this.sessionId = this.pickSession(this.sessions);
+        }
+      }
       this.syncDocumentTitle();
       this.postChannel('open');
-      if (nextSession && (changed || !this.events.length)) {
-        await this.loadEvents(nextSession);
-      }
+      if (this.sessionId) await this.loadEvents(this.sessionId);
     } catch (error) {
+      if (generation !== this.sessionGeneration) return;
       this.error =
         error instanceof Error ? error.message : 'Failed to load agent';
     } finally {
@@ -413,7 +509,23 @@ export class AgentTalkView extends LitElement {
     }
   }
 
+  /**
+   * Echoed operator turns in the thread, by command id: a sent bubble is
+   * dropped only once its own echo is on screen.
+   */
+  private echoedCommandIds(
+    activity: RuntimeSessionActivityItem[]
+  ): Set<string> {
+    const ids = new Set<string>();
+    for (const item of activity) {
+      const metadata = (item.metadata || {}) as Record<string, unknown>;
+      if (typeof metadata.command_id === 'string') ids.add(metadata.command_id);
+    }
+    return ids;
+  }
+
   private async loadEvents(sessionId: string): Promise<void> {
+    const generation = this.sessionGeneration;
     this.loadingEvents = true;
     // Approvals are read with the transcript, not after it: whether the agent
     // is blocked is the first thing an operator looks for on a live session.
@@ -428,7 +540,12 @@ export class AgentTalkView extends LitElement {
           items: [] as RuntimeSessionActivityItem[],
         })),
       ]);
-      if (sessionId !== this.sessionId) return;
+      if (
+        sessionId !== this.sessionId ||
+        generation !== this.sessionGeneration
+      ) {
+        return;
+      }
       this.events = this.sortEvents(events.logs || []);
       this.activity = activity.items || [];
       this.hasMoreEvents =
@@ -437,12 +554,13 @@ export class AgentTalkView extends LitElement {
       this.nextEventOffset =
         events.pagination?.next_offset ?? (events.logs || []).length;
       // Anything the server has now echoed back is in the thread already.
-      this.composer?.clearSentPending();
+      this.composer?.clearSentPending(this.echoedCommandIds(this.activity));
     } catch (error) {
+      if (generation !== this.sessionGeneration) return;
       this.error =
         error instanceof Error ? error.message : 'Failed to load conversation';
     } finally {
-      this.loadingEvents = false;
+      if (generation === this.sessionGeneration) this.loadingEvents = false;
     }
   }
 
@@ -456,21 +574,31 @@ export class AgentTalkView extends LitElement {
       return;
     }
     this.loadingMoreEvents = true;
+    const sessionId = this.sessionId;
+    const generation = this.sessionGeneration;
     try {
-      const page = await getRuntimeSessionGatewayEvents(this.sessionId, {
+      const page = await getRuntimeSessionGatewayEvents(sessionId, {
         limit: EVENT_PAGE_SIZE,
         offset: this.nextEventOffset,
       });
+      // An older page of a session the operator has left is not this thread.
+      if (
+        sessionId !== this.sessionId ||
+        generation !== this.sessionGeneration
+      ) {
+        return;
+      }
       const byId = new Map(this.events.map((event) => [event.id, event]));
       for (const event of page.logs || []) byId.set(event.id, event);
       this.events = this.sortEvents(Array.from(byId.values()));
       this.hasMoreEvents = page.pagination?.has_more ?? false;
       this.nextEventOffset = page.pagination?.next_offset ?? null;
     } catch (error) {
+      if (generation !== this.sessionGeneration) return;
       this.error =
         error instanceof Error ? error.message : 'Failed to load more events';
     } finally {
-      this.loadingMoreEvents = false;
+      if (generation === this.sessionGeneration) this.loadingMoreEvents = false;
     }
   }
 
@@ -507,7 +635,12 @@ export class AgentTalkView extends LitElement {
     };
     this.unsubscribeRealtimeState = unifiedWebSocketManager.onStateChange(
       (state) => {
-        this.realtimeConnected = state === ConnectionState.CONNECTED;
+        const connected = state === ConnectionState.CONNECTED;
+        // Whatever happened while the socket was down was not pushed here, so
+        // coming back reads the open session again instead of trusting it.
+        const reconnected = connected && this.realtimeConnected === false;
+        this.realtimeConnected = connected;
+        if (reconnected) void this.load();
       }
     );
     this.realtimeConnected =
@@ -522,20 +655,40 @@ export class AgentTalkView extends LitElement {
     if (agentId && agentId !== this.agentId) return;
     const sessionId = payload.runtime_session_id as string | undefined;
     if (!agentId && sessionId && sessionId !== this.sessionId) return;
-    // A new session for the same agent is exactly what the operator wants to
-    // see: the agent restarted and their next message must land in the live
-    // session, not the dead one. Pinned pages stay where they were put.
-    if (
-      sessionId &&
-      sessionId !== this.sessionId &&
-      !this.pinnedSessionId &&
-      agentId === this.agentId
-    ) {
-      this.followSession(sessionId);
+    if (sessionId && sessionId !== this.sessionId && agentId === this.agentId) {
+      // Any other session of the same agent is offered, never followed, also
+      // while New session waits for its first send (only that send's own
+      // response opens the session it created): an
+      // agent often runs several at once, and following each one's traffic
+      // flipped the window between them and sent turns to the wrong one.
+      this.offerSession(sessionId);
       return;
     }
     this.noteAgentTurn();
     this.scheduleReload();
+  }
+
+  /** Show the one-line "New session" notice for a session not on screen. */
+  private offerSession(sessionId: string): void {
+    if (this.noticeSessionId === sessionId) return;
+    this.noticeSessionId = sessionId;
+    // The notice names the session, and a brand new one is not in the list
+    // yet: refresh the list only, never the open thread.
+    if (!this.sessions.some((session) => session.id === sessionId)) {
+      void this.refreshSessions();
+    }
+  }
+
+  private async refreshSessions(): Promise<void> {
+    try {
+      const detail = await getAccountAgent(this.agentId, {
+        include: ['sessions'],
+      });
+      this.sessions = detail.sessions || [];
+    } catch (error) {
+      // The notice still offers the switch, under a generic name.
+      console.error('Failed to refresh talk sessions:', error);
+    }
   }
 
   /**
@@ -594,26 +747,41 @@ export class AgentTalkView extends LitElement {
     this.handleActivity(message);
   }
 
-  private followSession(sessionId: string): void {
+  /**
+   * Open another session in this window, or none (New session).
+   *
+   * Everything that belongs to the old session goes: thread, approvals, the
+   * next-page cursor and any error. Pending turns stay with the composer,
+   * which only shows the ones typed for the session on screen.
+   */
+  private switchSession(sessionId: string | null): void {
+    this.sessionGeneration += 1;
+    this.sessionResolved = true;
     this.sessionId = sessionId;
     this.events = [];
     this.activity = [];
-    // Another session's pending asks must never linger under this one.
     this.pendingApprovals = [];
-    void this.load().then(() => this.announceFollow());
+    this.hasMoreEvents = false;
+    this.nextEventOffset = null;
+    this.loadingEvents = false;
+    this.loadingMoreEvents = false;
+    this.browserStepViewerIndex = -1;
+    this.error = null;
+    if (this.noticeSessionId === sessionId) this.noticeSessionId = null;
+    if (this.reloadTimer !== null) {
+      window.clearTimeout(this.reloadTimer);
+      this.reloadTimer = null;
+    }
+    this.syncDocumentTitle();
+    this.postChannel('open');
+    if (sessionId) void this.loadEvents(sessionId);
+    // The operator switched to talk: the cursor goes back to the box.
+    this.composer?.focusInput();
   }
 
-  private announceFollow(): void {
-    const subject = this.sessionSubject || 'a new session';
-    this.followBanner = `Now following session ${subject}`;
-    this.syncDocumentTitle();
-    if (this.followBannerTimer !== null) {
-      window.clearTimeout(this.followBannerTimer);
-    }
-    this.followBannerTimer = window.setTimeout(() => {
-      this.followBanner = null;
-      this.followBannerTimer = null;
-    }, 8000);
+  private startNewSession(): void {
+    this.awaitingNewSession = true;
+    this.switchSession(null);
   }
 
   /**
@@ -657,6 +825,11 @@ export class AgentTalkView extends LitElement {
           </span>
         </div>
         <span class="spacer"></span>
+        <talk-session-picker
+          .sessions=${this.sessions}
+          .currentSessionId=${this.sessionId}
+          ?canStartNew=${agent?.supports_new_session !== false}
+        ></talk-session-picker>
         <a
           class="open-console"
           data-testid="open-in-console"
@@ -670,6 +843,32 @@ export class AgentTalkView extends LitElement {
         </a>
       </div>
     `;
+  }
+
+  private renderSessionNotice() {
+    const sessionId = this.noticeSessionId;
+    // The region is always there, so a screen reader hears the notice when it
+    // fills in; no motion, it does not push or animate the thread.
+    return html`<div
+      class=${sessionId ? 'session-notice has-notice' : 'session-notice'}
+      aria-live="polite"
+      data-testid=${sessionId ? 'session-notice' : 'session-notice-empty'}
+    >
+      ${
+        sessionId
+          ? html`<span
+                >${`New session: ${this.subjectOf(sessionId) || 'untitled session'}.`}</span
+              >
+              <button
+                type="button"
+                data-testid="session-notice-switch"
+                @click=${() => this.switchSession(sessionId)}
+              >
+                Switch
+              </button>`
+          : nothing
+      }
+    </div>`;
   }
 
   render() {
@@ -689,15 +888,11 @@ export class AgentTalkView extends LitElement {
     }
 
     return html`
-      ${this.renderHeader()}
+      ${this.renderHeader()} ${this.renderSessionNotice()}
       ${
-        this.followBanner
-          ? html`<div
-              class="follow-banner"
-              role="status"
-              data-testid="follow-banner"
-            >
-              ${this.followBanner}
+        this.error
+          ? html`<div class="talk-error" role="alert" data-testid="talk-error">
+              ${this.error}
             </div>`
           : nothing
       }
@@ -706,7 +901,7 @@ export class AgentTalkView extends LitElement {
         followLive
         @session-live-reload=${() => this.scheduleReload()}
         .sessionId=${this.sessionId || ''}
-        .ended=${Boolean(this.sessions.find((session) => session.id === this.sessionId)?.ended_at)}
+        .ended=${Boolean(this.currentSession?.ended_at)}
         @browser-step-open=${(event: CustomEvent<{ key: string }>) => {
           this.browserStepViewerIndex = sortBrowserSteps(
             this.activity
@@ -745,6 +940,8 @@ export class AgentTalkView extends LitElement {
       <talk-composer
         .agent=${this.agent}
         .sessionId=${this.sessionId}
+        .sessionEnded=${Boolean(this.currentSession?.ended_at)}
+        .liveAlternative=${this.liveAlternative}
         sourceContext=${this.composerSourceContext}
       ></talk-composer>
     `;
@@ -757,7 +954,22 @@ export class AgentTalkView extends LitElement {
     this.addEventListener(TALK_RETRY_EVENT, (event: Event) => {
       const id = (event as CustomEvent<{ id: string }>).detail?.id;
       if (id) void this.composer?.retry(id);
+      // The Retry link took focus; the operator's next keystroke belongs in
+      // the box.
+      this.composer?.focusInput();
     });
+    this.addEventListener(TALK_SESSION_SELECT_EVENT, (event: Event) => {
+      const id = (event as CustomEvent<{ sessionId: string }>).detail
+        ?.sessionId;
+      if (id && id !== this.sessionId) this.switchSession(id);
+    });
+    this.addEventListener(TALK_SWITCH_SESSION_EVENT, (event: Event) => {
+      const id = (event as CustomEvent<{ sessionId: string }>).detail
+        ?.sessionId;
+      if (id) this.switchSession(id);
+    });
+    this.addEventListener(TALK_SESSION_NEW_EVENT, () => this.startNewSession());
+    this.addEventListener(TALK_NEW_SESSION_EVENT, () => this.startNewSession());
     this.addEventListener(TALK_PENDING_CHANGED_EVENT, (event: Event) => {
       this.pending = [
         ...((event as CustomEvent<{ pending: PendingTalkMessage[] }>).detail
@@ -767,7 +979,22 @@ export class AgentTalkView extends LitElement {
     // Sending is not news: the turn the operator just typed is already on
     // screen. Only the reload is owed here; the unread dot belongs to
     // `handleActivity`, which is where the agent's answer arrives.
-    this.addEventListener(TALK_MESSAGE_SENT_EVENT, () => {
+    this.addEventListener(TALK_MESSAGE_SENT_EVENT, (event: Event) => {
+      const response = (
+        event as CustomEvent<{ response?: AgentControlCommandResponse }>
+      ).detail?.response;
+      // A turn sent from New session names the session it created in
+      // `target_session_id` (`runtime_session_id` is the existing binding).
+      const created =
+        typeof response?.target_session_id === 'string'
+          ? response.target_session_id
+          : null;
+      if (this.awaitingNewSession && !this.sessionId && created) {
+        this.awaitingNewSession = false;
+        this.switchSession(created);
+        void this.refreshSessions();
+        return;
+      }
       this.scheduleReload();
     });
     this.syncDocumentTitle();

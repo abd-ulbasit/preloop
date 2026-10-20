@@ -99,6 +99,16 @@ export interface PendingTalkMessage {
   state: 'sending' | 'sent' | 'failed';
   error?: string;
   inputMode?: 'text' | 'voice_transcript';
+  /**
+   * The session the turn was typed in, captured at send. Delivery and Retry
+   * use it, never the composer's current session, so a turn cannot land in a
+   * session the operator switched to afterwards. Null means "a new session".
+   */
+  targetSessionId?: string | null;
+  /** Whether the turn asked for a new session, captured with the target. */
+  startNewSession?: boolean;
+  /** Server command id, used to match the turn's echo in the thread. */
+  commandId?: string;
 }
 
 /** Bubbled by the Retry link under a failed turn. */
@@ -689,6 +699,12 @@ export class SessionChatView extends LitElement {
         author: '',
         now: Date.now(),
       };
+    // Another session is another conversation: where the reader had scrolled
+    // to in the old one means nothing here, so it opens at the latest turn
+    // with no jump pill left over from before.
+    if (changed.has('sessionId') && changed.get('sessionId') !== undefined) {
+      this.atBottom = true;
+    }
     if (changed.has('events') || changed.has('activity')) {
       this.conversation = buildConversation(this.events, this.activity);
       // Screen readers get the agent's reply, not the whole thread: the last
@@ -751,7 +767,15 @@ export class SessionChatView extends LitElement {
     // switched on); a scrollTop write on every update would force a reflow
     // and yank the view each time the user expands a message they are
     // reading.
-    if (!contentChanged && !pendingGrew && !changed.has('followLive')) return;
+    const sessionChanged =
+      changed.has('sessionId') && changed.get('sessionId') !== undefined;
+    if (
+      !contentChanged &&
+      !pendingGrew &&
+      !sessionChanged &&
+      !changed.has('followLive')
+    )
+      return;
     // Someone who scrolled up to re-read is not interrupted; the pill takes
     // them back when they want it.
     if (this.scrollable && !this.atBottom && !pendingGrew) return;
