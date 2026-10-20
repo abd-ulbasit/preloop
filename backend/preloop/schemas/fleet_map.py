@@ -157,3 +157,38 @@ class FleetCodeActivityResponse(BaseModel):
     counts: dict[str, FleetCodeCounts] = Field(default_factory=dict)
     flows: list[FleetCodeFlow] = Field(default_factory=list)
     events: list[FleetCodeEvent] = Field(default_factory=list)
+
+
+class FleetUsageTotals(BaseModel):
+    """Known ledger totals for one canonical model or provider node."""
+
+    request_count: int
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    estimated_cost: float | None = None
+    cost_is_estimate: Literal[True] = True
+    currency: str | None = Field(
+        default=None,
+        description="Ledger currency (legacy null is USD); null for mixed currencies.",
+    )
+    partial: bool = Field(
+        default=False,
+        description=(
+            "A source cap, missing token/cost data or mixed currencies makes "
+            "totals incomplete. Optional cache fields sum known values only."
+        ),
+    )
+
+
+class FleetUsageResponse(BaseModel):
+    """Bounded gateway usage joined to Fleet Map node identifiers."""
+
+    active_within_minutes: int | None = None
+    since: datetime
+    until: datetime
+    truncated: bool = False
+    partial: bool = False
+    models: dict[str, FleetUsageTotals] = Field(default_factory=dict)
+    providers: dict[str, FleetUsageTotals] = Field(default_factory=dict)

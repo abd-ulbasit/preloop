@@ -152,6 +152,7 @@
   "GET /api/v1/features": "deny",
   "GET /api/v1/fleet/code-activity": "deny",
   "GET /api/v1/fleet/map": "deny",
+  "GET /api/v1/fleet/usage": "deny",
   "GET /api/v1/flows": "deny",
   "GET /api/v1/flows/batches/{batch_id}/executions": "deny",
   "GET /api/v1/flows/executions": "execution:read",

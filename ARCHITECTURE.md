@@ -777,6 +777,19 @@ approvals travelled (throttled, a state change rather than an animation), and of
 instance administrators a spatial arrangement, with positions stored per user, also
 as an alternative to the Overview inventory table.
 
+`GET /api/v1/fleet/usage` adds gateway request, input/output token, optional cache
+read/write token and estimated cost totals keyed by the graph's canonical model
+and provider ids. A bounded visible model configuration mapping applies the same
+tenant, model permission and resource visibility rules as the graph, including
+available hosted models without exposing operator credentials. CRUD performs one
+SQL GROUP BY per grouping over account-scoped `model_gateway` ledger rows, using
+the gateway account/window indexes and excluding replay validation. The echoed
+window includes UTC bounds; omitted "any" and windows over 90 days read at most
+90 days. A 1,000-configuration cap sets truncation and partial flags. Missing
+input/output/cost data stays explicit, cache sums remain nullable, and mixed
+currencies yield no combined cost rather than an unlabelled conversion. Deleted
+or invisible model configurations contribute no node totals.
+
 `GET /api/v1/fleet/code-activity` is the map's code layer: pull and merge requests
 opened, commented on, reviewed and merged in the same window, counted per agent, flow
 and owning person, plus the flows to place and the 40 most recent events. It reads

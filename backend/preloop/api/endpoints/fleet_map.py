@@ -8,9 +8,14 @@ from sqlalchemy.orm import Session
 from preloop.api.auth import get_current_active_user
 from preloop.models import models
 from preloop.models.db.session import get_db_session
-from preloop.schemas.fleet_map import FleetCodeActivityResponse, FleetMapResponse
+from preloop.schemas.fleet_map import (
+    FleetCodeActivityResponse,
+    FleetMapResponse,
+    FleetUsageResponse,
+)
 from preloop.services.fleet_code_activity import build_code_activity
 from preloop.services.fleet_map import build_fleet_map
+from preloop.services.fleet_usage import build_fleet_usage
 from preloop.utils.permissions import require_permission
 
 router = APIRouter()
@@ -56,5 +61,23 @@ def read_fleet_code_activity(
 ) -> FleetCodeActivityResponse:
     """Pull and merge requests opened, commented, reviewed and merged per node."""
     return build_code_activity(
+        db, user=current_user, active_within_minutes=active_within_minutes
+    )
+
+
+@router.get("/fleet/usage", response_model=FleetUsageResponse, tags=["Fleet"])
+@require_permission("view_device_fleet")
+def read_fleet_usage(
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
+    active_within_minutes: int | None = Query(
+        None,
+        ge=1,
+        le=60 * 24 * 366,
+        description="Window in minutes; omitted or above 90 days reads the last 90 days.",
+    ),
+    db: Session = Depends(get_db_session),
+) -> FleetUsageResponse:
+    """Gateway request, token and estimated cost totals per model and provider node."""
+    return build_fleet_usage(
         db, user=current_user, active_within_minutes=active_within_minutes
     )
