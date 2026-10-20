@@ -2,8 +2,9 @@
  * Where the map's event notes go. A note sits beside the node it is about
  * and never on another node's box or title: each note tries its sides in
  * order, steps along a side to clear a note already there, and takes the
- * first spot that stays on the stage and covers no other node. Pure, so the
- * render pass and the per-frame pass place notes the same way.
+ * first spot that stays on the stage and covers no other node. When every
+ * side is taken it takes the nearest free spot; when the stage has none it
+ * is dropped. Pure, so the render pass and the per-frame pass agree.
  */
 
 export interface BubbleRect {
@@ -14,6 +15,8 @@ export interface BubbleRect {
 }
 
 export type BubbleSide = 'below' | 'above' | 'right' | 'left';
+/** Where a note went: a side of its node, or the nearest free spot. */
+export type BubbleSpot = BubbleSide | 'free';
 
 export interface BubbleRequest {
   node: string;
@@ -23,7 +26,7 @@ export interface BubbleRequest {
 
 export interface PlacedBubble extends BubbleRect {
   node: string;
-  side: BubbleSide;
+  side: BubbleSpot;
 }
 
 export interface BubblePlacement {
@@ -41,6 +44,7 @@ export interface BubblePlacement {
 
 const GAP = 6;
 const STEPS = 3;
+const SCAN = 24;
 
 const overlap = (a: BubbleRect, b: BubbleRect): number =>
   Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) *
@@ -107,7 +111,7 @@ export function placeBubbles(
       for (const other of placed) notes += overlap(rect, other);
       return { nodes, notes };
     };
-    let best: { rect: BubbleRect; side: BubbleSide; cost: number } | null =
+    let best: { rect: BubbleRect; side: BubbleSpot; cost: number } | null =
       null;
     // A side steps outward only past notes, never past another node.
     search: for (const side of sides)
@@ -119,15 +123,24 @@ export function placeBubbles(
         if (total === 0) break search;
         if (c.nodes > 0) break;
       }
-    if (!best || best.cost === Number.POSITIVE_INFINITY) {
-      // Nothing fits on the stage: clamp the first side inside it.
-      const rect = candidate(sides[0], 0, anchor, w, request.h);
-      rect.x = Math.max(bounds.x, Math.min(bounds.x + bounds.w - w, rect.x));
-      rect.y = Math.max(
-        bounds.y,
-        Math.min(bounds.y + bounds.h - request.h, rect.y)
-      );
-      best = { rect, side: sides[0], cost: 0 };
+    if (!best || best.cost > 0) {
+      // Every side is taken: the nearest free spot on the stage, scanned on
+      // a coarse grid. With none, the note is not drawn; the node still
+      // lights and its Recent list keeps the event.
+      const cx = anchor.x + anchor.w / 2;
+      const cy = anchor.y + anchor.h / 2;
+      let near: { rect: BubbleRect; d: number } | null = null;
+      for (let y = bounds.y; y + request.h <= bounds.y + bounds.h; y += SCAN)
+        for (let x = bounds.x; x + w <= bounds.x + bounds.w; x += SCAN) {
+          const rect = { x, y, w, h: request.h };
+          const d = Math.hypot(x + w / 2 - cx, y + request.h / 2 - cy);
+          if (near && d >= near.d) continue;
+          const c = cost(rect);
+          if (c.nodes === 0 && c.notes === 0 && !overlap(rect, anchor))
+            near = { rect, d };
+        }
+      if (!near) continue;
+      best = { rect: near.rect, side: 'free', cost: 0 };
     }
     counts.set(request.node, count + 1);
     placed.push({ ...best.rect, node: request.node, side: best.side });

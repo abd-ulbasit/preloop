@@ -76,4 +76,39 @@ describe('fleet-map bubble placement', () => {
     expect(spot.side).to.equal('right');
     expect(overlaps(spot, nodes.get('sib')!)).to.equal(false);
   });
+
+  it('takes the nearest free spot when a dense grid blocks every side, and covers nothing', () => {
+    // 7 columns x 12 rows, 10px row gap, 52px column gap: no side is free.
+    const nodes = new Map<string, BubbleRect>();
+    for (let c = 0; c < 7; c++)
+      for (let r = 0; r < 12; r++)
+        nodes.set(`n${c}_${r}`, {
+          x: 24 + c * 268,
+          y: 48 + r * 58,
+          w: 216,
+          h: 48,
+        });
+    const stage = { x: 12, y: 12, w: 1896, h: 1000 };
+    const [spot] = placeBubbles([{ node: 'n6_5', w: 256, h: 26 }], {
+      nodes,
+      bounds: stage,
+      sides: ['below', 'above', 'right', 'left'],
+    });
+    expect(spot.side).to.equal('free');
+    for (const [id, box] of nodes)
+      expect(overlaps(spot, box), id).to.equal(false);
+  });
+
+  it('drops a note when the stage has no free spot', () => {
+    const nodes = new Map([
+      ['a', { x: 0, y: 0, w: 400, h: 200 }],
+      ['b', { x: 0, y: 0, w: 400, h: 200 }],
+    ]);
+    const placed = placeBubbles([{ node: 'a', w: 160, h: 26 }], {
+      nodes,
+      bounds: { x: 0, y: 0, w: 400, h: 200 },
+      sides: ['below', 'right'],
+    });
+    expect(placed).to.have.length(0);
+  });
 });

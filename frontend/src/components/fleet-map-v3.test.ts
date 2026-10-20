@@ -544,6 +544,55 @@ describe('fleet-map v3 pass 2', () => {
     expect(tags()).to.deep.equal(['bug']);
   });
 
+  it('shows two label tags and a count, with every label in the title, inside the chip', async () => {
+    const el = await map({ positionsScope: 'many-labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: [
+        'bug',
+        'p2',
+        'needs-design-review-from-platform',
+        'area/checkout',
+      ],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = el.shadowRoot!.querySelector<HTMLElement>(
+      '[data-node="work:issue:example/widgets#41"]'
+    )!;
+    expect(
+      [...chip.querySelectorAll('[data-label]')].map((t) =>
+        t.textContent!.trim()
+      )
+    ).to.deep.equal(['bug', 'p2']);
+    expect(
+      chip.querySelector('[data-labels-more]')!.textContent!.trim()
+    ).to.equal('+2');
+    expect(chip.title).to.contain(
+      'Labels: bug, p2, needs-design-review-from-platform, area/checkout'
+    );
+    expect(chip.getAttribute('aria-label')).to.contain('labels bug, p2');
+    const box = chip.getBoundingClientRect();
+    for (const tag of chip.querySelectorAll('.tag')) {
+      const r = tag.getBoundingClientRect();
+      if (r.width) expect(r.left).to.be.at.least(box.left);
+    }
+    expect(
+      chip.querySelector('.sub')!.getBoundingClientRect().right
+    ).to.be.at.most(box.right);
+  });
+
   it('draws no line between an issue and the PR inside it, and no text on story lines', async () => {
     for (const arrangement of ['columns', 'spatial']) {
       const el = await map({

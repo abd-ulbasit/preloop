@@ -147,6 +147,8 @@ const MIN_SPATIAL_FIT_SCALE = 0.85;
 const GLIDE_MS = 400;
 /** The hover title of a lit work line; never drawn as text on the canvas. */
 const STORY_LINE = 'Observed work';
+/** Label tags drawn on a work chip; the rest are a +N count and in the title. */
+const LABELS_SHOWN = 2;
 /** After a pan or zoom by hand the view stops following the fleet a while. */
 const HANDS_OFF_MS = 15_000;
 const DEFAULT_TYPES = FLEET_MAP_TYPES.filter(
@@ -1788,6 +1790,12 @@ export class FleetMap extends LitElement {
         gap: 3px;
         margin-left: 8px;
       }
+      .node .sub .tag {
+        max-width: 72px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .node .sub .tag sl-icon {
         font-size: 11px;
       }
@@ -2780,6 +2788,7 @@ export class FleetMap extends LitElement {
       ? this.childLabel(node, context.parent)
       : displayLabel(node);
     const sub = this.subtitle(node, context.view, layout.groups, context.byId);
+    const tags = node.type === 'work' ? (node.labels ?? []).join(', ') : '';
     const height = isHeader ? FLEET_MAP_NODE_HEIGHT : position.h;
     const entering = presenceStyle(this.presence, node.id, Date.now());
     const button = html`<button
@@ -2796,11 +2805,11 @@ export class FleetMap extends LitElement {
       }"
       aria-pressed=${node.id === this.selected ? 'true' : 'false'}
       aria-label="${FLEET_MAP_TYPE_LABEL[node.type]} ${node.label}${
-        gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''
-      }"
+        tags ? `, labels ${tags}` : ''
+      }${gaps.length ? `, ${gaps.map((gap) => gap.label).join(', ')}` : ''}"
       title="${node.label}${node.detail ? `\n${node.detail}` : ''}${
-        gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''
-      }"
+        tags ? `\nLabels: ${tags}` : ''
+      }${gaps.length ? `\n${gaps.map((gap) => gap.label).join('\n')}` : ''}"
       @click=${() => {
         if (this.suppressClick) {
           this.suppressClick = false;
@@ -2819,13 +2828,21 @@ export class FleetMap extends LitElement {
             : html`<span class="sub ${gaps.length ? 'warn' : ''}"
                 >${sub}${
                   node.type === 'work' && node.labels?.length
-                    ? node.labels.map(
-                        (tag) =>
-                          html`<span class="tag" data-label=${tag}
-                            ><sl-icon name="tag" aria-hidden="true"></sl-icon
-                            >${tag}</span
-                          >`
-                      )
+                    ? html`${node.labels
+                        .slice(0, LABELS_SHOWN)
+                        .map(
+                          (tag) =>
+                            html`<span class="tag" data-label=${tag}
+                              ><sl-icon name="tag" aria-hidden="true"></sl-icon
+                              >${tag}</span
+                            >`
+                        )}${
+                        node.labels.length > LABELS_SHOWN
+                          ? html`<span class="tag more" data-labels-more
+                              >+${node.labels.length - LABELS_SHOWN}</span
+                            >`
+                          : nothing
+                      }`
                     : nothing
                 }</span
               >`

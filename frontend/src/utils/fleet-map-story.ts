@@ -31,7 +31,6 @@ const TERMINAL = new Set([
   'EXPIRED',
 ]);
 
-/** Only navigable object URLs, with credentials and tracking/query data removed. */
 /** Labels after an update: removals first, then additions, at most six. */
 export function nextLabels(
   current: string[] | undefined,
@@ -48,6 +47,7 @@ export function nextLabels(
   return next.slice(0, 6);
 }
 
+/** Only navigable object URLs, with credentials and tracking/query data removed. */
 export function workUrl(value: unknown): string {
   try {
     const url = new URL(text(value, 2000));
