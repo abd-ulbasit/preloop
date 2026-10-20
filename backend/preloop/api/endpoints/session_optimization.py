@@ -48,7 +48,7 @@ from preloop.services.session_optimization_jobs import (
     run_session_optimization,
     submit_session_optimization_job,
 )
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing/cost", tags=["Session Optimization"])
@@ -288,6 +288,7 @@ def apply_account_runtime_session_optimization(
     Applying writes governance/budget configuration only — it spends no model
     budget — so it is never gated behind an entitlement.
     """
+    ensure_permission_in_oss(db, current_user, "edit_ai_models")
     return SessionOptimizationService(db).apply_account_session_optimization_action(
         account=account,
         runtime_session_id=runtime_session_id,
@@ -352,6 +353,7 @@ def replay_account_runtime_session(
     under a hard spend cap, and records the exact deterministic input-token delta
     together with the noise-banded end-to-end delta. Requires explicit consent.
     """
+    ensure_permission_in_oss(db, current_user, "edit_ai_models")
     try:
         row = run_session_replay(
             db,

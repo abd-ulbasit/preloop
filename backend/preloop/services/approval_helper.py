@@ -487,7 +487,7 @@ async def require_approval(
                     f"Using explicitly provided workflow_id={workflow_id} for tool {tool_name}"
                 )
                 workflow = await get_approval_workflow_async(
-                    db, workflow_id=workflow_id
+                    db, workflow_id=workflow_id, account_id=account_id
                 )
 
                 if not workflow:
@@ -654,7 +654,7 @@ async def require_approval(
 
                 # Get approval workflow from tool configuration
                 workflow = await get_approval_workflow_async(
-                    db, workflow_id=config.approval_workflow_id
+                    db, workflow_id=config.approval_workflow_id, account_id=account_id
                 )
 
                 if not workflow:
@@ -1191,6 +1191,7 @@ async def require_approval(
                                 escalation_workflow = await get_approval_workflow_async(
                                     escalation_db,
                                     workflow_id=resolved_workflow_id,
+                                    account_id=account_id,
                                 )
 
                                 # Send escalation notifications

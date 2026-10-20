@@ -1290,9 +1290,18 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
 
   // ─── Event handlers ──────────────────────────────────
 
+  private _isSharedTool(tool: ToolWithRules): boolean {
+    if (tool.source !== 'mcp') return false;
+    const server = this.mcpServers.find(
+      (server) => server.id === tool.source_id
+    );
+    return Boolean(server?.is_shared || server?.read_only);
+  }
+
   private async _handleToggleEnabled(e: CustomEvent) {
     const detail = e.detail;
     const tool: ToolWithRules = detail.tool ? detail.tool : detail;
+    if (this._isSharedTool(tool)) return;
     const isEnabled: boolean =
       detail.isEnabled !== undefined ? detail.isEnabled : !tool.is_enabled;
 
@@ -1331,6 +1340,10 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
 
   private async _handleSaveRule(e: CustomEvent) {
     const { resolve, reject } = e.detail;
+    if (this._isSharedTool(e.detail.tool)) {
+      reject?.('Shared server configuration is read-only.');
+      return;
+    }
     if (!this.toolsSchemasReady) {
       try {
         await this.loadToolSchemas();
@@ -1412,6 +1425,7 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
   }
 
   private async _handleDeleteRule(e: CustomEvent) {
+    if (e.detail.tool && this._isSharedTool(e.detail.tool)) return;
     const { rule, tool } = e.detail as {
       rule: AccessRuleSummary;
       tool?: { name?: string };
@@ -1440,6 +1454,7 @@ ${this._formatStarterPolicyDiffValue(change.new_value)}</pre>
   }
 
   private async _handleReorderRules(e: CustomEvent) {
+    if (e.detail.tool && this._isSharedTool(e.detail.tool)) return;
     const { reorderedRules } = e.detail as {
       tool: any;
       reorderedRules: { id: string; priority: number }[];

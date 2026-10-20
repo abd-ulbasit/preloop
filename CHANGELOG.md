@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Require explicit permissions for account details, MCP OAuth setup, and
+  optimization actions in all editions
+  ([#1926](https://github.com/preloop/preloop/pull/1926)).
+
+- Scope preset clones, flow model bindings and tool configuration references
+  to the caller's account
+  ([#1927](https://github.com/preloop/preloop/pull/1927)).
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
   RBAC plugin, matching the other agent-control endpoints

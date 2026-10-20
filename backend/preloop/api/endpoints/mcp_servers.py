@@ -40,7 +40,7 @@ from preloop.services.mcp_tool_collisions import (
     tool_warnings_by_id,
 )
 from preloop.utils.audit import log_config_change
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -654,6 +654,7 @@ async def list_mcp_server_tools(
 
 
 @router.post("/mcp-servers/{server_id}/oauth/authorize-token")
+@require_permission("edit_mcp_servers")
 async def create_mcp_oauth_authorize_token(
     server_id: str,
     current_user: User = Depends(get_current_active_user),
@@ -669,6 +670,11 @@ async def create_mcp_oauth_authorize_token(
     the Authorization header — returns a token scoped to this one server and
     purpose and expiring in ~2 minutes.
     """
+    from preloop.api.loop_safety import run_db_off_loop
+
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "edit_mcp_servers")
+    )
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
@@ -687,6 +693,7 @@ async def create_mcp_oauth_authorize_token(
             "sub": str(current_user.id),
             "purpose": MCP_OAUTH_AUTHORIZE_PURPOSE,
             "server_id": server_id,
+            "permission": "edit_mcp_servers",
         },
         expires_delta=timedelta(seconds=MCP_OAUTH_AUTHORIZE_TTL_SECONDS),
         auth_generation=user_auth_generation(current_user),
@@ -731,6 +738,7 @@ async def mcp_server_oauth_authorize(
     if (
         payload.get("purpose") != MCP_OAUTH_AUTHORIZE_PURPOSE
         or payload.get("server_id") != server_id
+        or payload.get("permission") != "edit_mcp_servers"
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -859,6 +867,8 @@ async def mcp_server_oauth_authorize(
 
     # Store both PKCE verifier and server context
     _pending_oauth_states[state] = {
+        # Carry the signed issuance gate through the provider redirect.
+        "permission": payload["permission"],
         "server_id": str(server.id),
         "account_id": str(server.account_id),
         "code_verifier": code_verifier,
@@ -907,7 +917,7 @@ async def mcp_server_oauth_callback(
     """
     # Validate state (CSRF protection)
     state_data = _pending_oauth_states.pop(state, None)
-    if not state_data:
+    if not state_data or state_data.get("permission") != "edit_mcp_servers":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired OAuth state. Please try again.",

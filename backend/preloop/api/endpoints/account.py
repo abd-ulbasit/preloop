@@ -168,7 +168,7 @@ from preloop.services.subject_governance import (
     set_account_governance_defaults,
     set_subject_governance,
 )
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.utils.redaction import redact_dict
 from preloop.schemas.gateway_usage import GatewayUsageBreakdown
 from preloop.api.heavy_routes import heavy_route
@@ -1423,21 +1423,27 @@ def update_session_artifact_settings(
 
 
 @router.patch("/account/details", response_model=AccountDetailsResponse)
+@require_permission("manage_account")
 async def update_account_details(
     update_data: AccountDetailsUpdate,
     account: Annotated[Account, Depends(get_account_for_user)],
     db: Session = Depends(get_db_session),
-):
+    current_user: UserModel = Depends(get_current_active_user),
+) -> AccountDetailsResponse:
     """Update current account details.
 
     Args:
         update_data: Account update data
         account: Current user's account
         db: Database session
+        current_user: Authenticated account manager
 
     Returns:
         Updated account details
     """
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_account")
+    )
     # Update account
     update_dict = update_data.model_dump(exclude_unset=True)
     updated_account = crud_account.update(db=db, db_obj=account, obj_in=update_dict)

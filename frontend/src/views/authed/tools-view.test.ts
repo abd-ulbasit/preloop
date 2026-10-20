@@ -810,6 +810,31 @@ describe('ToolsView (approvals + conditions)', () => {
     ).to.exist;
   });
 
+  it('does not write shared server configuration from tool events', async () => {
+    const element = await fixture<ToolsView>(html`<tools-view></tools-view>`);
+    await waitUntil(() => !(element as any).toolsContextLoading);
+    const view = element as any;
+    view.mcpServers = [
+      { id: 'shared-server', is_shared: true, read_only: true },
+    ];
+    const tool = {
+      ...view.tools[0],
+      source: 'mcp',
+      source_id: 'shared-server',
+    };
+    const reject = sinon.spy();
+    fetchStub.resetHistory();
+    await view._handleToggleEnabled(
+      new CustomEvent('toggle-enabled', { detail: { tool, isEnabled: false } })
+    );
+    await view._handleSaveRule(
+      new CustomEvent('save-rule', { detail: { tool, reject } })
+    );
+    expect(reject.calledOnce).to.equal(true);
+    expect(reject.firstCall.args[0]).to.include('read-only');
+    expect(fetchStub.called).to.equal(false);
+  });
+
   it('does not create tool configuration twice when adding a rule immediately after toggling enabled', async () => {
     const element = (await fixture(
       html`<tools-view></tools-view>`

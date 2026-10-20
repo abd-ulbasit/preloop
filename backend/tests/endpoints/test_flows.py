@@ -8,7 +8,7 @@ from fastapi import HTTPException, Response
 from pytest_mock import MockerFixture
 
 from preloop.api.endpoints import flows
-from preloop.models import schemas
+from preloop.models import models, schemas
 from preloop.models.models.account import Account
 
 from tests.conftest import maybe_await
@@ -55,6 +55,12 @@ async def test_create_flow(mock_account: Account, mocker: MockerFixture):
         id=uuid.uuid4(),
         created_at=datetime.now(ZoneInfo("UTC")),
         updated_at=datetime.now(ZoneInfo("UTC")),
+    )
+
+    mocker.patch.object(
+        flows.crud_ai_model,
+        "get",
+        return_value=models.AIModel(account_id=mock_account.account_id),
     )
 
     # Act
@@ -140,6 +146,7 @@ async def test_update_flow(mock_account: Account, mocker: MockerFixture):
         new_callable=MagicMock,
     )
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Original Name"  # Different from update name
     mock_flow.is_preset = False
     mock_crud_flow.get.return_value = mock_flow
@@ -200,6 +207,7 @@ async def test_update_flow_merges_run_limits_onto_stored_agent_config(
         new_callable=MagicMock,
     )
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Nightly triage"
     mock_flow.is_preset = False
     mock_flow.source_preset_id = None
@@ -552,6 +560,7 @@ def _make_preset(flow_id: uuid.UUID, ai_model_id=None):
         pass
 
     preset = PresetObj()
+    preset.account_id = None
     preset.id = flow_id
     preset.name = "Preset Flow"
     preset.description = "A preset"
@@ -3113,6 +3122,7 @@ async def test_update_flow_switch_to_webhook_generates_secret(
     mock_crud_flow = _mock_crud_flow_no_conflicts(mocker)
     flow_id = uuid.uuid4()
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Cloned Preset Flow"
     mock_flow.trigger_event_source = None
     mock_flow.webhook_config = None
@@ -3158,6 +3168,7 @@ async def test_update_flow_webhook_keeps_existing_secret(
     mock_crud_flow = _mock_crud_flow_no_conflicts(mocker)
     flow_id = uuid.uuid4()
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Webhook Flow"
     mock_flow.trigger_event_source = "webhook"
     mock_flow.webhook_config = {"webhook_secret": "existing-secret"}
@@ -3192,6 +3203,7 @@ async def test_update_flow_webhook_keeps_existing_secret(
 def _webhook_update_flow(mocker, *, source, webhook_config):
     mock_crud_flow = _mock_crud_flow_no_conflicts(mocker)
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Reviewer"
     mock_flow.trigger_event_source = source
     mock_flow.webhook_config = webhook_config
@@ -3310,6 +3322,7 @@ async def test_update_flow_switch_to_schedule_forces_event_types(
     mock_crud_flow = _mock_crud_flow_no_conflicts(mocker)
     flow_id = uuid.uuid4()
     mock_flow = MagicMock()
+    mock_flow.ai_model_id = None
     mock_flow.name = "Webhook Flow"
     mock_flow.trigger_event_source = "webhook"
     mock_flow.schedule_config = None

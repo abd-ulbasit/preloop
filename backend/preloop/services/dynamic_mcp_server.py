@@ -693,7 +693,9 @@ class DynamicMCPServer:
 
                 # Get approval workflow using CRUD
                 policy = await get_approval_workflow_async(
-                    db, workflow_id=final_workflow_id
+                    db,
+                    workflow_id=final_workflow_id,
+                    account_id=user_context.account_id,
                 )
 
                 if not policy:

@@ -883,6 +883,28 @@ def _list_tools(account: Account, db: Session) -> List[Dict]:
     return tools
 
 
+def _validate_tool_references(
+    db: Session,
+    *,
+    account_id: UUID,
+    approval_workflow_id: UUID | str | None = None,
+    mcp_server_id: UUID | str | None = None,
+) -> None:
+    """Require each supplied tool reference to belong to the caller's account."""
+    for reference_id, crud, detail in (
+        (approval_workflow_id, crud_approval_workflow, "Approval workflow not found"),
+        (mcp_server_id, crud_mcp_server, "MCP server not found"),
+    ):
+        if reference_id is None:
+            continue
+        try:
+            parsed_id = UUID(str(reference_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail=detail) from None
+        if not crud.get(db, id=parsed_id, account_id=str(account_id)):
+            raise HTTPException(status_code=404, detail=detail)
+
+
 @router.post("/tool-configurations", status_code=status.HTTP_201_CREATED)
 @require_permission("manage_tools")
 async def create_tool_configuration(
@@ -904,11 +926,17 @@ async def create_tool_configuration(
     Raises:
         HTTPException: If configuration already exists or creation fails
     """
+    _validate_tool_references(
+        db,
+        account_id=current_user.account_id,
+        approval_workflow_id=config_data.approval_workflow_id,
+        mcp_server_id=config_data.mcp_server_id,
+    )
     # An agent-scoped configuration must reference an agent of this account.
     if config_data.managed_agent_id:
-        agent = crud_managed_agent.get_visible_target(
+        agent = crud_managed_agent.get_for_account(
             db,
-            account_id=str(account.id),
+            account_id=str(current_user.account_id),
             agent_id=str(config_data.managed_agent_id),
         )
         if not agent:
@@ -1082,6 +1110,13 @@ async def update_tool_configuration(
             detail="Tool configuration not found or access denied",
         )
 
+    _validate_tool_references(
+        db,
+        account_id=current_user.account_id,
+        approval_workflow_id=config_update.approval_workflow_id,
+        mcp_server_id=config_update.mcp_server_id,
+    )
+
     try:
         old_enabled = config.is_enabled
         updated_config = crud_tool_configuration.update(
@@ -1089,7 +1124,7 @@ async def update_tool_configuration(
         )
 
         # Determine if this was an enable/disable toggle or a general update
-        update_fields = config_update.model_dump(exclude_unset=True)
+        update_fields = config_update.model_dump(exclude_unset=True, mode="json")
         if "is_enabled" in update_fields and update_fields["is_enabled"] != old_enabled:
             action = "enabled" if updated_config.is_enabled else "disabled"
         else:
@@ -2225,6 +2260,12 @@ async def create_access_rule(
             detail="Action must be 'allow', 'deny', or 'require_approval'",
         )
 
+    _validate_tool_references(
+        db,
+        account_id=current_user.account_id,
+        approval_workflow_id=rule_in.approval_workflow_id,
+    )
+
     try:
         rule = crud_tool_access_rule.create(
             db,
@@ -2319,6 +2360,12 @@ async def update_access_rule(
     if "condition_expression" in update_data or "condition_type" in update_data:
         expression = update_data.get("condition_expression", rule.condition_expression)
         update_data["condition_type"] = _detect_condition_type(expression or "")
+
+    _validate_tool_references(
+        db,
+        account_id=current_user.account_id,
+        approval_workflow_id=rule_in.approval_workflow_id,
+    )
 
     try:
         old_snapshot = {
