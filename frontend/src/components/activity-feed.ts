@@ -282,6 +282,7 @@ const PAST_TENSE = new Set([
   'disabled',
   'assigned',
   'invited',
+  'added',
 ]);
 
 const CONFIG_LABELS: Record<string, string> = {
@@ -807,9 +808,33 @@ export function feedEventFromAuditGroup(
       }
       return { ...shape, tone: 'warning', text: `Approval expired: ${tool}` };
     }
+    case 'policy_allow':
+    case 'policy_require_approval':
+      // An allow is a tool call going through, and a require-approval
+      // decision already has its own "Approval requested" row.
+      return null;
     default: {
+      // Moving between accounts is navigation, not news.
+      if (event.action.startsWith('user.switch_account')) return null;
+      if (event.action === 'user.login') {
+        const who = String(details.username || actor || 'Someone');
+        return {
+          ...base,
+          kind: 'other',
+          tone: 'neutral',
+          text: `${who} signed in`,
+          actor: who,
+          fields: fieldList(
+            field('User', who),
+            field('Outcome', humaniseAction(String(outcome || 'success')))
+          ),
+          href: `/console/audit?event_type=${event.action}`,
+          openLabel: 'Filter audit by this type',
+        };
+      }
       // An event type nobody wrote a recipe for still says who did what.
-      const words = event.action.split('_');
+      // Dotted types (`team.member_added`) read like underscored ones.
+      const words = event.action.replace(/\./g, '_').split('_');
       const verb = words[words.length - 1];
       const subject = words.slice(0, -1).join('_');
       const rest = {
@@ -840,7 +865,10 @@ export function feedEventFromAuditGroup(
         return { ...rest, text: `${humaniseAction(subject)} ${verb}${suffix}` };
       }
       const trail = actor ? ` · ${actor}` : '';
-      return { ...rest, text: `${humaniseAction(event.action)}${trail}` };
+      return {
+        ...rest,
+        text: `${humaniseAction(event.action.replace(/\./g, ' '))}${trail}`,
+      };
     }
   }
 }

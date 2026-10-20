@@ -458,6 +458,54 @@ describe('activity-feed', () => {
       );
     });
 
+    it('leaves standalone policy allow and require-approval decisions out (B-05)', () => {
+      // An allow is a tool call going through, and a require-approval
+      // decision already has its own "Approval requested" row: traffic, not
+      // news.
+      for (const action of ['policy_allow', 'policy_require_approval']) {
+        expect(
+          feedEventFromAuditGroup(
+            auditGroup(action, { id: action, resource_id: 'Bash' }, 'success'),
+            { users: [{ id: 'user-1', username: 'dimo' }] }
+          )
+        ).to.equal(null);
+      }
+    });
+
+    it('leaves account switches out and words a dotted sign-in (B-05)', () => {
+      const users = { users: [{ id: 'user-1', username: 'dimo' }] };
+      expect(
+        feedEventFromAuditGroup(
+          auditGroup('user.switch_account.in', { id: 's1' }, 'success'),
+          users
+        )
+      ).to.equal(null);
+      expect(
+        feedEventFromAuditGroup(
+          auditGroup('user.switch_account.out', { id: 's2' }, 'success'),
+          users
+        )
+      ).to.equal(null);
+      const login = feedEventFromAuditGroup(
+        auditGroup('user.login', { id: 'l1' }, 'success'),
+        users
+      );
+      expect(login?.text).to.equal('dimo signed in');
+    });
+
+    it('humanises a dotted event type it has no recipe for (B-05)', () => {
+      const event = feedEventFromAuditGroup(
+        auditGroup('team.member_added', { id: 'm1' }, 'success'),
+        { users: [{ id: 'user-1', username: 'dimo' }] }
+      );
+      expect(event?.text).to.equal('Team member added by dimo');
+      const odd = feedEventFromAuditGroup(
+        auditGroup('widget.frobnicate', { id: 'w2' }, 'success'),
+        { users: [{ id: 'user-1', username: 'dimo' }] }
+      );
+      expect(odd?.text).to.equal('Widget frobnicate · dimo');
+    });
+
     it('never drops an audit event type it has no recipe for', () => {
       const event = feedEventFromAuditGroup(
         auditGroup('api_key_created', { id: 'k1' }, 'success'),
