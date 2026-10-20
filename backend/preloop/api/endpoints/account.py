@@ -1441,7 +1441,9 @@ async def update_account_details(
     Returns:
         Updated account details
     """
-    ensure_permission_in_oss(db, current_user, "manage_account")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_account")
+    )
     # Update account
     update_dict = update_data.model_dump(exclude_unset=True)
     updated_account = crud_account.update(db=db, db_obj=account, obj_in=update_dict)

@@ -670,7 +670,11 @@ async def create_mcp_oauth_authorize_token(
     the Authorization header — returns a token scoped to this one server and
     purpose and expiring in ~2 minutes.
     """
-    ensure_permission_in_oss(db, current_user, "edit_mcp_servers")
+    from preloop.api.loop_safety import run_db_off_loop
+
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "edit_mcp_servers")
+    )
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
