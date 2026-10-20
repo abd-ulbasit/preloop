@@ -130,7 +130,11 @@ export class NotificationPreferencesView extends AuthedElement {
         display: block;
       }
 
+      /* The console sheet (loaded for its chip recipe) makes .header a
+         flex row; this page stacks its title over its description. */
       .header {
+        display: block;
+        min-height: 0;
         margin-bottom: var(--sl-spacing-large);
       }
 
