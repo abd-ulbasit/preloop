@@ -173,6 +173,42 @@ describe('FlowView recent executions', () => {
   });
 });
 
+describe('FlowView recent executions width (B-09)', () => {
+  it('gives the subject the slack instead of a quarter of the table', async () => {
+    const element = document.createElement('flow-view') as any;
+    element.flowReady = true;
+    element.isNew = false;
+    element.isEditing = false;
+    element.initialized = true;
+    element.flow = { id: 'flow-1', name: 'PR Reviewer', agent_type: 'codex' };
+    element.recentExecutions = [
+      {
+        id: 'dee1da93-6d1e-4c0e-9f3a-2b1d0c4e5f60',
+        status: 'SUCCEEDED',
+        start_time: '2026-03-09T10:00:00Z',
+        end_time: '2026-03-09T10:02:00Z',
+        trigger_subject:
+          'example/example #1203 · Pull request synchronize · 949d625b',
+        trigger_subject_url: 'https://example.com/example/example/pull/1203',
+      },
+    ];
+    const host = document.createElement('div');
+    host.style.width = '760px';
+    host.appendChild(element);
+    document.body.appendChild(host);
+    await element.updateComplete;
+    try {
+      const table = element.shadowRoot!.querySelector(
+        '.executions-table'
+      ) as HTMLElement;
+      const subject = table.querySelector('td.subject-cell') as HTMLElement;
+      expect(subject.clientWidth).to.be.at.least(table.clientWidth * 0.5);
+    } finally {
+      host.remove();
+    }
+  });
+});
+
 describe('FlowView detail page language', () => {
   /** A rendered detail page for one flow, torn down by the caller. */
   async function renderDetail(overrides: Record<string, unknown> = {}) {

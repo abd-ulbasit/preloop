@@ -282,6 +282,44 @@ describe('FlowExecutionsView', () => {
     ).to.be.at.most(wrapperBox.left + wrapper.clientWidth + 1);
   });
 
+  it('lets the CI hint give way before the subject text at 1440 (B-09)', async () => {
+    // A webhook run dispatched from CI carries "via GitHub Actions" after the
+    // subject. The hint never shrank, so the subject collapsed to "p..".
+    fetchStub = stub([
+      {
+        id: 'exec-ci-1',
+        flow_id: 'flow-1',
+        flow_name: 'Pull request reviewer',
+        status: 'SUCCEEDED',
+        start_time: '2026-03-09T10:00:00Z',
+        end_time: '2026-03-09T10:05:00Z',
+        trigger_subject:
+          'example/example #1203 · Pull request synchronize · 949d625b',
+        trigger_subject_url: 'https://example.com/example/example/pull/1203',
+        trigger_subject_ci: 'GitHub Actions',
+        trigger_subject_ci_url: 'https://example.com/actions/runs/1',
+        model_alias: 'deepseek/deepseek-v4-pro',
+      },
+    ]);
+    const host = (await fixture(
+      html`<div style="width: 1125px;">
+        <flow-executions-view></flow-executions-view>
+      </div>`
+    )) as HTMLElement;
+    const el = host.querySelector('flow-executions-view') as FlowExecutionsView;
+    await tick();
+    await el.updateComplete;
+    const cell = el.shadowRoot!.querySelector('td.subject-cell') as HTMLElement;
+    const textBox = cell
+      .querySelector('.execution-subject-text')!
+      .getBoundingClientRect();
+    const cellWidth = cell.clientWidth;
+    expect(
+      textBox.width,
+      'the subject text keeps most of its cell'
+    ).to.be.at.least(cellWidth * 0.5);
+  });
+
   it('keeps the Subject column usable at the narrowest layout', async () => {
     // The table declares a 1080px min-width, which is the fixed columns
     // (954px) plus a ~120px floor for the flexible Subject column. At a

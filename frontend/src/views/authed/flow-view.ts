@@ -195,6 +195,19 @@ export class FlowView extends LitElement {
         .executions-table {
           table-layout: fixed;
         }
+        /* Fixed layout with no widths split the table in four equal
+         columns, so the subject truncated beside hundreds of empty pixels.
+         The short columns get what their content needs; Subject takes the
+         rest. */
+        .executions-table .col-status {
+          width: 112px;
+        }
+        .executions-table .col-started {
+          width: 96px;
+        }
+        .executions-table .col-duration {
+          width: 104px;
+        }
         .executions-table .subject-cell {
           max-width: 0;
           overflow: hidden;
@@ -1038,9 +1051,9 @@ export class FlowView extends LitElement {
                         <thead>
                           <tr>
                             <th>Subject</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                            <th>Duration</th>
+                            <th class="col-status">Status</th>
+                            <th class="col-started">Started</th>
+                            <th class="col-duration">Duration</th>
                           </tr>
                         </thead>
                         <tbody>
