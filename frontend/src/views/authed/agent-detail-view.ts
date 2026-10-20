@@ -1,3 +1,4 @@
+import { formatRelativeTime } from '../../utils/date';
 import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { parseUTCDate } from '../../utils/date';
@@ -1667,9 +1668,13 @@ export class AgentDetailView extends LitElement {
     return html`
       <sl-tooltip
         content=${(() => {
-          const lastSeen = `Last seen: ${this.formatDateTime(
-            this.liveActivity.lastActivityAt || this.agent.last_seen_at
-          )}`;
+          // Relative first, with the absolute time after it, since a
+          // tooltip has no title of its own (U-02).
+          const seenAt =
+            this.liveActivity.lastActivityAt || this.agent.last_seen_at;
+          const lastSeen = seenAt
+            ? `Last seen ${formatRelativeTime(seenAt)} (${this.formatDateTime(seenAt)})`
+            : 'Last seen: never';
           // A partial-onboarding chip explains itself first; the header
           // already carries one tooltip, so the two share it.
           return status.tooltip ? `${status.tooltip} · ${lastSeen}` : lastSeen;

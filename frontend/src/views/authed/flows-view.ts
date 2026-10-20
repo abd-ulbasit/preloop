@@ -2395,9 +2395,9 @@ export class FlowsView extends LitElement {
             <a class="row-link" href=${href}>${name}</a>
             <div class="row-subtitle">
               Started
-              ${formatLocalDateTime(exec.start_time)}${
-                duration ? ` · ${duration}` : ''
-              }
+              <span title=${formatLocalDateTime(exec.start_time)}
+                >${formatRelativeTime(exec.start_time)}</span
+              >${duration ? ` · ${duration}` : ''}
             </div>
           </div>
         </div>

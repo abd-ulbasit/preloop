@@ -1,3 +1,4 @@
+import { formatRelativeTime } from '../../../utils/date';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import '@shoelace-style/shoelace/dist/components/tooltip/tooltip.js';
@@ -413,7 +414,10 @@ export class InvitationManagementView extends LitElement {
                 <div class="invitation-details">
                   <h3 class="invitation-email">${invitation.email}</h3>
                   <p class="invitation-date">
-                    Sent: ${this.formatDate(invitation.created_at)}
+                    Sent
+                    <span title=${this.formatDate(invitation.created_at)}
+                      >${formatRelativeTime(invitation.created_at)}</span
+                    >
                   </p>
                   <div class="invitation-meta">
                     <sl-badge

@@ -671,6 +671,9 @@ describe('FlowsView', () => {
       });
 
       expect(text).to.match(/Started .*· Running · \d+m \d+s/);
+      // Relative, with the absolute time in the title (U-02).
+      expect(text).to.match(/Started \d+m ago/);
+      expect(text).to.not.match(/\d+\/\d+\/\d{4}/);
     });
 
     it('appends nothing for a legacy terminal execution without an end time', async () => {
