@@ -707,6 +707,7 @@ export function render_blog_post_html(
     : '';
   if (post.hero_video) {
     const video = post.hero_video;
+    const poster_image = post.og_image || config.landing?.meta?.og_image;
     const sources = [
       video.webm
         ? `<source src="${escape_html(video.webm)}" type="video/webm">`
@@ -715,11 +716,9 @@ export function render_blog_post_html(
         ? `<source src="${escape_html(video.mp4)}" type="video/mp4">`
         : '',
     ].join('');
-    const poster = post.og_image
-      ? ` poster="${escape_html(post.og_image)}"`
-      : '';
-    const fallback = post.og_image
-      ? `<img class="blog-hero-poster" src="${escape_html(post.og_image)}" alt="${escape_html(video.alt)}">`
+    const poster = poster_image ? ` poster="${escape_html(poster_image)}"` : '';
+    const fallback = poster_image
+      ? `<img class="blog-hero-poster" src="${escape_html(poster_image)}" alt="${escape_html(video.alt)}">`
       : '';
     const caption = video.caption
       ? `<figcaption>${escape_html(video.caption)}</figcaption>`

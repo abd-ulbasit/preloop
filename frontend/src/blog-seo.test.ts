@@ -203,6 +203,18 @@ describe('blog-seo', () => {
       expect(schema).not.to.have.property('video');
     });
 
+    it('uses the brand default as the video thumbnail without a post image', () => {
+      const schema = buildBlogPostingSchema(
+        makePost({
+          hero_video: { mp4: '/assets/blog/fleet.mp4', alt: 'Fleet activity' },
+        }),
+        config
+      ) as Record<string, any>;
+      expect(schema.video.thumbnailUrl).to.equal(
+        'https://preloop.ai/images/diagram.png'
+      );
+    });
+
     for (const sources of [
       { mp4: '/assets/blog/fleet.mp4', webm: '/assets/blog/fleet.webm' },
       { webm: 'https://cdn.example.com/fleet.webm' },
@@ -386,8 +398,12 @@ describe('blog-seo', () => {
         const doc = new DOMParser().parseFromString(html, 'text/html');
         expect(doc.querySelectorAll('video source')).to.have.lengthOf(1);
         expect(doc.querySelector('figcaption')).to.equal(null);
-        expect(doc.querySelector('video')!.hasAttribute('poster')).to.be.false;
-        expect(doc.querySelector('.blog-hero > img')).to.equal(null);
+        expect(doc.querySelector('video')!.getAttribute('poster')).to.equal(
+          '/images/diagram.png'
+        );
+        expect(
+          doc.querySelector('.blog-hero > img')!.getAttribute('src')
+        ).to.equal('/images/diagram.png');
       });
     }
 

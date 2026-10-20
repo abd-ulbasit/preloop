@@ -35,7 +35,9 @@ At least one of `mp4` or `webm` is required, along with non-empty `alt` text
 non-empty strings. WebM is offered first when both formats are present.
 Invalid video metadata produces a build warning and leaves the image hero.
 Provide `og_image` as the poster and static reduced-motion fallback; the build
-warns if it is missing. The index and social cards continue to use `og_image`.
+warns if it is missing and uses the brand's default social image for the video
+poster, reduced-motion fallback and structured data when available. The index
+and social cards continue to use `og_image`.
 
 The video autoplays muted, loops, and plays inline. The blog stylesheet hides
 it and shows the poster when `prefers-reduced-motion: reduce` is set, without

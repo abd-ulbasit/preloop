@@ -126,38 +126,52 @@ test('retains image-only posts without a video warning', async (t) => {
   assert.deepEqual(warnings, []);
 });
 
-test('reduced motion shows only the poster at the same width and spacing', async (t) => {
-  const { post } = await readPost(
-    t,
-    'og_image: /assets/blog/fleet.png\nhero_video: {mp4: /assets/blog/fleet.mp4, alt: Fleet activity}'
-  );
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
-    // No scripts are loaded: the fallback must work in the static HTML alone.
-    await page.setContent(renderPost(post, { name: 'Example' }, ''));
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    assert.equal(await page.locator('.blog-hero video').isVisible(), true);
-    assert.equal(await page.locator('.blog-hero-poster').isVisible(), false);
-    const videoWidth = (await page.locator('.blog-hero video').boundingBox())
-      .width;
-    const spacing = await page
-      .locator('.blog-hero')
-      .evaluate((figure) => getComputedStyle(figure).marginBottom);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    assert.equal(await page.locator('.blog-hero video').isVisible(), false);
-    assert.equal(await page.locator('.blog-hero-poster').isVisible(), true);
-    assert.equal(
-      (await page.locator('.blog-hero-poster').boundingBox()).width,
-      videoWidth
+for (const postImage of [true, false]) {
+  test(`reduced motion shows the ${postImage ? 'post' : 'brand default'} poster at the same width and spacing`, async (t) => {
+    const { post } = await readPost(
+      t,
+      `${postImage ? 'og_image: /assets/blog/fleet.png\n' : ''}hero_video: {mp4: /assets/blog/fleet.mp4, alt: Fleet activity}`
     );
-    assert.equal(
-      await page
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      // No scripts are loaded: the fallback must work in the static HTML alone.
+      const config = {
+        name: 'Example',
+        landing: { meta: { og_image: '/assets/blog/default.png' } },
+      };
+      await page.setContent(renderPost(post, config, ''));
+      const poster = postImage
+        ? '/assets/blog/fleet.png'
+        : '/assets/blog/default.png';
+      assert.equal(await page.locator('video').getAttribute('poster'), poster);
+      assert.equal(
+        await page.locator('.blog-hero-poster').getAttribute('src'),
+        poster
+      );
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      assert.equal(await page.locator('.blog-hero video').isVisible(), true);
+      assert.equal(await page.locator('.blog-hero-poster').isVisible(), false);
+      const videoWidth = (await page.locator('.blog-hero video').boundingBox())
+        .width;
+      const spacing = await page
         .locator('.blog-hero')
-        .evaluate((figure) => getComputedStyle(figure).marginBottom),
-      spacing
-    );
-  } finally {
-    await browser.close();
-  }
-});
+        .evaluate((figure) => getComputedStyle(figure).marginBottom);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await page.locator('.blog-hero video').isVisible(), false);
+      assert.equal(await page.locator('.blog-hero-poster').isVisible(), true);
+      assert.equal(
+        (await page.locator('.blog-hero-poster').boundingBox()).width,
+        videoWidth
+      );
+      assert.equal(
+        await page
+          .locator('.blog-hero')
+          .evaluate((figure) => getComputedStyle(figure).marginBottom),
+        spacing
+      );
+    } finally {
+      await browser.close();
+    }
+  });
+}

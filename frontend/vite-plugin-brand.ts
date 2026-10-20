@@ -238,7 +238,7 @@ export async function discover_blog_posts(
     if (!og_image) {
       console.warn(
         meta.hero_video !== undefined
-          ? `[blog] "${filename}" hero_video has no og_image; its poster and reduced-motion fallback are unavailable`
+          ? `[blog] "${filename}" hero_video has no og_image; its poster and reduced-motion fallback will use the brand default when available`
           : `[blog] "${filename}" has no og_image; the post will ship without a hero`
       );
     }
