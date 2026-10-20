@@ -1,5 +1,6 @@
 import '../../../components/runner-policy-settings';
 import '../../../components/weekly-report-settings';
+import { EditPermissions } from '../../../controllers/edit-permissions';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import { billingStatusLabel } from '../../../utils/billing-status';
@@ -40,6 +41,7 @@ import type {
 @customElement('account-view')
 export class AccountView extends LitElement {
   private readonly accessibilityStatus = new ConsoleStatus(this);
+  private readonly editPermissions = new EditPermissions(this);
   @state() private accountOrganization: AccountOrganization | null = null;
   @state() private features: FeaturesResponse | null = null;
   @state() private organizationName: string = '';
@@ -661,6 +663,7 @@ export class AccountView extends LitElement {
   ];
 
   render() {
+    const canManageAccount = this.editPermissions.allows('manage_account');
     if (this._loading) {
       return html`
         <view-header headerText="Account" width="narrow"></view-header>
@@ -740,10 +743,14 @@ export class AccountView extends LitElement {
                 value=${this.organizationName}
                 @sl-input=${(e: any) =>
                   (this.organizationName = e.target.value)}
-                ?disabled=${this.isSavingOrg}
+                ?disabled=${this.isSavingOrg || !canManageAccount}
               >
                 <span slot="help-text">
-                  This name will be displayed across the application
+                  ${
+                    canManageAccount
+                      ? 'This name will be displayed across the application'
+                      : 'Changing the account name needs the manage account permission.'
+                  }
                 </span>
               </sl-input>
 
@@ -752,6 +759,8 @@ export class AccountView extends LitElement {
                   variant="primary"
                   @click=${this._handleSaveOrganization}
                   ?loading=${this.isSavingOrg}
+                  ?disabled=${!canManageAccount}
+                  data-testid="save-account-name"
                 >
                   Save account name
                 </sl-button>

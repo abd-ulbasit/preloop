@@ -29,7 +29,27 @@ import {
   formatNumber,
   suggestSessionOptimizations,
 } from '../utils/session-observer';
-import { replayRuntimeSession } from '../api';
+import { getUserProfile, replayRuntimeSession } from '../api';
+import { hasPermission, type UserPermissions } from '../permissions';
+
+/**
+ * Permission the backend requires to apply each server-side action type.
+ * Mirrors ACTION_PERMISSIONS in backend/preloop/services/session_optimization.py.
+ */
+export const OPTIMIZATION_ACTION_PERMISSIONS: Record<string, string> = {
+  scope_tools: 'manage_tools',
+  disable_builtin_tools: 'manage_tools',
+  set_budget: 'manage_budgets',
+  enable_compression: 'manage_policies',
+  cap_tool_results: 'manage_policies',
+};
+
+/** Plain-words names for the permissions above. */
+const PERMISSION_LABELS: Record<string, string> = {
+  manage_tools: 'manage tools',
+  manage_budgets: 'manage budgets',
+  manage_policies: 'manage policies',
+};
 import { consoleDialogStyles } from '../styles/console-dialog';
 
 const SEGMENT_LABELS: Record<string, string> = {
@@ -79,6 +99,28 @@ export class SessionOptimizationPanel extends LitElement {
 
   @state()
   private pendingApply: SessionOptimizationSuggestion | null = null;
+
+  /** Current user's permissions; null or undefined means RBAC is off. */
+  @state() private permissions: UserPermissions = undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    void getUserProfile()
+      .then((profile) => {
+        this.permissions = profile?.permissions;
+      })
+      .catch(() => undefined);
+  }
+
+  /** The permission the user lacks to apply this suggestion, if any. */
+  private missingApplyPermission(
+    suggestion: SessionOptimizationSuggestion
+  ): string | null {
+    const required =
+      OPTIMIZATION_ACTION_PERMISSIONS[suggestion.action?.type || ''];
+    if (!required || hasPermission(this.permissions, required)) return null;
+    return required;
+  }
 
   // Per-tool keep/drop selection for the rich scope_tools dialog. Keyed by
   // tool name; ``true`` means the tool is checked (will be disabled). Seeded
@@ -233,6 +275,11 @@ export class SessionOptimizationPanel extends LitElement {
 
       .idle-expiry-summary strong {
         color: var(--sl-color-neutral-900);
+      }
+
+      .missing-permission {
+        color: var(--console-meta-color, var(--sl-color-neutral-600));
+        font-size: var(--sl-font-size-small);
       }
 
       .actions {
@@ -881,6 +928,7 @@ export class SessionOptimizationPanel extends LitElement {
     const actionType = suggestion.action?.type;
     const isOutputFilter = actionType === 'manage_output_filter';
     const isInspect = actionType === 'open_events';
+    const missingPermission = this.missingApplyPermission(suggestion);
     return html`
       <div class="suggestion">
         <div class="suggestion-header">
@@ -919,11 +967,28 @@ export class SessionOptimizationPanel extends LitElement {
                     </sl-badge>
                   `
                 : html`
+                    ${
+                      missingPermission
+                        ? html`<span
+                            class="missing-permission"
+                            data-testid="apply-missing-permission"
+                            >Needs the
+                            ${
+                              PERMISSION_LABELS[missingPermission] ||
+                              missingPermission
+                            }
+                            permission</span
+                          >`
+                        : nothing
+                    }
                     <sl-button
                       size="small"
                       variant="primary"
                       ?loading=${applying}
-                      ?disabled=${Boolean(this.applyingSuggestionId)}
+                      ?disabled=${
+                        Boolean(this.applyingSuggestionId) ||
+                        Boolean(missingPermission)
+                      }
                       @click=${() => {
                         if (actionType === 'scope_tools') {
                           this.openScopeToolsDialog(suggestion);
