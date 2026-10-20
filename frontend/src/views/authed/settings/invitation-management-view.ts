@@ -368,15 +368,33 @@ export class InvitationManagementView extends LitElement {
     `;
   }
 
+  /**
+   * The invitations the active tab is about. The list endpoint is asked for
+   * the tab's status, but a server that ignores the filter returns all of
+   * them, and the Pending tab must never call a cancelled one pending.
+   */
+  private get visibleInvitations(): UserInvitation[] {
+    if (this.activeTab === 'all') return this.invitations;
+    return this.invitations.filter(
+      (invitation) =>
+        String(invitation.status || '').toLowerCase() === this.activeTab
+    );
+  }
+
   renderInvitations() {
-    if (this.invitations.length === 0) {
+    const invitations = this.visibleInvitations;
+    if (invitations.length === 0) {
+      const empty =
+        this.activeTab === 'all'
+          ? 'No invitations yet.'
+          : `No ${this.activeTab} invitations.`;
       return html`
         <div class="empty-state">
           <sl-icon
             name="envelope"
             style="font-size: 3rem; margin-bottom: 1rem;"
           ></sl-icon>
-          <p>No invitations found.</p>
+          <p>${empty}</p>
         </div>
       `;
     }
@@ -384,7 +402,7 @@ export class InvitationManagementView extends LitElement {
     return html`
       <div class="invitations-grid">
         ${repeat(
-          this.invitations,
+          invitations,
           (invitation) => invitation.id,
           (invitation) => html`
             <sl-card>
