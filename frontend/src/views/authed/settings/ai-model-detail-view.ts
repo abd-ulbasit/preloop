@@ -1,4 +1,4 @@
-import { formatCount } from '../../../utils/count-format';
+import { formatCount, formatCountExact } from '../../../utils/count-format';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import { formatUsd, formatUsdExact } from '../../../utils/money';
@@ -2566,7 +2566,9 @@ export class AIModelDetailView extends LitElement {
         <div class="summary-strip">
           ${this.renderStat(
             'Requests',
-            this.formatNumber(this.summary.total_requests),
+            html`<span title=${formatCountExact(this.summary.total_requests)}
+              >${this.formatNumber(this.summary.total_requests)}</span
+            >`,
             `${this.formatNumber(this.summary.successful_requests)} succeeded, ${this.formatNumber(this.summary.failed_requests)} failed`
           )}
           ${this.renderStat(
@@ -2578,7 +2580,10 @@ export class AIModelDetailView extends LitElement {
           )}
           ${this.renderStat(
             'Tokens',
-            this.formatNumber(this.summary.token_usage.total_tokens),
+            html`<span
+              title=${formatCountExact(this.summary.token_usage.total_tokens)}
+              >${this.formatNumber(this.summary.token_usage.total_tokens)}</span
+            >`,
             `${this.formatNumber(this.summary.token_usage.prompt_tokens)} prompt, ${this.formatNumber(this.summary.token_usage.completion_tokens)} completion`
           )}
         </div>
