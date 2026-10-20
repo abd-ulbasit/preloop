@@ -34,7 +34,8 @@ import { hasPermission, type UserPermissions } from '../permissions';
 
 /**
  * Permission the backend requires to apply each server-side action type.
- * Mirrors ACTION_PERMISSIONS in backend/preloop/services/session_optimization.py.
+ * Mirrors ACTION_PERMISSIONS in backend/preloop/services/session_optimization.py,
+ * added with the apply-route permission checks in preloop/preloop#1926.
  */
 export const OPTIMIZATION_ACTION_PERMISSIONS: Record<string, string> = {
   scope_tools: 'manage_tools',

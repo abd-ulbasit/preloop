@@ -59,6 +59,7 @@ describe('AccountView', () => {
       artifactSettingsPut?: (body: Record<string, unknown>) => Response;
       accountHierarchy?: boolean;
       permissions?: string[] | null;
+      profileFails?: boolean;
     } = {}
   ) {
     return sinon
@@ -116,6 +117,9 @@ describe('AccountView', () => {
         }
 
         if (url.includes('/api/v1/auth/users/me')) {
+          if (opts.profileFails) {
+            return json({ detail: 'boom' }, 500);
+          }
           return json({
             id: 'user-1',
             account_id: 'acc-1',
@@ -276,9 +280,10 @@ describe('AccountView', () => {
   });
 
   async function saveButton(
-    permissions: string[] | null
+    permissions: string[] | null,
+    profileFails = false
   ): Promise<{ el: AccountView; button: HTMLElement & { disabled: boolean } }> {
-    fetchStub = createFetchStub({ permissions });
+    fetchStub = createFetchStub({ permissions, profileFails });
     const el = await fixture<AccountView>(html`<account-view></account-view>`);
     await waitUntil(
       () => el.shadowRoot?.querySelector('[data-testid="save-account-name"]'),
@@ -312,6 +317,12 @@ describe('AccountView', () => {
       'manage_account',
       'manage_budgets',
     ]);
+    expect(button.disabled).to.equal(false);
+    expect(copy(el)).not.to.contain('needs the manage account permission');
+  });
+
+  it('keeps the account name save usable when the profile fails to load', async () => {
+    const { el, button } = await saveButton(null, true);
     expect(button.disabled).to.equal(false);
     expect(copy(el)).not.to.contain('needs the manage account permission');
   });
