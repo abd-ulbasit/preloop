@@ -806,7 +806,13 @@ shelves) and the camera refits when a node joins, unless the user has recently
 navigated. Columns gives flows their own column beside Work and stretches the row
 pitch (10px to 64px) to the stage height. Bubbles are placed by
 `utils/fleet-map-bubbles.ts`: beside their node, never on another node's box, at
-most two per node.
+most two per node. Lit lines carry the specific label of what travelled them
+(model and tokens, native tool and status, approval, or the work action), never
+a kind; MCP calls light no device line. Gateway calls carrying `flow_id` add an
+observed flow-to-model line. Code activity seeds the window's work items
+(`FleetCodeActivity.work`, optional) and refits an unowned map when it first
+arrives; `GET /fleet/usage` totals show in the panel of a selected model or
+provider. The Show choice is stored per user and scope.
 
 Gateway starts light the sender; real completions light the model and show measured
 input/output tokens. Native permission activity identifies its managed agent
