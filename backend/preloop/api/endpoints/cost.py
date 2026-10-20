@@ -58,6 +58,7 @@ from preloop.services.model_gateway_usage import (
 )
 from preloop.services.usage_repricing import reprice_gateway_usage
 from preloop.utils.permissions import ensure_permission_in_oss, require_permission
+from preloop.api.loop_safety import run_db_off_loop
 
 router = APIRouter(prefix="/cost", tags=["Cost Analytics"])
 
@@ -616,7 +617,9 @@ async def backfill_from_provider_ledger_csv(
     Defaults to a dry run that returns the full allocation plan; pass
     ``apply=true`` to persist it.
     """
-    ensure_permission_in_oss(db, current_user, "manage_budgets")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "manage_budgets")
+    )
     get_account_or_404(db, current_user)
     raw = await file.read(MAX_LEDGER_CSV_BYTES + 1)
     if len(raw) > MAX_LEDGER_CSV_BYTES:

@@ -84,6 +84,7 @@ from preloop.services.built_in_models import (
     public_built_in_model,
 )
 from preloop.api.heavy_routes import heavy_route
+from preloop.api.loop_safety import run_db_off_loop
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -938,7 +939,9 @@ async def sync_ai_model_catalog(
     Backing service: ``preloop.services.ai_model_catalog_sync``. Every added
     model is recorded in the audit trail. Use ``dry_run`` to preview.
     """
-    ensure_permission_in_oss(db, current_user, "create_ai_models")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "create_ai_models")
+    )
     summary = await sync_account_model_catalog(
         db,
         user=current_user,

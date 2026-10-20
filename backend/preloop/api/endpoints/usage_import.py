@@ -38,6 +38,7 @@ from preloop.services.usage_import import (
     resolve_target_agent,
 )
 from preloop.utils.permissions import ensure_permission_in_oss, require_permission
+from preloop.api.loop_safety import run_db_off_loop
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,9 @@ async def import_usage_csv(
     stored with tokens but no charged amount. Re-importing the same file is
     idempotent.
     """
-    ensure_permission_in_oss(db, current_user, "import_usage")
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "import_usage")
+    )
     get_account_or_404(db, current_user)
 
     parsed_column_map = None
