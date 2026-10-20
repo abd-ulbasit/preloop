@@ -418,6 +418,21 @@ describe('activity-feed', () => {
       expect(labels).to.include('Server');
     });
 
+    it('words a rule change in sentence case (U-13)', () => {
+      const event = feedEventFromAuditGroup(
+        auditGroup(
+          'configuration_change',
+          {
+            id: 'r1',
+            resource_id: 'tool_rule',
+            details: { config_type: 'tool_rule', action: 'created' },
+          },
+          'success'
+        )
+      );
+      expect(event?.text).to.equal('Tool rule created');
+    });
+
     it('names the policy and spells out the action of a policy change', () => {
       const event = feedEventFromAuditGroup(
         auditGroup(

@@ -286,10 +286,10 @@ const PAST_TENSE = new Set([
 ]);
 
 const CONFIG_LABELS: Record<string, string> = {
-  mcp_server: 'MCP Server',
+  mcp_server: 'MCP server',
   tool_configuration: 'Tool',
-  tool_rule: 'Tool Rule',
-  approval_workflow: 'Approval Workflow',
+  tool_rule: 'Tool rule',
+  approval_workflow: 'Approval workflow',
   tracker: 'Tracker',
   flow: 'Flow',
   api_key: 'API key',
