@@ -1344,6 +1344,7 @@ export class FlowExecutionsView extends AuthedElement {
         }
 
         <time-range-select
+          size="medium"
           ariaLabel="Executions time range"
           .value=${this.range}
           .options=${RANGE_OPTIONS.map(({ value, label }) => ({
