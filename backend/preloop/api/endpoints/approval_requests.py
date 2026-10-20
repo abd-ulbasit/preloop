@@ -249,8 +249,7 @@ def _check_approval_permission(
 
     try:
         global_check(current_user=current_user, db=db, request=request)
-        if permission == "decide_approvals":
-            ensure_permission_in_oss(db, current_user, "decide_approvals")
+        ensure_permission_in_oss(db, current_user, permission)
         return
     except HTTPException as denied:
         if denied.status_code != 403:

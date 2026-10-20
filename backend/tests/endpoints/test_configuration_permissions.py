@@ -626,3 +626,24 @@ def test_async_route_permission_check_runs_off_event_loop(
     assert response.status_code == 403, response.text
     checked.assert_called_once()
     assert query_on_loop == [False]
+
+
+def test_approval_read_checks_enforce_view_permission_in_oss(
+    db_session: Session, permission_actor: models.User
+) -> None:
+    """Approval reads use the same OSS fallback as decisions."""
+    with pytest.raises(HTTPException) as denied:
+        approval_requests._check_approval_permission(
+            "view_approvals",
+            request_id=uuid4(),
+            current_user=permission_actor,
+            db=db_session,
+        )
+    assert denied.value.status_code == 403
+    _grant_permission(db_session, permission_actor, "view_approvals")
+    approval_requests._check_approval_permission(
+        "view_approvals",
+        request_id=uuid4(),
+        current_user=permission_actor,
+        db=db_session,
+    )
