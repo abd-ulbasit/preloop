@@ -433,6 +433,7 @@ def get_approval_request_stats(
     Computed over every request of the account, so the page no longer has
     to load the whole history to count it.
     """
+    ensure_permission_in_oss(db, current_user, "view_approvals")
     crud_approval_request.expire_stale_pending(db, account_id=current_user.account_id)
     return ApprovalRequestStats(
         **crud_approval_request.stats_by_account(db, account_id=current_user.account_id)
@@ -657,6 +658,7 @@ def list_approval_requests(
             explicit validation error instead of an empty list that reads as
             "this session needs nothing".
     """
+    ensure_permission_in_oss(db, current_user, "view_approvals")
     crud_approval_request.expire_stale_pending(db, account_id=current_user.account_id)
     # Use CRUD layer to get approval requests with filters. `runtime_session_id`
     # is ANDed with the caller's account inside the CRUD layer, so a session id

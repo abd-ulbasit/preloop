@@ -49,6 +49,24 @@ class RouteCase:
 ROUTES = [
     RouteCase(
         approval_requests,
+        "get_approval_request_stats",
+        "GET",
+        "/api/v1/approval-requests/stats",
+        "view_approvals",
+        "crud_approval_request.expire_stale_pending",
+        None,
+    ),
+    RouteCase(
+        approval_requests,
+        "list_approval_requests",
+        "GET",
+        "/api/v1/approval-requests",
+        "view_approvals",
+        "crud_approval_request.expire_stale_pending",
+        None,
+    ),
+    RouteCase(
+        approval_requests,
         "get_approval_original_args",
         "GET",
         "/api/v1/approval-requests/00000000-0000-0000-0000-000000000001/original-args",
