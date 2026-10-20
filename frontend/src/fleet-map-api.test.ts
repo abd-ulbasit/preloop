@@ -86,7 +86,7 @@ describe('fleet map graph', () => {
     const graph = sampleFleetMap();
     const first = layoutGraph(graph);
     expect(first.columns.map((c) => c.type)).to.deep.equal([
-      ...FLEET_MAP_COLUMNS.filter((c) => c !== 'work'),
+      ...FLEET_MAP_COLUMNS.filter((c) => c !== 'work' && c !== 'flow'),
     ]);
     expect(layoutGraph(graph).positions).to.deep.equal(first.positions);
     const users = first.positions.get('user:maya')!;

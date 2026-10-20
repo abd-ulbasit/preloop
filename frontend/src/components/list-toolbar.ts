@@ -88,9 +88,11 @@ export class ListToolbar extends LitElement {
       scrollbar-width: thin;
       padding: 2px;
     }
+    /* A dense bar keeps the search at a reading width; spare room stays
+       between the filters and the count instead of stretching the input. */
     :host([compact]) .filters sl-input {
-      flex: 1 0 150px;
-      min-width: 150px;
+      flex: 0 1 320px;
+      min-width: 200px;
     }
     :host([compact]) .filters ::slotted(sl-select) {
       min-width: 0;

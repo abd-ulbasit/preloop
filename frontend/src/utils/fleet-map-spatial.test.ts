@@ -96,3 +96,90 @@ describe('fleet-map spatial ownership', () => {
     for (const p of large.positions.values()) expect(p.w).to.be.at.least(180);
   });
 });
+
+describe('fleet-map spatial packing', () => {
+  it('packs the core, then people islands, then flows beside their work', () => {
+    const base = sampleFleetMap();
+    const extra = (id: string, type: 'flow' | 'work') => ({
+      ...base.nodes[0],
+      id,
+      type,
+      label: id,
+      ...(type === 'work' ? { work_kind: 'issue' as const } : {}),
+    });
+    const graph = {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        extra('flow:triage', 'flow'),
+        extra('work:issue:41', 'work'),
+      ],
+    };
+    const layout = spatialLayout(
+      graph,
+      layoutGraph(graph).positions,
+      {},
+      clusterOf(graph),
+      new Set(),
+      { width: 1600, height: 900 }
+    );
+    const x = (id: string) => layout.positions.get(id)!.x;
+    const models = graph.nodes.filter((n) => n.type === 'model');
+    const people = graph.nodes.filter((n) => n.type === 'user');
+    for (const model of models)
+      for (const person of people)
+        expect(x(model.id)).to.be.below(x(person.id));
+    for (const person of people)
+      expect(x(person.id)).to.be.below(x('flow:triage'));
+    expect(x('flow:triage')).to.be.below(x('work:issue:41'));
+    // Adjacent shelves: nothing sits between the flow and its work.
+    const shelves = [
+      ...new Set([...layout.positions.values()].map((p) => p.x)),
+    ].sort((a, b) => a - b);
+    expect(shelves.indexOf(x('work:issue:41'))).to.equal(
+      shelves.indexOf(x('flow:triage')) + 1
+    );
+  });
+});
+
+describe('fleet-map columns', () => {
+  it('gives flows their own column beside Work and keeps Agents for agents', () => {
+    const base = sampleFleetMap();
+    const graph = {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        { ...base.nodes[0], id: 'flow:triage', type: 'flow' as const },
+      ],
+    };
+    const layout = layoutGraph(graph);
+    const types = layout.columns.map((c) => c.type);
+    expect(types).to.include('flow');
+    expect(types.indexOf('flow')).to.equal(types.indexOf('provider') + 1);
+    expect(layout.columns.find((c) => c.type === 'agent')!.count).to.equal(
+      base.nodes.filter((n) => n.type === 'agent').length
+    );
+    // Seven columns still fit 1920px at 100%.
+    expect(layout.width).to.be.at.most(1832);
+  });
+
+  it('stretches the row pitch into a tall stage and keeps it tight in a short one', () => {
+    const graph = sampleFleetMap();
+    const pitch = (height: number) => {
+      const layout = layoutGraph(graph, {
+        room: { width: 1880, height },
+      });
+      const ys = [...layout.positions]
+        .filter(([id]) => id.startsWith('model:'))
+        .map(([, p]) => p.y)
+        .sort((a, b) => a - b);
+      return { gap: ys[1] - ys[0], height: layout.height };
+    };
+    const tall = pitch(1000);
+    const short = pitch(300);
+    expect(short.gap).to.equal(48 + 10);
+    expect(tall.gap).to.be.above(short.gap);
+    expect(tall.gap).to.be.at.most(48 + 64);
+    expect(tall.height).to.be.at.most(1000 - 16 - 64);
+  });
+});

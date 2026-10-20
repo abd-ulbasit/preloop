@@ -124,9 +124,14 @@ const TYPE_ORDER = [
 ];
 
 /**
- * Pack measured islands beside a shared model/provider core. The stage's
- * aspect ratio decides the shelves; overflow adds columns, never a distant
- * ring that makes every label shrink. Stable ordering makes reset repeatable.
+ * Pack the canvas left to right in shelves: the shared core first (one short
+ * column per provider, the provider on top and its models under it), then
+ * the people islands (a person, their machines and the agents inside), then
+ * the work cluster (flows, then issues with their pull requests). Agents sit
+ * between the models they call and the work they create, so lines stay short
+ * and do not cross the core. Every shelf is centred on the stage with its
+ * gaps stretched to use the height, and the shelves are spread across the
+ * width. Stable ordering makes reset repeatable.
  */
 export function clusterSeed(
   ids: string[],
@@ -144,90 +149,98 @@ export function clusterSeed(
     members.set(key, [...(members.get(key) ?? []), id]);
   }
   const seed = new Map<string, { x: number; y: number }>();
+  const roomHeight = Math.max(320, viewport.height - GUTTER * 2);
+  // A shelf is a column of blocks; a block is rows that stay 12px apart
+  // (an island), and the space between blocks stretches.
+  type Shelf = string[][];
+  const shelves: Shelf[] = [];
+  const blockHeight = (block: string[]) =>
+    block.reduce((sum, id) => sum + heightOf(id), 0) +
+    Math.max(0, block.length - 1) * 12;
+  const shelfHeight = (shelf: Shelf) =>
+    shelf.reduce((sum, block) => sum + blockHeight(block), 0) +
+    Math.max(0, shelf.length - 1) * GUTTER;
+  /** Blocks in order, a new shelf when the stage height is used up. */
+  const fill = (blocks: string[][]) => {
+    let shelf: Shelf = [];
+    for (const block of blocks) {
+      if (
+        shelf.length &&
+        shelfHeight(shelf) + GUTTER + blockHeight(block) > roomHeight
+      ) {
+        shelves.push(shelf);
+        shelf = [];
+      }
+      shelf.push(block);
+    }
+    if (shelf.length) shelves.push(shelf);
+  };
+  // Core: one column per provider.
   const shared = members.get('shared') ?? [];
-  const providerOf = (id: string) =>
-    graph?.edges.find(
-      (edge) =>
+  const providerIds = new Set(shared.filter((id) => typeOf(id) === 'provider'));
+  const providerOf = (id: string, depth = 0): string => {
+    for (const edge of graph?.edges ?? [])
+      if (
+        depth < 3 &&
         edge.source === id &&
         (edge.kind === 'provided_by' || edge.kind === 'account_of_provider')
-    )?.target ?? '';
-  const providers = shared.filter((id) => typeOf(id) === 'provider').sort();
-  const models = shared
-    .filter((id) => typeOf(id) !== 'provider')
+      )
+        return providerIds.has(edge.target)
+          ? edge.target
+          : providerOf(edge.target, depth + 1);
+    const facet = byId.get(id)?.provider_ids.find((p) => providerIds.has(p));
+    return facet ?? '';
+  };
+  const core = new Map<string, string[]>();
+  for (const id of [...providerIds].sort()) core.set(id, [id]);
+  for (const id of shared.filter((id) => !providerIds.has(id)).sort()) {
+    const key = providerOf(id);
+    core.set(key, [...(core.get(key) ?? []), id]);
+  }
+  for (const [, column] of [...core].sort(
+    ([a], [b]) => Number(!a) - Number(!b) || a.localeCompare(b)
+  ))
+    fill(column.map((id) => [id]));
+  // People islands, then anything without a person.
+  const rank = (id: string) => TYPE_ORDER.indexOf(typeOf(id));
+  const islandOrder = (key: string, list: string[]) =>
+    key === 'other' ? 2 : list.some((id) => typeOf(id) === 'user') ? 0 : 1;
+  const islands = [...members]
+    .filter(([key]) => !['shared', 'work', 'flows'].includes(key))
     .sort(
-      (a, b) => providerOf(a).localeCompare(providerOf(b)) || a.localeCompare(b)
+      ([a, la], [b, lb]) =>
+        islandOrder(a, la) - islandOrder(b, lb) || a.localeCompare(b)
+    )
+    .map(([, list]) =>
+      [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
     );
-  const width = Math.max(viewport.width, nodeWidth * 4 + GUTTER * 5);
-  const roomHeight = Math.max(320, viewport.height - GUTTER * 2);
-  const coreX = width / 2 - nodeWidth - GUTTER / 2;
-  const work = members.get('work') ?? [];
-  const workHeight = work.length
-    ? Math.ceil(work.length / 2) * (Math.max(...work.map(heightOf)) + GUTTER)
-    : 0;
-  const coreHeight = Math.max(240, roomHeight - workHeight);
-  const column = (list: string[], x: number) => {
-    const natural = list.reduce((sum, id) => sum + heightOf(id), 0);
+  fill(islands);
+  // Work cluster: the flows beside the issues and pull requests they act on.
+  const flows = (members.get('flows') ?? []).sort();
+  fill(flows.map((id) => [id]));
+  const work = (members.get('work') ?? []).sort();
+  fill(work.map((id) => [id]));
+  shelves.forEach((shelf, index) => {
+    const natural = shelfHeight(shelf) - Math.max(0, shelf.length - 1) * GUTTER;
     const gap =
-      list.length > 1
+      shelf.length > 1
         ? Math.max(
-            12,
-            Math.min(72, (coreHeight * 0.82 - natural) / (list.length - 1))
+            GUTTER,
+            Math.min(120, (roomHeight * 0.92 - natural) / (shelf.length - 1))
           )
         : 0;
-    const height = natural + Math.max(0, list.length - 1) * gap;
-    let y = GUTTER + Math.max(0, (coreHeight - height) / 2);
-    for (const id of list) {
-      seed.set(id, { x, y });
-      y += heightOf(id) + gap;
+    const height = natural + Math.max(0, shelf.length - 1) * gap;
+    let y = GUTTER + Math.max(0, (roomHeight - height) / 2);
+    const x = index * (nodeWidth + GUTTER);
+    for (const block of shelf) {
+      for (const id of block) {
+        seed.set(id, { x, y });
+        y += heightOf(id) + 12;
+      }
+      y += gap - 12;
     }
-  };
-  column(models, coreX);
-  column(providers, coreX + nodeWidth + GUTTER);
-  work.forEach((id, i) =>
-    seed.set(id, {
-      x: coreX + (i % 2) * (nodeWidth + GUTTER),
-      y:
-        GUTTER +
-        coreHeight +
-        Math.floor(i / 2) * (Math.max(...work.map(heightOf)) + GUTTER),
-    })
-  );
-  const hostOf = new Map<string, string>();
-  for (const edge of graph?.edges ?? [])
-    if (edge.kind === 'hosts') hostOf.set(edge.target, edge.source);
-  const islands = [...members]
-    .filter(([key]) => key !== 'shared' && key !== 'work')
-    .map(([key, list]) => {
-      const rank = (id: string) => TYPE_ORDER.indexOf(typeOf(id));
-      const rows = [...list].sort(
-        (a, b) => rank(a) - rank(b) || a.localeCompare(b)
-      );
-      return {
-        key,
-        rows,
-        height: rows.reduce((sum, id) => sum + heightOf(id) + 12, 0) - 12,
-      };
-    })
-    .sort((a, b) => b.height - a.height || a.key.localeCompare(b.key));
-  const sides = [
-    { x: coreX - nodeWidth - GUTTER, y: GUTTER, area: 0, direction: -1 },
-    { x: coreX + 2 * (nodeWidth + GUTTER), y: GUTTER, area: 0, direction: 1 },
-  ];
-  for (const island of islands) {
-    const side = sides[0].area <= sides[1].area ? sides[0] : sides[1];
-    if (side.y > GUTTER && side.y + island.height > roomHeight + GUTTER) {
-      side.x += side.direction * (nodeWidth + GUTTER);
-      side.y = GUTTER;
-    }
-    for (const id of island.rows) {
-      seed.set(id, { x: side.x, y: side.y });
-      side.y += heightOf(id) + 12;
-    }
-    side.y += GUTTER - 12;
-    side.area += island.height + GUTTER;
-  }
-  // Spread occupied shelves through available width, keeping the core tight
-  // to its neighbours instead of leaving an empty ring around it.
+  });
+  // Spread the shelves through the available width.
   const xs = [...new Set([...seed.values()].map((p) => p.x))].sort(
     (a, b) => a - b
   );

@@ -419,7 +419,7 @@ describe('fleet-map work geometry', () => {
     expect(chip.getAttribute('data-status')).to.equal('Merged');
     expect(chip.textContent).to.contain('Merged');
   });
-  it('repacks new work into the bottom lane before the user owns a spatial layout', async () => {
+  it('repacks new work into the work shelf, right of the flows, before the user owns a spatial layout', async () => {
     const el = await map({ positionsScope: 'work-packing' });
     for (const id of [41, 42]) {
       el.recordActivity('flow_executions', {
@@ -442,9 +442,261 @@ describe('fleet-map work geometry', () => {
       ...el.shadowRoot!.querySelectorAll<HTMLElement>('[data-kind="work"]'),
     ];
     expect(work).to.have.length(2);
-    expect(
-      Math.abs(parseFloat(work[0].style.top) - parseFloat(work[1].style.top))
-    ).to.be.below(2);
+    const left = (n: Element) => parseFloat((n as HTMLElement).style.left);
+    expect(Math.abs(left(work[0]) - left(work[1]))).to.be.below(2);
+    const flow = el.shadowRoot!.querySelector('[data-node="flow:triage"]')!;
+    expect(left(flow)).to.be.below(left(work[0]));
+    for (const node of el.shadowRoot!.querySelectorAll('[data-kind="user"]'))
+      expect(left(node)).to.be.below(left(flow));
+  });
+});
+
+const issue = (n: number) => ({
+  kind: 'issue',
+  key: `example/widgets#${n}`,
+  reference: `#${n}`,
+  title: `Issue ${n}`,
+  url: `https://example.com/example/widgets/issues/${n}`,
+});
+
+describe('fleet-map v3 pass 2', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+
+  it('keeps the search at a reading width and never clips a select', async () => {
+    const el = await map({ spatialOnly: false });
+    el.style.width = '1880px';
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const bar = el.shadowRoot!.querySelector('list-toolbar')!;
+    const search = bar.shadowRoot!.querySelector('sl-input')!;
+    expect(search.getBoundingClientRect().width).to.be.at.most(320);
+    const windows = el.shadowRoot!.querySelector<
+      HTMLElement & { value: string }
+    >('[data-testid="fleet-map-window"]')!;
+    for (const value of ['5m', '24h']) {
+      windows.value = value;
+      await (windows as unknown as { updateComplete: Promise<unknown> })
+        .updateComplete;
+      const input = windows.shadowRoot!.querySelector<HTMLInputElement>(
+        '.select__display-input'
+      )!;
+      expect(input.scrollWidth, value).to.be.at.most(input.clientWidth + 1);
+    }
+    for (const select of el.shadowRoot!.querySelectorAll(
+      'sl-select.secondary-filter'
+    ))
+      expect(select.getBoundingClientRect().width).to.be.at.least(136);
+  });
+
+  it('keeps tracker labels on the issue chip after the PR opens', async () => {
+    const el = await map({ positionsScope: 'labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: ['bug', 'p2'],
+      labels_removed: [],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = () =>
+      el.shadowRoot!.querySelector(
+        '[data-node="work:issue:example/widgets#41"]'
+      )!;
+    const tags = () =>
+      [...chip().querySelectorAll('[data-label]')].map((t) =>
+        t.textContent!.trim()
+      );
+    expect(tags()).to.deep.equal(['bug', 'p2']);
+    send({
+      event_id: 'p',
+      action: 'opened',
+      flow_id: 'implementation',
+      subject: {
+        kind: 'pull_request',
+        key: 'example/widgets#51',
+        reference: '#51',
+      },
+      related_issue: issue(41),
+    });
+    send({
+      event_id: 'u',
+      action: 'issue_unlabeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_removed: ['p2'],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(chip().textContent).to.contain('PR open');
+    expect(tags()).to.deep.equal(['bug']);
+  });
+
+  it('draws no line between an issue and the PR inside it, and no text on story lines', async () => {
+    for (const arrangement of ['columns', 'spatial']) {
+      const el = await map({
+        spatialOnly: false,
+        defaultArrangement: arrangement,
+        positionsScope: `contain-${arrangement}`,
+      });
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: {
+          event_id: 'o',
+          action: 'issue_opened',
+          managed_agent_id: 'claude',
+          subject: issue(41),
+        },
+      });
+      el.recordActivity('code_activity', {
+        type: 'code_activity',
+        payload: {
+          event_id: 'p',
+          action: 'opened',
+          flow_id: 'implementation',
+          subject: {
+            kind: 'pull_request',
+            key: 'example/widgets#51',
+            reference: '#51',
+          },
+          related_issue: issue(41),
+        },
+      });
+      await el.updateComplete;
+      await el.updateComplete;
+      const issueId = 'work:issue:example/widgets#41';
+      const prId = 'work:pull_request:example/widgets#51';
+      expect(el.shadowRoot!.querySelector(`[data-node="${prId}"]`), arrangement)
+        .to.exist;
+      for (const path of el.shadowRoot!.querySelectorAll(
+        'path[data-edge="caused"]'
+      )) {
+        const id = path.getAttribute('data-edge-id') ?? '';
+        expect(
+          id.includes(issueId) && id.includes(prId),
+          `${arrangement} ${id}`
+        ).to.equal(false);
+      }
+      expect(
+        el.shadowRoot!.querySelector('path[data-edge="caused"].active'),
+        arrangement
+      ).to.exist;
+      expect(el.shadowRoot!.querySelector('text.activity-label'), arrangement)
+        .not.to.exist;
+    }
+  });
+
+  it('places bubbles beside their node in Columns, never on another node', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      bubbles: true,
+      positionsScope: 'bubbles-columns',
+    });
+    el.style.height = '900px';
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: {
+        managed_agent_id: 'claude',
+        model_alias: 'claude-sonnet-5-5',
+        api_usage_id: 'u1',
+        prompt_tokens: 2100,
+        completion_tokens: 330,
+        outcome: 'success',
+      },
+    });
+    await el.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await el.updateComplete;
+    const bubble = el.shadowRoot!.querySelector<HTMLElement>('.bubble')!;
+    expect(bubble).to.exist;
+    const b = bubble.getBoundingClientRect();
+    const own = el
+      .shadowRoot!.querySelector(`[data-node="${bubble.dataset.bubble}"]`)!
+      .getBoundingClientRect();
+    // Next to its node, not in a corner stack.
+    expect(Math.abs(b.top - own.bottom)).to.be.below(own.height + 40);
+    for (const node of el.shadowRoot!.querySelectorAll<HTMLElement>(
+      '.node:not(.child)'
+    )) {
+      if (node.dataset.node === bubble.dataset.bubble) continue;
+      const r = node.getBoundingClientRect();
+      const hit =
+        b.left < r.right &&
+        r.left < b.right &&
+        b.top < r.bottom &&
+        r.top < b.bottom;
+      expect(hit, node.dataset.node).to.equal(false);
+    }
+  });
+
+  it('refits the camera when a node joins an unowned spatial layout, and not once it is owned', async () => {
+    const el = await map({ positionsScope: 'join-refit' });
+    const internals = el as unknown as {
+      userMovedAt: number;
+      points: Record<string, { x: number; y: number }>;
+      translateX: number;
+      translateY: number;
+      scale: number;
+      applyTransform(): void;
+    };
+    internals.userMovedAt = -Infinity;
+    const view = () => [
+      internals.translateX,
+      internals.translateY,
+      internals.scale,
+    ];
+    const join = async (n: number) => {
+      el.recordActivity('flow_executions', {
+        type: 'execution_started',
+        flow_id: `flow${n}`,
+        execution_id: `run${n}`,
+        payload: {
+          status: 'RUNNING',
+          fleet_context: { flow_name: `Flow ${n}` },
+        },
+      });
+      await el.updateComplete;
+      await el.updateComplete;
+      await el.updateComplete;
+    };
+    // The camera drifted (a previous fit, a resize) but every node is in view.
+    const nudge = () => {
+      internals.translateX -= 8;
+      internals.translateY -= 6;
+      internals.applyTransform();
+      return view();
+    };
+    await join(1);
+    const fitted = view();
+    const drifted = nudge();
+    await join(2);
+    expect(view()).not.to.deep.equal(drifted);
+    expect(view()[2]).to.be.closeTo(fitted[2], 0.05);
+    // Owned: the user's arrangement and camera stay put.
+    const shown = el.shadowRoot!.querySelectorAll<HTMLElement>('[data-node]');
+    internals.points = Object.fromEntries(
+      [...shown].map((n) => [
+        n.dataset.node!,
+        { x: parseFloat(n.style.left), y: parseFloat(n.style.top) },
+      ])
+    );
+    await el.updateComplete;
+    const owned = nudge();
+    await join(3);
+    expect(view()).to.deep.equal(owned);
   });
 });
 

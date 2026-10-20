@@ -32,6 +32,22 @@ const TERMINAL = new Set([
 ]);
 
 /** Only navigable object URLs, with credentials and tracking/query data removed. */
+/** Labels after an update: removals first, then additions, at most six. */
+export function nextLabels(
+  current: string[] | undefined,
+  added: unknown,
+  removed: unknown
+): string[] {
+  const list = (value: unknown) =>
+    Array.isArray(value)
+      ? value.map((item) => text(item, 40)).filter(Boolean)
+      : [];
+  const gone = new Set(list(removed));
+  const next = (current ?? []).filter((label) => !gone.has(label));
+  for (const label of list(added)) if (!next.includes(label)) next.push(label);
+  return next.slice(0, 6);
+}
+
 export function workUrl(value: unknown): string {
   try {
     const url = new URL(text(value, 2000));
@@ -361,6 +377,12 @@ export class FleetStory {
           }
         } else if (action === 'issue_labeled' || action === 'issue_updated')
           work.node.status = 'Updated';
+        if (action === 'issue_labeled' || action === 'issue_unlabeled')
+          work.node.labels = nextLabels(
+            work.node.labels,
+            p.labels_added,
+            p.labels_removed
+          );
         this.link(actor, subject, now);
         // Merge contributors are association evidence, never a human merger.
         if (Array.isArray(p.flow_ids))
