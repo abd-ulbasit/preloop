@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optimization actions in all editions
   ([#1926](https://github.com/preloop/preloop/pull/1926)).
 
+- Scope preset clones, flow model bindings and tool configuration references
+  to the caller's account.
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
   RBAC plugin, matching the other agent-control endpoints

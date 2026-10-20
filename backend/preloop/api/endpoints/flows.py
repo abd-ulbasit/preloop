@@ -161,15 +161,19 @@ def _owned_ci_execution(
     return execution
 
 
-def _reject_codex_model(
+def _validate_flow_model_binding(
     db: Session, agent_type: Any, model_id: Any, account_id: Any
 ) -> None:
-    """Validate Codex's selected model before persisting a flow."""
-    if str(agent_type).lower() != "codex" or model_id is None:
+    """Validate model scope and Codex compatibility before persisting a flow."""
+    if model_id is None:
         return
     model = crud_ai_model.get(db, id=model_id)
-    if model is None or model.account_id not in (None, account_id):
+    if model is None or (
+        model.account_id is not None and str(model.account_id) != str(account_id)
+    ):
         raise HTTPException(status_code=422, detail="AI model not found")
+    if str(agent_type).lower() != "codex":
+        return
     error = codex_model_configuration_error(model)
     if error:
         raise HTTPException(status_code=422, detail=error)
@@ -350,7 +354,7 @@ def create_flow(
         flow_in.trigger_event_source = "webhook"
         flow_in.trigger_event_types = ["webhook"]
 
-    _reject_codex_model(
+    _validate_flow_model_binding(
         db, flow_in.agent_type, flow_in.ai_model_id, current_user.account_id
     )
     _reject_host_exec_flow(
@@ -753,7 +757,14 @@ def clone_preset(
     the user customizes the prompt or tools.
     """
     preset = crud_flow.get(db=db, id=flow_id)
-    if not preset or not preset.is_preset:
+    if (
+        not preset
+        or not preset.is_preset
+        or (
+            preset.account_id is not None
+            and str(preset.account_id) != str(current_user.account_id)
+        )
+    ):
         raise HTTPException(status_code=404, detail="Preset not found")
 
     # Bind an AI model that will actually work for this account BEFORE
@@ -3035,7 +3046,7 @@ def update_flow(
         except CallableFlowsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    _reject_codex_model(
+    _validate_flow_model_binding(
         db,
         flow_in.agent_type
         if "agent_type" in flow_in.model_fields_set

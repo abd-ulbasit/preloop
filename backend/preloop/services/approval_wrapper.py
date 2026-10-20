@@ -148,7 +148,7 @@ def with_approval(tool_func: Callable) -> Callable:
 
                     # Get approval workflow using CRUD
                     workflow = await get_approval_workflow_async(
-                        db, workflow_id=workflow_id
+                        db, workflow_id=workflow_id, account_id=user_context.account_id
                     )
 
                     if not workflow:

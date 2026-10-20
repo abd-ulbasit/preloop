@@ -1653,6 +1653,18 @@ class FlowExecutionOrchestrator:
                     logger.warning(
                         f"Recorded routing model {effective_ai_model_id} is not available; falling back to flow model {self.flow.ai_model_id}."
                     )
+            if self.ai_model and (
+                self.ai_model.account_id is not None
+                and str(self.ai_model.account_id) != str(self.flow.account_id)
+            ):
+                unavailable_model_id = self.ai_model.id
+                self.ai_model = None
+                logger.warning(
+                    "AI model %s is not available to flow account %s; refusing to start",
+                    unavailable_model_id,
+                    self.flow.account_id,
+                )
+                raise ValueError("AI model is not available to this flow account")
             if not self.ai_model:
                 routing_record = (self.trigger_event_data or {}).get(
                     ROUTING_RECORD_KEY

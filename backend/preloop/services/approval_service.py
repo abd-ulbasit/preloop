@@ -2445,7 +2445,9 @@ class ApprovalService:
                     )
 
                     escalation_workflow = await get_approval_workflow_async(
-                        self.db, workflow_id=approval_workflow.escalation_workflow_id
+                        self.db,
+                        workflow_id=approval_workflow.escalation_workflow_id,
+                        account_id=approval_workflow.account_id,
                     )
                     if escalation_workflow:
                         logger.info(

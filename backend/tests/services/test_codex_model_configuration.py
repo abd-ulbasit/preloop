@@ -53,12 +53,12 @@ def test_responses_capable_models_remain_supported(
 
 
 def test_save_rejects_chat_only_codex_with_remediation() -> None:
-    from preloop.api.endpoints.flows import _reject_codex_model
+    from preloop.api.endpoints.flows import _validate_flow_model_binding
 
     model = models.AIModel(provider_name="anthropic", account_id=None, meta_data={})
     with patch("preloop.api.endpoints.flows.crud_ai_model.get", return_value=model):
         with pytest.raises(HTTPException) as caught:
-            _reject_codex_model(MagicMock(), "codex", "model-id", "account-id")
+            _validate_flow_model_binding(MagicMock(), "codex", "model-id", "account-id")
     assert caught.value.status_code == 422
     assert "Responses" in caught.value.detail
     assert "gateway.enabled=true" in caught.value.detail
