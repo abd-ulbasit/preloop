@@ -356,11 +356,13 @@ tools:
       - expression: "args.amount <= 500"
         action: allow
         description: "Small payments are safe"
-
-defaults:
-  unknown_tools: require_approval
-  default_approval_workflow: "finance-human"
 ```
+
+A tool the policy does not list is allowed. In `defaults`, `apply` (also with
+`--dry-run`) accepts only `unknown_tools: allow`; it rejects
+`unknown_tools: deny` or `require_approval`, `require_approval_for_new_tools: true`
+and `default_approval_workflow`. To put a tool behind approval, list it under
+`tools:` as `pay` is above.
 
 Apply with the CLI:
 
