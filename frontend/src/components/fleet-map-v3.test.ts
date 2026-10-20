@@ -629,7 +629,7 @@ describe('fleet-map v3 pass 2', () => {
     // Next to its node, not in a corner stack.
     expect(Math.abs(b.top - own.bottom)).to.be.below(own.height + 40);
     for (const node of el.shadowRoot!.querySelectorAll<HTMLElement>(
-      '.node:not(.child)'
+      '.node:not(.child), .column-title'
     )) {
       if (node.dataset.node === bubble.dataset.bubble) continue;
       const r = node.getBoundingClientRect();

@@ -18,7 +18,9 @@ import {
   FLEET_MAP_CAP,
   FLEET_MAP_COLUMN_LABEL,
   FLEET_MAP_EDGE_LABEL,
+  FLEET_MAP_HEADER,
   FLEET_MAP_NODE_HEIGHT,
+  FLEET_MAP_NODE_WIDTH,
   FLEET_MAP_TYPES,
   FLEET_MAP_TYPE_LABEL,
   agentState,
@@ -2989,26 +2991,47 @@ export class FleetMap extends LitElement {
         w: p.w * s,
         h: p.h * s,
       });
-    const groups = this.lastLayout?.groups ?? new Map<string, string[]>();
+    const layout = this.lastLayout;
+    const groups = layout?.groups ?? new Map<string, string[]>();
+    let pitch = Number.POSITIVE_INFINITY;
+    if (!this.spatial && layout?.columns.length) {
+      // Column headers are part of the picture: a note never covers one.
+      for (const column of layout.columns)
+        nodes.set(`header:${column.type}`, {
+          x: this.translateX + column.x * s,
+          y: this.translateY,
+          w: FLEET_MAP_NODE_WIDTH * s,
+          h: FLEET_MAP_HEADER * s,
+        });
+      // A note fits its column and gutter, so it can sit under its node.
+      if (layout.columns.length > 1)
+        pitch = (layout.columns[1].x - layout.columns[0].x - 12) * s;
+    }
     const panel =
       this.selected && !window.matchMedia('(max-width: 900px)').matches
         ? 364
         : 0;
-    return placeBubbles(requests, {
-      nodes,
-      bounds: {
-        x: 12,
-        y: 12,
-        w: Math.max(0, this.viewport.width - 24 - panel),
-        h: Math.max(0, this.viewport.height - 64),
-      },
-      sides: this.spatial
-        ? ['right', 'left', 'below', 'above']
-        : ['below', 'above', 'right', 'left'],
-      related: (node, other) =>
-        !!groups.get(other)?.includes(node) ||
-        !!groups.get(node)?.includes(other),
-    });
+    return placeBubbles(
+      requests.map((request) => ({
+        ...request,
+        w: Math.min(request.w, Math.max(140, pitch)),
+      })),
+      {
+        nodes,
+        bounds: {
+          x: 12,
+          y: 12,
+          w: Math.max(0, this.viewport.width - 24 - panel),
+          h: Math.max(0, this.viewport.height - 64),
+        },
+        sides: this.spatial
+          ? ['right', 'left', 'below', 'above']
+          : ['below', 'above', 'right', 'left'],
+        related: (node, other) =>
+          !!groups.get(other)?.includes(node) ||
+          !!groups.get(node)?.includes(other),
+      }
+    );
   }
 
   private positionBubbles(): void {
