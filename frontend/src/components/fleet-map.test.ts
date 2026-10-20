@@ -20,6 +20,12 @@ async function allAgents(el: FleetMap): Promise<void> {
   await el.updateComplete;
 }
 
+// The Show choice is remembered per user and map: no test inherits another's.
+afterEach(() => {
+  for (const key of Object.keys(localStorage))
+    if (key.startsWith('preloop:fleet-map:types')) localStorage.removeItem(key);
+});
+
 describe('fleet-map', () => {
   it('says what to do when there is nothing to map', async () => {
     const el = await fixture<FleetMap>(
