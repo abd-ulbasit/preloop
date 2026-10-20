@@ -408,3 +408,344 @@ describe('agent-talk-view approvals', () => {
     el.remove();
   });
 });
+
+describe('agent-talk-view session integrity', () => {
+  const OTHER = {
+    ...SESSION,
+    id: 'sess-2',
+    title: 'Fix the flaky login test',
+    last_activity_at: '2026-09-03T10:20:00Z',
+  };
+  let fetchStub: sinon.SinonStub;
+  let sessions: Array<Record<string, unknown>>;
+  let agentOverrides: Record<string, unknown>;
+  let agentFailure: boolean;
+  let eventPages: Map<string, () => Promise<Response>>;
+
+  function eventsFor(sessionId: string, ids: string[], hasMore = false) {
+    return jsonResponse({
+      logs: ids.map((id, index) => ({
+        id,
+        execution_id: 'exec-1',
+        timestamp: `2026-09-03T10:0${index}:00Z`,
+        type: 'model_gateway_call',
+        runtime_session_id: sessionId,
+        payload: {
+          outcome: 'success',
+          conversation_preview: {
+            messages: [{ source: 'request', role: 'user', text: id }],
+          },
+        },
+      })),
+      pagination: { has_more: hasMore, next_offset: ids.length },
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.setItem('accessToken', 'test-token');
+    sessions = [SESSION, OTHER];
+    agentOverrides = {};
+    agentFailure = false;
+    eventPages = new Map();
+    fetchStub = sinon.stub(window, 'fetch');
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const match = url.match(/runtime-sessions\/([^/]+)\/gateway-events/);
+      if (match || url.includes('/gateway-events')) {
+        const sessionId = match?.[1] ?? 'unknown';
+        const offset = new URL(url, 'http://x').searchParams.get('offset');
+        const custom = eventPages.get(`${sessionId}:${offset}`);
+        if (custom) return custom();
+        return eventsFor(sessionId, [`${sessionId}-e1`]);
+      }
+      if (url.includes('/activity')) return jsonResponse({ items: [] });
+      if (url.includes('/approval-requests')) return jsonResponse([]);
+      if (url.includes('/control/')) {
+        return jsonResponse({ command_id: 'cmd-1', status: 'delivered' });
+      }
+      if (url.includes('/api/v1/agents/agent-1')) {
+        if (agentFailure) return new Response('down', { status: 500 });
+        return jsonResponse({
+          agent: { ...AGENT, ...agentOverrides },
+          sessions,
+        });
+      }
+      return new Response('{}', { status: 200 });
+    });
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  async function mount(search = ''): Promise<AgentTalkView> {
+    const el = document.createElement('agent-talk-view') as AgentTalkView;
+    el.onBeforeEnter({ params: { agentId: 'agent-1' }, search });
+    document.body.append(el);
+    await waitUntil(() =>
+      Boolean(el.shadowRoot!.querySelector('[data-testid="talk-agent-name"]'))
+    );
+    await waitUntil(() => chat(el).events.length > 0);
+    return el;
+  }
+
+  function chat(el: AgentTalkView) {
+    return el.shadowRoot!.querySelector('session-chat-view') as HTMLElement & {
+      sessionId: string;
+      events: Array<{ id: string }>;
+      pending: Array<{ id: string }>;
+      pendingApprovals: unknown[];
+    };
+  }
+
+  function composer(el: AgentTalkView): TalkComposer {
+    return el.shadowRoot!.querySelector('talk-composer') as TalkComposer;
+  }
+
+  function subject(el: AgentTalkView): string {
+    return (
+      el.shadowRoot!.querySelector('[data-testid="talk-session-subject"]')!
+        .textContent || ''
+    );
+  }
+
+  function controlBodies(): Array<Record<string, unknown>> {
+    return fetchStub
+      .getCalls()
+      .filter((call) => String(call.args[0]).includes('/control/command'))
+      .map((call) => JSON.parse(call.args[1].body));
+  }
+
+  async function typeAndSend(el: AgentTalkView, text: string): Promise<void> {
+    const box = composer(el).shadowRoot!.querySelector(
+      '[data-testid="composer-input"]'
+    ) as HTMLElement & { value: string };
+    box.value = text;
+    box.dispatchEvent(new CustomEvent('sl-input', { bubbles: true }));
+    await composer(el).updateComplete;
+    box.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+    );
+  }
+
+  it('stays on the open session when another live session of the same agent reports activity', async () => {
+    const el = await mount();
+    expect(chat(el).sessionId).to.equal('sess-1');
+    el.receiveActivity({
+      payload: { managed_agent_id: 'agent-1', runtime_session_id: 'sess-2' },
+    });
+    await aTimeout(50);
+    await el.updateComplete;
+    expect(chat(el).sessionId).to.equal('sess-1');
+    expect(subject(el)).to.contain('Refactor the billing job');
+    expect(chat(el).events.map((event) => event.id)).to.deep.equal([
+      'sess-1-e1',
+    ]);
+    el.remove();
+  });
+
+  it('shows a switch notice for a new session without switching', async () => {
+    const el = await mount();
+    el.receiveActivity({
+      payload: { managed_agent_id: 'agent-1', runtime_session_id: 'sess-2' },
+    });
+    await waitUntil(() =>
+      el.shadowRoot!.querySelector('[data-testid="session-notice"]')
+    );
+    const notice = el.shadowRoot!.querySelector(
+      '[data-testid="session-notice"]'
+    ) as HTMLElement;
+    expect(notice.getAttribute('aria-live')).to.equal('polite');
+    expect(notice.textContent).to.contain(
+      'New session: Fix the flaky login test.'
+    );
+    expect(chat(el).sessionId).to.equal('sess-1');
+
+    (
+      notice.querySelector(
+        '[data-testid="session-notice-switch"]'
+      ) as HTMLElement
+    ).click();
+    await waitUntil(() => chat(el).sessionId === 'sess-2');
+    await waitUntil(() => chat(el).events[0]?.id === 'sess-2-e1');
+    el.remove();
+  });
+
+  it('switching from the picker loads that session and clears pending, events and approvals', async () => {
+    fetchStub
+      .withArgs(sinon.match(/control\/command/))
+      .resolves(new Response('nope', { status: 500 }));
+    const el = await mount();
+    await typeAndSend(el, 'for session one');
+    await waitUntil(() => chat(el).pending.length === 1);
+
+    const picker = el.shadowRoot!.querySelector('talk-session-picker')!;
+    expect(picker.shadowRoot, 'light DOM, content stays visible').to.equal(
+      null
+    );
+    const option = picker.querySelector(
+      '[data-session-id="sess-2"]'
+    ) as HTMLElement;
+    expect(option.textContent).to.contain('Fix the flaky login test');
+    option.click();
+
+    await waitUntil(() => chat(el).sessionId === 'sess-2');
+    expect(chat(el).pending).to.have.length(0);
+    expect(chat(el).pendingApprovals).to.have.length(0);
+    await waitUntil(() => chat(el).events[0]?.id === 'sess-2-e1');
+    expect(chat(el).events).to.have.length(1);
+    el.remove();
+  });
+
+  it('New session sends start_new_session with no target_session_id', async () => {
+    const el = await mount();
+    const picker = el.shadowRoot!.querySelector('talk-session-picker')!;
+    (
+      picker.querySelector('[data-testid="talk-new-session"]') as HTMLElement
+    ).click();
+    await waitUntil(() => composer(el).sessionId === null);
+    expect(chat(el).events).to.have.length(0);
+    await typeAndSend(el, 'start fresh');
+    await waitUntil(() => controlBodies().length === 1);
+    const body = controlBodies()[0];
+    expect(body.start_new_session).to.equal(true);
+    expect(body.target_session_id ?? null).to.equal(null);
+    el.remove();
+  });
+
+  it('a load-more page resolving after a switch is discarded', async () => {
+    let releasePage: (response: Response) => void = () => undefined;
+    eventPages.set('sess-1:0', async () =>
+      eventsFor('sess-1', ['sess-1-e1'], true)
+    );
+    eventPages.set(
+      'sess-1:1',
+      () => new Promise<Response>((resolve) => (releasePage = resolve))
+    );
+    const el = await mount();
+    chat(el).dispatchEvent(
+      new CustomEvent('session-events-page-requested', { bubbles: true })
+    );
+    await waitUntil(() =>
+      fetchStub
+        .getCalls()
+        .some((call) => String(call.args[0]).includes('offset=1'))
+    );
+    (
+      el
+        .shadowRoot!.querySelector('talk-session-picker')!
+        .querySelector('[data-session-id="sess-2"]') as HTMLElement
+    ).click();
+    await waitUntil(() => chat(el).events[0]?.id === 'sess-2-e1');
+    releasePage(eventsFor('sess-1', ['sess-1-old']));
+    await aTimeout(50);
+    expect(chat(el).events.map((event) => event.id)).to.deep.equal([
+      'sess-2-e1',
+    ]);
+    el.remove();
+  });
+
+  it('refetches the open session on socket reconnect', async () => {
+    // Other parts of the page listen too; tell every listener.
+    const listeners: Array<(state: ConnectionState) => void> = [];
+    const onState = (state: ConnectionState) =>
+      listeners.forEach((listener) => listener(state));
+    sinon.stub(unifiedWebSocketManager, 'subscribe').returns(() => undefined);
+    sinon
+      .stub(unifiedWebSocketManager, 'getState')
+      .returns(ConnectionState.CONNECTED);
+    sinon.stub(unifiedWebSocketManager, 'onStateChange').callsFake((cb) => {
+      listeners.push(cb as (state: ConnectionState) => void);
+      return () => undefined;
+    });
+    sinon.stub(unifiedWebSocketManager, 'connect').resolves();
+    const el = await mount();
+    const eventCalls = () =>
+      fetchStub
+        .getCalls()
+        .filter((call) =>
+          String(call.args[0]).includes('sess-1/gateway-events')
+        ).length;
+    const before = eventCalls();
+    onState(ConnectionState.DISCONNECTED);
+    onState(ConnectionState.CONNECTED);
+    await waitUntil(() => eventCalls() > before);
+    expect(chat(el).sessionId).to.equal('sess-1');
+    el.remove();
+  });
+
+  it('shows a reload error and keeps the thread', async () => {
+    const el = await mount();
+    agentFailure = true;
+    (el as unknown as { load: () => Promise<void> }).load();
+    await waitUntil(() =>
+      el.shadowRoot!.querySelector('[data-testid="talk-error"]')
+    );
+    expect(
+      el.shadowRoot!.querySelector('[data-testid="talk-error"]')!.textContent
+    ).to.contain('Failed to fetch managed agent');
+    expect(chat(el).events.map((event) => event.id)).to.deep.equal([
+      'sess-1-e1',
+    ]);
+    el.remove();
+  });
+
+  it('refocuses the input after a session switch and after retry', async () => {
+    const el = await mount();
+    const focus = sinon.spy(composer(el), 'focusInput');
+    (
+      el
+        .shadowRoot!.querySelector('talk-session-picker')!
+        .querySelector('[data-session-id="sess-2"]') as HTMLElement
+    ).click();
+    await waitUntil(() => focus.callCount === 1);
+    el.dispatchEvent(
+      new CustomEvent('talk-retry', {
+        detail: { id: 'missing' },
+        bubbles: true,
+      })
+    );
+    await waitUntil(() => focus.callCount === 2);
+    el.remove();
+  });
+
+  it('only fetches the sessions section of the agent detail', async () => {
+    const el = await mount();
+    const agentCall = fetchStub
+      .getCalls()
+      .map((call) => String(call.args[0]))
+      .find((url) => url.includes('/api/v1/agents/agent-1'));
+    expect(agentCall).to.contain('include=sessions');
+    el.remove();
+  });
+
+  it('sending into an ended session is blocked and offers switch or new', async () => {
+    sessions = [
+      { ...SESSION, ended_at: '2026-09-03T10:40:00Z', is_active_now: false },
+      OTHER,
+    ];
+    const el = await mount('?session=sess-1');
+    await typeAndSend(el, 'are you there?');
+    const guard = await waitUntil(
+      () =>
+        composer(el).shadowRoot!.querySelector(
+          '[data-testid="ended-session-guard"]'
+        ),
+      'no ended-session guard'
+    ).then(() =>
+      composer(el).shadowRoot!.querySelector(
+        '[data-testid="ended-session-guard"]'
+      )
+    );
+    expect(controlBodies()).to.have.length(0);
+    expect(guard!.textContent).to.contain('This session has ended');
+    const switchButton = guard!.querySelector(
+      '[data-testid="ended-switch"]'
+    ) as HTMLElement;
+    expect(switchButton.textContent).to.contain('Fix the flaky login test');
+    expect(guard!.querySelector('[data-testid="ended-new"]')).to.exist;
+    switchButton.click();
+    await waitUntil(() => chat(el).sessionId === 'sess-2');
+    el.remove();
+  });
+});

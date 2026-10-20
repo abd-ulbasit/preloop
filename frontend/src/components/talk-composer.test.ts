@@ -275,3 +275,109 @@ describe('talk-composer', () => {
     expect(calls.some((url) => url.includes('/control/release'))).to.be.false;
   });
 });
+
+describe('talk-composer session scoping', () => {
+  let fetchStub: sinon.SinonStub;
+
+  beforeEach(() => {
+    localStorage.setItem('accessToken', 'test-token');
+    fetchStub = sinon.stub(window, 'fetch');
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  function ok(): Response {
+    return new Response(
+      JSON.stringify({ status: 'delivered', command_id: 'cmd-1' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  async function type(el: TalkComposer, text: string): Promise<void> {
+    const input = textarea(el);
+    input.value = text;
+    input.dispatchEvent(new CustomEvent('sl-input', { bubbles: true }));
+    await el.updateComplete;
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+    );
+  }
+
+  function commandBodies(): Array<Record<string, unknown>> {
+    return controlCalls(fetchStub)
+      .filter((call) => String(call.args[0]).includes('/control/command'))
+      .map((call) => JSON.parse(call.args[1].body));
+  }
+
+  it('delivers to the session the message was typed in even if sessionId changes during takeover', async () => {
+    let releaseTakeover: (response: Response) => void = () => undefined;
+    fetchStub.callsFake(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/control/takeover')) {
+        return new Promise<Response>((resolve) => (releaseTakeover = resolve));
+      }
+      return ok();
+    });
+    const el = await mount(agent({ control_session_mode: 'local' }));
+    await type(el, 'for sess-1');
+    await waitUntil(() => controlCalls(fetchStub).length === 1);
+    el.sessionId = 'sess-2';
+    await el.updateComplete;
+    releaseTakeover(ok());
+    await waitUntil(() => commandBodies().length === 1);
+    expect(commandBodies()[0].target_session_id).to.equal('sess-1');
+    const takeover = JSON.parse(controlCalls(fetchStub)[0].args[1].body);
+    expect(takeover.target_session_id).to.equal('sess-1');
+  });
+
+  it('retry targets the original session', async () => {
+    fetchStub.resolves(new Response('nope', { status: 500 }));
+    const el = await mount(agent());
+    await type(el, 'retry me');
+    await waitUntil(() => el.pendingMessages[0]?.state === 'failed');
+    el.sessionId = 'sess-2';
+    await el.updateComplete;
+    fetchStub.callsFake(async () => ok());
+    await el.retry(el.pendingMessages[0].id);
+    const bodies = commandBodies();
+    expect(bodies.at(-1)!.target_session_id).to.equal('sess-1');
+    expect(bodies.at(-1)!.start_new_session).to.equal(false);
+  });
+
+  it("only the current session's pending items are emitted", async () => {
+    fetchStub.resolves(new Response('nope', { status: 500 }));
+    const el = await mount(agent());
+    const emitted: Array<Array<{ id: string }>> = [];
+    el.addEventListener('talk-pending-changed', (event) => {
+      emitted.push(
+        (event as CustomEvent<{ pending: Array<{ id: string }> }>).detail
+          .pending
+      );
+    });
+    await type(el, 'only in sess-1');
+    await waitUntil(() => el.pendingMessages[0]?.state === 'failed');
+    expect(emitted.at(-1)).to.have.length(1);
+
+    el.sessionId = 'sess-2';
+    await el.updateComplete;
+    expect(emitted.at(-1), 'sess-2 shows nothing from sess-1').to.have.length(
+      0
+    );
+
+    el.sessionId = 'sess-1';
+    await el.updateComplete;
+    expect(emitted.at(-1)).to.have.length(1);
+  });
+
+  it('keeps a sent turn until the server echoes its command id', async () => {
+    fetchStub.callsFake(async () => ok());
+    const el = await mount(agent());
+    await type(el, 'echo me');
+    await waitUntil(() => el.pendingMessages[0]?.state === 'sent');
+    el.clearSentPending(new Set(['cmd-other']));
+    expect(el.pendingMessages, 'not echoed yet').to.have.length(1);
+    el.clearSentPending(new Set(['cmd-1']));
+    expect(el.pendingMessages).to.have.length(0);
+  });
+});

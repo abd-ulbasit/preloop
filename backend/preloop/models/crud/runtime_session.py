@@ -62,6 +62,10 @@ INTERNAL_USAGE_PURPOSES = tuple(sorted(GATEWAY_USAGE_PURPOSES))
 # stops the closer from ever matching a natively-keyed row.
 IDLE_GENERATION_INFIX = ":idle-"
 
+# Same window as the console's "active now" (MANAGED_AGENT_ACTIVE_WINDOW in
+# crud/managed_agent.py, not imported to keep this module free of that one).
+PRINCIPAL_ACTIVE_SESSION_WINDOW = timedelta(minutes=10)
+
 
 def _exclude_internal_usage_condition():
     """Return a NULL-safe filter that excludes Preloop-internal usage rows.
@@ -1883,6 +1887,47 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             )
             .order_by(self.model.created_at.desc())
             .first()
+        )
+
+    def count_active_by_principal(
+        self,
+        db: Session,
+        *,
+        account_id: str,
+        principal_type: str,
+        principal_id: str,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Count the principal's sessions that are open and recently active.
+
+        Active matches the console's "active now": not ended, with activity
+        inside ``PRINCIPAL_ACTIVE_SESSION_WINDOW``. A session that was never
+        ended but went quiet long ago does not count, so a principal is not
+        treated as concurrent forever because of one abandoned session.
+
+        Args:
+            db: Database session.
+            account_id: Account that owns the sessions.
+            principal_type: Runtime principal type (the session source type).
+            principal_id: Runtime principal id.
+            now: Reference time, for tests. Defaults to the current time.
+
+        Returns:
+            int: Number of active sessions for the principal.
+        """
+        cutoff = (now or datetime.now(UTC)) - PRINCIPAL_ACTIVE_SESSION_WINDOW
+        return int(
+            db.query(func.count(self.model.id))
+            .filter(
+                self.model.account_id == account_id,
+                self.model.session_source_type == principal_type,
+                self.model.session_source_id.startswith(f"{principal_id}-")
+                | (self.model.session_source_id == principal_id),
+                self.model.ended_at.is_(None),
+                self.model.last_activity_at >= cutoff,
+            )
+            .scalar()
+            or 0
         )
 
     def get_account_session_summary(
