@@ -3,6 +3,7 @@ import { useFakeTimers } from 'sinon';
 import {
   FleetActivityTracker,
   activityFromRealtime,
+  activityLabel,
   modelKey,
   windowMinutes,
   windowRefreshMs,
@@ -65,5 +66,26 @@ describe('fleet map activity', () => {
     expect(modelKey('anthropic/claude-opus-5-5-20261001')).to.equal(
       'claude-opus-5-5'
     );
+  });
+
+  it('counts a start and its completion as one call in the label', () => {
+    const clock = useFakeTimers({ now: 0 });
+    try {
+      const tracker = new FleetActivityTracker(() => undefined, {
+        flushMs: 1000,
+        now: () => clock.now,
+      });
+      for (let i = 0; i < 2; i++) {
+        tracker.add(['m'], 'model request');
+        tracker.add(['m'], 'model request', 'Sonnet · 3.6k in / 210 out');
+      }
+      clock.tick(1000);
+      expect(activityLabel(tracker.marks.get('m')!)).to.equal(
+        'Sonnet · 3.6k in / 210 out ×2'
+      );
+      tracker.stop();
+    } finally {
+      clock.restore();
+    }
   });
 });

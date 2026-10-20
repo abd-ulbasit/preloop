@@ -174,7 +174,7 @@ describe('fleet-map live canvas', () => {
       columns
         .shadowRoot!.querySelector('path.edge.active')!
         .getAttribute('data-activity')
-    ).to.equal('gpt-6.1 · 4.1k in / 380 out ×2');
+    ).to.equal('gpt-6.1 · 4.1k in / 380 out');
   });
 
   it('lists recent events from the endpoint on load and says when counts are capped', async () => {

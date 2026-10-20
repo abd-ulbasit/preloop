@@ -272,7 +272,7 @@ export interface FleetActivityMark {
   until: number;
   /** The latest specific label ("Edit allowed", "Claude Fable 5.1 · 4.1k in / 380 out"). */
   label?: string;
-  /** Hits since the line lit. */
+  /** Labelled hits since the line lit. */
   hits?: number;
 }
 
@@ -342,13 +342,17 @@ export class FleetActivityTracker {
             counts: new Map([[kind, 1]]),
             until: now + this.holdMs,
             label,
-            hits: 1,
+            hits: label ? 1 : 0,
           });
         } else {
           mark.counts.set(kind, (mark.counts.get(kind) || 0) + 1);
           mark.until = now + this.holdMs;
-          mark.hits = (mark.hits ?? 1) + 1;
-          if (label) mark.label = label;
+          // Only hits that say something count: a start and its completion
+          // are one call.
+          if (label) {
+            mark.hits = (mark.hits ?? 0) + 1;
+            mark.label = label;
+          }
           // Re-insert so the map stays ordered stalest first.
           this.marks.delete(id);
           this.marks.set(id, mark);
