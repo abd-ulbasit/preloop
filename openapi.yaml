@@ -21857,7 +21857,9 @@ paths:
 
         The filters are validated here, so a saved search that cannot run cannot
 
-        be stored. Visibility defaults to private; sharing is a separate edit.'
+        be stored. Visibility defaults to private. Account visibility requires
+
+        permission to share saved searches.'
       operationId: create_saved_session_search_api_v1_runtime_sessions_search_saved_post
       security:
       - bearerAuth: []
@@ -21987,7 +21989,9 @@ paths:
 
         one thing: this saved question is not what it was. Only the author may do
 
-        any of them.'
+        any of them. Changing visibility to ``account`` also requires
+
+        ``share_session_searches``.'
       operationId: update_saved_session_search_api_v1_runtime_sessions_search_saved__saved_search_id__patch
       security:
       - bearerAuth: []
