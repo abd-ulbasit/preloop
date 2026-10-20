@@ -1972,6 +1972,35 @@ describe('DashboardView', () => {
       ).to.equal(0);
     });
 
+    it('gives the Inventory the full row while it shows the Map (F-04)', async () => {
+      const element = await mountLoaded();
+      const inventory = () =>
+        element.shadowRoot!.querySelector('inventory-card') as HTMLElement;
+      expect(inventory().closest('.main-column'), 'table: main column').to
+        .exist;
+      inventory().dispatchEvent(
+        new CustomEvent('inventory-view-change', {
+          detail: { view: 'map' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await element.updateComplete;
+      expect(inventory().closest('.main-column'), 'map: not in the column').to
+        .not.exist;
+      expect(inventory().closest('.inventory-full-row'), 'map: its own row').to
+        .exist;
+      inventory().dispatchEvent(
+        new CustomEvent('inventory-view-change', {
+          detail: { view: 'table' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await element.updateComplete;
+      expect(inventory().closest('.main-column')).to.exist;
+    });
+
     it('states a capped audit count as a floor, not an exact figure (B-15)', async () => {
       auditResponse = { ...auditResponse, total: 10000, total_capped: true };
       const element = await mountLoaded();

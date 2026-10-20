@@ -556,6 +556,8 @@ export class DashboardView extends AuthedElement {
    */
   @state() private auditEventCount: number | null = null;
   @state() private auditEventCountCapped = false;
+  /** The Inventory shows the Fleet Map, which gets a full-width row. */
+  @state() private inventoryMapMode = false;
   /**
    * True while the figures on the Audit trail line are being measured for
    * the range on screen. It covers a range change too, which keeps the
@@ -4815,6 +4817,9 @@ export class DashboardView extends AuthedElement {
         .rangeLabel=${this.gatewayRangeLabel}
         .timeRange=${this.gatewayTimeRange}
         @range-change=${this.onRangeChange}
+        @inventory-view-change=${(event: CustomEvent<{ view: string }>) => {
+          this.inventoryMapMode = event.detail?.view === 'map';
+        }}
         .flowRunsCapped=${this.flowRunsCapped}
         ?loading=${this.loading}
         .loadingAgents=${this.fetchingAgents}
@@ -4996,14 +5001,7 @@ export class DashboardView extends AuthedElement {
         <div class="main-column">
           <div class="dashboard-stack">
             ${this.renderGatewayCard()} ${this.renderNextStepsCard()}
-            ${this.renderInventoryCard()} ${this.renderAuditTrail()}
-
-            <div
-              style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sl-spacing-medium);"
-            >
-              ${this.renderGatewayFailuresCard()}
-              ${this.renderAuditExceptionsCard()}
-            </div>
+            ${this.inventoryMapMode ? nothing : this.renderInventoryStack()}
           </div>
         </div>
 
@@ -5026,6 +5024,33 @@ export class DashboardView extends AuthedElement {
             this.isInviteDialogOpen = false;
           }}
         ></preloop-invite-dialog>
+      </div>
+      ${
+        this.inventoryMapMode
+          ? html`<div
+              class="dashboard-stack inventory-full-row extra-wide"
+              style="margin-top: var(--sl-spacing-medium);"
+            >
+              ${this.renderInventoryStack()}
+            </div>`
+          : nothing
+      }
+    `;
+  }
+
+  /**
+   * The Inventory, the audit trail line and the two exception cards. In
+   * the main column beside Usage and Activity while the Inventory is a
+   * table; under both columns, at the full width, while it is the Fleet
+   * Map, whose topology does not fit a 2fr column (F-04).
+   */
+  private renderInventoryStack() {
+    return html`
+      ${this.renderInventoryCard()} ${this.renderAuditTrail()}
+      <div
+        style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sl-spacing-medium);"
+      >
+        ${this.renderGatewayFailuresCard()} ${this.renderAuditExceptionsCard()}
       </div>
     `;
   }
