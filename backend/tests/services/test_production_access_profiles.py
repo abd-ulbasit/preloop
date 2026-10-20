@@ -412,6 +412,7 @@ async def test_tool_missing_from_the_policy_is_denied(
         ("k8s-readonly", "pods_exec"),
         ("k8s-readonly", "pods_run"),
         ("sentry-readonly", "sentry_update_issue"),
+        ("sentry-readonly", "sentry_onboarding_status_update"),
     ],
 )
 async def test_known_writes_denied_without_allowlist_rules(
@@ -511,6 +512,10 @@ async def test_dbhub_config_matches_policy() -> None:
     [source] = config["sources"]
     assert source["dsn"].startswith("postgres://agent_readonly:${AGENT_DB_PASSWORD}@")
     assert source["query_timeout"] > 0
+    # The pool must not open more connections than the role is allowed.
+    role_sql = (EXAMPLE / "postgres-readonly-role.sql").read_text()
+    [limit] = re.findall(r"CONNECTION LIMIT (\d+)", role_sql)
+    assert source["pool_max_connections"] == int(limit)
     tools = {tool["name"]: tool for tool in config["tools"]}
     assert set(tools) == {"execute_sql", "search_objects"}
     assert all(tool["source"] == source["id"] for tool in tools.values())
@@ -546,7 +551,8 @@ async def test_flow_snippet_tools_are_allowed() -> None:
 
 # What `kubectl auth can-i --list` prints for a ServiceAccount bound to view
 # (abridged), including the self-review and discovery rules every
-# authenticated user has.
+# authenticated user has. The metrics.k8s.io rules come from metrics-server's
+# ClusterRole, which is aggregated into view.
 VIEW_RULES = """\
 Resources                                       Non-Resource URLs   Resource Names   Verbs
 selfsubjectaccessreviews.authorization.k8s.io   []                  []               [create]
@@ -556,6 +562,7 @@ configmaps                                      []                  []          
 deployments.apps                                []                  []               [get list watch]
 pods                                            []                  []               [get list watch]
 pods/log                                        []                  []               [get list watch]
+nodes.metrics.k8s.io                            []                  []               [get list watch]
 pods.metrics.k8s.io                             []                  []               [get list watch]
                                                 [/api/*]            []               [get]
                                                 [/version]          []               [get]

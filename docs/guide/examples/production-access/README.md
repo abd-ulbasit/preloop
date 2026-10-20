@@ -108,7 +108,11 @@ Sentry rule checks its `name` argument against the same read list.
     `kubeconfig` so the server uses its own ServiceAccount rather than forward
     a caller's `Authorization` header (the upstream default is `passthrough`).
     `nodes_log` and `nodes_stats_summary` are left out: they read through the
-    kubelet proxy, which `view` does not grant.
+    kubelet proxy, which `view` does not grant. `pods_top` and `nodes_top` read
+    `metrics.k8s.io`, which exists only where metrics-server runs. Its
+    ClusterRole (`system:aggregated-metrics-reader` in the upstream manifest,
+    its Helm chart and k3s) is aggregated into `view`, so the binding above
+    covers both tools; without metrics-server they return an error.
 
 ### PostgreSQL
 
@@ -147,10 +151,13 @@ Sentry rule checks its `name` argument against the same read list.
    this profile does not use.
 2. Run the Sentry MCP server with only the `inspect` skill (`--skills=inspect`,
    or `?skills=inspect` on the hosted server's URL). The hosted server takes a
-   token in an `Authorization: Sentry-Bearer <token>` header; in Preloop that
-   is the API's `api_key` authentication type with key name `Authorization`.
+   token in an `Authorization: Sentry-Bearer <token>` header. In Preloop that
+   is the API's `api_key` authentication type with key name `Authorization`,
+   and the API key is the whole header value, `Sentry-Bearer <token>`:
+   `api_key` sends the value as it is, without adding a scheme.
    The `inspect` skill still includes `onboarding_status_update`, which changes
-   onboarding state in Sentry, so the policy checks every tool name anyway.
+   onboarding state in Sentry, so the policy refuses it per tool and checks
+   every tool name anyway.
 3. Give the server the tool prefix `sentry` when you register it in Preloop
    (**Tool prefix** in the console, or
    `preloop mcp-servers update sentry-readonly --tool-prefix sentry`). Sentry's

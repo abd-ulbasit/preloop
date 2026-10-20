@@ -97,8 +97,9 @@ sensitive_data:
       action: deny
 
 # The write tools these servers expose directly today, refused per tool.
-# Sentry's catalog writes, which run only through execute_sentry_tool, are
-# refused by the allowlist rule. The allowlist rules above already deny these
+# Sentry writes that run through execute_sentry_tool are refused only by the
+# allowlist rule, since denying the executor would also block its reads. The
+# allowlist rules above already deny these
 # too; the entries show the refusal on each tool in Tools and still hold if
 # someone disables an allowlist rule.
 tools:
@@ -134,3 +135,12 @@ tools:
         action: deny
         description: >-
           Read-only profile: Sentry issues are not changed from this flow.
+  - name: sentry_onboarding_status_update
+    source: sentry-readonly
+    conditions:
+      - expression: "true"
+        condition_type: cel
+        action: deny
+        description: >-
+          Read-only profile: Sentry onboarding state is not changed from this
+          flow.

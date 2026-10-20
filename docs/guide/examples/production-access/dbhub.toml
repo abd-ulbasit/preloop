@@ -14,6 +14,9 @@ description = "Production database, read-only role"
 dsn = "postgres://agent_readonly:${AGENT_DB_PASSWORD}@db.example.com:5432/app_db?sslmode=require"
 # Seconds. DBHub applies it as statement_timeout on PostgreSQL.
 query_timeout = 15
+# Matches CONNECTION LIMIT in postgres-readonly-role.sql. Without it the pool
+# opens up to 10 connections and calls beyond the role's limit fail.
+pool_max_connections = 5
 
 # readonly refuses statements other than reads before they reach the
 # database. max_rows caps the rows returned to the agent; Postgres has no
