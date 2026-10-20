@@ -30,6 +30,12 @@ import type {
 } from '../types';
 import type { LiveToolCall } from './live-session';
 import { normalizeToolCalls } from './live-session';
+import { isHarnessSideRequestEvent } from './harness-side-request';
+
+export {
+  HARNESS_SIDE_REQUEST_PREFIXES,
+  isHarnessSideRequest,
+} from './harness-side-request';
 
 export type TranscriptStepKind =
   'tool_call' | 'tool_result' | 'system' | 'injected' | 'intermediate';
@@ -213,27 +219,6 @@ export const INJECTED_SEGMENT_PATTERNS: Array<{
     test: (text) => text.startsWith('[Request interrupted'),
   },
 ];
-
-/**
- * Side requests a coding-agent harness sends through the gateway on its own
- * behalf (a session title, a 3-5 word status line). They share the session
- * but are not the operator's words, so the whole exchange (the request and
- * the short answer) folds into a step instead of rendering as "You" and
- * "Agent". Prefix match only, at the start of the message: a prompt that
- * merely mentions describing an action stays a prompt.
- */
-export const HARNESS_SIDE_REQUEST_PREFIXES: readonly string[] = [
-  'Describe your most recent action in 3-5 words',
-  'Please write a 5-10 word title for the following conversation',
-  'Analyze if this message indicates a new conversation topic',
-];
-
-export function isHarnessSideRequest(text: string): boolean {
-  const trimmed = text.trimStart();
-  return HARNESS_SIDE_REQUEST_PREFIXES.some((prefix) =>
-    trimmed.startsWith(prefix)
-  );
-}
 
 /**
  * Exact-prefix gateway event-type check. The backend emits
@@ -454,12 +439,7 @@ export function buildConversation(
       stats.eventsWithPartialToolResults += 1;
     }
     const failed = eventIsFailure(event);
-    const sideRequest = previewMessages(event).some(
-      (message) =>
-        (message.source || 'request').toLowerCase() !== 'response' &&
-        (message.role || '').toLowerCase() === 'user' &&
-        isHarnessSideRequest(message.text || '')
-    );
+    const sideRequest = isHarnessSideRequestEvent(event);
 
     previewMessages(event).forEach((message, messageIndex) => {
       const text = (message.text || '').trim();

@@ -195,4 +195,30 @@ describe('session live evidence', () => {
         .label
     ).to.equal('Agent working');
   });
+  it('ignores a harness side request when reading whose turn it is', () => {
+    const now = Date.parse('2026-10-02T10:00:10Z');
+    const toolCall = {
+      ...event('tool', { finish_reason: 'tool_use' }),
+      timestamp: '2026-10-02T10:00:00Z',
+    };
+    const summariser = {
+      ...event('side', {
+        finish_reason: 'stop',
+        conversation_preview: {
+          messages: [
+            {
+              source: 'request',
+              role: 'user',
+              text: 'Describe your most recent action in 3-5 words using present tense.',
+            },
+            { source: 'response', role: 'assistant', text: 'Running tests' },
+          ],
+        },
+      }),
+      timestamp: '2026-10-02T10:00:05Z',
+    };
+    expect(sessionWork([toolCall, summariser], false, now).label).to.equal(
+      'Agent working'
+    );
+  });
 });

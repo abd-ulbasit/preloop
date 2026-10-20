@@ -1,4 +1,5 @@
 import { parseUTCDate } from './date';
+import { isHarnessSideRequestEvent } from './harness-side-request';
 import type { FlowGatewayEvent, RuntimeSessionActivityItem } from '../types';
 
 export type ToolPhase =
@@ -226,6 +227,9 @@ export function lastFinishReason(
       type === 'model_gateway_request_started'
     )
       continue;
+    // A harness side request (title or status summariser) ends with "stop"
+    // without the agent having finished anything.
+    if (isHarnessSideRequestEvent(event)) continue;
     const reason = event.payload?.finish_reason;
     if (typeof reason !== 'string' || !reason) continue;
     const at = Date.parse(event.timestamp || '') || 0;
