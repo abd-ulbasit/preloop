@@ -418,3 +418,39 @@ def test_explicitly_unpriced_legacy_zero_cost_is_partial(
         assert total.partial
         assert total.estimated_cost == 0.01
         assert total.request_count == 2
+
+
+@pytest.mark.parametrize(
+    ("cost_source", "cost"),
+    [
+        ("provider", 0.02),
+        ("provider", 0.0),
+        ("reconciled", 0.02),
+        ("imported", 0.02),
+        ("catalog", 0.02),
+        ("override", 0.0),
+        (None, 0.02),
+    ],
+)
+def test_resolved_cost_overrides_stale_preflight_pricing_marker(
+    db_session: Session,
+    fleet: dict[str, Any],
+    cost_source: str | None,
+    cost: float,
+) -> None:
+    _usage(
+        db_session,
+        fleet["user"].account_id,
+        fleet["a"],
+        cost_source=cost_source,
+        estimated_cost=cost,
+        meta_data={"budget": {"pricing_available": False}},
+    )
+    result = _read(db_session, fleet["user"])
+    for total in (
+        result.models["model:example-model"],
+        result.providers["provider:openai"],
+    ):
+        assert total.estimated_cost == cost
+        assert not total.partial
+    assert not result.partial

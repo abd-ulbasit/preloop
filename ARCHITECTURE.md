@@ -789,6 +789,7 @@ window includes UTC bounds; omitted "any" and windows over 90 days read at most
 input/output/cost data stays explicit, cache sums remain nullable, and mixed
 currencies yield no combined cost rather than an unlabelled conversion. Explicit
 unpriced markers also exclude legacy numeric zero costs and mark totals partial.
+Resolved prices take precedence over preflight budget pricing metadata.
 Currency and pricing markers require heap reads through the existing gateway
 window indexes; this endpoint does not claim an index-only scan. Deleted or
 invisible model configurations contribute no node totals.

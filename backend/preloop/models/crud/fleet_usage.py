@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import String, Uuid, case, column, func, or_, select, values
+from sqlalchemy import String, Uuid, and_, case, column, func, or_, select, values
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
@@ -57,8 +57,15 @@ def usage_by_node(
     missing_cost = or_(
         usage.estimated_cost.is_(None),
         usage.cost_source.is_not_distinct_from("unpriced"),
-        usage.meta_data["budget"]["pricing_available"].astext.is_not_distinct_from(
-            "false"
+        # Budget metadata is a preflight estimate. A subsequently resolved
+        # cost source (including a legitimate zero) or positive legacy cost
+        # takes precedence over that earlier inability to price the request.
+        and_(
+            usage.cost_source.is_(None),
+            usage.estimated_cost == 0,
+            usage.meta_data["budget"]["pricing_available"].astext.is_not_distinct_from(
+                "false"
+            ),
         ),
     )
     known_cost = case((missing_cost, None), else_=usage.estimated_cost)
