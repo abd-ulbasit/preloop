@@ -1299,8 +1299,13 @@ export class InventoryCard extends LitElement {
         hideable: false,
         // The name is what a reader scans for; it gets the room and keeps
         // at least enough for "claude-code on a laptop" before cutting.
-        width: 280,
-        minWidth: 180,
+        // Widths are content widths: every cell adds 32px of padding, and
+        // at 280 + four numeric columns the table measured 776px in a
+        // 735px card at 1440, clipping Last seen and leaving Model at 0px.
+        // 240 keeps a name and its status chip on one line and leaves Model
+        // about 60px, enough for "No model" and an ellipsised alias.
+        width: 240,
+        minWidth: 160,
         truncate: true,
         cellClass: 'identity-cell',
         cellTitle: (row) => row.name,
@@ -1335,7 +1340,7 @@ export class InventoryCard extends LitElement {
         cellLabel: 'Requests',
         header: 'Requests',
         numeric: true,
-        width: 96,
+        width: 64,
         cell: (row) =>
           this.renderUsageCell(this.formatCompactNumber(row.requests)),
       },
@@ -1347,7 +1352,7 @@ export class InventoryCard extends LitElement {
         cellLabel: 'Tokens',
         header: 'Tokens',
         numeric: true,
-        width: 104,
+        width: 72,
         cell: (row) =>
           this.renderUsageCell(
             html`<token-figures
@@ -1364,7 +1369,7 @@ export class InventoryCard extends LitElement {
         headerLabel: 'Estimated spend',
         pickerLabel: 'Estimated spend',
         numeric: true,
-        width: 88,
+        width: 72,
         cell: (row) =>
           this.renderUsageCell(
             html`<span title=${formatUsdExact(row.cost)}
@@ -1378,7 +1383,7 @@ export class InventoryCard extends LitElement {
         cellLabel: 'Seen',
         header: 'Last seen',
         numeric: true,
-        width: 104,
+        width: 64,
         cellTitle: (row) => this.absolute(row.lastSeenAt),
         cell: (row) => this.relative(row.lastSeenAt),
       },
