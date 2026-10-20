@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1930](https://github.com/preloop/preloop/pull/1930)).
 
 - Flow and issue lifecycle writes consistently enforce their declared permissions
-  on builds without the RBAC plugin, and dependency commits use scoped pairs.
+  on builds without the RBAC plugin, and dependency commits use scoped pairs
+  ([#1931](https://github.com/preloop/preloop/pull/1931)).
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
   RBAC plugin, matching the other agent-control endpoints
