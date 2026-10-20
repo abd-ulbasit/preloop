@@ -29,3 +29,20 @@ describe('UI copy has no em dashes (U-10)', () => {
     });
   }
 });
+
+describe('one glyph for a missing value (U-11)', () => {
+  for (const path of [
+    '/src/views/authed/flow-executions-view.ts',
+    '/src/views/authed/flow-execution-view.ts',
+  ]) {
+    it(`uses "-", never an em dash, in ${path}`, async () => {
+      const code = (await (await fetch(path)).text())
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('//'))
+        .join('\n');
+      expect(code).to.not.contain('—');
+      expect(code).to.not.contain('\\u2014');
+    });
+  }
+});

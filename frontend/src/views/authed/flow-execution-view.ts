@@ -1283,9 +1283,9 @@ export class FlowExecutionView extends LitElement {
    */
   private renderDurationText(): string {
     const execution = this.execution;
-    if (!execution) return '—';
+    if (!execution) return '-';
 
-    return executionDurationText(execution, this.durationNow) || '—';
+    return executionDurationText(execution, this.durationNow) || '-';
   }
 
   async updated(changedProperties: Map<string, any>) {
@@ -3595,7 +3595,7 @@ ${execution.resolved_input_prompt}</pre>
         ? formatEstimatedCost(this.budgetUsed)
         : this.totalTokens > 0
           ? 'Not priced'
-          : '—';
+          : '-';
 
     const limits = this.executionLimits;
     const tokenLimit = limits?.max_total_tokens;
@@ -3751,7 +3751,7 @@ ${execution.resolved_input_prompt}</pre>
             class="strip-value"
             data-testid="strip-agent"
             title=${this.flow?.agent_type || ''}
-            >${this.flow?.agent_type ? flowRuntimeLabel(this.flow.agent_type) : '—'}</span
+            >${this.flow?.agent_type ? flowRuntimeLabel(this.flow.agent_type) : '-'}</span
           >
         </div>
         <div class="strip-item">
@@ -3767,7 +3767,7 @@ ${execution.resolved_input_prompt}</pre>
                     title=${sessionReference}
                     >${shortenIdentifier(sessionReference)}</a
                   >`
-                : '—'
+                : '-'
             }
           </span>
         </div>

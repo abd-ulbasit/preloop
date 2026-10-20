@@ -1032,7 +1032,7 @@ describe('FlowExecutionsView', () => {
       );
     });
 
-    it('shows an em dash for a terminal execution with no end time', async () => {
+    it('shows the missing-value mark for a terminal execution with no end time', async () => {
       const el = await renderRows([
         {
           id: 'exec-legacy',
@@ -1043,10 +1043,10 @@ describe('FlowExecutionsView', () => {
         },
       ]);
 
-      expect(cellText(el, 0)).to.equal('—');
+      expect(cellText(el, 0)).to.equal('-');
     });
 
-    it('shows an em dash when the timestamps are unusable', async () => {
+    it('shows the missing-value mark when the timestamps are unusable', async () => {
       const el = await renderRows([
         {
           id: 'exec-skew',
@@ -1058,7 +1058,7 @@ describe('FlowExecutionsView', () => {
         },
       ]);
 
-      expect(cellText(el, 0)).to.equal('—');
+      expect(cellText(el, 0)).to.equal('-');
     });
   });
 
@@ -1211,12 +1211,12 @@ describe('FlowExecutionsView', () => {
           el.shadowRoot?.querySelector('tbody .model-cell')?.textContent || ''
         ).trim();
       await waitUntil(
-        () => cellText() === '\u2014',
-        'model cell should render an em dash when the run has no model',
+        () => cellText() === '-',
+        'model cell should render the missing-value mark when the run has no model',
         { timeout: 4000 }
       );
       const cell = el.shadowRoot?.querySelector('tbody .model-cell');
-      expect((cell?.textContent || '').trim()).to.equal('\u2014');
+      expect((cell?.textContent || '').trim()).to.equal('-');
       expect(cell?.querySelector('.execution-model-more')).to.not.exist;
     });
 
@@ -1355,7 +1355,7 @@ describe('FlowExecutionsView', () => {
       const costCells = Array.from(
         el.shadowRoot?.querySelectorAll('tbody tr') || []
       ).map((row) => (row.querySelectorAll('td')[8]?.textContent || '').trim());
-      expect(costCells).to.eql(['$0.08', '\u2014']);
+      expect(costCells).to.eql(['$0.08', '-']);
     });
 
     it('anchors the flow name at the execution and makes the row clickable', async () => {
