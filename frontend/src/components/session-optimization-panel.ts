@@ -32,14 +32,14 @@ import {
 import { getUserProfile, replayRuntimeSession } from '../api';
 import { hasPermission, type UserPermissions } from '../permissions';
 
+/** Every server-side apply is gated on this permission before the action check. */
+export const APPLY_BASE_PERMISSION = 'edit_ai_models';
+
 /**
  * Permission the backend requires to apply each server-side action type.
  * Mirrors ACTION_PERMISSIONS in backend/preloop/services/session_optimization.py,
  * added with the apply-route permission checks in preloop/preloop#1926.
  */
-/** Every server-side apply is gated on this permission before the action check. */
-export const APPLY_BASE_PERMISSION = 'edit_ai_models';
-
 export const OPTIMIZATION_ACTION_PERMISSIONS: Record<string, string> = {
   scope_tools: 'manage_tools',
   disable_builtin_tools: 'manage_tools',
