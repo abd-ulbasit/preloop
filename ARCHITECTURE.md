@@ -807,8 +807,8 @@ successful code tool calls (`runtime_session_activity`, served by the partial in
 `ix_runtime_session_activity_work_tools`, capped at 5,000 rows) attributing a call in
 a flow run to the flow and any other call to the managed agent whose runtime
 principal made it, and forge-reported merges (`issue_cost_pull_request.merged_at`,
-capped at 500 PR milestone rows, joined through `ix_issue_cost_execution_account_pr_key`) attributed to
-the flows whose runs touched the pull request. A flow's tool-call merge and the forge's
+capped at 500 merged PRs, joined through `ix_issue_cost_execution_account_pr_key`)
+attributed to the flows whose runs touched the pull request. A flow's tool-call merge and the forge's
 webhook for it count once. The generic `add_comment` counts only when the wrapper
 recorded a pull request target (`code_target`, a boolean kept instead of the target);
 issue comments and operator notes never count. "Any time" reads 90 days. Live, the `code_activity` realtime topic carries each successful code
@@ -821,9 +821,9 @@ at least 0.85 and leaves overflow reachable by panning.
 The optional `work` and `work_truncated` fields seed history with at most 200
 distinct issues and pull requests, newest activity first, in that same bounded
 window. CRUD reads each source once: successful issue/PR tools (5,000 rows,
-`ix_runtime_session_activity_work_tools`), PR milestones (500 rows, also reused
-for merge counts), current tracker snapshots and lifecycle recency (201 rows),
-cost/lifecycle run links (5,000 rows), and compact execution subjects/publication
+`ix_runtime_session_activity_work_tools`), PR milestones (separate 500-row active
+and merged windows in one query), current tracker snapshots and lifecycle recency
+(201 rows), cost/lifecycle run links (5,000 rows), and compact execution subjects/publication
 URLs (5,000 rows). Sentinel rows expose source truncation. Existing references
 enrich old tracker/PR snapshots within those queries, with no per-object lookup.
 Titles come from stored tracker rows or compact subjects, labels from tracker
@@ -832,10 +832,15 @@ or earliest approval is not proof of current open state or latest review verdict
 so unknown values stay null. Work actors require explicit in-window run or tool
 links, are visibility filtered, deduplicated and capped at five; agent ownership
 and forge merge stamps alone never identify a human actor. Ambiguous and
-unassigned cost links supply neither actors nor issue associations. Stored
-milestone merge counts retain their contributing-flow semantics, with bounded
+unassigned cost links supply neither actors nor issue associations. The PR query
+keeps independently capped active and merged windows, so new openings cannot
+crowd an older merge out of the counts. Stored milestone merge counts retain
+their contributing-flow semantics, with bounded
 fan-out and explicit truncation. Issue snapshot recency is not a delivery journal
-or a guarantee that every creation path preserved current labels.
+or a guarantee that every creation path preserved current labels. The normal
+tool summary producer records argument sizes, not references. Such rows cannot
+identify work or actors; only an explicitly stored reference can do so. This
+projection neither adds argument capture nor infers an issue's creator.
 
 Spatial layout packs measured owner/machine islands beside the model/provider core,
 with attached issue/PR rows in the work lane. The first drag stores the complete

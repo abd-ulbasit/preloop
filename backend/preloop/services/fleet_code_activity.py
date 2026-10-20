@@ -238,7 +238,7 @@ def build_code_activity(
         pull_request_limit=MERGE_LIMIT,
     )
     result.work, result.work_truncated = work.work, work.truncated
-    last_flow, pull_requests = work.flow_activity, work.pull_requests
+    last_flow, pull_requests = work.flow_activity, work.merged_pull_requests
     result.truncated |= work.pull_requests_truncated
 
     def count(node_id: str, action: CodeAction) -> None:

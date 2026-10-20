@@ -14,6 +14,7 @@ from sqlalchemy import (
     or_,
     null,
     select,
+    union,
     union_all,
     values,
 )
@@ -63,7 +64,12 @@ def list_pull_requests(
     limit: int,
     targets: Targets | None = None,
 ) -> list[Row[Any]]:
-    """Read PR milestones once, newest first; no actor is implied by a milestone."""
+    """Read independently capped active and merged PR windows in one query.
+
+    At most twice ``limit`` distinct PRs are returned, with membership flags.
+    Active metadata must never crowd a merge out of the existing merge counts.
+    No actor is implied by a milestone.
+    """
     p, r, x = (
         models.IssueCostPullRequest,
         models.IssueCostRollup,
@@ -74,6 +80,31 @@ def list_pull_requests(
     target_rows = _targets(targets) if targets else None
     if target_rows is not None:
         at = func.greatest(at, target_rows.c.at)
+    active_statement = select(p.id, at.label("at")).select_from(p)
+    if target_rows is not None:
+        canonical_key = func.regexp_replace(
+            func.lower(p.pr_key),
+            r"^https://[^/]+/(.+?)/(?:-/)?(pull|pulls|merge_requests|pull-requests)/([0-9]+)/?$",
+            case((p.pr_key.contains("/merge_requests/"), r"\1!\3"), else_=r"\1#\3"),
+        )
+        active_statement = active_statement.outerjoin(
+            target_rows,
+            or_(p.pr_key == target_rows.c.url, canonical_key == target_rows.c.key),
+        )
+    active = (
+        active_statement.where(p.account_id == account_id, at.is_not(None))
+        .order_by(at.desc(), p.pr_key)
+        .limit(limit)
+        .cte("active_prs")
+    )
+    merged = (
+        select(p.id)
+        .where(p.account_id == account_id, p.merged_at.between(since, until))
+        .order_by(p.merged_at.desc(), p.pr_key)
+        .limit(limit)
+        .cte("merged_prs")
+    )
+    keys = union(select(active.c.id), select(merged.c.id)).subquery()
     # Historical merge counts credit contributing flows, while work.node_ids
     # below only credits links active in this window. Bound fan-out as well as PRs.
     contributors = (
@@ -94,32 +125,30 @@ def list_pull_requests(
         .subquery()
     )
     merge_flows = select(func.json_agg(contributors.c.flow_id)).scalar_subquery()
-    statement = select(
-        p.pr_key,
-        p.opened_at,
-        p.approved_at,
-        p.merged_at,
-        p.ambiguous,
-        r.issue_key,
-        at.label("at"),
-        merge_flows.label("merge_flows"),
-    ).select_from(p)
-    if target_rows is not None:
-        canonical_key = func.regexp_replace(
-            func.lower(p.pr_key),
-            r"^https://[^/]+/(.+?)/(?:-/)?(pull|pulls|merge_requests|pull-requests)/([0-9]+)/?$",
-            case((p.pr_key.contains("/merge_requests/"), r"\1!\3"), else_=r"\1#\3"),
+    statement = (
+        select(
+            p.pr_key,
+            p.opened_at,
+            p.approved_at,
+            p.merged_at,
+            p.ambiguous,
+            r.issue_key,
+            active.c.at,
+            active.c.id.is_not(None).label("active"),
+            merged.c.id.is_not(None).label("for_merges"),
+            merge_flows.label("merge_flows"),
         )
-        statement = statement.outerjoin(
-            target_rows,
-            or_(p.pr_key == target_rows.c.url, canonical_key == target_rows.c.key),
-        )
+        .select_from(p)
+        .join(keys, keys.c.id == p.id)
+    )
+    statement = statement.outerjoin(active, active.c.id == p.id).outerjoin(
+        merged, merged.c.id == p.id
+    )
     return list(
         db.execute(
             statement.outerjoin(r, (r.id == p.rollup_id) & (r.account_id == account_id))
-            .where(p.account_id == account_id, at.is_not(None))
-            .order_by(at.desc(), p.pr_key)
-            .limit(limit)
+            .where(p.account_id == account_id)
+            .order_by(active.c.at.desc().nullslast(), p.pr_key)
         ).all()
     )
 

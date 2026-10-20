@@ -970,3 +970,102 @@ def test_work_hard_cap_is_two_hundred(
     assert result.work == sorted(
         result.work, key=lambda item: (-item.last_at.timestamp(), item.kind, item.key)
     )
+
+
+def test_work_update_pull_request_review_agrees_with_counts_and_events(
+    db_session: Session, fleet: dict[str, Any]
+) -> None:
+    session = (
+        db_session.query(models.RuntimeSession)
+        .filter_by(session_source_id=fleet["agent"].session_source_id)
+        .one()
+    )
+    _call(
+        db_session,
+        session,
+        "update_pull_request",
+        1,
+        metadata={
+            "arguments_summary": {"target": "example/widgets#4", "review_action": 9},
+        },
+    )
+    db_session.flush()
+    result = build_code_activity(
+        db_session, user=fleet["user"], active_within_minutes=60, now=NOW
+    )
+    item = next(item for item in result.work if item.key == "example/widgets#4")
+    assert item.last_action == "reviewed"
+    assert item.review_state is None
+    assert result.counts[f"agent:{fleet['agent'].id}"].reviewed == 1
+    assert any(
+        event.action == "reviewed" and event.node_id == f"agent:{fleet['agent'].id}"
+        for event in result.events
+    )
+
+
+def test_work_real_size_only_summaries_never_invent_a_target_or_actor(
+    db_session: Session, fleet: dict[str, Any]
+) -> None:
+    from preloop.services.dynamic_fastmcp import _summarize_arguments
+
+    session = (
+        db_session.query(models.RuntimeSession)
+        .filter_by(session_source_id=fleet["agent"].session_source_id)
+        .one()
+    )
+    summary = _summarize_arguments(
+        {
+            "issue_id": "example/widgets#55",
+            "url": "https://github.com/example/widgets/issues/55",
+            "title": "This is not persisted tracker metadata",
+            "body": "Private issue body",
+        }
+    )
+    assert all(isinstance(value, int) for value in summary.values())
+    _call(
+        db_session, session, "update_issue", 1, metadata={"arguments_summary": summary}
+    )
+    db_session.flush()
+    result = build_code_activity(
+        db_session, user=fleet["user"], active_within_minutes=60, now=NOW
+    )
+    assert not any(item.key == "example/widgets#55" for item in result.work)
+    assert all(
+        f"agent:{fleet['agent'].id}" not in item.node_ids for item in result.work
+    )
+    assert "Private issue body" not in result.model_dump_json()
+
+
+def test_work_active_pr_cap_cannot_crowd_a_merge_out_of_counts(
+    db_session: Session, fleet: dict[str, Any]
+) -> None:
+    for number in range(501):
+        db_session.add(
+            models.IssueCostPullRequest(
+                account_id=fleet["user"].account_id,
+                pr_key=f"https://github.com/example/widgets/pull/{number + 1}",
+                opened_at=NOW - timedelta(seconds=1),
+            )
+        )
+    db_session.flush()
+    from preloop.models.crud import fleet_work
+
+    windows = fleet_work.list_pull_requests(
+        db_session,
+        account_id=str(fleet["user"].account_id),
+        since=NOW - timedelta(hours=1),
+        until=NOW,
+        limit=1,
+    )
+    assert len(windows) == 2
+    assert sum(row.active for row in windows) == 1
+    assert sum(row.for_merges for row in windows) == 1
+    result = build_code_activity(
+        db_session, user=fleet["user"], active_within_minutes=60, now=NOW
+    )
+    assert result.counts[f"flow:{fleet['flow'].id}"].merged == 1
+    assert any(
+        event.pr == "acme/api#42" and event.action == "merged"
+        for event in result.events
+    )
+    assert result.work_truncated is True

@@ -58,7 +58,7 @@ class FleetWorkResult:
     work: list[FleetWorkItem]
     truncated: bool
     flow_activity: dict[str, datetime]
-    pull_requests: list[Any]
+    merged_pull_requests: list[Any]
     pull_requests_truncated: bool
 
 
@@ -271,6 +271,8 @@ def build_work_items(
             else "pull_request"
         )
         action = _TOOL_ACTIONS.get(call.tool_name, "pull_request_updated")
+        if call.tool_name == "update_pull_request" and "review_action" in summary:
+            action = "reviewed"
         flow_id = flow_of_execution.get(str(call.flow_execution_id or ""))
         node_id = f"flow:{flow_id}" if flow_id else None
         if not call.flow_execution_id:
@@ -355,8 +357,15 @@ def build_work_items(
         limit=pull_request_limit + 1,
         targets=targets("pull_request"),
     )
-    pull_requests_truncated = len(pull_requests) > pull_request_limit
-    for row in pull_requests[:pull_request_limit]:
+    active_prs = [row for row in pull_requests if row.active]
+    merged_prs = sorted(
+        (row for row in pull_requests if row.for_merges),
+        key=lambda row: (-_aware(row.merged_at).timestamp(), row.pr_key),
+    )
+    pull_requests_truncated = (
+        len(active_prs) > pull_request_limit or len(merged_prs) > pull_request_limit
+    )
+    for row in active_prs[:pull_request_limit]:
         action = (
             "opened"
             if row.opened_at and _aware(row.opened_at) == row.at
@@ -398,6 +407,6 @@ def build_work_items(
         work=visible,
         truncated=truncated or len(ordered) > WORK_LIMIT,
         flow_activity=active_flows,
-        pull_requests=pull_requests[:pull_request_limit],
+        merged_pull_requests=merged_prs[:pull_request_limit],
         pull_requests_truncated=pull_requests_truncated,
     )
