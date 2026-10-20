@@ -1968,7 +1968,10 @@ export class PreloopFlowForm extends LitElement {
         agent_config: this.composedAgentConfig(),
         allowed_mcp_servers: this.flow.allowed_mcp_servers || ['preloop-mcp'],
         allowed_mcp_tools: this.flow.allowed_mcp_tools || [],
-        ai_model_id: this.flow.ai_model_id || undefined,
+        ai_model_id:
+          this.flow.ai_model_id === null
+            ? null
+            : this.flow.ai_model_id || undefined,
         trigger_event_source: this.flow.trigger_event_source || fallbackSource,
         trigger_event_types:
           this.flow.trigger_event_types ||
@@ -3721,6 +3724,38 @@ export class PreloopFlowForm extends LitElement {
     this.requestUpdate();
   }
 
+  private renderSharedModelBindingNotice() {
+    const sharedIds = new Set(
+      this.models.filter((model) => model.is_shared).map((model) => model.id)
+    );
+    const boundIds = [
+      this.flow.ai_model_id,
+      ...this.routingRules.map((rule) => rule.ai_model_id),
+      ...this.labelRules.map((rule) => rule.ai_model_id),
+    ];
+    if (!boundIds.some((id) => sharedIds.has(id))) return nothing;
+    return html`<sl-alert variant="warning" open data-shared-binding-warning>
+      Replace shared models with account or built-in models, or remove their
+      bindings before saving or running this flow.
+      <sl-button
+        size="small"
+        data-clear-shared-bindings
+        @click=${() => {
+          if (sharedIds.has(this.flow.ai_model_id))
+            this.flow.ai_model_id = null;
+          this.routingRules = this.routingRules.filter(
+            (rule) => !sharedIds.has(rule.ai_model_id)
+          );
+          this.labelRules = this.labelRules.filter(
+            (rule) => !sharedIds.has(rule.ai_model_id)
+          );
+          this.requestUpdate();
+        }}
+        >Remove shared model bindings</sl-button
+      >
+    </sl-alert>`;
+  }
+
   /** One picker row: the flow, and its two ceilings once it is selected. */
   private renderCallableFlowRow(
     name: string,
@@ -4899,6 +4934,7 @@ export class PreloopFlowForm extends LitElement {
                   </sl-select>
                 `
           }
+          ${this.renderSharedModelBindingNotice()}
           ${
             this.flow.agent_type === 'cursor'
               ? html`
@@ -4930,30 +4966,6 @@ export class PreloopFlowForm extends LitElement {
                         <div
                           style="display: flex; flex-direction: column; gap: var(--sl-spacing-2x-small); margin-bottom: var(--sl-spacing-medium);"
                         >
-                          ${
-                            this.models.some(
-                              (model) =>
-                                model.is_shared &&
-                                [
-                                  this.flow.ai_model_id,
-                                  ...this.routingRules.map(
-                                    (rule) => rule.ai_model_id
-                                  ),
-                                  ...this.labelRules.map(
-                                    (rule) => rule.ai_model_id
-                                  ),
-                                ].includes(model.id)
-                            )
-                              ? html`<sl-alert
-                                  variant="warning"
-                                  open
-                                  data-shared-binding-warning
-                                >
-                                  Replace shared models with account or built-in
-                                  models before saving or running this flow.
-                                </sl-alert>`
-                              : ''
-                          }
                           <sl-select
                             label="AI model"
                             placeholder="Select an AI model"

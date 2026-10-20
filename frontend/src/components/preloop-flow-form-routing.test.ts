@@ -138,6 +138,72 @@ describe('PreloopFlowForm model routing roundtrip', () => {
     ).to.include('Replace shared models');
   });
 
+  for (const agentType of ['cursor', 'devin', 'copilot', 'claude_code']) {
+    it(`can remove a shared binding from a ${agentType} flow`, async () => {
+      const element = await mount();
+      element.flow.agent_type = agentType;
+      element.flow.ai_model_id = 'shared-model';
+      element.requestUpdate();
+      await element.updateComplete;
+      expect(element.shadowRoot!.querySelector('[data-shared-binding-warning]'))
+        .to.exist;
+      (
+        element.shadowRoot!.querySelector(
+          '[data-clear-shared-bindings]'
+        ) as HTMLElement
+      ).click();
+      await element.updateComplete;
+      expect(element.flow.ai_model_id).to.equal(null);
+      expect(element.shadowRoot!.querySelector('[data-shared-binding-warning]'))
+        .not.to.exist;
+      const payload = await submit(element);
+      expect(payload.ai_model_id).to.equal(null);
+    });
+  }
+
+  it('removes only shared nested bindings and preserves owned models and unrelated settings', async () => {
+    const element = await mount({
+      max_iterations: 6,
+      model_routing: {
+        version: 1,
+        rules: [
+          {
+            id: 'owned',
+            labels: { any: ['owned'] },
+            ai_model_id: MODEL_A,
+            agent_type: 'codex',
+          },
+          {
+            id: 'shared',
+            labels: { any: ['shared'] },
+            ai_model_id: 'shared-model',
+            agent_type: 'codex',
+          },
+        ],
+      },
+      model_by_label: [
+        { label: 'owned', ai_model_id: MODEL_A, reasoning_effort: '' },
+        { label: 'shared', ai_model_id: 'shared-model', reasoning_effort: '' },
+      ],
+    });
+    (
+      element.shadowRoot!.querySelector(
+        '[data-clear-shared-bindings]'
+      ) as HTMLElement
+    ).click();
+    await element.updateComplete;
+    const payload = await submit(element);
+    expect(payload.ai_model_id).to.equal(MODEL_B);
+    const config = payload.agent_config as any;
+    expect(config.max_iterations).to.equal(6);
+    expect(
+      config.model_routing.rules.map((rule: any) => rule.id)
+    ).to.deep.equal(['owned']);
+    expect(config.model_by_label.map((rule: any) => rule.label)).to.deep.equal([
+      'owned',
+    ]);
+  });
+
   it('loads saved rules and preserves unrelated agent_config keys', async () => {
     const saved = {
       sandbox_type: 'exec',

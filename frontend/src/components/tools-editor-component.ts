@@ -434,9 +434,9 @@ export class ToolsEditorComponent extends LitElement {
   }
 
   private _renderToolGroup(group: ToolGroup, visibleTools = group.tools) {
-    const readOnly = Boolean(
-      group.server?.is_shared || group.server?.read_only
-    );
+    const readOnly =
+      this.mode === 'global' &&
+      Boolean(group.server?.is_shared || group.server?.read_only);
     const isEnabled = (t: ToolWithRules) =>
       this.mode === 'scoped' && t.name in this.toolEnabledOverrides
         ? this.toolEnabledOverrides[t.name]

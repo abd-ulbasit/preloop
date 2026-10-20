@@ -454,13 +454,13 @@ export class ToolListItem extends LitElement {
   }
 
   private _openJustificationDialog() {
-    if (this.readOnly) return;
+    if (this.readOnly || this.mode === 'scoped') return;
     this._justificationMode = this.tool.justification_mode || 'disabled';
     this._showJustificationDialog = true;
   }
 
   private async _saveJustificationMode() {
-    if (this.readOnly) return;
+    if (this.readOnly || this.mode === 'scoped') return;
     try {
       const { updateToolConfiguration, createToolConfiguration } =
         await import('../api');
@@ -730,7 +730,7 @@ export class ToolListItem extends LitElement {
           </div>
 
           ${
-            this._isNativeTool() || this.readOnly
+            this._isNativeTool() || this.readOnly || this.mode === 'scoped'
               ? ''
               : html`
                   <div
