@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../utils/count-format';
 import { formatUsd, formatUsdExact } from '../utils/money';
 import { parseUTCDate } from '../utils/date';
 import { LitElement, html, css, nothing } from 'lit';
@@ -561,7 +562,10 @@ export class BillingSubscriptionDetails extends LitElement {
                                   ${model.model_name}
                                 </div>
                                 <div class="usage-model-meta">
-                                  ${model.request_count}
+                                  <span
+                                    title=${formatCountExact(model.request_count)}
+                                    >${formatCount(model.request_count)}</span
+                                  >
                                   request${model.request_count === 1 ? '' : 's'}
                                   · ${model.total_tokens.toLocaleString()}
                                   tokens ${model.tier ? `· ${model.tier}` : ''}
@@ -638,6 +642,24 @@ export class BillingSubscriptionDetails extends LitElement {
     .quota-fill.over,
     .seat-warning {
       color: var(--sl-color-warning-700);
+    }
+    /* The built-in usage figures: label over value, side by side across
+       the card. These classes had no rules at all, so the figures fell into
+       an unstyled stack of lines. */
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: var(--sl-spacing-medium);
+      margin-top: var(--sl-spacing-medium);
+    }
+    .usage-label {
+      color: var(--console-meta-color, var(--sl-color-neutral-600));
+      font-size: var(--console-text-meta, 13px);
+    }
+    .usage-value {
+      font-size: var(--console-text-body, 14px);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
     }
     .usage-models {
       margin-top: 1rem;

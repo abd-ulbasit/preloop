@@ -482,7 +482,7 @@ describe('AuditView', () => {
       element.shadowRoot
         ?.querySelector('view-header')
         ?.getAttribute('headerText')
-    ).to.equal('Audit Timeline');
+    ).to.equal('Audit timeline');
     expect(content).to.contain('Runtime session started');
     expect(content).to.contain('search');
     expect(content).to.contain('Alice Example via Claude Workspace Token');
@@ -755,7 +755,7 @@ describe('AuditView', () => {
       await element.updateComplete;
 
       const header = element.shadowRoot?.querySelector('view-header');
-      expect(header?.getAttribute('headerText')).to.equal('Audit Timeline');
+      expect(header?.getAttribute('headerText')).to.equal('Audit timeline');
       // Nothing precedes the title any more: the count and LIVE are meta.
       expect(header?.querySelector('[slot="title-prefix"]')).to.equal(null);
 
@@ -1324,6 +1324,20 @@ describe('AuditView', () => {
       },
     });
     expect(label).to.equal('Policy version deleted: v2');
+    element.remove();
+  });
+
+  it('humanises an event type it has no title for (U-13)', async () => {
+    const element = document.createElement('audit-view') as AuditView;
+    document.body.appendChild(element);
+    await waitUntil(
+      () => !(element as any)._loading,
+      'Audit view did not finish loading'
+    );
+    const label = (action: string) =>
+      (element as any)._getPrimaryLabel({ action, details: {} });
+    expect(label('api_key_created')).to.equal('API key created');
+    expect(label('user.switch_account.in')).to.equal('User switch account in');
     element.remove();
   });
 

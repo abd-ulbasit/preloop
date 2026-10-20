@@ -1987,6 +1987,9 @@ describe('AgentDetailView', () => {
     expect(stripText).to.contain('Estimated spend · 30d');
     expect(stripText).to.contain('$0.57');
     expect(stripText).to.contain('4 requests');
+    expect(
+      strip?.querySelector('.strip-requests')?.getAttribute('title')
+    ).to.equal('4 requests');
 
     // Volume leads the money on the strip as it does in the lists, so the
     // card this replaced did not take the token split down with it.
@@ -2065,7 +2068,7 @@ describe('AgentDetailView', () => {
     expect(strip?.textContent).to.not.contain('4b7e-4c21');
   });
 
-  it('calls the session history panel Session History', async () => {
+  it('calls the session history panel in sentence case (U-13)', async () => {
     const element = await fixture<AgentDetailView>(
       html`<agent-detail-view agentId="agent-1"></agent-detail-view>`
     );
@@ -2077,7 +2080,7 @@ describe('AgentDetailView', () => {
 
     const text = getDeepText(element).replace(/\s+/g, ' ');
     expect(text).to.not.contain('Sessions History');
-    expect(text).to.contain('Session History');
+    expect(text).to.contain('Session history');
     await element.updateComplete;
     const refresh = element.shadowRoot!.querySelector(
       'sl-icon-button[name="arrow-clockwise"]'

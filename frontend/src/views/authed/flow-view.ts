@@ -1,3 +1,5 @@
+import { formatUsd, formatUsdExact } from '../../utils/money';
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
@@ -32,7 +34,7 @@ import {
   executionStatusVariant,
 } from '../../utils/execution-presentation';
 import { flowTriggerSummary } from '../../utils/flow-trigger';
-import { getAgentKindPresentation } from '../../utils/agent-kinds';
+import { flowRuntimeLabel } from '../../utils/flow-runtime';
 import {
   executionSubjectCss,
   renderExecutionSubject,
@@ -120,23 +122,15 @@ export function referenceListsSentence(
   return joined.charAt(0).toUpperCase() + joined.slice(1);
 }
 
-const FLOW_RUNTIME_LABELS: Record<string, string> = {
-  codex: 'Codex CLI',
-  gemini: 'Gemini CLI',
-  opencode: 'OpenCode',
-  pi: 'Pi',
-  deepseek: 'DeepSeek Harness',
-};
+export { flowRuntimeLabel } from '../../utils/flow-runtime';
 
-/** The label for a flow's `agent_type`. */
-export function flowRuntimeLabel(agentType: string | null | undefined): string {
-  const raw = (agentType || '').trim();
-  if (!raw) return 'Unknown';
-  return (
-    FLOW_RUNTIME_LABELS[raw.toLowerCase()] ||
-    getAgentKindPresentation(raw)?.label ||
-    raw
-  );
+/** "2m 40s", "45s", "1h 05m" for an average run time. */
+function flowDurationText(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }
 
 @customElement('flow-view')
@@ -189,11 +183,44 @@ export class FlowView extends LitElement {
           white-space: nowrap;
           border: 0;
         }
+        /* One hairline row of facts above the runs, as on the execution
+         page: label-free, meta ink, numbers tabular. */
+        .flow-summary-strip {
+          align-items: baseline;
+          border-bottom: 1px solid var(--console-hairline);
+          color: var(--sl-color-neutral-700);
+          display: flex;
+          flex-wrap: wrap;
+          font-size: var(--console-text-body);
+          font-variant-numeric: tabular-nums;
+          gap: var(--sl-spacing-x-small);
+          margin-bottom: var(--sl-spacing-medium);
+          padding-bottom: var(--sl-spacing-small);
+        }
+        .flow-summary-strip .strip-sep {
+          color: var(--console-meta-color);
+        }
+        .flow-summary-strip .strip-sample {
+          color: var(--console-meta-color);
+        }
         /* The subject column takes the slack: fixed layout plus a zero max
          width makes the cell shrink to its share and ellipsise inside it,
          instead of a long repo name widening the whole table. */
         .executions-table {
           table-layout: fixed;
+        }
+        /* Fixed layout with no widths split the table in four equal
+         columns, so the subject truncated beside hundreds of empty pixels.
+         The short columns get what their content needs; Subject takes the
+         rest. */
+        .executions-table .col-status {
+          width: 112px;
+        }
+        .executions-table .col-started {
+          width: 96px;
+        }
+        .executions-table .col-duration {
+          width: 104px;
         }
         .executions-table .subject-cell {
           max-width: 0;
@@ -1020,8 +1047,7 @@ export class FlowView extends LitElement {
       </view-header>
       <div class="column-layout wide">
         <div class="main-column">
-          ${this.renderReferenceDataWarning()}
-
+          ${this.renderReferenceDataWarning()} ${this.renderSummaryStrip()}
           <!-- Recent executions come before the prompt (#1692): the runs are
                why the page is opened, the prompt is reference. -->
           <sl-card data-recent-executions>
@@ -1038,9 +1064,9 @@ export class FlowView extends LitElement {
                         <thead>
                           <tr>
                             <th>Subject</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                            <th>Duration</th>
+                            <th class="col-status">Status</th>
+                            <th class="col-started">Started</th>
+                            <th class="col-duration">Duration</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1443,17 +1469,90 @@ ${(this.flow.custom_commands.commands || []).join('\n')}</pre>
    * key is `flow_id`, which is what the executions view parses and what the
    * Flows list already links with.
    */
+  /**
+   * What this flow has done, before the runs that show it (F-02): runs and
+   * spend over its lifetime, from the stats the flow read already carries,
+   * and how the most recent finished runs went (failure rate, average
+   * duration, last success), from the runs this page already loaded. The
+   * sample is named in the title, never passed off as the lifetime.
+   */
+  private renderSummaryStrip() {
+    const stats = this.flow?.execution_stats;
+    if (!stats) return nothing;
+    const total = Number(stats.total_execs || 0);
+    const running = Number(stats.running_execs || 0);
+    const cost = Number(stats.estimated_cost || 0);
+    const finished = this.recentExecutions.filter((exec: any) =>
+      ['SUCCEEDED', 'FAILED', 'STOPPED', 'CANCELLED', 'TIMEOUT'].includes(
+        String(exec.status || '').toUpperCase()
+      )
+    );
+    const failed = finished.filter((exec: any) =>
+      ['FAILED', 'TIMEOUT'].includes(String(exec.status || '').toUpperCase())
+    ).length;
+    // Only runs that recorded both ends have a duration: parseUTCDate reads
+    // a missing end as now, which would turn a legacy row into days.
+    const durations = finished
+      .filter((exec: any) => exec.start_time && exec.end_time)
+      .map(
+        (exec: any) =>
+          parseUTCDate(exec.end_time).getTime() -
+          parseUTCDate(exec.start_time).getTime()
+      )
+      .filter((ms: number) => Number.isFinite(ms) && ms > 0);
+    const average = durations.length
+      ? durations.reduce((sum: number, ms: number) => sum + ms, 0) /
+        durations.length
+      : null;
+    const lastSuccess = finished.find(
+      (exec: any) => String(exec.status || '').toUpperCase() === 'SUCCEEDED'
+    );
+    const sep = html`<span class="strip-sep" aria-hidden="true">·</span>`;
+    return html`
+      <div class="flow-summary-strip" data-testid="flow-summary-strip">
+        <span title=${`${formatCountExact(total)} runs`}
+          >${formatCount(total)} run${total === 1 ? '' : 's'}</span
+        >
+        ${running > 0 ? html`${sep}<span>${running} running</span>` : nothing}
+        ${sep}<span title=${formatUsdExact(cost)}>${formatUsd(cost)} est.</span>
+        ${
+          finished.length
+            ? html`${sep}<span
+                  class="strip-sample"
+                  data-testid="flow-summary-sample"
+                  title=${`From the last ${finished.length} finished runs`}
+                  >${Math.round((failed / finished.length) * 100)}%
+                  failed${
+                    average !== null
+                      ? html` · avg ${flowDurationText(average)}`
+                      : nothing
+                  }${
+                    lastSuccess
+                      ? html` · last success
+                        ${formatRelativeTime(lastSuccess.start_time)}`
+                      : html` · no recent success`
+                  }</span
+                >`
+            : nothing
+        }
+      </div>
+    `;
+  }
+
   private renderAllExecutionsLink() {
     const total = Number(this.flow?.execution_stats?.total_execs || 0);
     if (total > 0 && total <= this.recentExecutions.length) return '';
     const label =
-      total > 0 ? `View all ${total} executions` : 'View all executions';
+      total > 0
+        ? `View all ${formatCount(total)} executions`
+        : 'View all executions';
     return html`
       <div class="all-executions">
         <a
           href=${`/console/flows/executions?flow_id=${encodeURIComponent(
             this.flowId || ''
           )}`}
+          title=${total > 0 ? `${formatCountExact(total)} executions` : nothing}
           >${label}</a
         >
       </div>

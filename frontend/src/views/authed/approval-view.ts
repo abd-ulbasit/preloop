@@ -204,7 +204,8 @@ export class ApprovalView extends AuthedElement {
 
       .header h1 {
         margin: 0 0 0.5rem 0;
-        font-size: 1.75rem;
+        font-size: var(--console-text-h1, 1.625rem);
+        font-weight: 600;
         display: flex;
         align-items: center;
         flex-wrap: wrap;
@@ -1434,7 +1435,7 @@ export class ApprovalView extends AuthedElement {
           this.history.length
             ? html`
                 <div class="content-section">
-                  <h2>Workflow History</h2>
+                  <h2>Workflow history</h2>
                   <ul class="timeline">
                     ${this.history.map(
                       (event) => html`

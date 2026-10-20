@@ -4,6 +4,11 @@ import { customElement, property, state } from 'lit/decorators.js';
 import '@shoelace-style/shoelace/dist/components/badge/badge.js';
 import type { LiveToolCall, ToolCallState } from '../utils/live-session';
 import { TOOL_CALL_STATE_LABELS, formatDuration } from '../utils/live-session';
+
+/** Reasons the server gives for an ordinary allow, not worth a line. */
+const DEFAULT_ALLOW_REASONS = new Set([
+  'No central native rule requires approval',
+]);
 import {
   readablePayload,
   toolSummary,
@@ -292,7 +297,18 @@ ${text}</pre>`
     const call = this.call;
     if (!call) return nothing;
     const state: ToolCallState = call.state;
-    const duration = formatDuration(call.durationMs);
+    // A zero duration and an "unknown" state are absences, not facts: the
+    // row read "Bash · unknown · 0.0s" for every native call (U-07).
+    const duration =
+      call.durationMs && call.durationMs > 0
+        ? formatDuration(call.durationMs)
+        : null;
+    // The server's reason for an ordinary allow repeats on every native
+    // call and says nothing about this one.
+    const summary =
+      call.summary && !DEFAULT_ALLOW_REASONS.has(call.summary.trim())
+        ? call.summary
+        : null;
     const time = this.formatTime(call.timestamp);
     const displayName = call.name || 'tool (name not captured)';
     // Redacted-but-known counts as expandable: the operator still deserves to
@@ -310,7 +326,13 @@ ${text}</pre>`
       >
         <div class="header">
           <span class="name ${call.name ? '' : 'unnamed'}">${displayName}</span>
-          <span class="state">${TOOL_CALL_STATE_LABELS[state]}</span>
+          ${
+            state === 'unknown'
+              ? nothing
+              : html`<span class="state"
+                  >${TOOL_CALL_STATE_LABELS[state]}</span
+                >`
+          }
           ${duration ? html`<span class="duration">${duration}</span>` : nothing}
           ${
             call.serverName
@@ -333,12 +355,12 @@ ${text}</pre>`
           }
         </div>
         ${
-          call.summary
+          summary
             ? html`<p
                 class="summary ${this.expanded ? '' : 'clamped'}"
                 data-testid="tool-summary"
               >
-                ${call.summary}
+                ${summary}
               </p>`
             : nothing
         }

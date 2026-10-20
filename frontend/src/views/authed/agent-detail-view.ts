@@ -1,3 +1,5 @@
+import { formatRelativeTime } from '../../utils/date';
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { parseUTCDate } from '../../utils/date';
 import { formatUsd, formatUsdExact } from '../../utils/money';
@@ -1554,8 +1556,10 @@ export class AgentDetailView extends LitElement {
           <span class="strip-value"
             >${html`<span title=${formatUsdExact(aggregate?.estimated_cost)}>${formatUsd(aggregate?.estimated_cost)}</span>`}</span
           >
-          <span class="strip-requests"
-            >${requests} request${requests === 1 ? '' : 's'}</span
+          <span
+            class="strip-requests"
+            title=${`${formatCountExact(requests)} request${requests === 1 ? '' : 's'}`}
+            >${formatCount(requests)} request${requests === 1 ? '' : 's'}</span
           >
           <time-range-select
             ariaLabel="Estimated spend range"
@@ -1664,9 +1668,13 @@ export class AgentDetailView extends LitElement {
     return html`
       <sl-tooltip
         content=${(() => {
-          const lastSeen = `Last seen: ${this.formatDateTime(
-            this.liveActivity.lastActivityAt || this.agent.last_seen_at
-          )}`;
+          // Relative first, with the absolute time after it, since a
+          // tooltip has no title of its own (U-02).
+          const seenAt =
+            this.liveActivity.lastActivityAt || this.agent.last_seen_at;
+          const lastSeen = seenAt
+            ? `Last seen ${formatRelativeTime(seenAt)} (${this.formatDateTime(seenAt)})`
+            : 'Last seen: never';
           // A partial-onboarding chip explains itself first; the header
           // already carries one tooltip, so the two share it.
           return status.tooltip ? `${status.tooltip} · ${lastSeen}` : lastSeen;
@@ -2022,7 +2030,7 @@ export class AgentDetailView extends LitElement {
             class="hero"
             style="margin-bottom: var(--sl-spacing-medium); display: flex; align-items: baseline; justify-content: flex-start; gap: var(--sl-spacing-small);"
           >
-            <div class="hero-title">Session History</div>
+            <div class="hero-title">Session history</div>
             <span class="meta-line" data-testid="session-count"
               >${
                 total !== null

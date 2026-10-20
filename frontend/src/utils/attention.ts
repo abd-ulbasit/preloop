@@ -1514,11 +1514,23 @@ export function attentionItemAnchor(itemId: string): string {
   return `/console/attention#item-${encodeURIComponent(itemId)}`;
 }
 
+/**
+ * Chip nouns that differ from the section titles: a section can be called
+ * "Pricing", but "1 pricing" is not something a reader can say, and
+ * lowercasing "MCP routes" printed "mcp routes".
+ */
+const CHIP_NOUNS: Partial<Record<AttentionKind, [string, string]>> = {
+  mcp: ['MCP route to review', 'MCP routes to review'],
+  pricing: ['pricing question', 'pricing questions'],
+};
+
 /** "2 approvals", "1 agent" - the chip label used by the Attention page. */
 export function attentionKindChipLabel(
   kind: AttentionKind,
   count: number
 ): string {
+  const chip = CHIP_NOUNS[kind];
+  if (chip) return `${count} ${count === 1 ? chip[0] : chip[1]}`;
   const meta = ATTENTION_KIND_META[kind];
   const noun = count === 1 ? meta.label : meta.plural;
   return `${count} ${noun.toLowerCase()}`;

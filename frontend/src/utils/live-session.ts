@@ -1,4 +1,5 @@
 import type { FlowGatewayEvent, RuntimeSessionActivityItem } from '../types';
+import { lastFinishReason } from './session-live';
 
 /**
  * Shared live-session state for the console's session surfaces.
@@ -607,6 +608,14 @@ export function deriveLiveSessionState(
     .filter((value): value is number => value !== null)
     .sort((left, right) => right - left)[0];
   if (queued !== undefined) return base('waiting_for_agent', null, queued);
+
+  // The newest model reply asked for tools and nothing newer arrived: the
+  // agent is running them locally, which is not idle. The status line under
+  // this header said "Tool requested" while this one said "Idle".
+  if (lastFinishReason(events) === 'tool' && lastUpdateAt !== null) {
+    if (now - lastUpdateAt <= MAX_INFLIGHT_REQUEST_MS)
+      return base('running_tool', null, lastUpdateAt);
+  }
 
   return base('idle');
 }

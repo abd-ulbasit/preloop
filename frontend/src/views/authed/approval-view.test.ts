@@ -1128,7 +1128,7 @@ describe('ApprovalView', () => {
 
     const timeline = element.shadowRoot?.querySelector('.timeline');
     expect(timeline).to.exist;
-    expect(element.shadowRoot?.textContent).to.contain('Workflow History');
+    expect(element.shadowRoot?.textContent).to.contain('Workflow history');
     expect(element.shadowRoot?.textContent).to.contain(
       "Approval requested for tool 'shell_command'"
     );
@@ -1177,7 +1177,7 @@ describe('ApprovalView', () => {
 
     expect((element as any).publicOnly).to.be.true;
     expect(element.shadowRoot?.textContent).to.contain('Timed out');
-    expect(element.shadowRoot?.textContent).to.contain('Workflow History');
+    expect(element.shadowRoot?.textContent).to.contain('Workflow history');
     expect(element.shadowRoot?.textContent).to.contain(
       'Expired: no response within the approval window'
     );
@@ -1335,12 +1335,12 @@ describe('ApprovalView', () => {
     );
     await element.updateComplete;
 
-    expect(element.shadowRoot?.textContent).to.contain('Workflow History');
+    expect(element.shadowRoot?.textContent).to.contain('Workflow history');
     await (element as any).handleApprove();
     await element.updateComplete;
 
     expect((element as any).history.length).to.equal(2);
-    expect(element.shadowRoot?.textContent).to.contain('Workflow History');
+    expect(element.shadowRoot?.textContent).to.contain('Workflow history');
     expect(element.shadowRoot?.textContent).to.contain(
       "Approval requested for tool 'shell_command'"
     );

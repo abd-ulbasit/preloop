@@ -11,11 +11,13 @@ describe('ToolsView (approvals + conditions)', () => {
   let fetchStub: sinon.SinonStub;
   let overrideAgentIds: string[];
   let accountAgents: { id: string; display_name: string }[];
+  let detailAgents: Record<string, { id: string; display_name: string }>;
   let failGovernanceGet: boolean;
   let failGovernancePut: boolean;
 
   beforeEach(() => {
     overrideAgentIds = ['agent-override-1'];
+    detailAgents = {};
     accountAgents = [
       { id: 'agent-override-1', display_name: 'Claude Code Workspace' },
     ];
@@ -144,6 +146,21 @@ describe('ToolsView (approvals + conditions)', () => {
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
+        }
+
+        const single = url.match(/\/api\/v1\/agents\/([^/?]+)(\?|$)/);
+        if (single && method === 'GET') {
+          const agent = detailAgents[decodeURIComponent(single[1])];
+          if (!agent) {
+            return new Response(JSON.stringify({ detail: 'Not found' }), {
+              status: 404,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response(JSON.stringify({ agent }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
 
         if (url.includes('/api/v1/agents?') || url.endsWith('/api/v1/agents')) {
@@ -654,6 +671,35 @@ describe('ToolsView (approvals + conditions)', () => {
       element.shadowRoot?.querySelector('#native-approvals-default-workflow')
     ).to.exist;
     expect(element.shadowRoot?.querySelector('.governance-notice')).to.be.null;
+  });
+
+  it('names an override agent the first list page did not return (B-14)', async () => {
+    overrideAgentIds = ['agent-1', 'agent-retired', 'agent-gone'];
+    accountAgents = [{ id: 'agent-1', display_name: 'Agent one' }];
+    detailAgents = {
+      'agent-retired': { id: 'agent-retired', display_name: 'Retired helper' },
+    };
+    const element = await fixture<ToolsView>(html`<tools-view></tools-view>`);
+    await waitUntil(
+      () =>
+        (
+          element.shadowRoot?.querySelector('#native-approvals-override-list')
+            ?.textContent || ''
+        ).includes('Retired helper'),
+      'override names did not resolve'
+    );
+    const overrides = element.shadowRoot!.querySelector(
+      '#native-approvals-override-list'
+    )!;
+    const text = overrides.textContent || '';
+    expect(text).to.include('Agent one');
+    expect(text).to.include('Unnamed agent');
+    expect(text).to.not.include('agent-gone');
+    const unnamed = Array.from(overrides.querySelectorAll('a')).find(
+      (link) => link.textContent?.trim() === 'Unnamed agent'
+    )!;
+    expect(unnamed.getAttribute('title')).to.equal('agent-gone');
+    expect(unnamed.getAttribute('href')).to.equal('/console/agents/agent-gone');
   });
 
   it('caps the override list at 5 agents and links the remainder', async () => {
@@ -1597,6 +1643,36 @@ describe('ToolsView – tabs and toolbar', () => {
       ) || []),
     ].map((option) => option.getAttribute('value'));
     expect(options).to.deep.equal(['command', 'description', 'timeout']);
+  });
+
+  it('counts only enabled rules as "with rules", as the rows do (B-16)', async () => {
+    tools = [
+      makeNativeTool({
+        access_rules: [
+          {
+            id: 'rule-off',
+            action: 'deny',
+            is_enabled: false,
+            condition_expression: null,
+            priority: 0,
+          },
+        ],
+      }),
+      makeNativeTool({ name: 'Edit' }),
+    ];
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}?tab=native`
+    );
+    const el = (await fixture(html`<tools-view></tools-view>`)) as ToolsView;
+    await waitUntil(
+      () => !(el as any).loading && (el as any).governanceDefaults !== null,
+      'Governance defaults did not load'
+    );
+    await el.updateComplete;
+    const strip = el.shadowRoot?.querySelector('.native-summary-strip');
+    expect(strip?.textContent?.replace(/\s+/g, ' ')).to.include('0 with rules');
   });
 
   it('native tab summary strip states the counts and the account default', async () => {

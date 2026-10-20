@@ -1178,7 +1178,7 @@ ${
       <sl-details class="steps">
         <span slot="summary" class="steps-summary">
           <sl-icon name="three-dots"></sl-icon>
-          ${item.steps.length} step${item.steps.length === 1 ? '' : 's'} —
+          ${item.steps.length} step${item.steps.length === 1 ? '' : 's'}:
           ${this.describeSteps(item.steps)}
         </span>
         ${item.steps.map((step) => this.renderStep(step))}
