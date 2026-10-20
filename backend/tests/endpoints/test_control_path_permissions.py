@@ -314,8 +314,6 @@ def test_mcp_oauth_continuation_preserves_state_and_pkce(
     test_user: models.User,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import base64
-    import hashlib
     from urllib.parse import parse_qs, urlparse
 
     import httpx
@@ -338,6 +336,9 @@ def test_mcp_oauth_continuation_preserves_state_and_pkce(
     ).json()["authorize_token"]
     monkeypatch.setattr(mcp_servers, "_pending_oauth_states", {})
     monkeypatch.setattr(mcp_servers, "get_db_session", lambda: iter([db_session]))
+    # RFC 7636 Appendix B gives an independent expected S256 challenge.
+    expected_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    expected_challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     scan = AsyncMock(return_value=[])
     monkeypatch.setattr(mcp_servers, "scan_mcp_server_tools", scan)
     outbound = AsyncMock()
@@ -357,22 +358,23 @@ def test_mcp_oauth_continuation_preserves_state_and_pkce(
     )
     with patch.object(mcp_servers.httpx, "AsyncClient") as factory:
         factory.return_value.__aenter__.return_value = outbound
-        response = client.get(
-            f"/api/v1/mcp-servers/{server.id}/oauth/authorize",
-            params={"code": token},
-            follow_redirects=False,
-        )
+        with patch.object(
+            mcp_servers.secrets,
+            "token_urlsafe",
+            side_effect=[expected_verifier, "example-oauth-state"],
+        ):
+            response = client.get(
+                f"/api/v1/mcp-servers/{server.id}/oauth/authorize",
+                params={"code": token},
+                follow_redirects=False,
+            )
         assert response.status_code == 302
         params = parse_qs(urlparse(response.headers["location"]).query)
         state = params["state"][0]
         pending = mcp_servers._pending_oauth_states[state]
         verifier = pending["code_verifier"]
-        challenge = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-            .rstrip(b"=")
-            .decode()
-        )
-        assert params["code_challenge"] == [challenge]
+        assert verifier == expected_verifier
+        assert params["code_challenge"] == [expected_challenge]
         assert params["code_challenge_method"] == ["S256"]
         assert pending["permission"] == "edit_mcp_servers"
         assert pending["account_id"] == str(test_user.account_id)
