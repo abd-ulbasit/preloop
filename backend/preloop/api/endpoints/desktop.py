@@ -40,7 +40,7 @@ from preloop.models.crud import crud_audit_log, crud_desktop, crud_managed_agent
 from preloop.models.crud.desktop import endpoint_is_online
 from preloop.services import desktop_broker as broker
 from preloop.services.db_executor import run_db_async
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -101,6 +101,7 @@ def _authorize_operator(db: Session, user: models.User) -> None:
     if _is_machine_credential(user):
         raise _error(403, "forbidden", "Agent credentials cannot open desktop views")
     _desktop_permission(current_user=user, db=db)
+    ensure_permission_in_oss(db, user, "control_managed_agent")
 
 
 # ---------------------------------------------------------------------------

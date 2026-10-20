@@ -24,7 +24,7 @@ from preloop.services.session_manager import session_manager
 from preloop.services.websocket_manager import SessionStreamFilter, manager
 from preloop.sync.services.event_bus import EventBus, get_nats_client
 from preloop.utils import get_client_ip
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ def _approval_visibility(*, current_user: models.User, db: Session) -> bool:
 @require_permission("execute_flows")
 def _execution_command_permission(*, current_user: models.User, db: Session) -> bool:
     """Apply the same permission check as the HTTP execution command endpoint."""
+    ensure_permission_in_oss(db, current_user, "execute_flows")
     return True
 
 

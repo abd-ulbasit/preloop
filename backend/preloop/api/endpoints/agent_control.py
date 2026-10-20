@@ -22,7 +22,7 @@ from starlette import status
 
 from preloop.api.loop_safety import run_db_off_loop
 from preloop.api.auth import get_current_active_user
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.api.auth.jwt import (
     RuntimeBearerAuthContext,
     authenticate_runtime_bearer_token,
@@ -1828,6 +1828,9 @@ async def send_managed_agent_command(
     db: Session = Depends(get_db_session),
 ) -> AgentControlCommandResponse:
     """Backward-compatible route for sending text commands to an agent."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "control_managed_agent")
+    )
     return await _route_managed_agent_prompt(
         agent_id=agent_id,
         request=request,
@@ -1849,6 +1852,9 @@ async def send_managed_agent_prompt(
     db: Session = Depends(get_db_session),
 ) -> AgentControlCommandResponse:
     """Route a text prompt to the current, existing, or next agent session."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "control_managed_agent")
+    )
     return await _route_managed_agent_prompt(
         agent_id=agent_id,
         request=request,
@@ -1971,6 +1977,9 @@ async def send_managed_agent_voice_transcript(
     db: Session = Depends(get_db_session),
 ) -> AgentControlCommandResponse:
     """Mobile-friendly alias that routes a voice transcript as a prompt."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "control_managed_agent")
+    )
     prompt_request = AgentControlSendMessageRequest(
         message=request.transcript,
         consent_request_id=request.consent_request_id,
@@ -2109,6 +2118,9 @@ async def request_managed_agent_takeover(
     db: Session = Depends(get_db_session),
 ) -> AgentControlCommandResponse:
     """Ask the sidecar to switch a local TUI session into remote SDK mode."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "control_managed_agent")
+    )
     return await _route_session_action(
         agent_id=agent_id,
         name="request_takeover",
@@ -2131,6 +2143,9 @@ async def release_managed_agent_session(
     db: Session = Depends(get_db_session),
 ) -> AgentControlCommandResponse:
     """Release a remote SDK session back to the local `preloop claude` TUI."""
+    await run_db_off_loop(
+        lambda: ensure_permission_in_oss(db, current_user, "control_managed_agent")
+    )
     return await _route_session_action(
         agent_id=agent_id,
         name="release",
