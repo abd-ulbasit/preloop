@@ -68,7 +68,7 @@ from preloop.services.model_gateway_usage import (
     normalize_usage_period,
 )
 from preloop.services.runtime_session_explorer import RuntimeSessionExplorerService
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.services.hosted_spend_guard import hosted_model_selectable
 from preloop.services.ai_model_provider import (
     ERROR_SUBSCRIPTION_OAUTH,
@@ -294,6 +294,7 @@ def create_ai_model(
     current_user: User = Depends(get_current_active_user),
 ) -> AIModel:
     """Create a new AI Model for the authenticated user's account."""
+    ensure_permission_in_oss(db, current_user, "create_ai_models")
     try:
         created_model = crud_ai_model.create_with_account(
             db=db,
@@ -812,6 +813,7 @@ def update_ai_model(
     current_user: User = Depends(get_current_active_user),
 ) -> AIModelRead:
     """Update an existing AI Model by its ID."""
+    ensure_permission_in_oss(db, current_user, "edit_ai_models")
     db_model = _get_account_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
@@ -846,6 +848,7 @@ def delete_ai_model(
     current_user: User = Depends(get_current_active_user),
 ):
     """Delete an AI Model by its ID."""
+    ensure_permission_in_oss(db, current_user, "delete_ai_models")
     _get_account_ai_model(db=db, model_id=model_id, current_user=current_user)
 
     crud_ai_model.remove(db=db, id=model_id)
@@ -893,6 +896,7 @@ def fetch_ai_model_pricing(
     written by a fetch: the numbers come back for a person to confirm, and
     saving one stays with the price override endpoints.
     """
+    ensure_permission_in_oss(db, current_user, "edit_ai_models")
     db_model = _get_account_ai_model(
         db=db, model_id=model_id, current_user=current_user
     )
@@ -934,6 +938,7 @@ async def sync_ai_model_catalog(
     Backing service: ``preloop.services.ai_model_catalog_sync``. Every added
     model is recorded in the audit trail. Use ``dry_run`` to preview.
     """
+    ensure_permission_in_oss(db, current_user, "create_ai_models")
     summary = await sync_account_model_catalog(
         db,
         user=current_user,
@@ -1082,6 +1087,7 @@ def export_ai_model_credentials(
     written to the audit log without token material. API-key credentials are
     never exportable.
     """
+    ensure_permission_in_oss(db, current_user, "edit_ai_models")
     db_model = _get_account_ai_model(
         db=db, model_id=model_id, current_user=current_user, view=True
     )
