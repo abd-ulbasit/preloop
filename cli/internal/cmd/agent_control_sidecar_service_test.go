@@ -263,7 +263,7 @@ func TestCodexOnboardNoSidecarFlag(t *testing.T) {
 	if *calls != 0 {
 		t.Fatalf("--no-sidecar still installed the service")
 	}
-	if !strings.Contains(out.String(), "preloop codex sidecar enable") {
+	if !strings.Contains(out.String(), codexSidecarManualHint(codexAgentControlSidecarSpec())) {
 		t.Fatalf("expected manual enable hint, got %q", out.String())
 	}
 	if agentsEnrollCmd.Flags().Lookup("no-sidecar") == nil {
