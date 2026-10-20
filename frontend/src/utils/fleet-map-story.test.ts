@@ -335,3 +335,62 @@ describe('fleet-map work line labels', () => {
     expect(codeLineLabel('something_else', '#51', {}, pr)).to.equal('');
   });
 });
+
+describe('fleet-map window history seeding', () => {
+  const merged = (pr: string, url: string | null) => ({
+    id: `merge:${pr}`,
+    at: new Date(Date.now() - 60_000).toISOString(),
+    action: 'merged' as const,
+    node_id: 'flow:implementation',
+    pr,
+    url,
+  });
+  const base = {
+    active_within_minutes: 60,
+    since: new Date(Date.now() - 3_600_000).toISOString(),
+    truncated: false,
+    counts: {},
+    flows: [],
+  };
+  const works = (story: FleetStory) =>
+    story
+      .graph({ ...sampleFleetMap() }, 60)
+      .nodes.filter((n) => n.type === 'work');
+
+  it('seeds merged PRs from forge merges on a server without the work list', () => {
+    const story = new FleetStory();
+    expect(
+      story.seedWork({ ...base, events: [merged('acme/api#51', null)] })
+    ).to.equal(true);
+    const nodes = works(story);
+    expect(nodes.map((n) => [n.work_kind, n.status])).to.deep.equal([
+      ['pull_request', 'Merged'],
+    ]);
+  });
+
+  it('does not add a merge event PR twice when the work list has it', () => {
+    const story = new FleetStory();
+    story.seedWork({
+      ...base,
+      events: [merged('#51', null)],
+      work: [
+        {
+          key: 'acme/api#51',
+          kind: 'pull_request',
+          reference: '#51',
+          repo: 'acme/api',
+          title: 'Retry',
+          url: null,
+          state: 'merged',
+          last_action: 'merged',
+          last_at: new Date(Date.now() - 60_000).toISOString(),
+          review_state: null,
+          labels: [],
+          related_issue: null,
+          node_ids: [],
+        },
+      ],
+    });
+    expect(works(story)).to.have.length(1);
+  });
+});

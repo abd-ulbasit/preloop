@@ -596,9 +596,22 @@ export class FleetStory {
       ...item,
       at: parseUTCDate(item.last_at).getTime(),
     }));
-    // Until the server lists work items, forge merges name their PR.
+    // Until the server lists work items, forge merges name their PR; a PR
+    // the list already has is not added twice.
+    const listed = new Set(
+      items.flatMap((item) => [item.key, item.url ?? ''].filter(Boolean))
+    );
+    // A short "#51" matches any listed "repo#51"; a full key must match.
+    const same = (pr: string) =>
+      listed.has(pr) ||
+      (!pr.includes('/') && [...listed].some((key) => key.endsWith(pr)));
     for (const event of activity.events ?? [])
-      if (event.action === 'merged' && (event.pr || event.url))
+      if (
+        event.action === 'merged' &&
+        (event.pr || event.url) &&
+        !(event.url && listed.has(event.url)) &&
+        !(event.pr && same(event.pr))
+      )
         items.push({
           key: event.pr || event.url || '',
           kind: 'pull_request',

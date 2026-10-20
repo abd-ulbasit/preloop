@@ -1098,3 +1098,33 @@ describe('fleet-map usage totals', () => {
     expect(await pick('agent:claude')).to.equal(undefined);
   });
 });
+
+describe('fleet-map Show memory', () => {
+  afterEach(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith('preloop:fleet-map')) localStorage.removeItem(key);
+  });
+  it('remembers a choice that hides every type', async () => {
+    const el = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'hide-all',
+    });
+    for (const box of el.shadowRoot!.querySelectorAll<
+      HTMLElement & { checked: boolean }
+    >('sl-checkbox[data-type]'))
+      if (box.checked) {
+        box.dispatchEvent(new CustomEvent('sl-change'));
+        await el.updateComplete;
+      }
+    expect(el.shadowRoot!.querySelectorAll('[data-node]').length).to.equal(0);
+    const again = await map({
+      spatialOnly: false,
+      defaultArrangement: 'columns',
+      positionsScope: 'hide-all',
+    });
+    expect(again.shadowRoot!.querySelectorAll('[data-node]').length).to.equal(
+      0
+    );
+  });
+});

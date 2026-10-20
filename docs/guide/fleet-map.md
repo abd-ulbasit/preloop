@@ -47,8 +47,9 @@ line. A flow's model calls draw and light the flow's own line to that model. Lin
 to issues and PRs say the action (`opened PR #51`, `labelled bug, p2`,
 `review: approved`). Text is drawn only where it covers no node.
 
-Select a model or provider to see the window's gateway totals: requests, input and
-output tokens and the estimated cost.
+Select a model or provider to see the window's gateway totals (requests, input and
+output tokens, estimated cost) on servers that provide `GET /api/v1/fleet/usage`;
+on others the panel omits them.
 
 The map selects metadata, never model prompts or replies. Approval command text
 comes from the existing display-redacted approval payload, with extra credential
@@ -56,8 +57,10 @@ scrubbing. Generic command/path capture is not enabled by this UI.
 
 ## Observed work
 
-On load and on every window change the map shows the flows and the issues and PRs
-active in the window, not only those that move while it is open. Show > Flows and
+On load and on every window change the map shows the flows active in the window and
+the pull requests merged in it, not only what moves while it is open. Open issues
+and PRs from earlier in the window join them on servers that list the window's work
+items in code activity. Show > Flows and
 Show > Work (issues, PRs) hide or show them; the Show choice is remembered.
 
 Flow start/status metadata creates a work reference when it identifies an issue or

@@ -4176,12 +4176,13 @@ function loadTypes(user: string, scope: string): Set<FleetMapNodeType> {
       localStorage.getItem(`${TYPES_KEY}:${scope}:${user || 'anonymous'}`) ||
         'null'
     );
-    if (Array.isArray(saved)) {
-      const types = saved.filter((type): type is FleetMapNodeType =>
-        (FLEET_MAP_TYPES as readonly string[]).includes(type)
+    // A saved list is the user's choice, even when it hides everything.
+    if (Array.isArray(saved))
+      return new Set(
+        saved.filter((type): type is FleetMapNodeType =>
+          (FLEET_MAP_TYPES as readonly string[]).includes(type)
+        )
       );
-      if (types.length) return new Set(types);
-    }
   } catch {
     // Private mode or a hand-edited value: the default applies.
   }

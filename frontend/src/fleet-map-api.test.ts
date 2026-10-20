@@ -4,9 +4,11 @@ import {
   FLEET_MAP_TYPES,
   blastRadius,
   filterGraph,
+  getFleetUsage,
   layoutGraph,
   nodeGaps,
 } from './fleet-map-api';
+import sinon from 'sinon';
 import { sampleFleetMap } from './test-helpers/fleet-map-graph';
 
 const all = new Set(FLEET_MAP_TYPES);
@@ -167,5 +169,47 @@ describe('gaps only', () => {
     // shares a model with that runner is two hops away and drops out.
     expect(forward).to.include('device:build');
     expect(forward).not.to.include('agent:claude');
+  });
+});
+
+describe('Fleet usage client', () => {
+  let fetchStub: sinon.SinonStub;
+  beforeEach(() => {
+    localStorage.setItem('accessToken', 'test-token');
+    fetchStub = sinon.stub(window, 'fetch');
+  });
+  afterEach(() => {
+    fetchStub.restore();
+    localStorage.removeItem('accessToken');
+  });
+  it('reads window totals from /fleet/usage, and the any window without a parameter', async () => {
+    const body = {
+      active_within_minutes: 60,
+      since: '2026-10-20T09:00:00Z',
+      until: '2026-10-20T10:00:00Z',
+      truncated: false,
+      partial: false,
+      models: {},
+      providers: {},
+    };
+    fetchStub.callsFake(
+      async () => new Response(JSON.stringify(body), { status: 200 })
+    );
+    expect(await getFleetUsage(undefined, 60)).to.deep.equal(body);
+    expect(String(fetchStub.firstCall.args[0])).to.contain(
+      '/api/v1/fleet/usage?active_within_minutes=60'
+    );
+    await getFleetUsage(undefined, null);
+    expect(String(fetchStub.secondCall.args[0])).to.match(
+      /\/api\/v1\/fleet\/usage$/
+    );
+    fetchStub.callsFake(async () => new Response('{}', { status: 404 }));
+    let failed = false;
+    try {
+      await getFleetUsage(undefined, 60);
+    } catch {
+      failed = true;
+    }
+    expect(failed, 'an older server without the route').to.equal(true);
   });
 });

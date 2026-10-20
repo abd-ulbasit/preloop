@@ -809,10 +809,12 @@ pitch (10px to 64px) to the stage height. Bubbles are placed by
 most two per node. Lit lines carry the specific label of what travelled them
 (model and tokens, native tool and status, approval, or the work action), never
 a kind; MCP calls light no device line. Gateway calls carrying `flow_id` add an
-observed flow-to-model line. Code activity seeds the window's work items
-(`FleetCodeActivity.work`, optional) and refits an unowned map when it first
-arrives; `GET /fleet/usage` totals show in the panel of a selected model or
-provider. The Show choice is stored per user and scope.
+observed flow-to-model line. Code activity seeds the window's merged PRs from
+forge merge events, and every work item when the server sends the optional
+`FleetCodeActivity.work` list (not yet emitted by this backend), and refits an
+unowned map when it first arrives. When the server provides `GET /fleet/usage`
+(separate backend change), a selected model or provider shows its window
+totals; without it the panel omits them. The Show choice is stored per user and scope.
 
 Gateway starts light the sender; real completions light the model and show measured
 input/output tokens. Native permission activity identifies its managed agent
