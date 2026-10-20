@@ -376,11 +376,45 @@ def test_gateway_indexes_support_both_aggregate_queries(
     db_session.execute(text("SET LOCAL enable_seqscan = off"))
     for sql, params in queries:
         plan = "\n".join(connection.exec_driver_sql("EXPLAIN " + sql, params).scalars())
+        # Small fixtures can favor the narrower gateway model/time index over
+        # a totals index. Require indexed tenant/window bounds, not one name.
+        assert "Index Scan" in plan, plan
         assert any(
-            index in plan
-            for index in (
-                "ix_api_usage_account_action_ts",
-                "ix_api_usage_gateway_totals",
-                "ix_api_usage_gateway_model_totals",
-            )
+            "Index Cond:" in line and "account_id" in line and "timestamp" in line
+            for line in plan.splitlines()
         ), plan
+
+
+@pytest.mark.parametrize(
+    "pricing",
+    [
+        {"cost_source": "unpriced"},
+        {"meta_data": {"budget": {"pricing_available": False}}},
+    ],
+)
+def test_explicitly_unpriced_legacy_zero_cost_is_partial(
+    db_session: Session, fleet: dict[str, Any], pricing: dict[str, Any]
+) -> None:
+    _usage(
+        db_session, fleet["user"].account_id, fleet["a"], estimated_cost=0.0, **pricing
+    )
+    result = _read(db_session, fleet["user"])
+    for total in (
+        result.models["model:example-model"],
+        result.providers["provider:openai"],
+    ):
+        assert total.partial
+        assert total.estimated_cost is None
+        assert total.request_count == 1
+        assert total.input_tokens == 100
+    assert result.partial
+    # Keep the known cost when priced and explicitly unpriced rows mix.
+    _usage(db_session, fleet["user"].account_id, fleet["b"])
+    result = _read(db_session, fleet["user"])
+    for total in (
+        result.models["model:example-model"],
+        result.providers["provider:openai"],
+    ):
+        assert total.partial
+        assert total.estimated_cost == 0.01
+        assert total.request_count == 2

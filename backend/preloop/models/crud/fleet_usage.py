@@ -36,6 +36,11 @@ def usage_by_node(
 
     Returns:
         SQL aggregates keyed by graph node id, with missing-data indicators.
+
+    Notes:
+        Currency and explicit pricing markers are not in the covering gateway
+        indexes. This bounded window read uses indexed heap access, rather than
+        claiming an index-only scan or adding wide pricing metadata to indexes.
     """
     if not model_nodes:
         return []
@@ -49,6 +54,14 @@ def usage_by_node(
     usage = models.ApiUsage
     currency = func.coalesce(usage.currency, "USD")
     one_currency = func.count(func.distinct(currency)) == 1
+    missing_cost = or_(
+        usage.estimated_cost.is_(None),
+        usage.cost_source.is_not_distinct_from("unpriced"),
+        usage.meta_data["budget"]["pricing_available"].astext.is_not_distinct_from(
+            "false"
+        ),
+    )
+    known_cost = case((missing_cost, None), else_=usage.estimated_cost)
     statement = (
         select(
             node.label("node_id"),
@@ -57,16 +70,14 @@ def usage_by_node(
             func.sum(usage.completion_tokens).label("output_tokens"),
             func.sum(usage.cache_read_tokens).label("cache_read_tokens"),
             func.sum(usage.cache_creation_tokens).label("cache_write_tokens"),
-            case((one_currency, func.sum(usage.estimated_cost))).label(
-                "estimated_cost"
-            ),
+            case((one_currency, func.sum(known_cost))).label("estimated_cost"),
             case((one_currency, func.min(currency))).label("currency"),
             (
                 func.bool_or(
                     or_(
                         usage.prompt_tokens.is_(None),
                         usage.completion_tokens.is_(None),
-                        usage.estimated_cost.is_(None),
+                        missing_cost,
                     )
                 )
                 | ~one_currency

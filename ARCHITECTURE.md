@@ -787,8 +787,11 @@ the gateway account/window indexes and excluding replay validation. The echoed
 window includes UTC bounds; omitted "any" and windows over 90 days read at most
 90 days. A 1,000-configuration cap sets truncation and partial flags. Missing
 input/output/cost data stays explicit, cache sums remain nullable, and mixed
-currencies yield no combined cost rather than an unlabelled conversion. Deleted
-or invisible model configurations contribute no node totals.
+currencies yield no combined cost rather than an unlabelled conversion. Explicit
+unpriced markers also exclude legacy numeric zero costs and mark totals partial.
+Currency and pricing markers require heap reads through the existing gateway
+window indexes; this endpoint does not claim an index-only scan. Deleted or
+invisible model configurations contribute no node totals.
 
 `GET /api/v1/fleet/code-activity` is the map's code layer: pull and merge requests
 opened, commented on, reviewed and merged in the same window, counted per agent, flow
