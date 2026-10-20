@@ -1825,7 +1825,8 @@ paths:
       summary: Update Account Details
       description: "Update current account details.\n\nArgs:\n    update_data: Account\
         \ update data\n    account: Current user's account\n    db: Database session\n\
-        \nReturns:\n    Updated account details"
+        \    current_user: Authenticated account manager\n\nReturns:\n    Updated\
+        \ account details"
       operationId: update_account_details_api_v1_account_details_patch
       requestBody:
         content:
