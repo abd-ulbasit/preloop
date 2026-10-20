@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permissions on builds without the RBAC plugin
   ([#1933](https://github.com/preloop/preloop/pull/1933)).
 - Approval decisions, policy controls, tool configuration and MCP server
-  management enforce consistent permissions on builds without the RBAC plugin.
+  management enforce consistent permissions on builds without the RBAC plugin
+  ([#1930](https://github.com/preloop/preloop/pull/1930)).
 
 - Opening an approval bypass requires `decide_approvals`, and the
   approval-bypass endpoints enforce their permissions on builds without the
