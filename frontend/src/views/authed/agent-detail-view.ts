@@ -2025,7 +2025,7 @@ export class AgentDetailView extends LitElement {
             class="hero"
             style="margin-bottom: var(--sl-spacing-medium); display: flex; align-items: baseline; justify-content: flex-start; gap: var(--sl-spacing-small);"
           >
-            <div class="hero-title">Session History</div>
+            <div class="hero-title">Session history</div>
             <span class="meta-line" data-testid="session-count"
               >${
                 total !== null

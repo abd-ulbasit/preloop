@@ -532,9 +532,8 @@ export class AgentsView extends LitElement {
           cursor: pointer;
           font: inherit;
           font-weight: var(--sl-font-weight-semibold);
-          font-size: var(--sl-font-size-x-small);
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
+          /* Sentence case at the meta size, like every other list. */
+          font-size: var(--console-text-meta, 13px);
           color: var(--sl-color-neutral-600);
           padding: var(--sl-spacing-small) var(--sl-spacing-medium);
         }

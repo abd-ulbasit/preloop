@@ -1478,7 +1478,7 @@ export class AuditView extends AuthedElement {
   render() {
     return html`
       <view-header
-        headerText="Audit Timeline"
+        headerText="Audit timeline"
         description="The permanent record of governed activity: tool calls, approvals, and policy decisions, with outcomes and timestamps."
         width="wide"
       >

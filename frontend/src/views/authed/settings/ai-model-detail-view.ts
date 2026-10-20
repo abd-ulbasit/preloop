@@ -2857,7 +2857,7 @@ export class AIModelDetailView extends LitElement {
     const gatewayConfig = this.getGatewayConfig();
     return html`
       <sl-card>
-        <div slot="header" class="model-title">Try Through Gateway</div>
+        <div slot="header" class="model-title">Try through the gateway</div>
         <div class="validation-stack">
           <div class="meta-line">
             ${
@@ -3106,7 +3106,7 @@ export class AIModelDetailView extends LitElement {
 
                       <sl-card>
                         <div slot="header" class="model-title">
-                          Session Observer
+                          Session observer
                         </div>
                         <div class="meta-line" style="margin-bottom: 0.75rem;">
                           Recent sessions, replay, cost breakdown, and

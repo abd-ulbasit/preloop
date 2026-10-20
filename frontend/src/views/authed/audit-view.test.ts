@@ -482,7 +482,7 @@ describe('AuditView', () => {
       element.shadowRoot
         ?.querySelector('view-header')
         ?.getAttribute('headerText')
-    ).to.equal('Audit Timeline');
+    ).to.equal('Audit timeline');
     expect(content).to.contain('Runtime session started');
     expect(content).to.contain('search');
     expect(content).to.contain('Alice Example via Claude Workspace Token');
@@ -755,7 +755,7 @@ describe('AuditView', () => {
       await element.updateComplete;
 
       const header = element.shadowRoot?.querySelector('view-header');
-      expect(header?.getAttribute('headerText')).to.equal('Audit Timeline');
+      expect(header?.getAttribute('headerText')).to.equal('Audit timeline');
       // Nothing precedes the title any more: the count and LIVE are meta.
       expect(header?.querySelector('[slot="title-prefix"]')).to.equal(null);
 

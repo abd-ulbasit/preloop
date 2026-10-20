@@ -503,12 +503,11 @@ export class TrackerList extends LitElement {
           cursor: pointer;
           display: flex;
           font: inherit;
-          font-size: var(--sl-font-size-x-small);
+          /* Sentence case at the meta size, like every other list. */
+          font-size: var(--console-text-meta, 13px);
           font-weight: var(--sl-font-weight-semibold);
           gap: 4px;
-          letter-spacing: 0.04em;
           padding: var(--sl-spacing-small);
-          text-transform: uppercase;
           width: 100%;
         }
         .trackers-table th {
@@ -742,7 +741,7 @@ export class TrackerList extends LitElement {
   private renderDeleteDialog() {
     return html`
       <sl-dialog
-        label="Confirm Deletion"
+        label="Confirm deletion"
         ?open=${this.trackerPendingDelete !== null}
         @sl-hide=${this._cancelDelete}
       >

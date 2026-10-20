@@ -29,9 +29,9 @@ export const listTableStyles = css`
     cursor: pointer;
     font: inherit;
     font-weight: var(--sl-font-weight-semibold);
-    font-size: var(--sl-font-size-x-small);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    /* Sentence case at the meta size, as on Models and Gateway traffic:
+       the uppercase header was one of two header styles in the console. */
+    font-size: var(--console-text-meta, 13px);
     color: var(--sl-color-neutral-600);
     padding: 8px;
   }

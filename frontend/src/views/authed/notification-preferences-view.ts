@@ -134,7 +134,7 @@ export class NotificationPreferencesView extends AuthedElement {
 
       .header h1 {
         margin: 0 0 var(--sl-spacing-x-small) 0;
-        font-size: var(--sl-font-size-2x-large);
+        font-size: var(--console-text-h1, 1.625rem);
         font-weight: var(--sl-font-weight-semibold);
         color: var(--sl-color-neutral-900);
       }
