@@ -720,7 +720,7 @@ describe('AIModelDetailView', () => {
     expect(content).to.contain('Try Through Gateway');
     expect(content).to.contain('18');
     expect(content).to.contain('$1.42');
-    expect(content).to.contain('8,500');
+    expect(content).to.contain('8.5K');
     expect(content).to.contain('Session Observer');
 
     const observer = element.shadowRoot?.querySelector(

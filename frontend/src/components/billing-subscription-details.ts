@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../utils/count-format';
 import { formatUsd, formatUsdExact } from '../utils/money';
 import { parseUTCDate } from '../utils/date';
 import { LitElement, html, css, nothing } from 'lit';
@@ -561,7 +562,10 @@ export class BillingSubscriptionDetails extends LitElement {
                                   ${model.model_name}
                                 </div>
                                 <div class="usage-model-meta">
-                                  ${model.request_count}
+                                  <span
+                                    title=${formatCountExact(model.request_count)}
+                                    >${formatCount(model.request_count)}</span
+                                  >
                                   request${model.request_count === 1 ? '' : 's'}
                                   · ${model.total_tokens.toLocaleString()}
                                   tokens ${model.tier ? `· ${model.tier}` : ''}

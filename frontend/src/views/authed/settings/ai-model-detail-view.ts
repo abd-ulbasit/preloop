@@ -1,3 +1,4 @@
+import { formatCount } from '../../../utils/count-format';
 import { ConsoleStatus } from '../../../controllers/console-status';
 import { parseUTCDate } from '../../../utils/date';
 import { formatUsd, formatUsdExact } from '../../../utils/money';
@@ -1361,8 +1362,9 @@ export class AIModelDetailView extends LitElement {
     });
   }
 
+  /** Compact at 1000 and above, as DESIGN.md "Numbers" says (U-01). */
   private formatNumber(value: number | null | undefined): string {
-    return typeof value === 'number' ? value.toLocaleString() : '0';
+    return typeof value === 'number' ? formatCount(value) : '0';
   }
 
   /**

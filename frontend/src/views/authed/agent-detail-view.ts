@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { parseUTCDate } from '../../utils/date';
 import { formatUsd, formatUsdExact } from '../../utils/money';
@@ -1554,8 +1555,10 @@ export class AgentDetailView extends LitElement {
           <span class="strip-value"
             >${html`<span title=${formatUsdExact(aggregate?.estimated_cost)}>${formatUsd(aggregate?.estimated_cost)}</span>`}</span
           >
-          <span class="strip-requests"
-            >${requests} request${requests === 1 ? '' : 's'}</span
+          <span
+            class="strip-requests"
+            title=${`${formatCountExact(requests)} request${requests === 1 ? '' : 's'}`}
+            >${formatCount(requests)} request${requests === 1 ? '' : 's'}</span
           >
           <time-range-select
             ariaLabel="Estimated spend range"

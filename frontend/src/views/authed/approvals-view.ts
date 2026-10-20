@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { replaceListFilters } from '../../utils/list-filter-url';
 import { html, css, nothing, unsafeCSS } from 'lit';
@@ -1796,14 +1797,19 @@ export class ApprovalsView extends AuthedElement {
           ? `${stats.avgResponseTimeMinutes}m`
           : `${Math.round(stats.avgResponseTimeMinutes / 60)}h`
         : null;
+    // Compact at 1000 and above, exact in the title (DESIGN.md "Numbers").
+    const count = (value: number) =>
+      html`<strong title=${formatCountExact(value)}
+        >${formatCount(value)}</strong
+      >`;
     const facts: Array<unknown> = [
       capped
-        ? html`Last <strong>${loaded}</strong> requests`
-        : html`<strong>${loaded}</strong> requests`,
-      html`<strong>${this.waitingRequests.length}</strong> waiting`,
-      html`<strong>${stats.approved}</strong> approved`,
-      html`<strong>${stats.declined}</strong> denied`,
-      html`<strong>${stats.expired}</strong> timed out`,
+        ? html`Last ${count(loaded)} requests`
+        : html`${count(loaded)} requests`,
+      html`${count(this.waitingRequests.length)} waiting`,
+      html`${count(stats.approved)} approved`,
+      html`${count(stats.declined)} denied`,
+      html`${count(stats.expired)} timed out`,
     ];
     if (stats.approved + stats.declined > 0) {
       facts.push(

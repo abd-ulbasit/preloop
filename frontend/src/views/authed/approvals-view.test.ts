@@ -1584,9 +1584,17 @@ describe('ApprovalsView', () => {
       );
       // The strip counts the whole account, from the server.
       const strip = element.shadowRoot!.querySelector('.stat-strip')!;
+      // Compact at 1000 and above, exact in the title (U-01).
       expect(strip.textContent!.replace(/\s+/g, ' ')).to.contain(
-        '40000 requests'
+        '40K requests'
       );
+      expect(strip.textContent!.replace(/\s+/g, ' ')).to.contain(
+        '32K approved'
+      );
+      expect(
+        strip.querySelector('strong[title="40,000"]'),
+        'exact total in the title'
+      ).to.exist;
       expect(strip.textContent).to.not.contain('Last');
     });
 

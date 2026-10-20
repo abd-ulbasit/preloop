@@ -1987,6 +1987,9 @@ describe('AgentDetailView', () => {
     expect(stripText).to.contain('Estimated spend · 30d');
     expect(stripText).to.contain('$0.57');
     expect(stripText).to.contain('4 requests');
+    expect(
+      strip?.querySelector('.strip-requests')?.getAttribute('title')
+    ).to.equal('4 requests');
 
     // Volume leads the money on the strip as it does in the lists, so the
     // card this replaced did not take the token split down with it.

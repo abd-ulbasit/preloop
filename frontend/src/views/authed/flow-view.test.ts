@@ -173,6 +173,42 @@ describe('FlowView recent executions', () => {
   });
 });
 
+describe('FlowView compact counts (U-01)', () => {
+  it('states the executions total compactly with the exact count in the title', async () => {
+    const element = document.createElement('flow-view') as any;
+    element.flowReady = true;
+    element.isNew = false;
+    element.isEditing = false;
+    element.initialized = true;
+    element.flowId = 'flow-1';
+    element.flow = {
+      id: 'flow-1',
+      name: 'PR Reviewer',
+      agent_type: 'codex',
+      execution_stats: { total_execs: 1998, running_execs: 0 },
+    };
+    element.recentExecutions = [
+      {
+        id: 'dee1da93-6d1e-4c0e-9f3a-2b1d0c4e5f60',
+        status: 'SUCCEEDED',
+        start_time: '2026-03-09T10:00:00Z',
+        end_time: '2026-03-09T10:02:00Z',
+      },
+    ];
+    document.body.appendChild(element);
+    await element.updateComplete;
+    try {
+      const link = element.shadowRoot!.querySelector('.all-executions a')!;
+      expect((link.textContent || '').trim()).to.equal(
+        'View all 2K executions'
+      );
+      expect(link.getAttribute('title')).to.equal('1,998 executions');
+    } finally {
+      element.remove();
+    }
+  });
+});
+
 describe('FlowView recent executions width (B-09)', () => {
   it('gives the subject the slack instead of a quarter of the table', async () => {
     const element = document.createElement('flow-view') as any;

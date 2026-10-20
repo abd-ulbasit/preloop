@@ -1,3 +1,4 @@
+import { formatCount, formatCountExact } from '../../utils/count-format';
 import { ConsoleStatus } from '../../controllers/console-status';
 import { tableScrollStyles } from '../../styles/table-scroll';
 import { LitElement, html, css, nothing, unsafeCSS } from 'lit';
@@ -1443,13 +1444,16 @@ ${(this.flow.custom_commands.commands || []).join('\n')}</pre>
     const total = Number(this.flow?.execution_stats?.total_execs || 0);
     if (total > 0 && total <= this.recentExecutions.length) return '';
     const label =
-      total > 0 ? `View all ${total} executions` : 'View all executions';
+      total > 0
+        ? `View all ${formatCount(total)} executions`
+        : 'View all executions';
     return html`
       <div class="all-executions">
         <a
           href=${`/console/flows/executions?flow_id=${encodeURIComponent(
             this.flowId || ''
           )}`}
+          title=${total > 0 ? `${formatCountExact(total)} executions` : nothing}
           >${label}</a
         >
       </div>
