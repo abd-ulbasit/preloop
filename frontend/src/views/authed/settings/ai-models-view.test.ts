@@ -935,13 +935,84 @@ describe('AIModelsView attention dismissals', () => {
 
     expect((element as any).modelsNeedingAttentionCount).to.equal(0);
     const badge = healthBadge(element);
-    expect(badge.textContent!.trim()).to.equal('Healthy');
+    // 9 of 40 requests failed in the window: acknowledged, not healthy.
+    expect(badge.textContent!.trim()).to.equal('Acknowledged');
+    expect(badge.getAttribute('variant')).to.equal('neutral');
     // The claim stays checkable: the badge says when it was made.
     expect(badge.getAttribute('title')).to.contain('Marked fixed');
     // An acknowledged model offers no second dismissal.
     expect(
       element.shadowRoot!.querySelector('[data-testid="dismiss-model-1"]')
     ).to.equal(null);
+  });
+
+  const fixedMarker = () => ({
+    id: 'dismissal-1',
+    item_id: 'model:example/reviewer',
+    fingerprint: `last:${lastFailureAt}`,
+    reason: 'fixed',
+    snooze_until: null,
+    dismissed_by_user_id: 'user-1',
+    dismissed_by_username: 'Jane Doe',
+    created_at: '2026-09-14T09:30:00Z',
+  });
+
+  const withCounts = async (
+    element: AIModelsView,
+    total: number,
+    failed: number
+  ) => {
+    const overview = new Map((element as any).modelOverview);
+    overview.set('model-1', {
+      ...(overview.get('model-1') as any),
+      total_requests: total,
+      successful_requests: total - failed,
+      failed_requests: failed,
+    });
+    (element as any).modelOverview = overview;
+    await element.updateComplete;
+  };
+
+  it('never calls an acknowledged model with a high failure rate Healthy (B-13)', async () => {
+    dismissalsResponse = [fixedMarker()];
+    const element = await mount();
+    await withCounts(element, 73, 50);
+    const badge = healthBadge(element);
+    expect(badge.textContent!.trim()).to.equal('Acknowledged');
+    expect(badge.getAttribute('title')).to.contain('50 of 73 requests failed');
+    expect(badge.getAttribute('title')).to.contain('Marked fixed');
+  });
+
+  it('keeps Healthy for an acknowledged model with a low failure rate', async () => {
+    dismissalsResponse = [fixedMarker()];
+    const element = await mount();
+    await withCounts(element, 1000, 10);
+    expect(healthBadge(element).textContent!.trim()).to.equal('Healthy');
+  });
+
+  it('pluralises the active session chip (B-12)', async () => {
+    const element = await mount();
+    const overview = new Map((element as any).modelOverview);
+    overview.set('model-1', {
+      ...(overview.get('model-1') as any),
+      active_session_count: 1,
+    });
+    (element as any).modelOverview = overview;
+    await element.updateComplete;
+    const text = (element.shadowRoot!.textContent || '').replace(/\s+/g, ' ');
+    expect(text).to.contain('1 active session');
+    expect(text).to.not.contain('1 active sessions');
+  });
+
+  it('splits the Need attention count into unpriced and failing (B-03)', async () => {
+    unpricedRequestCount = 4;
+    const element = await mount();
+    const card = Array.from(
+      element.shadowRoot!.querySelectorAll('.summary-card')
+    ).find((node) => node.textContent?.includes('Need attention'))!;
+    const text = (card.textContent || '').replace(/\s+/g, ' ');
+    expect(text).to.contain('1 unpriced · 1 failing');
+    expect(text).to.not.contain('unpriced or failing');
   });
 
   it('still counts an acknowledged model that has unpriced requests', async () => {
@@ -1069,7 +1140,7 @@ describe('AIModelsView attention dismissals', () => {
     });
 
     await waitUntil(
-      () => healthBadge(element).textContent!.trim() === 'Healthy',
+      () => healthBadge(element).textContent!.trim() === 'Acknowledged',
       'the row stayed flagged after being snoozed'
     );
   });
@@ -1261,7 +1332,7 @@ describe('AIModelsView attention dismissals', () => {
 
       await selectMenuItem(element, 'unpriced-expected');
       await waitUntil(
-        () => healthBadge(element).textContent!.trim() === 'Healthy',
+        () => healthBadge(element).textContent!.trim() === 'Acknowledged',
         'the row stayed flagged after both markers were taken'
       );
       expect((element as any).modelsNeedingAttentionCount).to.equal(0);

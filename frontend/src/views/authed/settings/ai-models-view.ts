@@ -764,6 +764,31 @@ export class AIModelsView extends LitElement {
    * Unpriced requests somebody marked expected are out for the same reason
    * (#848): a model that is unpriced on purpose is not a task.
    */
+  /**
+   * "3 unpriced · 1 failing": the attention page counts unpriced models as
+   * one pricing item and failing models as model items, so the split is what
+   * makes the two pages reconcilable.
+   */
+  private get needAttentionBreakdown(): string {
+    const rows: Array<[AIModelOverviewItem | undefined, AIModel | undefined]> =
+      this.models.length > 0
+        ? this.models.map((model) => [this.getModelOverview(model.id), model])
+        : [...this.modelOverview.values()].map((item) => [item, undefined]);
+    let unpriced = 0;
+    let failing = 0;
+    for (const [item, model] of rows) {
+      if (this.unpricedStateFor(item, model).status === 'unpriced') unpriced++;
+      if (this.attentionStateFor(item, model).status === 'failing') failing++;
+    }
+    if (unpriced === 0 && failing === 0) return 'none unpriced or failing';
+    return [
+      unpriced ? `${this.formatCompactNumber(unpriced)} unpriced` : '',
+      failing ? `${this.formatCompactNumber(failing)} failing` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+
   private get modelsNeedingAttentionCount(): number {
     if (this.models.length > 0) {
       return this.models.filter((model) => {
@@ -839,7 +864,29 @@ export class AIModelsView extends LitElement {
     if (!overview || overview.total_requests === 0) {
       return 'neutral';
     }
+    if (this.failsOften(modelId)) {
+      return 'neutral';
+    }
     return 'success';
+  }
+
+  /**
+   * Failure rate in the window at or above which a quiet row is not called
+   * Healthy. An acknowledged failure keeps the row out of the attention
+   * count, but "Healthy" over 50 failures in 73 requests is a claim the
+   * numbers on the same row contradict.
+   */
+  private static readonly HEALTHY_FAILURE_RATE = 0.05;
+
+  private failsOften(modelId: string): boolean {
+    const overview = this.getModelOverview(modelId);
+    const total = overview?.total_requests || 0;
+    const failed = overview?.failed_requests || 0;
+    return (
+      total > 0 &&
+      failed > 0 &&
+      failed / total >= AIModelsView.HEALTHY_FAILURE_RATE
+    );
   }
 
   /**
@@ -855,6 +902,9 @@ export class AIModelsView extends LitElement {
     if (!overview || overview.total_requests === 0) {
       return 'Idle';
     }
+    if (this.failsOften(modelId)) {
+      return 'Acknowledged';
+    }
     return 'Healthy';
   }
 
@@ -865,7 +915,13 @@ export class AIModelsView extends LitElement {
       return state.reasonText;
     }
     const unpriced = this.unpricedStateForModel(modelId);
+    const overview = this.getModelOverview(modelId);
     return [
+      this.failsOften(modelId) && overview
+        ? `${this.formatNumber(overview.failed_requests)} of ${this.formatNumber(
+            overview.total_requests
+          )} requests failed in ${this.windowSuffix}`
+        : '',
       state.status === 'marked' ? state.markerLabel : '',
       unpriced.status === 'marked' ? unpriced.markerLabel : '',
     ]
@@ -1004,7 +1060,7 @@ export class AIModelsView extends LitElement {
           <div class="metric-value">
             ${this.formatCompactNumber(this.modelsNeedingAttentionCount)}
           </div>
-          <div class="metric-subtext">unpriced or failing</div>
+          <div class="metric-subtext">${this.needAttentionBreakdown}</div>
         </sl-card>
         <sl-card class="summary-card">
           <div class="metric-label">Requests · ${this.windowSuffix}</div>
@@ -1016,7 +1072,7 @@ export class AIModelsView extends LitElement {
           </div>
           <div class="metric-subtext">
             ${this.formatCompactNumber(this.activeFleetSessions)} active
-            sessions
+            session${this.activeFleetSessions === 1 ? '' : 's'}
           </div>
         </sl-card>
         <sl-card class="summary-card">
@@ -1494,7 +1550,8 @@ export class AIModelsView extends LitElement {
               ? html`
                   <sl-badge class="chip" variant="neutral" pill>
                     ${this.formatCompactNumber(overview.active_session_count)}
-                    active sessions
+                    active
+                    session${overview.active_session_count === 1 ? '' : 's'}
                   </sl-badge>
                 `
               : null
