@@ -1143,6 +1143,13 @@ describe('FlowsView', () => {
         expect((row?.textContent || '').replace(/\s+/g, ' ')).to.contain(
           'GitHub Actions'
         );
+        // A narrow cell cuts the CI hint with an ellipsis, never mid-word
+        // ("GitHub Ac") with nothing to say it was cut (B-10).
+        const hint = link!.querySelector(
+          '.execution-subject-ci'
+        ) as HTMLElement;
+        expect(getComputedStyle(hint).textOverflow).to.equal('ellipsis');
+        expect(getComputedStyle(hint).overflow).to.equal('hidden');
         expect(
           fetchStub
             .getCalls()
