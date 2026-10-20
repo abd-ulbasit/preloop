@@ -181,4 +181,18 @@ describe('session live evidence', () => {
       'Waiting for agent'
     );
   });
+  it('says whose turn it is from how the last model call finished (B-06)', () => {
+    const now = Date.parse('2026-10-02T10:00:10Z');
+    expect(
+      sessionWork([event('done', { finish_reason: 'end_turn' })], false, now)
+        .label
+    ).to.equal('Your turn');
+    expect(
+      sessionWork([event('done', { finish_reason: 'stop' })], false, now).label
+    ).to.equal('Your turn');
+    expect(
+      sessionWork([event('tool', { finish_reason: 'tool_use' })], false, now)
+        .label
+    ).to.equal('Agent working');
+  });
 });
