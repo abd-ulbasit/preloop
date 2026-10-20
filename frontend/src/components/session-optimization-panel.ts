@@ -37,6 +37,9 @@ import { hasPermission, type UserPermissions } from '../permissions';
  * Mirrors ACTION_PERMISSIONS in backend/preloop/services/session_optimization.py,
  * added with the apply-route permission checks in preloop/preloop#1926.
  */
+/** Every server-side apply is gated on this permission before the action check. */
+export const APPLY_BASE_PERMISSION = 'edit_ai_models';
+
 export const OPTIMIZATION_ACTION_PERMISSIONS: Record<string, string> = {
   scope_tools: 'manage_tools',
   disable_builtin_tools: 'manage_tools',
@@ -47,6 +50,7 @@ export const OPTIMIZATION_ACTION_PERMISSIONS: Record<string, string> = {
 
 /** Plain-words names for the permissions above. */
 const PERMISSION_LABELS: Record<string, string> = {
+  edit_ai_models: 'edit AI models',
   manage_tools: 'manage tools',
   manage_budgets: 'manage budgets',
   manage_policies: 'manage policies',
@@ -113,13 +117,24 @@ export class SessionOptimizationPanel extends LitElement {
       .catch(() => undefined);
   }
 
-  /** The permission the user lacks to apply this suggestion, if any. */
+  /**
+   * The permission the user lacks to apply this suggestion, if any.
+   *
+   * Mirrors the apply endpoint: every apply needs ``edit_ai_models``, and
+   * each action adds its own permission on top. The baseline is reported
+   * first so a custom role that holds the action permission alone sees the
+   * reason the server will give.
+   */
   private missingApplyPermission(
     suggestion: SessionOptimizationSuggestion
   ): string | null {
     const required =
       OPTIMIZATION_ACTION_PERMISSIONS[suggestion.action?.type || ''];
-    if (!required || hasPermission(this.permissions, required)) return null;
+    if (!required) return null;
+    if (!hasPermission(this.permissions, APPLY_BASE_PERMISSION)) {
+      return APPLY_BASE_PERMISSION;
+    }
+    if (hasPermission(this.permissions, required)) return null;
     return required;
   }
 

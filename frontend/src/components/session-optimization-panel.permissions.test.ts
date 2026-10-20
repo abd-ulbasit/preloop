@@ -4,7 +4,17 @@ import { invalidateApiCaches } from '../api';
 import './session-optimization-panel';
 import type { SessionOptimizationPanel } from './session-optimization-panel';
 
-const EDITOR = ['view_flows', 'edit_ai_models'];
+// A role that may edit models but holds none of the action permissions.
+const READER = ['view_flows', 'edit_ai_models'];
+// The seeded editor: tools and policies, never budgets.
+const EDITOR = [
+  'view_flows',
+  'edit_ai_models',
+  'manage_tools',
+  'manage_policies',
+];
+// A custom role with the action permissions but without the apply baseline.
+const ACTIONS_ONLY = ['view_flows', 'manage_tools', 'manage_budgets'];
 const OWNER = [
   'view_flows',
   'edit_ai_models',
@@ -103,8 +113,8 @@ describe('SessionOptimizationPanel apply permissions', () => {
     })[];
   }
 
-  it('disables Apply and names the missing permission for an editor', async () => {
-    const el = await render(EDITOR);
+  it('disables Apply and names the missing permission for a reader', async () => {
+    const el = await render(READER);
     await waitUntil(
       () =>
         el.shadowRoot?.querySelectorAll(
@@ -123,6 +133,48 @@ describe('SessionOptimizationPanel apply permissions', () => {
     expect(notes).to.deep.equal([
       'Needs the manage budgets permission',
       'Needs the manage tools permission',
+    ]);
+  });
+
+  it('disables only the budget action for the seeded editor', async () => {
+    const el = await render(EDITOR);
+    await waitUntil(
+      () =>
+        el.shadowRoot?.querySelectorAll(
+          '[data-testid="apply-missing-permission"]'
+        ).length === 1,
+      'missing-permission note did not render'
+    );
+    const buttons = applyButtons(el);
+    expect(buttons).to.have.length(2);
+    expect(buttons.map((b) => b.disabled)).to.deep.equal([true, false]);
+    const notes = Array.from(
+      el.shadowRoot?.querySelectorAll(
+        '[data-testid="apply-missing-permission"]'
+      ) || []
+    ).map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim());
+    expect(notes).to.deep.equal(['Needs the manage budgets permission']);
+  });
+
+  it('reports the apply baseline when the action permission alone is held', async () => {
+    const el = await render(ACTIONS_ONLY);
+    await waitUntil(
+      () =>
+        el.shadowRoot?.querySelectorAll(
+          '[data-testid="apply-missing-permission"]'
+        ).length === 2,
+      'missing-permission notes did not render'
+    );
+    const buttons = applyButtons(el);
+    expect(buttons.every((b) => b.disabled)).to.equal(true);
+    const notes = Array.from(
+      el.shadowRoot?.querySelectorAll(
+        '[data-testid="apply-missing-permission"]'
+      ) || []
+    ).map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim());
+    expect(notes).to.deep.equal([
+      'Needs the edit AI models permission',
+      'Needs the edit AI models permission',
     ]);
   });
 
