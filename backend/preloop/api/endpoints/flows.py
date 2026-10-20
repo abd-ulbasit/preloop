@@ -2333,7 +2333,9 @@ async def send_execution_command(
     the status it ended in.
     """
     if not isinstance(current_user, CiAuthorizationContext):
-        ensure_permission_in_oss(db, current_user, "execute_flows")
+        await run_db_off_loop(
+            lambda: ensure_permission_in_oss(db, current_user, "execute_flows")
+        )
     import logging
 
     from preloop.services.flow_execution_stop import stop_execution
@@ -2662,7 +2664,9 @@ async def trigger_flow_execution(
         ``execution_id``) when a matrix was given
     """
     if not isinstance(current_user, CiAuthorizationContext):
-        ensure_permission_in_oss(db, current_user, "execute_flows")
+        await run_db_off_loop(
+            lambda: ensure_permission_in_oss(db, current_user, "execute_flows")
+        )
     if isinstance(current_user, CiAuthorizationContext):
         if flow_id != current_user.flow_id:
             raise HTTPException(403, "Restricted CI flow denied")
