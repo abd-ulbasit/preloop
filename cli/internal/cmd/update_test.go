@@ -218,8 +218,18 @@ func TestUpdateYesReplacesBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if maintained != dest {
-		t.Fatalf("maintained %q, want %q", maintained, dest)
+	// The updater resolves the executable path, including Windows short-name
+	// directories (RUNNER~1). Compare file identity rather than path spelling.
+	maintainedInfo, err := os.Stat(maintained)
+	if err != nil {
+		t.Fatalf("stat maintained binary: %v", err)
+	}
+	destInfo, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat destination binary: %v", err)
+	}
+	if !os.SameFile(maintainedInfo, destInfo) {
+		t.Fatalf("maintained %q does not identify destination %q", maintained, dest)
 	}
 	if string(got) != string(payload) {
 		t.Fatalf("installed %q", got)
