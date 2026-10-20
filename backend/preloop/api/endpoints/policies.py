@@ -80,7 +80,7 @@ from preloop.services.sensitive_data.policy_store import (
 from preloop.services.sensitive_data.redact import redact_text
 from preloop.tools.utils import run_async
 from preloop.utils.audit import log_config_change
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 
 POLICY_AUDIT_CONFIG_TYPE = "policy"
@@ -864,6 +864,7 @@ def create_model_io_rule(
     db: Session = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """Save one model I/O rule from the Policies console form."""
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     _reject_cel_syntax_declared_simple(rule)
     _reject_unknown_pii_types(db, account, rule)
     saved = upsert_model_io_rule(db, account.id, rule)
@@ -884,6 +885,7 @@ def update_model_io_rule(
     db: Session = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """Replace an existing model I/O rule. The path id wins."""
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     if rule.id != rule_id:
         rule = rule.model_copy(update={"id": rule_id})
     _reject_cel_syntax_declared_simple(rule)
@@ -912,6 +914,7 @@ def patch_model_io_rule(
     db: Session = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """Toggle enabled without rewriting the rest of the rule."""
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     rules = load_model_io_rules(db, account.id)
     updated: List[ModelIORule] = []
     found = False
@@ -947,6 +950,7 @@ def remove_model_io_rule(
     db: Session = Depends(get_db_session),
 ) -> Response:
     """Delete one model I/O rule."""
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     if not delete_model_io_rule(db, account.id, rule_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1301,6 +1305,7 @@ async def create_policy_version(
     Returns:
         The created policy version.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     snapshot = service.create_snapshot(
         description=request.description,
@@ -1349,6 +1354,7 @@ async def update_version_tag(
     Raises:
         HTTPException: If version not found.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     snapshot, error = service.update_tag(version_id, request.tag)
 
@@ -1393,6 +1399,7 @@ async def remove_version_tag(
     Raises:
         HTTPException: If version not found.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     snapshot, error = service.remove_tag(version_id)
 
@@ -1442,6 +1449,7 @@ async def rollback_to_version(
     Raises:
         HTTPException: If version not found.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     diff, success, error = service.rollback_to_snapshot(
         version_id,
@@ -1499,6 +1507,7 @@ async def delete_policy_version(
     Raises:
         HTTPException: If version not found or is active.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     try:
         deleted_ref = _snapshot_audit_ref(service.get_snapshot(version_id))
@@ -1556,6 +1565,7 @@ async def prune_policy_versions(
     Returns:
         PruneResponse with count of deleted versions.
     """
+    ensure_permission_in_oss(db, current_user, "manage_policies")
     service = PolicyVersionService(db, str(account.id))
     deleted_count = service.prune_snapshots(
         older_than_days=request.older_than_days,

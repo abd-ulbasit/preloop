@@ -39,7 +39,7 @@ from preloop.services.question_schema import (
     prepare_answer,
     question_form,
 )
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 
 router = APIRouter(
     prefix="/approval-requests",
@@ -224,7 +224,7 @@ def _require_decide_approvals(
     sync session to reconcile security-maintenance items after a batch
     decision, matching the single-item endpoints.
     """
-    _ = (request, current_user)  # Consumed by @require_permission.
+    ensure_permission_in_oss(db, current_user, "decide_approvals")
     return db
 
 
@@ -249,6 +249,8 @@ def _check_approval_permission(
 
     try:
         global_check(current_user=current_user, db=db, request=request)
+        if permission == "decide_approvals":
+            ensure_permission_in_oss(db, current_user, "decide_approvals")
         return
     except HTTPException as denied:
         if denied.status_code != 403:
@@ -490,6 +492,7 @@ def get_approval_original_args(
     sealed copy is deleted at decision, so a decided request returns 404.
     Email, webhook and push payloads never carry it.
     """
+    ensure_permission_in_oss(db, current_user, "decide_approvals")
     from preloop.services.sensitive_data.reference import (
         SEALED_ARGS_KEY,
         unseal_original,

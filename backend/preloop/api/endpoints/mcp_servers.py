@@ -77,6 +77,7 @@ async def create_mcp_server(
     Raises:
         HTTPException: If creation fails or validation fails
     """
+    ensure_permission_in_oss(db, current_user, "create_mcp_servers")
     logger.info(
         f"Account {current_user.account_id} creating MCP server: {server_data.name} "
         f"(auth_type={server_data.auth_type!r})"
@@ -365,6 +366,7 @@ async def update_mcp_server(
     Raises:
         HTTPException: If server not found or update fails
     """
+    ensure_permission_in_oss(db, current_user, "edit_mcp_servers")
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
@@ -460,6 +462,7 @@ async def delete_mcp_server(
     Raises:
         HTTPException: If server not found or deletion fails
     """
+    ensure_permission_in_oss(db, current_user, "delete_mcp_servers")
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
@@ -545,6 +548,7 @@ async def scan_mcp_server(
     Raises:
         HTTPException: If server not found or scan fails
     """
+    ensure_permission_in_oss(db, current_user, "manage_mcp_servers")
     server = crud_mcp_server.get(
         db, id=server_id, account_id=str(current_user.account_id)
     )
