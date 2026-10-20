@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -184,5 +185,96 @@ func TestSystemdQuoteEscapesSpecialCharacters(t *testing.T) {
 		if got := systemdQuote(in); got != want {
 			t.Fatalf("systemdQuote(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+func stubCodexSidecarInstaller(t *testing.T) *int {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	calls := 0
+	orig := agentControlSidecarServiceInstaller
+	t.Cleanup(func() { agentControlSidecarServiceInstaller = orig })
+	agentControlSidecarServiceInstaller = func(spec agentControlSidecarSpec, out io.Writer) error {
+		calls++
+		path := agentControlSidecarServiceFile(spec)
+		if path == "" {
+			return errAgentControlSidecarServiceUnsupported
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte("unit"), 0o644)
+	}
+	if err := os.MkdirAll(filepath.Dir(codexControlConfigPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexControlConfigPath(), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &calls
+}
+
+func TestCodexOnboardEnablesSidecarService(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("launchd/systemd only")
+	}
+	calls := stubCodexSidecarInstaller(t)
+	agent := AgentConfig{Name: "Codex CLI"}
+
+	var out bytes.Buffer
+	maybeEnableCodexSidecarOnOnboard(agent, managedEnrollmentOptions{}, &out)
+	if *calls != 1 {
+		t.Fatalf("expected one install, got %d: %s", *calls, out.String())
+	}
+	if !strings.Contains(out.String(), "sidecar service enabled") {
+		t.Fatalf("missing enabled line: %q", out.String())
+	}
+
+	// Re-onboarding with the service already installed is a no-op.
+	out.Reset()
+	maybeEnableCodexSidecarOnOnboard(agent, managedEnrollmentOptions{}, &out)
+	if *calls != 1 {
+		t.Fatalf("re-onboard reinstalled the service: %d calls", *calls)
+	}
+	if !strings.Contains(out.String(), "already installed") {
+		t.Fatalf("missing already-installed line: %q", out.String())
+	}
+
+	// Other agents never touch the Codex sidecar.
+	maybeEnableCodexSidecarOnOnboard(AgentConfig{Name: "Cursor"}, managedEnrollmentOptions{}, &out)
+	if *calls != 1 {
+		t.Fatalf("non-codex agent installed the codex sidecar")
+	}
+}
+
+func TestCodexOnboardNoSidecarFlag(t *testing.T) {
+	calls := stubCodexSidecarInstaller(t)
+	var out bytes.Buffer
+	maybeEnableCodexSidecarOnOnboard(
+		AgentConfig{Name: "Codex CLI"},
+		managedEnrollmentOptions{NoSidecar: true},
+		&out,
+	)
+	if *calls != 0 {
+		t.Fatalf("--no-sidecar still installed the service")
+	}
+	if !strings.Contains(out.String(), "preloop codex sidecar enable") {
+		t.Fatalf("expected manual enable hint, got %q", out.String())
+	}
+	if agentsEnrollCmd.Flags().Lookup("no-sidecar") == nil {
+		t.Fatalf("agents onboard has no --no-sidecar flag")
+	}
+}
+
+func TestCodexOnboardPrintsManualCommandWhenInstallFails(t *testing.T) {
+	calls := stubCodexSidecarInstaller(t)
+	agentControlSidecarServiceInstaller = func(agentControlSidecarSpec, io.Writer) error {
+		*calls++
+		return errAgentControlSidecarServiceUnsupported
+	}
+	var out bytes.Buffer
+	maybeEnableCodexSidecarOnOnboard(AgentConfig{Name: "Codex CLI"}, managedEnrollmentOptions{}, &out)
+	if !strings.Contains(out.String(), "preloop codex sidecar enable") {
+		t.Fatalf("expected manual enable hint, got %q", out.String())
 	}
 }

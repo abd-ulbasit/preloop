@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -322,22 +323,77 @@ func findAgentControlSidecarPackageEntry(
 }
 
 func runAgentControlSidecarEnable(spec agentControlSidecarSpec, cmd *cobra.Command, _ []string) error {
+	return installAgentControlSidecarService(spec, cmd.OutOrStdout())
+}
+
+var errAgentControlSidecarServiceUnsupported = errors.New("sidecar service install is not implemented on this OS")
+
+// agentControlSidecarServiceFile is the service definition path for this OS,
+// or "" where no service manager is supported.
+func agentControlSidecarServiceFile(spec agentControlSidecarSpec) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return spec.launchdPath()
+	case "linux":
+		return spec.systemdPath()
+	default:
+		return ""
+	}
+}
+
+func installAgentControlSidecarService(spec agentControlSidecarSpec, out io.Writer) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		return writeAgentControlSidecarLaunchd(spec, self, cmd.OutOrStdout())
+		return writeAgentControlSidecarLaunchd(spec, self, out)
 	case "linux":
-		return writeAgentControlSidecarSystemd(spec, self, cmd.OutOrStdout())
+		return writeAgentControlSidecarSystemd(spec, self, out)
 	default:
 		return fmt.Errorf(
-			"sidecar service install is not implemented on %s; use preloop %s sidecar run",
+			"%w (%s); use preloop %s sidecar run",
+			errAgentControlSidecarServiceUnsupported,
 			runtime.GOOS,
 			spec.Command,
 		)
 	}
+}
+
+// agentControlSidecarServiceInstaller installs and starts the sidecar
+// service. It is a variable so tests never touch launchctl or systemctl.
+var agentControlSidecarServiceInstaller = installAgentControlSidecarService
+
+const codexSidecarEnableHint = "Run `preloop codex sidecar enable` to keep the sidecar up."
+
+// maybeEnableCodexSidecarOnOnboard installs the Codex Agent Control sidecar
+// service after onboarding wrote ~/.codex/preloop-control.json, so Talk can
+// connect without a manual step. It is idempotent and honours --no-sidecar.
+// Failures only print the manual command; they never fail the enrollment.
+func maybeEnableCodexSidecarOnOnboard(agent AgentConfig, opts managedEnrollmentOptions, out io.Writer) {
+	if runtimeSessionSourceTypeForAgent(agent.Name) != "codex" || !supportsAgentControlChannel(agent) {
+		return
+	}
+	if _, err := os.Stat(codexControlConfigPath()); err != nil {
+		return
+	}
+	if opts.NoSidecar {
+		fmt.Fprintf(out, "  Codex Agent Control sidecar not started (--no-sidecar). %s\n", codexSidecarEnableHint) //nolint:errcheck
+		return
+	}
+	spec := codexAgentControlSidecarSpec()
+	if path := agentControlSidecarServiceFile(spec); path != "" {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(out, "  Codex Agent Control sidecar service already installed (%s)\n", path) //nolint:errcheck
+			return
+		}
+	}
+	if err := agentControlSidecarServiceInstaller(spec, out); err != nil {
+		fmt.Fprintf(out, "  Warning: Codex Agent Control sidecar service not installed: %v. %s\n", err, codexSidecarEnableHint) //nolint:errcheck
+		return
+	}
+	fmt.Fprintln(out, "  Codex Agent Control sidecar service enabled (remove with `preloop codex sidecar disable`; skip with --no-sidecar)") //nolint:errcheck
 }
 
 func runAgentControlSidecarDisable(spec agentControlSidecarSpec, _ *cobra.Command, _ []string) error {

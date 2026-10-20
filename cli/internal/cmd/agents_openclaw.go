@@ -308,6 +308,9 @@ type managedEnrollmentOptions struct {
 	// installs by default (`preloop agents onboard Cursor --no-usage-hooks`).
 	// Other agents are unaffected.
 	NoUsageHooks bool
+	// NoSidecar skips installing and starting the Codex Agent Control
+	// sidecar service during onboarding (`--no-sidecar`).
+	NoSidecar bool
 	// StoreTranscript opts the Cursor usage hooks into shipping transcript
 	// text as session activities (`--store-transcript`). Off by default:
 	// only counts, the title and a short summary leave the machine.
@@ -1062,6 +1065,7 @@ func executeManagedEnrollment(agent AgentConfig, opts managedEnrollmentOptions) 
 		}
 	}
 	pluginInstallResult := installAgentControlRuntimePlugin(agent, output)
+	maybeEnableCodexSidecarOnOnboard(agent, opts, output)
 	gatewayRestartResult := restartHermesGatewayAfterReconfig(agent, output)
 	if err := saveLocalEnrollmentState(backupState); err != nil {
 		return err
@@ -4421,7 +4425,7 @@ func applyManagedAgentControlConfig(
 		}
 		plan.Notes = append(
 			plan.Notes,
-			"Codex CLI Agent Control config written to ~/.codex/preloop-control.json. Run `preloop codex sidecar enable` to keep the sidecar up.",
+			"Codex CLI Agent Control config written to ~/.codex/preloop-control.json. Onboarding installs the sidecar service unless --no-sidecar is set; otherwise run `preloop codex sidecar enable`.",
 		)
 	}
 	if isOpenCodeAgent(plan.Agent) {

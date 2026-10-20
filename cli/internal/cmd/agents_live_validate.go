@@ -1357,10 +1357,10 @@ func runDeferredLiveValidationsParallel(
 		go func(agent AgentConfig) {
 			defer wg.Done()
 			started := time.Now()
-			outcome, err := runManagedAgentLiveValidation(
+			outcome, err := deferredLiveValidationRunner(
 				client,
 				agent,
-				cloneStringMap(defaultManagedLiveValidationResult(agent)),
+				deferredLiveValidationSeed(client, agent),
 			)
 			resultCh <- deferredLiveValidationResult{
 				Agent:    agent,
@@ -1478,7 +1478,7 @@ func persistDeferredLiveValidationResult(
 	client *api.Client,
 	result deferredLiveValidationResult,
 ) {
-	if result.Outcome == nil {
+	if client == nil || result.Outcome == nil {
 		return
 	}
 	enrollmentID := resolveDeferredEnrollmentID(client, result.Agent)
@@ -1520,6 +1520,47 @@ func deferredLiveValidationPersistStatus(outcome *managedLiveValidationOutcome) 
 // fetch. Returning “""“ causes the persistence step to no-op, which is
 // the correct behaviour when the agent was never actually onboarded
 // (e.g. the user passed “--dry-run“).
+// deferredLiveValidationRunner is the live-validation entry point used by the
+// deferred parallel phase. It is a variable so tests can stub the network.
+var deferredLiveValidationRunner = runManagedAgentLiveValidation
+
+// loadStoredValidationResult returns the validation result the control plane
+// holds for the agent's CLI enrollment, or nil when it cannot be read.
+var loadStoredValidationResult = func(client *api.Client, agent AgentConfig) map[string]interface{} {
+	if client == nil {
+		return nil
+	}
+	detail, err := getManagedAgentDetailForDiscovered(client, agent)
+	if err != nil || detail == nil {
+		return nil
+	}
+	wantID := ""
+	if state, err := loadLocalEnrollmentState(agent); err == nil {
+		wantID = strings.TrimSpace(state.EnrollmentID)
+	}
+	for _, enrollment := range detail.Enrollments {
+		if wantID != "" && enrollment.ID != wantID {
+			continue
+		}
+		if wantID == "" && enrollment.EnrollmentType != "cli_managed_config" {
+			continue
+		}
+		return enrollment.ValidationResult
+	}
+	return nil
+}
+
+// deferredLiveValidationSeed builds the starting validation result for a
+// deferred live check. It starts from the stored enrollment result so keys
+// written at onboarding (control_* in particular) are carried into the
+// payload sent back, then overlays the canonical not_run live keys.
+func deferredLiveValidationSeed(client *api.Client, agent AgentConfig) map[string]interface{} {
+	return mergeStringMaps(
+		loadStoredValidationResult(client, agent),
+		defaultManagedLiveValidationResult(agent),
+	)
+}
+
 func resolveDeferredEnrollmentID(client *api.Client, agent AgentConfig) string {
 	if state, err := loadLocalEnrollmentState(agent); err == nil &&
 		strings.TrimSpace(state.EnrollmentID) != "" {
