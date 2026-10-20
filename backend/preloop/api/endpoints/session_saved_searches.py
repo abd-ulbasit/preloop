@@ -288,6 +288,7 @@ def list_saved_session_searches(
     Most recently run first, so the searches somebody actually repeats are at
     the top of the list.
     """
+    ensure_permission_in_oss(db, current_user, "view_runtime_sessions")
     rows, total = crud_session_saved_search.list_visible(
         db,
         account_id=account.id,
@@ -319,6 +320,7 @@ def get_saved_session_search(
     db: Session = Depends(get_db_session),
 ) -> SessionSavedSearchRead:
     """Return one saved search the caller may see."""
+    ensure_permission_in_oss(db, current_user, "view_runtime_sessions")
     return saved_search_service.to_read(
         _load_visible(
             db,
@@ -413,6 +415,7 @@ def run_saved_session_search(
     The body is optional: it carries paging only, because the saved search
     owns everything else about the question.
     """
+    ensure_permission_in_oss(db, current_user, "view_runtime_sessions")
     # An absent body is an empty body: the defaults on the paging model are
     # the first page.
     requested = paging or SessionSavedSearchRunRequest.model_validate({})
