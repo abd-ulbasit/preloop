@@ -501,6 +501,7 @@ export class AgentTalkView extends LitElement {
       this.postChannel('open');
       if (this.sessionId) await this.loadEvents(this.sessionId);
     } catch (error) {
+      if (generation !== this.sessionGeneration) return;
       this.error =
         error instanceof Error ? error.message : 'Failed to load agent';
     } finally {
@@ -559,7 +560,7 @@ export class AgentTalkView extends LitElement {
       this.error =
         error instanceof Error ? error.message : 'Failed to load conversation';
     } finally {
-      this.loadingEvents = false;
+      if (generation === this.sessionGeneration) this.loadingEvents = false;
     }
   }
 
@@ -655,14 +656,9 @@ export class AgentTalkView extends LitElement {
     const sessionId = payload.runtime_session_id as string | undefined;
     if (!agentId && sessionId && sessionId !== this.sessionId) return;
     if (sessionId && sessionId !== this.sessionId && agentId === this.agentId) {
-      // The window asked for a new session and this is the first one the
-      // agent reports: that is the operator's own session, so open it.
-      if (this.awaitingNewSession && !this.sessionId) {
-        this.awaitingNewSession = false;
-        this.switchSession(sessionId);
-        return;
-      }
-      // Any other session of the same agent is offered, never followed: an
+      // Any other session of the same agent is offered, never followed, also
+      // while New session waits for its first send (only that send's own
+      // response opens the session it created): an
       // agent often runs several at once, and following each one's traffic
       // flipped the window between them and sent turns to the wrong one.
       this.offerSession(sessionId);
@@ -987,10 +983,11 @@ export class AgentTalkView extends LitElement {
       const response = (
         event as CustomEvent<{ response?: AgentControlCommandResponse }>
       ).detail?.response;
-      // A turn sent from New session names the session it created: open it.
+      // A turn sent from New session names the session it created in
+      // `target_session_id` (`runtime_session_id` is the existing binding).
       const created =
-        typeof response?.runtime_session_id === 'string'
-          ? response.runtime_session_id
+        typeof response?.target_session_id === 'string'
+          ? response.target_session_id
           : null;
       if (this.awaitingNewSession && !this.sessionId && created) {
         this.awaitingNewSession = false;

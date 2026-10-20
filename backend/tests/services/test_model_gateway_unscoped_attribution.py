@@ -33,15 +33,21 @@ def _session(
     suffix: str,
     last_activity_at: datetime,
     ended_at: datetime | None = None,
+    per_run: bool = False,
 ) -> RuntimeSession:
+    # Two id shapes exist: command-history sessions key the source id as
+    # ``<principal>-<suffix>``, per-run sessions key the principal id as
+    # ``<principal>:<run-id>``.
     row = RuntimeSession(
         id=uuid4(),
         account_id=account_id,
         session_source_type=PRINCIPAL_TYPE,
-        session_source_id=f"{PRINCIPAL_ID}-{suffix}",
+        session_source_id=(
+            f"{PRINCIPAL_ID}:{suffix}" if per_run else f"{PRINCIPAL_ID}-{suffix}"
+        ),
         session_reference=suffix,
         runtime_principal_type=PRINCIPAL_TYPE,
-        runtime_principal_id=PRINCIPAL_ID,
+        runtime_principal_id=f"{PRINCIPAL_ID}:{suffix}" if per_run else PRINCIPAL_ID,
         started_at=last_activity_at,
         last_activity_at=last_activity_at,
         ended_at=ended_at,
@@ -151,3 +157,14 @@ def test_count_active_by_principal_ignores_ended_quiet_and_other_principals(
         )
         == 1
     )
+
+
+def test_unscoped_gateway_call_not_attributed_with_a_per_run_sibling(
+    db_session: Session,
+) -> None:
+    account = _account(db_session)
+    now = datetime.now(UTC)
+    _session(db_session, account.id, suffix="cli", last_activity_at=now)
+    _session(db_session, account.id, suffix="run-1", last_activity_at=now, per_run=True)
+
+    assert _emit(db_session, _unscoped_usage(account.id)) == []

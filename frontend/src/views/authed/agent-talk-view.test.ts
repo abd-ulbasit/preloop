@@ -613,6 +613,52 @@ describe('agent-talk-view session integrity', () => {
     el.remove();
   });
 
+  it('New session opens the session the send created and clears its echoed bubble', async () => {
+    let activity: unknown[] = [];
+    fetchStub.withArgs(sinon.match(/control\/command/)).callsFake(async () =>
+      jsonResponse({
+        command_id: 'cmd-new',
+        status: 'delivered',
+        // The agent's existing binding, not the session this send created.
+        runtime_session_id: 'sess-1',
+        target_session_id: 'sess-new',
+      })
+    );
+    fetchStub
+      .withArgs(sinon.match(/sess-new\/activity/))
+      .callsFake(async () => jsonResponse({ items: activity }));
+    const el = await mount();
+    (
+      el
+        .shadowRoot!.querySelector('talk-session-picker')!
+        .querySelector('[data-testid="talk-new-session"]') as HTMLElement
+    ).click();
+    await waitUntil(() => composer(el).sessionId === null);
+
+    // Before the send, another session's traffic is offered, not opened.
+    el.receiveActivity({
+      payload: { managed_agent_id: 'agent-1', runtime_session_id: 'sess-2' },
+    });
+    await aTimeout(50);
+    expect(chat(el).sessionId).to.equal('');
+    expect(el.shadowRoot!.querySelector('[data-testid="session-notice"]')).to
+      .exist;
+
+    activity = [
+      {
+        activity_type: 'agent_control_message',
+        timestamp: '2026-09-03T11:00:00Z',
+        title: 'start fresh',
+        summary: 'start fresh',
+        metadata: { command_id: 'cmd-new' },
+      },
+    ];
+    await typeAndSend(el, 'start fresh');
+    await waitUntil(() => chat(el).sessionId === 'sess-new');
+    await waitUntil(() => composer(el).pendingMessages.length === 0);
+    el.remove();
+  });
+
   it('a load-more page resolving after a switch is discarded', async () => {
     let releasePage: (response: Response) => void = () => undefined;
     eventPages.set('sess-1:0', async () =>
@@ -706,6 +752,28 @@ describe('agent-talk-view session integrity', () => {
       })
     );
     await waitUntil(() => focus.callCount === 2);
+    el.remove();
+  });
+
+  it('drops a reload error that resolves after a switch', async () => {
+    const el = await mount();
+    let failAgent: (response: Response) => void = () => undefined;
+    fetchStub
+      .withArgs(sinon.match(/\/api\/v1\/agents\/agent-1/))
+      .callsFake(
+        () => new Promise<Response>((resolve) => (failAgent = resolve))
+      );
+    void (el as unknown as { load: () => Promise<void> }).load();
+    (
+      el
+        .shadowRoot!.querySelector('talk-session-picker')!
+        .querySelector('[data-session-id="sess-2"]') as HTMLElement
+    ).click();
+    await waitUntil(() => chat(el).events[0]?.id === 'sess-2-e1');
+    failAgent(new Response('down', { status: 500 }));
+    await aTimeout(50);
+    expect(el.shadowRoot!.querySelector('[data-testid="talk-error"]')).to.not
+      .exist;
     el.remove();
   });
 

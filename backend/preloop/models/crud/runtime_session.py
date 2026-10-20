@@ -1916,13 +1916,20 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
             int: Number of active sessions for the principal.
         """
         cutoff = (now or datetime.now(UTC)) - PRINCIPAL_ACTIVE_SESSION_WINDOW
+        # Both ways a session names its principal count: the source-id form
+        # ``get_latest_by_principal`` attributes to (``<id>`` or ``<id>-*``)
+        # and the per-run principal form (``<id>:<run-id>``). Missing either
+        # would undercount and let the latest session be guessed again.
+        by_source = and_(
+            self.model.session_source_type == principal_type,
+            self.model.session_source_id.startswith(f"{principal_id}-")
+            | (self.model.session_source_id == principal_id),
+        )
         return int(
             db.query(func.count(self.model.id))
             .filter(
                 self.model.account_id == account_id,
-                self.model.session_source_type == principal_type,
-                self.model.session_source_id.startswith(f"{principal_id}-")
-                | (self.model.session_source_id == principal_id),
+                or_(by_source, self._principal_condition(principal_type, principal_id)),
                 self.model.ended_at.is_(None),
                 self.model.last_activity_at >= cutoff,
             )

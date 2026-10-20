@@ -659,9 +659,11 @@ export class TalkComposer extends LitElement {
           : undefined;
       // A turn that started a new session belongs to the session the server
       // created for it, so the bubble follows the page there.
+      // The server names the created session in `target_session_id`;
+      // `runtime_session_id` is the agent's existing binding.
       const createdSessionId =
-        startNewSession && typeof response.runtime_session_id === 'string'
-          ? response.runtime_session_id
+        startNewSession && typeof response.target_session_id === 'string'
+          ? response.target_session_id
           : null;
       this.setPending(
         this.pending.map((item) =>
