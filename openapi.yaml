@@ -21989,7 +21989,9 @@ paths:
 
         one thing: this saved question is not what it was. Only the author may do
 
-        any of them.'
+        any of them. Changing visibility to ``account`` also requires
+
+        ``share_session_searches``.'
       operationId: update_saved_session_search_api_v1_runtime_sessions_search_saved__saved_search_id__patch
       security:
       - bearerAuth: []

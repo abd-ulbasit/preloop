@@ -349,7 +349,8 @@ def update_saved_session_search(
 
     Renaming, changing the question and sharing are one route because they are
     one thing: this saved question is not what it was. Only the author may do
-    any of them.
+    any of them. Changing visibility to ``account`` also requires
+    ``share_session_searches``.
     """
     ensure_permission_in_oss(db, current_user, "view_runtime_sessions")
     saved = _load_owned(

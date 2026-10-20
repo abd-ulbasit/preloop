@@ -43,7 +43,8 @@ at an answer, not of the question, so they are passed per run.
 All of them take the `view_runtime_sessions` permission, the same one the
 search endpoint takes: saving a query grants no access, because a saved search
 can only ever return what the person running it could have found by typing the
-query themselves.
+query themselves. Sharing a search with the account, on create or by changing
+its visibility, also requires `share_session_searches`.
 
 | Route | What it does |
 | --- | --- |
