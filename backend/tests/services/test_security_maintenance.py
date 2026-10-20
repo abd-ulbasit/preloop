@@ -2211,7 +2211,8 @@ class TestBaselineAuditEntry:
 
             app.dependency_overrides[get_current_active_user] = lambda: test_viewer_user
             foreign = client.post(path, json={"sbom_content_base64": SBOM_B64})
-            assert foreign.status_code == 404
+            assert foreign.status_code == 403
+            assert "edit_flows" in foreign.json()["detail"]
 
 
 class _Clock:

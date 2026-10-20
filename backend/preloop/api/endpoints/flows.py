@@ -124,7 +124,7 @@ from preloop.services.runner_service import (
 )
 from preloop.utils.audit import log_config_change
 from preloop.utils.hashing import compute_content_hash
-from preloop.utils.permissions import require_permission
+from preloop.utils.permissions import ensure_permission_in_oss, require_permission
 from preloop.utils.workspace_seed import (
     WORKSPACE_FILES_KEY,
     WorkspaceSeedError,
@@ -299,6 +299,7 @@ def create_flow(
     current_user: User = Depends(get_current_active_user),
 ):
     """Create new flow."""
+    ensure_permission_in_oss(db, current_user, "create_flows")
     # Check for name uniqueness within account
     # Note: We intentionally allow flows to have the same name as global presets,
     # as users should be able to customize presets and keep the original name
@@ -806,6 +807,7 @@ def run_preset(
     """
     # Sync handler: an async def would hold Session on the event loop and
     # fail test_async_sync_session_route_count_does_not_grow.
+    ensure_permission_in_oss(db, current_user, "execute_flows")
     from preloop.services.preset_runner import PresetRunnerError, run_preset_on_target
 
     try:
@@ -1507,6 +1509,7 @@ def adopt_execution_continuation(
     current_user: User = Depends(get_current_active_user),
 ) -> ContinuationAdoptResponse:
     """Explicitly subscribe one previously published PR to bounded repairs."""
+    ensure_permission_in_oss(db, current_user, "execute_flows")
     account_id = current_user.account_id
     crud_flow_feedback.release_read(db)
     try:
@@ -2329,6 +2332,8 @@ async def send_execution_command(
     stopping an execution that already ended changes nothing and answers with
     the status it ended in.
     """
+    if not isinstance(current_user, CiAuthorizationContext):
+        ensure_permission_in_oss(db, current_user, "execute_flows")
     import logging
 
     from preloop.services.flow_execution_stop import stop_execution
@@ -2656,6 +2661,8 @@ async def trigger_flow_execution(
         Execution details, or batch details (``batch_id`` + per-cell
         ``execution_id``) when a matrix was given
     """
+    if not isinstance(current_user, CiAuthorizationContext):
+        ensure_permission_in_oss(db, current_user, "execute_flows")
     if isinstance(current_user, CiAuthorizationContext):
         if flow_id != current_user.flow_id:
             raise HTTPException(403, "Restricted CI flow denied")
@@ -2767,6 +2774,7 @@ async def retry_flow_execution(
     Returns:
         New execution details
     """
+    ensure_permission_in_oss(db, current_user, "execute_flows")
     # Get the original execution
     original = crud_flow_execution.get(
         db=db, id=execution_id, account_id=current_user.account_id
@@ -2877,6 +2885,7 @@ def update_flow(
     current_user: User = Depends(get_current_active_user),
 ):
     """Update a flow."""
+    ensure_permission_in_oss(db, current_user, "edit_flows")
     flow = crud_flow.get(db=db, id=flow_id, account_id=current_user.account_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
@@ -3129,6 +3138,7 @@ def delete_flow(
     current_user: User = Depends(get_current_active_user),
 ):
     """Delete a flow."""
+    ensure_permission_in_oss(db, current_user, "delete_flows")
     import logging
 
     logger = logging.getLogger(__name__)
@@ -3222,6 +3232,7 @@ def apply_preset_update(
 
     Returns the updated flow.
     """
+    ensure_permission_in_oss(db, current_user, "edit_flows")
     from preloop.services.flow_presets_service import apply_preset_update_to_flow
 
     # Check that flow belongs to user's account
@@ -3258,6 +3269,7 @@ def dismiss_preset_update(
 
     Returns the updated flow.
     """
+    ensure_permission_in_oss(db, current_user, "edit_flows")
     from preloop.services.flow_presets_service import (
         dismiss_preset_update as dismiss_update,
     )
