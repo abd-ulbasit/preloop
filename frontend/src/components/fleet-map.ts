@@ -1783,18 +1783,35 @@ export class FleetMap extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      /* Tracker labels are tags, not states: an icon and the word. */
+      /* Tracker labels are tags, not states: an icon and the word. The row
+         is budgeted: status, tags and the +N count shrink and ellipsize
+         inside the chip; the count never shrinks. */
+      .node .sub.tagged {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .node .sub .sub-text,
+      .node .sub .tag-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .node .sub .sub-text {
+        flex: 0 1 auto;
+      }
       .node .sub .tag {
         display: inline-flex;
         align-items: center;
         gap: 3px;
-        margin-left: 8px;
-      }
-      .node .sub .tag {
+        flex: 0 1 auto;
+        min-width: 0;
         max-width: 72px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      }
+      .node .sub .tag.more {
+        flex: none;
       }
       .node .sub .tag sl-icon {
         font-size: 11px;
@@ -2825,27 +2842,27 @@ export class FleetMap extends LitElement {
         ><span class="label">${label}</span>${
           child && node.type !== 'work'
             ? nothing
-            : html`<span class="sub ${gaps.length ? 'warn' : ''}"
-                >${sub}${
-                  node.type === 'work' && node.labels?.length
-                    ? html`${node.labels
-                        .slice(0, LABELS_SHOWN)
-                        .map(
-                          (tag) =>
-                            html`<span class="tag" data-label=${tag}
-                              ><sl-icon name="tag" aria-hidden="true"></sl-icon
-                              >${tag}</span
-                            >`
-                        )}${
-                        node.labels.length > LABELS_SHOWN
-                          ? html`<span class="tag more" data-labels-more
-                              >+${node.labels.length - LABELS_SHOWN}</span
-                            >`
-                          : nothing
-                      }`
-                    : nothing
-                }</span
-              >`
+            : node.type === 'work' && node.labels?.length
+              ? html`<span class="sub tagged"
+                  ><span class="sub-text">${sub}</span>${node.labels
+                    .slice(0, LABELS_SHOWN)
+                    .map(
+                      (tag) =>
+                        html`<span class="tag" data-label=${tag}
+                          ><sl-icon name="tag" aria-hidden="true"></sl-icon
+                          ><span class="tag-text">${tag}</span></span
+                        >`
+                    )}${
+                    node.labels.length > LABELS_SHOWN
+                      ? html`<span class="tag more" data-labels-more
+                          >+${node.labels.length - LABELS_SHOWN}</span
+                        >`
+                      : nothing
+                  }</span
+                >`
+              : html`<span class="sub ${gaps.length ? 'warn' : ''}"
+                  >${sub}</span
+                >`
         }</span
       >
       ${
@@ -3070,6 +3087,9 @@ export class FleetMap extends LitElement {
     );
     for (const el of els) {
       const spot = placed.find((item) => item.node === el.dataset.bubble);
+      // No free spot at this zoom: hide the note rather than leave it where
+      // it was, possibly on a node, until the next render drops it.
+      el.style.visibility = spot ? '' : 'hidden';
       if (!spot) continue;
       el.dataset.side = spot.side;
       el.style.left = `${spot.x}px`;

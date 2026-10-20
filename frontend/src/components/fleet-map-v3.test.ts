@@ -593,6 +593,67 @@ describe('fleet-map v3 pass 2', () => {
     ).to.be.at.most(box.right);
   });
 
+  it('fits two long label tags and the count inside the chip', async () => {
+    const el = await map({ positionsScope: 'long-labels' });
+    const send = (payload: Record<string, unknown>) =>
+      el.recordActivity('code_activity', { type: 'code_activity', payload });
+    send({
+      event_id: 'o',
+      action: 'issue_opened',
+      managed_agent_id: 'claude',
+      subject: issue(41),
+    });
+    send({
+      event_id: 'l',
+      action: 'issue_labeled',
+      flow_id: 'triage',
+      subject: issue(41),
+      labels_added: [
+        'needs-design-review-from-platform',
+        'customer-escalation-tier-one',
+        'p2',
+      ],
+    });
+    await el.updateComplete;
+    await el.updateComplete;
+    const chip = el.shadowRoot!.querySelector<HTMLElement>(
+      '[data-node="work:issue:example/widgets#41"]'
+    )!;
+    const sub = chip.querySelector('.sub')!.getBoundingClientRect();
+    for (const tag of chip.querySelectorAll('.tag, [data-labels-more]'))
+      expect(tag.getBoundingClientRect().right).to.be.at.most(sub.right + 0.5);
+    const more = chip.querySelector<HTMLElement>('[data-labels-more]')!;
+    expect(more.textContent!.trim()).to.equal('+1');
+    expect(more.scrollWidth).to.be.at.most(more.clientWidth + 1);
+    expect(more.getBoundingClientRect().width).to.be.above(8);
+  });
+
+  it('hides a note the per-frame pass cannot place instead of leaving it in place', async () => {
+    const el = await map({ bubbles: true, positionsScope: 'hide-note' });
+    el.recordActivity('gateway_activity', {
+      type: 'model_gateway_call',
+      payload: {
+        managed_agent_id: 'claude',
+        model_alias: 'claude-sonnet-5-5',
+        api_usage_id: 'h1',
+        prompt_tokens: 10,
+        completion_tokens: 2,
+        outcome: 'success',
+      },
+    });
+    await el.updateComplete;
+    const bubble = el.shadowRoot!.querySelector<HTMLElement>('.bubble')!;
+    expect(bubble.style.visibility).to.equal('');
+    const internals = el as unknown as {
+      placeNotes: () => unknown[];
+      applyTransform(): void;
+    };
+    // A zoom where the stage has no free spot left.
+    internals.placeNotes = () => [];
+    internals.applyTransform();
+    expect(bubble.style.visibility).to.equal('hidden');
+  });
+
   it('draws no line between an issue and the PR inside it, and no text on story lines', async () => {
     for (const arrangement of ['columns', 'spatial']) {
       const el = await map({
