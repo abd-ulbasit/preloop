@@ -256,3 +256,47 @@ describe('token-figures', () => {
     expect(totalTokensOf(null)).to.equal(0);
   });
 });
+
+describe('token figures when input excludes cache reads', () => {
+  // Anthropic-shaped usage reports `input_tokens` without the cached part,
+  // so the aggregate's cache reads can exceed its input and the server's
+  // uncached remainder clamps to zero. "12.5B in · 16.9B hit · 0 miss" is
+  // impossible on its face; the reported input is the uncached part.
+  const EXCLUSIVE: GatewayTokenUsage = {
+    prompt_tokens: 1200,
+    completion_tokens: 300,
+    total_tokens: 1500,
+    input_tokens: 1200,
+    output_tokens: 300,
+    cache_read_tokens: 16000,
+    cache_write_tokens: 800,
+    uncached_input_tokens: 0,
+    cache_hit_ratio: 1,
+  };
+
+  it('never shows more cache hits than input, or zero misses over uncached input', async () => {
+    const el = await fixture<TokenFigures>(
+      html`<token-figures .usage=${EXCLUSIVE} expanded></token-figures>`
+    );
+    expect(text(el)).to.equal('18K in · 300 out 16K hit · 1.2K miss');
+  });
+
+  it('recomputes the hit rate from the derived miss', () => {
+    const split = cacheSplitOf(EXCLUSIVE);
+    expect(split?.miss).to.equal(1200);
+    expect(split?.ratio).to.be.closeTo(16000 / 17200, 0.0001);
+    expect(tokenFiguresTitle(EXCLUSIVE)).to.contain('18,000 input tokens');
+    expect(tokenFiguresTitle(EXCLUSIVE)).to.contain(
+      '1,200 not cached (93% hit)'
+    );
+  });
+
+  it('leaves cache-inclusive usage untouched', () => {
+    expect(cacheSplitOf(USAGE)).to.deep.equal({
+      hit: 8200,
+      miss: 3900,
+      ratio: 0.6777,
+    });
+    expect(tokenFiguresTitle(USAGE)).to.contain('12,400 input tokens');
+  });
+});
