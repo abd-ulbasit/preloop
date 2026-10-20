@@ -665,8 +665,20 @@ describe('fleet-map labels', () => {
       const labels = [
         ...el.shadowRoot!.querySelectorAll('.activity-label'),
       ].map((label) => label.textContent);
-      expect(labels).to.include('gpt-6.1 · 4.1k in / 380 out ×2');
+      // Text is drawn only where it covers no node; the line keeps it.
       expect(labels.join(' ')).not.to.contain('tool call');
+      for (const text of el.shadowRoot!.querySelectorAll('.activity-label')) {
+        const t = text.getBoundingClientRect();
+        for (const node of el.shadowRoot!.querySelectorAll('.node')) {
+          const r = node.getBoundingClientRect();
+          const hit =
+            t.left < r.right &&
+            r.left < t.right &&
+            t.top < r.bottom &&
+            r.top < t.bottom;
+          expect(hit, text.textContent ?? '').to.equal(false);
+        }
+      }
       expect(labels.join(' ')).not.to.contain('model request');
       expect(
         el.shadowRoot!.querySelectorAll('path.edge.active').length

@@ -2880,10 +2880,14 @@ export class FleetMap extends LitElement {
       return node.detail ? agentKindLabel(node.detail) : 'Agent';
     }
     if (node.type === 'model') {
+      // Agents only: a flow's observed model line is not an agent.
       const agents = new Set(
         view.edges
           .filter(
-            (edge) => edge.kind === 'uses_model' && edge.target === node.id
+            (edge) =>
+              edge.kind === 'uses_model' &&
+              edge.target === node.id &&
+              byId.get(edge.source)?.type !== 'flow'
           )
           .map((edge) => edge.source)
       ).size;
@@ -3855,6 +3859,10 @@ export class FleetMap extends LitElement {
       );
     };
     const context = { view, layout, byId, lit, hits };
+    // Line labels never cover a node or another label; one that cannot fit
+    // is left to the line's title and the bubble.
+    const boxes = [...layout.positions.values()];
+    const labelRects: FleetMapPosition[] = [];
     const active = this.activityByLine(view, layout);
     // On an administrator's spatial canvas the lit node says where traffic
     // started; the line lights without a label, so a busy map stays legible.
@@ -3988,9 +3996,16 @@ export class FleetMap extends LitElement {
                       // Text only when the line has something specific to
                       // say; the spatial admin canvas stays quiet.
                       if (!live || quiet) return path;
-                      const mx = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
-                      const my = (y1 + y2) / 2 - 6;
-                      return svg`${path}<text class="activity-label" x=${mx} y=${my} text-anchor="middle">${live}</text>`;
+                      const spot = labelSpot(
+                        live,
+                        [a.x + a.w, y1],
+                        [b.x, y2],
+                        a.x <= b.x,
+                        boxes,
+                        labelRects
+                      );
+                      if (!spot) return path;
+                      return svg`${path}<text class="activity-label" x=${spot.x} y=${spot.y} text-anchor="middle">${live}</text>`;
                     }
                   )}
                 </svg>
@@ -4116,6 +4131,39 @@ export class FleetMap extends LitElement {
         ${lit && reach && uses ? this.renderPanel(graph, reach, uses) : nothing}
       </div>`;
   }
+}
+
+/**
+ * Where a lit line's label goes: on the line between the two boxes, at the
+ * middle or a third of the way along, wherever it covers no node and no
+ * label already placed. Null when no spot is free.
+ */
+function labelSpot(
+  text: string,
+  from: [number, number],
+  to: [number, number],
+  forward: boolean,
+  boxes: FleetMapPosition[],
+  placed: FleetMapPosition[]
+): { x: number; y: number } | null {
+  const [x1, y1] = forward ? from : to;
+  const [x2, y2] = forward ? to : from;
+  const w = text.length * 6 + 8;
+  const h = 14;
+  for (const t of [0.5, 0.33, 0.67]) {
+    const x = x1 + (x2 - x1) * t;
+    const y = y1 + (y2 - y1) * t - 6;
+    const rect = { x: x - w / 2, y: y - h + 3, w, h };
+    const hits = (b: FleetMapPosition) =>
+      rect.x < b.x + b.w &&
+      b.x < rect.x + rect.w &&
+      rect.y < b.y + b.h &&
+      b.y < rect.y + rect.h;
+    if (boxes.some(hits) || placed.some(hits)) continue;
+    placed.push(rect);
+    return { x, y };
+  }
+  return null;
 }
 
 const BUBBLES_KEY = 'preloop:fleet-map:bubbles';

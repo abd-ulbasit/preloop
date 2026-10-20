@@ -703,14 +703,16 @@ describe('fleet-map v3 pass 2', () => {
         !!el.shadowRoot!.querySelector('path[data-edge="caused"].active'),
         arrangement
       ).to.equal(true);
-      // The lit line to the issue says the action that created it, in
-      // Columns; the spatial admin canvas stays quiet.
+      // The lit line to the issue says the action that created it (drawn as
+      // text in Columns where it covers no node; always on the line).
+      const lines = [
+        ...el.shadowRoot!.querySelectorAll('path.edge.active'),
+      ].map((p) => p.getAttribute('data-activity'));
+      expect(lines, arrangement).to.include('opened issue #41');
       const texts = [
         ...el.shadowRoot!.querySelectorAll('text.activity-label'),
       ].map((t) => t.textContent);
-      expect(texts, arrangement).to.deep.equal(
-        arrangement === 'columns' ? ['opened issue #41'] : []
-      );
+      if (arrangement === 'spatial') expect(texts).to.deep.equal([]);
       expect(texts.join(' ')).not.to.contain('Observed work');
     }
   });

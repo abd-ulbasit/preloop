@@ -171,7 +171,9 @@ describe('fleet-map live canvas', () => {
     columns.flushActivity();
     await columns.updateComplete;
     expect(
-      columns.shadowRoot!.querySelector('.activity-label')!.textContent
+      columns
+        .shadowRoot!.querySelector('path.edge.active')!
+        .getAttribute('data-activity')
     ).to.equal('gpt-6.1 · 4.1k in / 380 out ×2');
   });
 
