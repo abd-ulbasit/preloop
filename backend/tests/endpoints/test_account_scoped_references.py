@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from preloop.api.endpoints import flows, tools
 from preloop.models import models, schemas
@@ -17,7 +18,6 @@ from preloop.models.schemas.tool_configuration import (
     ToolConfigurationUpdate,
 )
 from tests.conftest import maybe_await
-from sqlalchemy.orm import Session
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,9 @@ async def test_clone_preset_account_scope(
 @pytest.mark.parametrize(
     "agent_type", ["openhands", "opencode", "claude-code", "codex"]
 )
-@pytest.mark.parametrize("scope", ["own", "global", "other", "missing", "null"])
+@pytest.mark.parametrize(
+    "scope", ["own", "global", "other", "shared", "missing", "null"]
+)
 async def test_flow_model_account_scope(
     mocker: Any, operation: str, agent_type: str, scope: str
 ) -> None:
@@ -80,8 +82,12 @@ async def test_flow_model_account_scope(
         model_identifier="example-model",
         meta_data={},
     )
-    if scope == "other":
+    if scope in ("other", "shared"):
         model.account_id = uuid4()
+    if scope == "shared":
+        mocker.patch(
+            "preloop.plugins.account_hooks.extra_visible_ids", return_value=[model_id]
+        )
     mocker.patch.object(
         flows.crud_ai_model, "get", return_value=None if scope == "missing" else model
     )
@@ -115,7 +121,7 @@ async def test_flow_model_account_scope(
         kwargs.update(
             flow_id=crud.get.return_value.id, flow_in=schemas.FlowUpdate(**values)
         )
-    if scope in ("other", "missing"):
+    if scope in ("other", "shared", "missing"):
         with pytest.raises(HTTPException) as caught:
             await maybe_await(endpoint(**kwargs))
         assert caught.value.status_code == 422
@@ -124,6 +130,50 @@ async def test_flow_model_account_scope(
     else:
         await maybe_await(endpoint(**kwargs))
         getattr(crud, operation).assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["own", "global", "other"])
+async def test_flow_update_preserves_model_scope_when_binding_is_omitted(
+    mocker: Any, scope: str
+) -> None:
+    account_id, model_id = uuid4(), uuid4()
+    model = models.AIModel(
+        id=model_id, account_id=None if scope == "global" else account_id
+    )
+    if scope == "other":
+        model.account_id = uuid4()
+    load = mocker.patch.object(flows.crud_ai_model, "get", return_value=model)
+    crud = mocker.patch.object(flows, "crud_flow")
+    crud.get_by_name_and_account.return_value = None
+    crud.get.return_value = models.Flow(
+        id=uuid4(),
+        name="Example flow",
+        account_id=account_id,
+        agent_type="openhands",
+        ai_model_id=model_id,
+        agent_config={},
+        source_preset_id=None,
+        webhook_config=None,
+    )
+    mocker.patch.object(flows, "log_config_change")
+    flow_in = schemas.FlowUpdate(name="Renamed flow")
+    assert "ai_model_id" not in flow_in.model_fields_set
+    kwargs = dict(
+        db=MagicMock(),
+        flow_id=crud.get.return_value.id,
+        flow_in=flow_in,
+        current_user=SimpleNamespace(account_id=account_id),
+    )
+    if scope == "other":
+        with pytest.raises(HTTPException) as caught:
+            await maybe_await(flows.update_flow(**kwargs))
+        assert caught.value.status_code == 422
+        crud.update.assert_not_called()
+    else:
+        await maybe_await(flows.update_flow(**kwargs))
+        crud.update.assert_called_once()
+    load.assert_called_once_with(kwargs["db"], id=model_id)
 
 
 @pytest.mark.asyncio
@@ -195,6 +245,20 @@ async def test_tool_server_account_scope(
     mocker: Any, operation: str, scope: str
 ) -> None:
     await _tool_reference_case(mocker, True, operation, scope, "mcp_server_id")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["config_create", "config_update"])
+async def test_tool_server_visibility_keeps_configuration_owner_scoped(
+    mocker: Any, operation: str
+) -> None:
+    visible = mocker.patch.object(
+        tools.crud_mcp_server,
+        "get_visible",
+        return_value=models.MCPServer(account_id=uuid4()),
+    )
+    await _tool_reference_case(mocker, True, operation, "other", "mcp_server_id")
+    visible.assert_not_called()
 
 
 @pytest.mark.asyncio

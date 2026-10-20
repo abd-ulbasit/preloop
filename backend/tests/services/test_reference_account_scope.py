@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from preloop.models import models
 from preloop.models.crud import crud_account, crud_approval_workflow
 from preloop.models.crud.approval_workflow import get_approval_workflow_async
+from preloop.models.models.flow_execution import (
+    MATRIX_OVERRIDES_KEY,
+    ROUTING_RECORD_KEY,
+)
 from preloop.services.flow_orchestrator import FlowExecutionOrchestrator
 from preloop.services.flow_presets_service import clone_preset_for_account
 
@@ -67,6 +71,51 @@ def test_execution_model_account_scope(
         orch._get_flow_details()
         assert orch.ai_model is model
     assert load.call_count == (2 if fallback else 1)
+
+
+@pytest.mark.parametrize("selection_key", [ROUTING_RECORD_KEY, MATRIX_OVERRIDES_KEY])
+@pytest.mark.parametrize("scope", ["own", "global", "other", "missing"])
+def test_execution_override_model_account_scope(
+    mocker: Any, selection_key: str, scope: str
+) -> None:
+    account_id, default_id, override_id = uuid4(), uuid4(), uuid4()
+    flow = models.Flow(
+        id=uuid4(),
+        name="Example flow",
+        account_id=account_id,
+        agent_type="openhands",
+        ai_model_id=default_id,
+    )
+    default = models.AIModel(id=default_id, account_id=account_id)
+    override = models.AIModel(
+        id=override_id, account_id=None if scope == "global" else account_id
+    )
+    if scope == "other":
+        override.account_id = uuid4()
+    mocker.patch("preloop.services.flow_orchestrator.crud_flow.get", return_value=flow)
+    load = mocker.patch(
+        "preloop.services.flow_orchestrator.crud_ai_model.get",
+        side_effect=[None, default] if scope == "missing" else [override],
+    )
+    orch = FlowExecutionOrchestrator(
+        db=MagicMock(),
+        flow_id=flow.id,
+        nats_client=AsyncMock(),
+        trigger_event_data={
+            selection_key: {"ai_model_id": str(override_id), "agent_type": "openhands"}
+        },
+    )
+    if scope == "other":
+        with pytest.raises(ValueError, match="AI model"):
+            orch._get_flow_details()
+        assert orch.ai_model is None
+        load.assert_called_once_with(orch.db, id=str(override_id))
+    else:
+        orch._get_flow_details()
+        assert orch.ai_model is (default if scope == "missing" else override)
+        assert load.call_args_list[0].kwargs["id"] == str(override_id)
+        if scope == "missing":
+            assert load.call_args_list[1].kwargs["id"] == str(default_id)
 
 
 @pytest.mark.parametrize("scope", ["own", "global", "other", "ordinary"])
