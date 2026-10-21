@@ -10822,11 +10822,11 @@ paths:
         in: query
         required: false
         schema:
-          type: string
-          description: Type of search to perform ('fulltext' or 'similarity')
           enum:
           - fulltext
           - similarity
+          type: string
+          description: Type of search to perform ('fulltext' or 'similarity')
           default: fulltext
           title: Search Type
         description: Type of search to perform ('fulltext' or 'similarity')
@@ -12249,11 +12249,11 @@ paths:
         in: query
         required: false
         schema:
-          type: string
-          description: Type of search to perform ('fulltext' or 'similarity')
           enum:
           - fulltext
           - similarity
+          type: string
+          description: Type of search to perform ('fulltext' or 'similarity')
           default: fulltext
           title: Search Type
         description: Type of search to perform ('fulltext' or 'similarity')
@@ -12370,11 +12370,11 @@ paths:
         in: query
         required: false
         schema:
-          type: string
-          description: Type of search to perform ('fulltext' or 'similarity')
           enum:
           - fulltext
           - similarity
+          type: string
+          description: Type of search to perform ('fulltext' or 'similarity')
           default: fulltext
           title: Search Type
         description: Type of search to perform ('fulltext' or 'similarity')
@@ -12404,11 +12404,10 @@ paths:
         required: false
         schema:
           anyOf:
-          - type: string
+          - const: newest
+            type: string
           - type: 'null'
           description: Sort order. 'newest' sorts by creation date descending.
-          enum:
-          - newest
           title: Sort
         description: Sort order. 'newest' sorts by creation date descending.
       - name: issue_id
