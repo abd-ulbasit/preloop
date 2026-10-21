@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
+from preloop.models import models
 from preloop.models.crud.runtime_session import (
     _latest_gateway_usage_for_sessions,
     _runtime_session_columns_cache,
@@ -61,6 +64,94 @@ def test_get_latest_by_principal_scopes_to_account(db_session, create_account) -
     assert latest is not None
     assert str(latest.id) == str(current_session.id)
     assert str(latest.account_id) == str(current_account.id)
+
+
+@pytest.mark.parametrize("reverse_insertion", [False, True])
+@pytest.mark.parametrize("same_start", [False, True])
+def test_latest_principal_session_breaks_creation_timestamp_ties(
+    db_session: Session,
+    create_account: Callable[..., models.Account],
+    reverse_insertion: bool,
+    same_start: bool,
+) -> None:
+    """Transaction-wide created_at defaults must not make latest arbitrary."""
+    account = create_account()
+    created_at = datetime(2026, 1, 2, tzinfo=UTC)
+    later_start = created_at - timedelta(hours=1)
+    sessions = [
+        models.RuntimeSession(
+            id=UUID(int=index),
+            account_id=account.id,
+            session_source_type="claude_code",
+            session_source_id=f"principal-{index}",
+            session_reference=str(index),
+            runtime_principal_type="claude_code",
+            runtime_principal_id="principal",
+            created_at=created_at,
+            started_at=(
+                later_start
+                if same_start or index == 2
+                else later_start - timedelta(days=1)
+            ),
+            last_activity_at=later_start,
+        )
+        for index in (1, 2)
+    ]
+    for session in reversed(sessions) if reverse_insertion else sessions:
+        db_session.add(session)
+        db_session.flush()
+
+    latest = crud_runtime_session.get_latest_by_principal(
+        db_session,
+        account_id=str(account.id),
+        principal_type="claude_code",
+        principal_id="principal",
+    )
+
+    assert latest is not None
+    assert latest.id == sessions[1].id
+
+
+def test_latest_principal_session_prioritizes_creation_time(
+    db_session: Session, create_account: Callable[..., models.Account]
+) -> None:
+    """Tie breakers do not change existing newest-created semantics."""
+    account = create_account()
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    newest = models.RuntimeSession(
+        id=uuid4(),
+        account_id=account.id,
+        session_source_type="claude_code",
+        session_source_id="principal-new",
+        session_reference="new",
+        runtime_principal_type="claude_code",
+        runtime_principal_id="principal",
+        created_at=now,
+        started_at=now - timedelta(days=2),
+        last_activity_at=now,
+    )
+    older = models.RuntimeSession(
+        id=uuid4(),
+        account_id=account.id,
+        session_source_type="claude_code",
+        session_source_id="principal-old",
+        session_reference="old",
+        runtime_principal_type="claude_code",
+        runtime_principal_id="principal",
+        created_at=now - timedelta(days=1),
+        started_at=now,
+        last_activity_at=now,
+    )
+    db_session.add_all([older, newest])
+    db_session.flush()
+    latest = crud_runtime_session.get_latest_by_principal(
+        db_session,
+        account_id=str(account.id),
+        principal_type="claude_code",
+        principal_id="principal",
+    )
+    assert latest is not None
+    assert latest.id == newest.id
 
 
 def test_latest_gateway_usage_for_sessions_returns_latest_per_session(
