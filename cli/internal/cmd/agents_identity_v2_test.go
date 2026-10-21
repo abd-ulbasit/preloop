@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,7 +14,101 @@ import (
 	"testing"
 
 	"github.com/preloop/preloop/cli/internal/api"
+	"github.com/preloop/preloop/cli/internal/testenv"
 )
+
+func TestReonboardPreservesPinnedIdentityAfterHostnameChange(t *testing.T) {
+	for _, name := range []string{"Codex CLI", "Hermes"} {
+		for _, autoApprove := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/auto=%t", name, autoApprove), func(t *testing.T) {
+				testenv.SetTempHome(t)
+				t.Setenv("PRELOOP_CONFIRM", "")
+				agent := AgentConfig{
+					Name: name, ConfigPath: "/tmp/example/config", DisplayName: "Example",
+				}
+				oldID := runtimeSessionSourceTypeForAgent(name) + "-old-host-id"
+				if err := saveLocalEnrollmentState(&localEnrollmentState{
+					AgentName: name, ConfigPath: agent.ConfigPath, RuntimePrincipalID: oldID,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				prepared, err := prepareAgentForEnrollment(
+					bufio.NewReader(strings.NewReader("Renamed agent\n")),
+					&bytes.Buffer{}, agent, autoApprove,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if prepared.RuntimePrincipalID != oldID {
+					t.Errorf("preparation replaced pinned identity: got %q, want %q", prepared.RuntimePrincipalID, oldID)
+				}
+				item := managedAgentSummary{
+					ID: "existing-agent", SessionSourceType: runtimeSessionSourceTypeForAgent(name),
+					SessionSourceID: oldID, SessionReference: agent.ConfigPath,
+					EnrollmentHostname: "previous-host", LifecycleState: "active",
+				}
+				server, requests, _ := identityTestServer(t, item, 200)
+				updated, matched, err := ensureManagedAgentIdentityReady(
+					api.NewClientWithToken(server.URL, "tok"), prepared,
+					autoApprove, false, strings.NewReader(""), &bytes.Buffer{},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if matched == nil || matched.ID != item.ID || updated.RuntimePrincipalID != oldID {
+					t.Fatalf("lost existing identity: matched=%#v principal=%q", matched, updated.RuntimePrincipalID)
+				}
+				for _, request := range *requests {
+					if strings.HasPrefix(request, "POST") || strings.HasPrefix(request, "PATCH") {
+						t.Fatalf("active pinned identity must not be rekeyed: %v", *requests)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPinnedIdentityWinsOverDerivedDuplicateAndRefreshesHostname(t *testing.T) {
+	agent := newIdentityTestAgent(t)
+	oldID := "codex-previous-host-id"
+	if err := saveLocalEnrollmentState(&localEnrollmentState{
+		AgentName: agent.Name, ConfigPath: agent.ConfigPath, RuntimePrincipalID: oldID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var tokenRequest runtimeSessionTokenRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents":
+			_ = json.NewEncoder(w).Encode(managedAgentListResponse{Items: []managedAgentSummary{
+				{ID: "duplicate", SessionSourceType: "codex", SessionSourceID: stableRuntimePrincipalIDForAgent(agent, "")},
+				{ID: "original", SessionSourceType: "codex", SessionSourceID: oldID, LifecycleState: "active"},
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/runtime-sessions/token":
+			_ = json.NewDecoder(r.Body).Decode(&tokenRequest)
+			_ = json.NewEncoder(w).Encode(runtimeSessionTokenResponse{})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := api.NewClientWithToken(server.URL, "tok")
+	// --no-reuse applies to unpinned identity collisions, not this installation.
+	updated, matched, err := ensureManagedAgentIdentityReady(
+		client, agent, true, true, strings.NewReader(""), &bytes.Buffer{},
+	)
+	if err != nil || matched == nil || matched.ID != "original" {
+		t.Fatalf("expected pinned original: matched=%#v error=%v", matched, err)
+	}
+	if _, err := issueRuntimeSessionToken(client, updated, nil); err != nil {
+		t.Fatal(err)
+	}
+	host, _ := enrollmentHostnameLabel()
+	if tokenRequest.RuntimePrincipalID != oldID || tokenRequest.PrincipalIdentity == nil || tokenRequest.PrincipalIdentity.Hostname != host {
+		t.Fatalf("expected old identity with current hostname: %#v", tokenRequest)
+	}
+}
 
 func TestStableRuntimePrincipalIDGolden(t *testing.T) {
 	agent := AgentConfig{
