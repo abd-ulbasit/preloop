@@ -1885,7 +1885,13 @@ class CRUDRuntimeSession(CRUDBase[RuntimeSession]):
                 self.model.session_source_id.startswith(f"{principal_id}-")
                 | (self.model.session_source_id == principal_id),
             )
-            .order_by(self.model.created_at.desc())
+            # PostgreSQL's now() default is shared within a transaction. Use
+            # session start time, then identity, to order equal creation times.
+            .order_by(
+                self.model.created_at.desc(),
+                self.model.started_at.desc(),
+                self.model.id.desc(),
+            )
             .first()
         )
 
