@@ -44,6 +44,31 @@ def _effective_gateway_alias_from_fields(
 class CRUDAIModel(CRUDBase[AIModel]):
     """CRUD class for AIModel operations."""
 
+    def update_gateway_bootstrap_metadata(
+        self, db: Session, *, db_obj: models.AIModel, meta_data: dict
+    ) -> models.AIModel:
+        """Persist bootstrap defaults without rejecting legacy duplicate aliases.
+
+        Only deployment bootstrap uses this metadata-only path. Existing aliases
+        retain their deterministic runtime resolution; normal model mutations
+        still enforce uniqueness through ``update``.
+        """
+        return super().update(db, db_obj=db_obj, obj_in={"meta_data": meta_data})
+
+    def get_gateway_bootstrap_candidates(self, db: Session) -> list[models.AIModel]:
+        """Return credentialed models for deployment-wide bootstrap defaults."""
+        return (
+            db.query(models.AIModel)
+            .filter(
+                or_(
+                    models.AIModel.api_key.isnot(None),
+                    models.AIModel.credentials_secret_id.isnot(None),
+                )
+            )
+            .order_by(models.AIModel.id)
+            .all()
+        )
+
     @staticmethod
     def _is_retired_system_model(ai_model: AIModel) -> bool:
         """Retain historical global rows without selecting them for new work."""
@@ -602,23 +627,16 @@ class CRUDAIModel(CRUDBase[AIModel]):
         account_id: uuid.UUID | str,
         include_built_in: bool = False,
     ) -> list[AIModel]:
-        """List account models plus the active Cloud built-in, when enabled.
+        """List account models plus the enabled deployment built-ins, when enabled.
 
         Retired system rows remain stored for historical references, but cannot
         be selected for new work. OSS callers opt out by default.
         """
-        from preloop.services.built_in_models import BUILT_IN_MODEL_ALIAS
-
         own = self.model.account_id == account_id
         visible = own
         if include_built_in:
-            built_in = (
-                self.model.account_id.is_(None)
-                & (self.model.meta_data["gateway"]["enabled"].astext == "true")
-                & (
-                    self.model.meta_data["gateway"]["model_alias"].astext
-                    == BUILT_IN_MODEL_ALIAS
-                )
+            built_in = self.model.account_id.is_(None) & (
+                self.model.meta_data["gateway"]["enabled"].astext == "true"
             )
             visible = or_(own, built_in)
         candidates = (
