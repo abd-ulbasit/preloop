@@ -6920,7 +6920,8 @@ func findReusableManagedGatewayAIModel(
 		if managedGatewayAliasConflictsWithIdentity(models[i]) {
 			continue
 		}
-		if models[i].ProviderName != upstream.ProviderName {
+		if models[i].ProviderName != upstream.ProviderName ||
+			!gatewaySelectionMatchesProvider(aiModelSourceProviderID(models[i]), upstream) {
 			continue
 		}
 		if models[i].ModelIdentifier != upstream.ModelIdentifier {

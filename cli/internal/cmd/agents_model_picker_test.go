@@ -389,3 +389,231 @@ func TestManagedAliasRecoveryPreservesUserAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewaySelectionUsesActualSourceProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name, adapter, source, selected string
+		allowed                         bool
+	}{
+		{"normalized zai rejects openai", "openai", "zai", "openai", false},
+		{"normalized zai accepts zai", "openai", "zai", "zai", true},
+		{"source beats same-family adapter", "openai-codex", "zai", "openai", false},
+		{"openai codex spelling", "openai", "openai-codex", "openai", true},
+		{"codex openai spelling", "openai-codex", "openai", "openai-codex", true},
+		{"google gemini spelling", "google", "gemini", "google", true},
+		{"gemini google spelling", "gemini", "google", "gemini", true},
+		{"bedrock spelling", "amazon-bedrock", "bedrock", "amazon-bedrock", true},
+		{"amazon bedrock spelling", "bedrock", "amazon-bedrock", "bedrock", true},
+		{"legacy adapter fallback", "openai", "", "openai-codex", true},
+		{"case and whitespace", "openai", " OpenAI-Codex ", "OPENAI", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local := &managedGatewayUpstream{ProviderName: tc.adapter, SourceProviderID: tc.source,
+				ModelIdentifier: "old-model", ManagedModelAlias: tc.source + "/old-model",
+				APIEndpoint: "https://api.z.ai/api/paas/v4", APIKey: "synthetic-key"}
+			alias := tc.selected + "/gpt-6.1-sol"
+			_, _, err := resolveManagedModelSelection(nil, AgentConfig{Name: "Hermes"}, local,
+				managedEnrollmentOptions{PreferredModel: alias, AutoApprove: true})
+			if (err == nil) != tc.allowed {
+				t.Errorf("selection allowed=%v, want %v: %v", err == nil, tc.allowed, err)
+			}
+			updated := applySelectedModelToUpstream(local, alias, nil)
+			if tc.allowed {
+				if updated.ModelIdentifier != "gpt-6.1-sol" || updated.APIKey != "synthetic-key" {
+					t.Fatalf("compatible selection lost identity or credential: %#v", updated)
+				}
+			} else if updated.ModelIdentifier != "old-model" || updated.ManagedModelAlias == alias {
+				t.Fatalf("incompatible selection relabeled local upstream: %#v", updated)
+			}
+		})
+	}
+}
+
+func TestManagedAliasSourceIdentityChoicesAndReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, source, alias, managedBy string
+		conflict                                 bool
+	}{
+		{"cross provider", "openai", "", "anthropic/other-model", "preloop agents onboard", true},
+		{"cross provider same model", "openai", "", "anthropic/old-model", "preloop agents onboard", true},
+		{"cross provider collision", "openai", "", "anthropic/old-model-2", "preloop agents onboard", true},
+		{"openrouter mismatch", "openrouter", "", "openrouter/other-model", "preloop agents onboard", true},
+		{"mistral mismatch", "mistral", "", "mistral/other-model", "preloop agents onboard", true},
+		{"moonshot mismatch", "moonshot", "", "moonshot/other-model", "preloop agents onboard", true},
+		{"zai mismatch", "zai", "", "zai/other-model", "preloop agents onboard", true},
+		{"normalized zai mismatch", "openai", "zai", "zai/other-model", "preloop agents onboard", true},
+		{"normalized zai foreign alias", "openai", "zai", "openai/old-model", "preloop agents onboard", true},
+		{"normalized zai valid", "openai", "zai", "zai/old-model", "preloop agents onboard", false},
+		{"normalized zai collision", "openai", "zai", "preloop/zai/old-model-2", "preloop agents onboard", false},
+		{"same family", "openai", "openai-codex", "openai/old-model", "preloop agents onboard", false},
+		{"friendly managed", "openai", "zai", "team/assistant", "preloop agents onboard", false},
+		{"user owned", "openai", "", "anthropic/other-model", "", false},
+		{"custom mismatch", "custom", "", "custom/other-model", "preloop agents onboard", true},
+		{"compatible mismatch", "openai-compatible", "", "openai-compatible/other-model", "preloop agents onboard", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := aiModelResponse{ID: "synthetic-model", ProviderName: tc.provider, ModelIdentifier: "old-model", HasAPIKey: true,
+				MetaData: map[string]interface{}{"managed_by": tc.managedBy,
+					"gateway":         map[string]interface{}{"model_alias": tc.alias},
+					"upstream_config": map[string]interface{}{"source_provider_id": tc.source}}}
+			if got := managedGatewayAliasConflictsWithIdentity(model); got != tc.conflict {
+				t.Errorf("conflict=%v, want %v", got, tc.conflict)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("unexpected mutation: %s", r.Method)
+				}
+				_ = json.NewEncoder(w).Encode([]aiModelResponse{model})
+			}))
+			defer server.Close()
+			choices := listGatewayModelChoices(api.NewClientWithToken(server.URL, "token"), nil, io.Discard)
+			if (len(choices) == 0) != tc.conflict {
+				t.Errorf("unexpected choices: %#v", choices)
+			}
+			upstream := &managedGatewayUpstream{ProviderName: tc.provider, SourceProviderID: tc.source,
+				ModelIdentifier: "old-model", ManagedModelAlias: tc.alias}
+			if reused := findReusableManagedGatewayAIModel([]aiModelResponse{model}, upstream); (reused == nil) != tc.conflict {
+				t.Errorf("unexpected reuse: %#v", reused)
+			}
+		})
+	}
+}
+
+func TestAccountSelectionUsesSourceProviderIdentity(t *testing.T) {
+	for _, source := range []string{"openai", "zai"} {
+		for _, hasKey := range []bool{false, true} {
+			t.Run(source+"/"+strconv.FormatBool(hasKey), func(t *testing.T) {
+				endpoint := "https://api.z.ai/api/paas/v4"
+				local := &managedGatewayUpstream{ProviderName: "openai", SourceProviderID: "zai",
+					ModelIdentifier: "old-model", ManagedModelAlias: "zai/old-model", APIEndpoint: endpoint, APIKey: "synthetic-local-key"}
+				selected := &aiModelResponse{ProviderName: "openai", ModelIdentifier: "old-model", APIEndpoint: endpoint, HasAPIKey: hasKey,
+					MetaData: map[string]interface{}{"upstream_config": map[string]interface{}{"source_provider_id": source}}}
+				updated := applySelectedModelToUpstream(local, "team/assistant", selected)
+				if updated.SourceProviderID != source {
+					t.Errorf("lost actual source: %#v", updated)
+				}
+				if source != "zai" && (updated.APIKey != "" || updated.AllowServerCredentialReuse != hasKey) {
+					t.Fatalf("foreign account borrowed local credentials: %#v", updated)
+				}
+				if source == "zai" && updated.APIKey != "synthetic-local-key" {
+					t.Fatalf("compatible credential lost: %#v", updated)
+				}
+				if reused := findReusableManagedGatewayAIModel([]aiModelResponse{*selected}, local); (reused != nil) != (source == "zai") {
+					t.Fatalf("cross-source reuse: %#v", reused)
+				}
+			})
+		}
+	}
+}
+
+func TestManagedAliasReconciliationSkipsCorruptRows(t *testing.T) {
+	for _, source := range []string{"openai", "zai"} {
+		t.Run(source, func(t *testing.T) {
+			staleAlias := "anthropic/other-model"
+			if source == "zai" {
+				staleAlias = "zai/other-model"
+			}
+			rows := []aiModelResponse{{ID: "corrupt-model", ProviderName: "openai", ModelIdentifier: "old-model", HasAPIKey: true,
+				MetaData: map[string]interface{}{"managed_by": "preloop agents onboard",
+					"gateway":         map[string]interface{}{"model_alias": staleAlias},
+					"upstream_config": map[string]interface{}{"source_provider_id": source}}}}
+			creates := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/ai-models":
+					_ = json.NewEncoder(w).Encode(rows)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/ai-models":
+					var created aiModelResponse
+					if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+						t.Error(err)
+						http.Error(w, "invalid create", http.StatusBadRequest)
+						return
+					}
+					created.ID, created.HasAPIKey = "valid-model", true
+					rows = append(rows, created)
+					creates++
+					_ = json.NewEncoder(w).Encode(created)
+				default:
+					t.Errorf("unexpected mutation: %s %s", r.Method, r.URL.Path)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			client := api.NewClientWithToken(server.URL, "synthetic-token")
+			for i := 0; i < 2; i++ {
+				inferred := &managedGatewayUpstream{SourceAgent: "hermes", ProviderName: "openai", SourceProviderID: source,
+					ModelIdentifier: "old-model", ManagedModelAlias: source + "/old-model", APIKey: "synthetic-key"}
+				alias, selected, err := resolveManagedModelSelection(client, AgentConfig{Name: "Hermes"}, inferred,
+					managedEnrollmentOptions{PreferredModel: source + "/old-model", AutoApprove: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				upstream := applySelectedModelToUpstream(inferred, alias, selected)
+				resolved, _, err := syncManagedGatewayAIModel(client, &managedAgentSummary{ID: "synthetic-agent"}, AgentConfig{Name: "Hermes"}, upstream, server.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resolved == nil || resolved.ID != "valid-model" || managedGatewayAliasConflictsWithIdentity(*resolved) {
+					t.Fatalf("corrupt model reused: %#v", resolved)
+				}
+			}
+			if creates != 1 || len(rows) != 2 || gatewayAliasForAIModel(rows[0]) != staleAlias {
+				t.Fatalf("reconciliation changed stale row or was not idempotent: creates=%d, rows=%#v", creates, rows)
+			}
+		})
+	}
+}
+
+func TestPickerDoesNotMergeDifferentSourceProviders(t *testing.T) {
+	model := aiModelResponse{ProviderName: "openai", ModelIdentifier: "old-model", HasAPIKey: true,
+		MetaData: map[string]interface{}{"gateway": map[string]interface{}{"model_alias": "team/assistant"},
+			"upstream_config": map[string]interface{}{"source_provider_id": "openai"}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]aiModelResponse{model})
+	}))
+	defer server.Close()
+	inferred := &managedGatewayUpstream{ProviderName: "openai", SourceProviderID: "zai", ModelIdentifier: "old-model", ManagedModelAlias: "team/assistant"}
+	choices := listGatewayModelChoices(api.NewClientWithToken(server.URL, "token"), inferred, io.Discard)
+	if len(choices) != 1 || choices[0].Model != nil {
+		t.Fatalf("account replaced local source identity: %#v", choices)
+	}
+}
+
+func TestAccountSelectionWithDifferentEndpointDoesNotBorrowLocalCredential(t *testing.T) {
+	local := &managedGatewayUpstream{ProviderName: "openai", SourceProviderID: "zai", ModelIdentifier: "old-model",
+		APIEndpoint: "https://api.z.ai/api/paas/v4", APIKey: "synthetic-key", ManagedModelAlias: "zai/old-model"}
+	selected := &aiModelResponse{ProviderName: "openai", ModelIdentifier: "old-model", APIEndpoint: "https://example.com/v1",
+		MetaData: map[string]interface{}{"upstream_config": map[string]interface{}{"source_provider_id": "zai"}}}
+	updated := applySelectedModelToUpstream(local, "team/assistant", selected)
+	if updated.SourceProviderID != "zai" || updated.APIEndpoint != selected.APIEndpoint || updated.APIKey != "" || updated.CanRouteThroughGateway() {
+		t.Fatalf("account borrowed credentials for a different endpoint: %#v", updated)
+	}
+}
+
+func TestRawCanonicalSelectionRejectsAdapterAliasAlreadyInferred(t *testing.T) {
+	local := &managedGatewayUpstream{ProviderName: "openai", SourceProviderID: "zai",
+		ModelIdentifier: "gpt-6.1-sol", ManagedModelAlias: "openai/gpt-6.1-sol",
+		APIEndpoint: "https://api.z.ai/api/paas/v4", APIKey: "synthetic-key"}
+	_, _, err := resolveManagedModelSelection(nil, AgentConfig{Name: "Hermes"}, local,
+		managedEnrollmentOptions{PreferredModel: "openai/gpt-6.1-sol", AutoApprove: true})
+	if err == nil {
+		t.Fatal("an inferred adapter alias must not bypass source-provider validation")
+	}
+}
+
+func TestSelectedNormalizedAccountModelPreservesSourceProvider(t *testing.T) {
+	selected := &aiModelResponse{ProviderName: "openai", ModelIdentifier: "selected-model", HasAPIKey: true,
+		APIEndpoint: "https://api.z.ai/api/paas/v4",
+		MetaData:    map[string]interface{}{"upstream_config": map[string]interface{}{"source_provider_id": "zai"}}}
+	for _, local := range []*managedGatewayUpstream{nil, {
+		ProviderName: "openai", SourceProviderID: "zai", ModelIdentifier: "old-model",
+		APIEndpoint: selected.APIEndpoint, APIKey: "synthetic-local-key", ManagedModelAlias: "zai/old-model",
+	}} {
+		updated := applySelectedModelToUpstream(local, "zai/selected-model", selected)
+		if updated.ProviderName != "openai" || updated.SourceProviderID != "zai" ||
+			updated.ModelIdentifier != "selected-model" || updated.APIEndpoint != selected.APIEndpoint ||
+			updated.APIKey != "" || !updated.AllowServerCredentialReuse {
+			t.Fatalf("selected account model lost source identity: %#v", updated)
+		}
+	}
+}

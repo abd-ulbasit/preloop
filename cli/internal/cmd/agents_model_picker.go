@@ -39,7 +39,7 @@ func resolveManagedModelSelection(
 	preferred := strings.TrimSpace(opts.PreferredModel)
 	if preferred != "" {
 		choice := findGatewayModelChoice(choices, preferred)
-		if choice != nil {
+		if choice != nil && choice.Model != nil {
 			return choice.Alias, choice.Model, nil
 		}
 		// A new canonical model can use local credentials only for the same
@@ -48,6 +48,9 @@ func resolveManagedModelSelection(
 		if provider, _, ok := strings.Cut(alias, "/"); ok && isCanonicalGatewayProvider(provider) &&
 			(inferred == nil || !gatewaySelectionMatchesProvider(provider, inferred)) {
 			return "", nil, fmt.Errorf("model %q requires a configured account model for that provider", alias)
+		}
+		if choice != nil {
+			return choice.Alias, nil, nil
 		}
 		return alias, nil, nil
 	}
@@ -163,7 +166,8 @@ func listGatewayModelChoices(
 			// Alias equality alone cannot override a freshly discovered upstream.
 			// A stale import may advertise the requested alias for another model.
 			if inferred != nil && (model.ProviderName != inferred.ProviderName ||
-				model.ModelIdentifier != inferred.ModelIdentifier) {
+				model.ModelIdentifier != inferred.ModelIdentifier ||
+				!gatewaySelectionMatchesProvider(aiModelSourceProviderID(model), inferred)) {
 				continue
 			}
 			for j := range choices {
@@ -301,6 +305,7 @@ func applySelectedModelToUpstream(
 	// no stored credential. Never fill a foreign row with local credentials.
 	incompatibleLocal := selectedModel != nil && upstream != nil &&
 		(upstream.ProviderName != selectedModel.ProviderName ||
+			!gatewaySelectionMatchesProvider(aiModelSourceProviderID(*selectedModel), upstream) ||
 			normalizeAIModelEndpoint(upstream.APIEndpoint) != normalizeAIModelEndpoint(selectedModel.APIEndpoint))
 	if selectedModel != nil &&
 		(selectedModel.HasAPIKey || aiModelUsesAmbientProviderCredentials(selectedModel) || incompatibleLocal) &&
@@ -315,7 +320,7 @@ func applySelectedModelToUpstream(
 		modelAlias = strings.TrimPrefix(modelAlias, "preloop/")
 		return &managedGatewayUpstream{
 			SourceAgent:                "account-ai-model",
-			SourceProviderID:           provider,
+			SourceProviderID:           aiModelSourceProviderID(*selectedModel),
 			ProviderName:               provider,
 			ModelIdentifier:            identifier,
 			APIEndpoint:                normalizeAIModelEndpoint(selectedModel.APIEndpoint),
@@ -335,6 +340,14 @@ func applySelectedModelToUpstream(
 			Notes: []string{
 				fmt.Sprintf("Using operator-selected model %s.", alias),
 			},
+		}
+	}
+	// Defense in depth for callers that bypass selection validation: never
+	// relabel foreign credentials with a canonical provider alias.
+	if selectedModel == nil {
+		if provider, _, ok := strings.Cut(alias, "/"); ok && isCanonicalGatewayProvider(provider) &&
+			!gatewaySelectionMatchesProvider(provider, upstream) {
+			return upstream
 		}
 	}
 	// A provider/model selection changes the concrete upstream, not just its
@@ -361,8 +374,11 @@ func applySelectedModelToUpstream(
 // Canonical provider prefixes carry upstream identity; other prefixes can be
 // intentional friendly aliases, such as team/assistant.
 func isCanonicalGatewayProvider(provider string) bool {
-	switch strings.ToLower(provider) {
-	case "openai", "openai-codex", "anthropic", "google", "gemini", "bedrock", "amazon-bedrock", "deepseek", "qwen":
+	// Keep in sync with the provider registry in services/ai_model_provider.py
+	// and the same-family spellings accepted by the CLI normalizers.
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "openai-codex", "anthropic", "google", "gemini", "bedrock", "amazon-bedrock", "deepseek", "qwen",
+		"openrouter", "mistral", "moonshot", "zai", "openai-compatible", "custom":
 		return true
 	}
 	return false
@@ -372,18 +388,35 @@ func gatewaySelectionMatchesProvider(provider string, upstream *managedGatewayUp
 	if upstream == nil {
 		return false
 	}
-	if strings.EqualFold(provider, upstream.ProviderName) || strings.EqualFold(provider, upstream.SourceProviderID) {
-		return true
+	actual := strings.TrimSpace(upstream.SourceProviderID)
+	if actual == "" {
+		actual = upstream.ProviderName
 	}
-	switch strings.ToLower(provider) {
-	case "openai", "openai-codex":
-		return upstream.ProviderName == "openai" || upstream.ProviderName == "openai-codex"
-	case "google", "gemini":
-		return upstream.ProviderName == "google" || upstream.ProviderName == "gemini"
-	case "bedrock", "amazon-bedrock":
-		return upstream.ProviderName == "bedrock" || upstream.ProviderName == "amazon-bedrock"
+	return gatewayProviderFamily(provider) == gatewayProviderFamily(actual)
+}
+
+// ProviderName can name a protocol adapter (for example, openai for zai).
+// SourceProviderID identifies the upstream whose credentials we actually have.
+func gatewayProviderFamily(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "openai-codex":
+		return "openai"
+	case "gemini":
+		return "google"
+	case "amazon-bedrock":
+		return "bedrock"
 	}
-	return false
+	return provider
+}
+
+func aiModelSourceProviderID(model aiModelResponse) string {
+	if config, ok := asObjectMap(model.MetaData["upstream_config"]); ok {
+		if source := strings.TrimSpace(lookupString(config, "source_provider_id")); source != "" {
+			return source
+		}
+	}
+	return strings.TrimSpace(model.ProviderName)
 }
 
 // Ignore corrupted managed imports during reconciliation, without imposing
@@ -394,8 +427,13 @@ func managedGatewayAliasConflictsWithIdentity(model aiModelResponse) bool {
 	}
 	alias := strings.TrimPrefix(strings.TrimSpace(gatewayAliasForAIModel(model)), "preloop/")
 	provider, identifier, ok := strings.Cut(alias, "/")
-	if !ok || !isCanonicalGatewayProvider(provider) || !gatewaySelectionMatchesProvider(provider, &managedGatewayUpstream{ProviderName: model.ProviderName}) {
+	if !ok || !isCanonicalGatewayProvider(provider) {
 		return false
+	}
+	if !gatewaySelectionMatchesProvider(provider, &managedGatewayUpstream{
+		ProviderName: model.ProviderName, SourceProviderID: aiModelSourceProviderID(model),
+	}) {
+		return true
 	}
 	concrete := strings.TrimSpace(model.ModelIdentifier)
 	if identifier == concrete {
