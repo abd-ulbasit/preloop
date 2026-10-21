@@ -1333,10 +1333,6 @@ func prepareAgentForEnrollment(
 ) (AgentConfig, error) {
 	agent = normalizeDiscoveredAgent(agent)
 	if autoApprove || nonInteractiveAutoConfirm() {
-		agent.RuntimePrincipalID = stableRuntimePrincipalIDForAgent(
-			agent,
-			identitySaltForAgent(agent),
-		)
 		return agent, nil
 	}
 
@@ -1352,11 +1348,7 @@ func prepareAgentForEnrollment(
 	if strings.TrimSpace(input) != "" {
 		agent.DisplayName = strings.TrimSpace(input)
 	}
-	// Display name is decoupled from identity under v2 derivation.
-	agent.RuntimePrincipalID = stableRuntimePrincipalIDForAgent(
-		agent,
-		identitySaltForAgent(agent),
-	)
+	// Keep the normalized (possibly locally pinned) identity when renaming.
 	return agent, nil
 }
 
@@ -5466,7 +5458,30 @@ func ensureManagedAgentIdentityReady(
 
 	var matched *managedAgentSummary
 	matchKind := ""
+	// A hostname change must not replace the identity of this installation.
+	// Read the pin from local state rather than trusting an arbitrary ID on
+	// the discovered config, and prefer it even if a derived ID also exists.
+	localState, localStateErr := loadLocalEnrollmentState(agent)
+	hasLocalState := localStateErr == nil
+	pinnedID := ""
+	if hasLocalState {
+		pinnedID = strings.TrimSpace(localState.RuntimePrincipalID)
+	}
+	// Known pre-v2 pins retain the existing lazy migration and v2 priority.
+	if pinnedID != "" && pinnedID != v1ID && pinnedID != legacyID {
+		for i := range response.Items {
+			item := response.Items[i]
+			if containsString(sourceTypes, item.SessionSourceType) && item.SessionSourceID == pinnedID {
+				matched = &item
+				matchKind = "pinned"
+				break
+			}
+		}
+	}
 	for i := range response.Items {
+		if matchKind == "pinned" {
+			break
+		}
 		item := response.Items[i]
 		if !containsString(sourceTypes, item.SessionSourceType) {
 			continue
@@ -5495,11 +5510,6 @@ func ensureManagedAgentIdentityReady(
 			matched = fallback
 			matchKind = "fallback"
 		}
-	}
-
-	hasLocalState := false
-	if _, err := loadLocalEnrollmentState(agent); err == nil {
-		hasLocalState = true
 	}
 
 	if matched != nil && matchKind == "v2" && !hasLocalState {
@@ -5540,7 +5550,7 @@ func ensureManagedAgentIdentityReady(
 		return agent, nil, nil
 	}
 
-	if matchKind == "v2" {
+	if matchKind == "v2" || matchKind == "pinned" {
 		if managedAgentLifecycleRevivalAction(matched.LifecycleState) != "" {
 			revived, err := reenrollArchivedManagedAgent(
 				client,
