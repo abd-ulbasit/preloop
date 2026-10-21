@@ -1031,8 +1031,18 @@ def _build_managed_agent_detail_response(
         start_date = start_date.astimezone(UTC).replace(tzinfo=None)
     if end_date and end_date.tzinfo:
         end_date = end_date.astimezone(UTC).replace(tzinfo=None)
-    summary = crud_managed_agent.get_summary_for_account(
+    agent_row = crud_managed_agent.get_for_account(
         db, account_id=account_id, agent_id=agent_id
+    )
+    if agent_row is None:
+        return None
+    # The agent's sessions are resolved once and shared by the summary, the
+    # windowed aggregate and the per-model rows below.
+    ownership = crud_managed_agent.session_ownership(
+        db, account_id=account_id, agent=agent_row
+    )
+    summary = crud_managed_agent.get_summary_for_account(
+        db, account_id=account_id, agent_id=agent_id, ownership=ownership
     )
     if summary is None:
         return None
@@ -1047,6 +1057,7 @@ def _build_managed_agent_detail_response(
         agent_id=agent_id,
         start_date=start_date,
         end_date=end_date,
+        ownership=ownership,
     )
     usage_by_model = (
         crud_managed_agent.get_usage_by_model_for_account(
@@ -1055,6 +1066,7 @@ def _build_managed_agent_detail_response(
             agent_id=agent_id,
             start_date=start_date,
             end_date=end_date,
+            ownership=ownership,
         )
         if "usage_by_model" in sections
         else []
@@ -1110,6 +1122,9 @@ def _build_managed_agent_detail_response(
                 aggregate["latest_provider_name"] if aggregate else None
             ),
             last_request_at=aggregate["last_request_at"] if aggregate else None,
+            subscription_usage=(
+                aggregate.get("subscription_usage") if aggregate else None
+            ),
         ),
         usage_by_model=[
             ModelGatewayUsageService._model_row_to_schema(row) for row in usage_by_model
@@ -1479,7 +1494,8 @@ def get_account_gateway_usage_summary(
     include_breakdown: bool = Query(
         True,
         description=(
-            "When true, include per-model/flow/session/tool/day breakdowns. "
+            "When true, include per-model/flow/session/tool/day breakdowns "
+            "(and per-agent totals when breakdown=agents is selected). "
             "Default true preserves the historical response shape for API "
             "clients; lightweight card callers (Overview/Agents) should pass "
             "false. Prefer /cost/summary for full cost analytics."
@@ -1489,7 +1505,10 @@ def get_account_gateway_usage_summary(
         None,
         description=(
             "Selected breakdowns, repeated for multiple sections. Omitted "
-            "preserves all sections; ignored when include_breakdown=false."
+            "preserves the historical sections (models, flows, sessions, "
+            "tools, days); 'agents' is opt-in and returns usage_by_agent, "
+            "account-wide only (empty when runtime_principal_id is set). "
+            "Ignored when include_breakdown=false."
         ),
     ),
     session_limit: Optional[int] = Query(

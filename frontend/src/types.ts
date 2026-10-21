@@ -494,6 +494,19 @@ export interface GatewayToolUsageByAgent {
   estimated_schema_cost: number;
 }
 
+/** One agent's gateway usage in a summary period. */
+export interface GatewayUsageByAgent {
+  agent_id: string;
+  session_count: number;
+  request_count: number;
+  successful_requests: number;
+  failed_requests: number;
+  token_usage: GatewayTokenUsage;
+  estimated_cost: number;
+  last_request_at?: string | null;
+  subscription_usage?: SubscriptionUsageSummary | null;
+}
+
 export interface GatewayUsageByTool {
   tool_name: string;
   server_name?: string | null;
@@ -717,6 +730,8 @@ export interface ManagedAgentSummary {
   read_only?: boolean;
   owner_name?: string;
 
+  /** Subscription-routed requests: $0 spend, an API-equivalent estimate. */
+  subscription_usage?: SubscriptionUsageSummary | null;
   id: string;
   runtime_session_id: string | null;
   owner_user_id: string | null;
@@ -933,6 +948,8 @@ export interface ManagedAgentUsageAggregate {
   latest_model_alias: string | null;
   latest_provider_name: string | null;
   last_request_at: string | null;
+  /** Subscription-routed requests: $0 spend, an API-equivalent estimate. */
+  subscription_usage?: SubscriptionUsageSummary | null;
 }
 
 export interface ManagedAgentServerActivitySummary {
@@ -1614,6 +1631,11 @@ export interface AccountGatewayUsageSummaryResponse {
    */
   total_sessions?: number | null;
   usage_by_tool?: GatewayUsageByTool[];
+  /**
+   * Per-agent totals in the period (`breakdown=agents`), by the attribution
+   * the agents list and agent detail use, so the three agree.
+   */
+  usage_by_agent?: GatewayUsageByAgent[];
   /**
    * Set when the server answered from a pre-aggregated rollup rather than the
    * raw request rows, which is how a year of usage comes back in a second.

@@ -50,6 +50,7 @@ import { formatRelativeTime } from '../utils/date';
 import { formatCurrencyAmount } from '../utils/money';
 import {
   placeBubbles,
+  placeCornerNotes,
   type BubbleRect,
   type BubbleRequest,
   type PlacedBubble,
@@ -77,6 +78,7 @@ import {
   savePositions,
   spatialLayout,
   type FleetMapArrangement,
+  type FleetMapViewport,
   type FleetMapPoints,
 } from '../utils/fleet-map-spatial';
 import {
@@ -162,6 +164,12 @@ const MIN_SPATIAL_FIT_SCALE = LEGIBLE_SPATIAL_SCALE;
 const ARRANGE_LABEL_MIN_WIDTH = 1100;
 /** Narrower stages fold the legend behind its ? button. */
 const LEGEND_INLINE_MIN_WIDTH = 1000;
+/**
+ * Where the wheel scrolls the page (the Overview card), overflow is not
+ * reachable by scrolling and reads as nodes that were never drawn (B-08):
+ * a fit there contains the whole picture, down to the zoom-out limit.
+ */
+const MIN_CONTAINED_FIT_SCALE = 0.2;
 /** Nodes and the view glide to a new arrangement in this long (medium). */
 const GLIDE_MS = 400;
 /** Label tags drawn on a work chip; the rest are a +N count and in the title. */
@@ -1104,6 +1112,7 @@ export class FleetMap extends LitElement {
     const zoom = this.shadowRoot?.querySelector('.zoom');
     if (zoom) zoom.textContent = `${Math.round(this.scale * 100)}%`;
     this.positionBubbles();
+    this.positionToasts();
   }
 
   protected willUpdate(changed: Map<string, unknown>): void {
@@ -1243,6 +1252,8 @@ export class FleetMap extends LitElement {
       this.follow(this.joined);
       this.joined = false;
     } else if (!this.camera) this.applyTransform();
+    // New toasts are measured and placed before they are painted.
+    if (changed.has('toasts')) this.positionToasts();
   }
 
   disconnectedCallback(): void {
@@ -1347,6 +1358,15 @@ export class FleetMap extends LitElement {
   private glidePoints?: FleetMapPoints;
 
   /**
+   * Whether a plain wheel pans the canvas. On the Overview card it scrolls
+   * the page instead, so whatever a fit leaves outside the stage is reached
+   * only by dragging, which nothing on screen suggests.
+   */
+  private get wheelPans(): boolean {
+    return this.wheelMode !== 'page' || this.fullscreen;
+  }
+
+  /**
    * The view that puts the nodes' centre of gravity (the mean of their
    * centres) in the middle of the stage, at the largest scale up to 100%
    * that keeps every node in view around it.
@@ -1372,15 +1392,14 @@ export class FleetMap extends LitElement {
       (room - 48) / Math.max(1, width),
       availableHeight / Math.max(1, height)
     );
-    const s = Math.max(MIN_SPATIAL_FIT_SCALE, natural);
+    const floor = this.wheelPans
+      ? MIN_SPATIAL_FIT_SCALE
+      : MIN_CONTAINED_FIT_SCALE;
+    const s = Math.max(floor, natural);
     return {
-      x:
-        (natural < MIN_SPATIAL_FIT_SCALE ? 24 : (room - width * s) / 2) -
-        left * s,
+      x: (natural < floor ? 24 : (room - width * s) / 2) - left * s,
       y:
-        (natural < MIN_SPATIAL_FIT_SCALE
-          ? 24
-          : 24 + (availableHeight - height * s) / 2) -
+        (natural < floor ? 24 : 24 + (availableHeight - height * s) / 2) -
         top * s,
       s,
     };
@@ -2708,18 +2727,19 @@ export class FleetMap extends LitElement {
         border: none;
       }
       /* Above the zoom controls, clear of the column headers. */
+      /* The stage's top right is the toasts' corner, but a node may be
+         drawn there: each toast is placed by positionToasts() in the free
+         spot nearest the corner (B-08), hidden until it has one. */
       .toasts {
-        top: 12px;
-        right: 12px;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 6px;
+        inset: 0;
+        display: block;
         pointer-events: none;
       }
-      .stage.has-selection .toasts {
-        right: 364px;
-      }
       .toast {
+        position: absolute;
+        top: 0;
+        left: 0;
+        visibility: hidden;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -3721,6 +3741,75 @@ export class FleetMap extends LitElement {
     );
   }
 
+  /** Screen boxes of the drawn nodes, in stage coordinates. */
+  private screenBoxes(positions: Map<string, FleetMapPosition>): BubbleRect[] {
+    const s = this.scale;
+    return [...positions.values()].map((p) => ({
+      x: this.translateX + p.x * s,
+      y: this.translateY + p.y * s,
+      w: p.w * s,
+      h: p.h * s,
+    }));
+  }
+
+  /** Put each toast in the free spot nearest the top right (B-08). */
+  private positionToasts(): void {
+    const els = [
+      ...(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-toast]') ?? []),
+    ];
+    const positions = (
+      this.spatial ? (this.shownLayout ?? this.lastLayout) : this.lastLayout
+    )?.positions;
+    if (!els.length || !positions) return;
+    const panel =
+      this.selected && !window.matchMedia('(max-width: 900px)').matches
+        ? 364
+        : 0;
+    const nodes = this.screenBoxes(positions);
+    // Column headers are part of the picture, as they are for bubbles.
+    const layout = this.lastLayout;
+    if (!this.spatial && layout?.columns.length)
+      for (const column of layout.columns)
+        nodes.push({
+          x: this.translateX + column.x * this.scale,
+          y: this.translateY,
+          w: FLEET_MAP_NODE_WIDTH * this.scale,
+          h: FLEET_MAP_HEADER * this.scale,
+        });
+    // The canvas tools sit on the stage too.
+    const tools = this.shadowRoot?.querySelector('.canvas-tools');
+    const stage = this.shadowRoot?.querySelector('.stage');
+    if (tools && stage) {
+      const t = tools.getBoundingClientRect();
+      const st = stage.getBoundingClientRect();
+      nodes.push({
+        x: t.left - st.left,
+        y: t.top - st.top,
+        w: t.width,
+        h: t.height,
+      });
+    }
+    const spots = placeCornerNotes(
+      els.map((el) => ({ w: el.offsetWidth || 200, h: el.offsetHeight || 26 })),
+      {
+        nodes,
+        bounds: {
+          x: 12,
+          y: 12,
+          w: Math.max(0, this.viewport.width - 24 - panel),
+          h: Math.max(0, this.viewport.height - 24),
+        },
+      }
+    );
+    els.forEach((el, index) => {
+      const spot = spots[index];
+      el.style.visibility = spot ? 'visible' : 'hidden';
+      if (!spot) return;
+      el.style.left = `${spot.x}px`;
+      el.style.top = `${spot.y}px`;
+    });
+  }
+
   private positionBubbles(): void {
     const els = [
       ...(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-bubble]') ??
@@ -4182,6 +4271,37 @@ export class FleetMap extends LitElement {
     </aside>`;
   }
 
+  private roomCache?: {
+    viewport: FleetMapViewport;
+    k: number;
+    room: FleetMapViewport;
+  };
+
+  /**
+   * The stage the spatial layout packs for. Where the wheel pans, the stage
+   * itself: shelves stack until the picture fits at the legible scale. On
+   * the Overview card (B-08) a fleet too dense for that is packed for a
+   * proportionally larger stage, so its shelves stack to the card's shape
+   * and the contained fit shrinks the whole picture evenly into view.
+   */
+  private layoutRoom(count: number): FleetMapViewport {
+    const viewport = this.viewport;
+    if (this.wheelPans || !count) return viewport;
+    const cell = (FLEET_MAP_NODE_WIDTH + 24) * (FLEET_MAP_NODE_HEIGHT + 24);
+    const fits = Math.sqrt((viewport.width * viewport.height) / (count * cell));
+    if (fits >= LEGIBLE_SPATIAL_SCALE) return viewport;
+    // Quantised, so a node arriving does not repack the whole map.
+    const k = Math.max(MIN_CONTAINED_FIT_SCALE, Math.floor(fits * 20) / 20);
+    const cached = this.roomCache;
+    if (cached?.viewport === viewport && cached.k === k) return cached.room;
+    const room = {
+      width: Math.round(viewport.width / k),
+      height: Math.round(viewport.height / k),
+    };
+    this.roomCache = { viewport, k, room };
+    return room;
+  }
+
   /** The simulation reruns only when the shown graph or a position changes. */
   private spatialFor(view: FleetMapGraph): FleetMapLayout {
     // Keyed on what is shown, not on the object: focus mode rebuilds the
@@ -4195,7 +4315,7 @@ export class FleetMap extends LitElement {
       this.points,
       this.dragSnapshot,
       this.collapsed,
-      this.viewport,
+      this.layoutRoom(view.nodes.length),
     ];
     const cached = this.spatialCache;
     if (cached && cached.key.every((value, index) => value === key[index]))
@@ -4231,7 +4351,7 @@ export class FleetMap extends LitElement {
       { ...settled, ...(this.dragSnapshot ?? {}), ...this.points },
       clusters,
       this.collapsed,
-      this.viewport
+      this.layoutRoom(view.nodes.length)
     );
     for (const [id, position] of layout.positions)
       this.settled.set(id, { x: position.x, y: position.y, w: position.w });

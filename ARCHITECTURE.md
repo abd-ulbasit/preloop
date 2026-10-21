@@ -521,6 +521,25 @@ constraints and scalar session association prevent cross-account labels and
 join fan-out. Console exact-period links preserve UTC microseconds and use
 normal authenticated account scoping; URL account context grants no access.
 
+Console agent spend (Agents list, Agent detail, the Overview Inventory and the
+user page, the last two via the opt-in `breakdown=agents` section of
+`GET /api/v1/account/gateway-usage/summary`, which returns `usage_by_agent`
+for the whole account and is empty when `runtime_principal_id` is set) reads
+one CRUD aggregate. A
+gateway row belongs to an agent when its runtime principal is the agent's base
+source id, or when it ran in a session the agent owns: the bound session, a
+session whose runtime principal is `managed_agent:<id>`, or a per-run session
+whose source or principal id is `<base>:<run>` or `<base>-<run>` (longest base
+wins). A row whose principal names another agent's base id stays with that
+agent, so no row counts twice. Only the window differs between surfaces (all
+time, the detail range, the Overview range). Subscription-routed rows
+(`cost_source='subscription'`) count in an agent's requests and tokens and add
+$0 to its spend; each surface also reports the agent's subscription block
+(the Cost page's `SubscriptionUsageSummary`: requests, tokens, the summed
+`meta_data.api_equivalent_cost` estimate and its coverage) and shows "without
+subscriptions" as spend plus that estimate, a lower bound when coverage is
+partial and no figure when nothing is covered.
+
 Managed tracker OAuth persistence uses the [provider-neutral storage contract](docs/architecture/managed-oauth-storage.md),
 with tenant-bound connection transactions and serialized token-pair rotation.
 The console creates a managed tracker at consent completion, before scope is
@@ -846,8 +865,11 @@ issue comments and operator notes never count. "Any time" reads 90 days. Live, t
 tool call and each first merge. The collection toolbar shares
 `list-toolbar` with the other console collections; accounts are an optional layer.
 The hosts give the canvas its height. Device fleet and full screen pan on wheel,
-while the Overview card lets plain wheel scroll the page. Fit keeps spatial scale
-at least 0.85 and leaves overflow reachable by panning.
+while the Overview card lets plain wheel scroll the page. Where the wheel pans
+(Device fleet, full screen), Fit keeps spatial scale at least 0.85 and leaves
+overflow reachable by panning; on the Overview card, where it does not, Fit
+contains every node (down to the 0.2 zoom-out limit). Code activity toasts sit
+in the free spot nearest the stage's top right that covers no node.
 
 The optional `work` and `work_truncated` fields seed history with at most 200
 distinct issues and pull requests, newest activity first, in that same bounded

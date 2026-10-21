@@ -144,6 +144,22 @@ describe('DashboardView', () => {
           last_request_at: '2026-03-07T10:00:00Z',
         },
       ],
+      usage_by_agent: [
+        {
+          agent_id: 'agent-1',
+          session_count: 1,
+          request_count: 8,
+          successful_requests: 8,
+          failed_requests: 0,
+          token_usage: {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+          },
+          estimated_cost: 4.2,
+          last_request_at: '2026-03-07T10:00:00Z',
+        },
+      ],
     };
 
     runtimeSessionsResponse = {
@@ -2248,6 +2264,85 @@ describe('DashboardView', () => {
       expect(tabs).to.eql(['Agents 1', 'Flows 1', 'Models 1', 'Tools 2']);
     });
 
+    // B-02: the Agents tab reads the server's per-agent totals, the same
+    // attribution as the agents list and the agent page. The session list is
+    // capped at the most recent sessions and is never summed into a total.
+    it('reads agent usage from usage_by_agent, not the capped session list', async () => {
+      gatewaySummaryResponse = {
+        ...gatewaySummaryResponse,
+        usage_by_session: [
+          {
+            ...gatewaySummaryResponse.usage_by_session[0],
+            request_count: 1,
+            estimated_cost: 0.01,
+          },
+        ],
+        usage_by_agent: [
+          {
+            ...gatewaySummaryResponse.usage_by_agent[0],
+            request_count: 70,
+            estimated_cost: 0.34,
+          },
+        ],
+      };
+      const element = await mountLoaded();
+      const agents = element['inventoryAgentRows'];
+      expect(agents[0].requests).to.equal(70);
+      expect(agents[0].cost).to.equal(0.34);
+      const breakdownUrls = fetchStub
+        .getCalls()
+        .map((call: sinon.SinonSpyCall) => String(call.args[0]))
+        .filter(
+          (url: string) =>
+            url.includes('/api/v1/account/gateway-usage/summary') &&
+            url.includes('include_breakdown=true')
+        );
+      // The Inventory breakdown asks for the per-agent section.
+      expect(
+        breakdownUrls.some((url: string) => url.includes('breakdown=agents'))
+      ).to.be.true;
+    });
+
+    // D-05: the Agents tab carries the without-subscriptions estimate from
+    // the same per-agent breakdown as the spend.
+    it('carries the without-subscriptions estimate from usage_by_agent', async () => {
+      gatewaySummaryResponse = {
+        ...gatewaySummaryResponse,
+        usage_by_agent: [
+          {
+            ...gatewaySummaryResponse.usage_by_agent[0],
+            estimated_cost: 0.34,
+            subscription_usage: {
+              request_count: 10,
+              prompt_tokens: 1000,
+              completion_tokens: 100,
+              total_tokens: 1100,
+              api_equivalent_cost: 2,
+              api_equivalent_cost_is_estimate: true,
+              covered_requests: 10,
+              coverage: 1,
+              billed: null,
+              billed_available: false,
+            },
+          },
+        ],
+      };
+      const element = await mountLoaded();
+      const [agent] = element['inventoryAgentRows'];
+      expect(agent.cost).to.equal(0.34);
+      expect(agent.withoutSubscriptions.text).to.equal('$2.34');
+      const inventory = element.shadowRoot!.querySelector(
+        'inventory-card'
+      ) as any;
+      await inventory.updateComplete;
+      const line = inventory.shadowRoot.querySelector(
+        '[data-testid="without-subscriptions"]'
+      );
+      expect(line.textContent.replace(/\s+/g, ' ').trim()).to.equal(
+        '$2.34 w/o subs.'
+      );
+    });
+
     it('reads each tab from a fetch the page already made', async () => {
       const element = await mountLoaded();
 
@@ -2485,6 +2580,7 @@ describe('DashboardView', () => {
         usage_by_model: [],
         usage_by_flow: [],
         usage_by_tool: [],
+        usage_by_agent: [],
       };
       release();
       await pending;
