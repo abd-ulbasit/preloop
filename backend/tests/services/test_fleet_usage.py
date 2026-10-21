@@ -221,7 +221,7 @@ def test_one_sql_aggregate_per_grouping(
     def record(
         conn: Any, cursor: Any, sql: str, params: Any, ctx: Any, many: bool
     ) -> None:
-        if "api_usage" in sql:
+        if "api_usage" in sql and "visible_models" in sql:
             statements.append(sql)
 
     connection = db_session.connection()
@@ -364,7 +364,8 @@ def test_gateway_indexes_support_both_aggregate_queries(
     def record(
         conn: Any, cursor: Any, sql: str, params: Any, ctx: Any, many: bool
     ) -> None:
-        if "api_usage" in sql:
+        # The model/provider aggregates; per-node reads share the predicates.
+        if "api_usage" in sql and "visible_models" in sql:
             queries.append((sql, params))
 
     connection = db_session.connection()

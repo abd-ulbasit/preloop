@@ -472,4 +472,6 @@ def test_flow_runners_revision_chains_onto_approval_rule_context() -> None:
     assert cache_input.down_revision == "20261105_fleet_work_tools"
     command_lookup = script.get_revision("20261106_control_command_idx")
     assert command_lookup.down_revision == "20261106_anthropic_cache_input"
-    assert script.get_heads() == ["20261106_control_command_idx"]
+    work_ref = script.get_revision("20261106_fleet_work_ref_idx")
+    assert work_ref.down_revision == "20261106_control_command_idx"
+    assert script.get_heads() == ["20261106_fleet_work_ref_idx"]

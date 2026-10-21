@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -12,10 +12,18 @@ from sqlalchemy.orm import Session
 
 from preloop.models import models
 from preloop.models.crud import fleet_work as work_crud
-from preloop.schemas.fleet_map import FleetWorkItem, WorkAction
+from preloop.schemas.fleet_map import FleetWorkItem, FleetWorkRelation, WorkAction
+from preloop.services.fleet_work_refs import work_key, work_url
 from preloop.utils.secret_scrubbing import scrub_secrets
 
 WORK_LIMIT = 200
+RELATION_LIMIT = 500
+_PROVENANCE = {
+    "builtin": "tool_call",
+    "cli": "cli",
+    "github_mcp": "mcp",
+    "gitlab_mcp": "mcp",
+}
 RUN_LIMIT = 5000
 Kind = Literal["issue", "pull_request"]
 _TOOL_ACTIONS: dict[str, WorkAction] = {
@@ -60,6 +68,13 @@ class FleetWorkResult:
     flow_activity: dict[str, datetime]
     merged_pull_requests: list[Any]
     pull_requests_truncated: bool
+    relations: list[FleetWorkRelation] | None = None
+    relations_truncated: bool = False
+
+
+def work_id(kind: str, key: str) -> str:
+    """Graph id of a work item."""
+    return f"work:{kind}:{key}"
 
 
 def _aware(value: datetime) -> datetime:
@@ -139,6 +154,39 @@ def build_work_items(
     """
     items: dict[tuple[Kind, str], FleetWorkItem] = {}
     actors: dict[tuple[Kind, str], dict[str, datetime]] = {}
+    relations: dict[str, FleetWorkRelation] = {}
+
+    def relate(
+        kind: str,
+        source: str,
+        target: tuple[Kind, str],
+        at: datetime,
+        provenance: str,
+        action: WorkAction | None = None,
+    ) -> None:
+        """Record one relation; both work ends are checked after the merge."""
+        target_id = work_id(*target)
+        identifier = f"{kind}:{source}:{target_id}"
+        at = _aware(at)
+        relation = relations.get(identifier)
+        if relation is None:
+            relation = relations[identifier] = FleetWorkRelation(
+                id=identifier,
+                kind=kind,  # type: ignore[arg-type]
+                source=source,
+                target=target_id,
+                at=at,
+                provenance=provenance,  # type: ignore[arg-type]
+            )
+        relation.at = max(relation.at, at)
+        if kind == "touched":
+            relation.count += 1
+            if action and action not in relation.actions:
+                relation.actions.append(action)
+
+    def slot_of(value: Any, kind: Kind, repo: Any = None) -> tuple[Kind, str] | None:
+        identity = _identity(value, kind, repo)
+        return (kind, identity[0]) if identity else None
 
     def add(
         value: Any,
@@ -217,6 +265,16 @@ def build_work_items(
     truncated = calls_truncated or len(links) > RUN_LIMIT or len(subjects) > RUN_LIMIT
     for row in links[:RUN_LIMIT]:
         node_id: str | None = f"flow:{row.flow_id}"
+        issue_slot = slot_of(row.issue_key or row.url, "issue")
+        pr_slot = slot_of(row.pr_key, "pull_request")
+        if issue_slot and pr_slot:
+            relate(
+                "resolves" if row.link == "closing_reference" else "mentions",
+                work_id(*pr_slot),
+                issue_slot,
+                row.at,
+                "tracker" if row.link == "closing_reference" else "flow_run",
+            )
         add(
             row.issue_key or row.url,
             "issue",
@@ -238,6 +296,20 @@ def build_work_items(
         node_id = f"flow:{row.flow_id}" if row.assigned else None
         # A trigger identifies a run's subject, not the actor that performed
         # the webhook action. The run itself only proves work on that subject.
+        subject_kind: Kind | None = None
+        if isinstance(row.event, str):
+            if row.event.startswith("issue_"):
+                subject_kind = "issue"
+            elif row.event.startswith(("pull_request_", "merge_request_")):
+                subject_kind = "pull_request"
+        if subject_kind:
+            # The trigger subject is what started the run, assigned or not.
+            subject = slot_of(row.url or row.reference, subject_kind, row.repo)
+            if subject:
+                relate("triggered", f"flow:{row.flow_id}", subject, row.at, "flow_run")
+        produced = slot_of(row.pr_url, "pull_request")
+        if produced and node_id:
+            relate("produced", node_id, produced, row.at, "flow_run")
         if isinstance(row.event, str):
             if row.event.startswith("issue_"):
                 add(
@@ -260,8 +332,103 @@ def build_work_items(
                     node_id=node_id,
                 )
         add(row.pr_url, "pull_request", row.at, "pull_request_updated", node_id=node_id)
+    # A create call has no number yet. Its parsed closing/plain references
+    # attach to the first pull request the same caller names afterwards in the
+    # same repository (typically its own follow-up on the PR it opened).
+    unnumbered: list[
+        tuple[tuple[str, str, str], str, datetime, dict[str, Any], str | None]
+    ] = []
+    named: list[tuple[tuple[str, str, str], str, datetime, str]] = []
     for call in calls:
         metadata = call.metadata_ if isinstance(call.metadata_, dict) else {}
+        work_ref = metadata.get("work_ref")
+        caller = (
+            call.runtime_principal_type or "",
+            call.runtime_principal_id or "",
+            str(call.flow_execution_id or ""),
+        )
+        if (
+            isinstance(work_ref, dict)
+            and work_key(work_ref) is None
+            and work_ref.get("kind") == "pull_request"
+            and work_ref.get("action") == "opened"
+            and isinstance(work_ref.get("repo"), str)
+            and (work_ref.get("closes") or work_ref.get("mentions"))
+        ):
+            pending_flow = flow_of_execution.get(str(call.flow_execution_id or ""))
+            pending_actor: str | None = f"flow:{pending_flow}" if pending_flow else None
+            if not call.flow_execution_id:
+                owner_agent = agents_by_principal.get(
+                    (call.runtime_principal_type or "", call.runtime_principal_id or "")
+                )
+                if owner_agent:
+                    pending_actor = f"agent:{owner_agent.id}"
+            unnumbered.append(
+                (
+                    caller,
+                    work_ref["repo"],
+                    _aware(call.timestamp),
+                    work_ref,
+                    pending_actor,
+                )
+            )
+            continue
+        if isinstance(work_ref, dict) and (named_key := work_key(work_ref)):
+            if named_key[0] == "pull_request" and isinstance(work_ref.get("repo"), str):
+                named.append(
+                    (caller, work_ref["repo"], _aware(call.timestamp), named_key[1])
+                )
+        # A classified call is authoritative once its object is known; an
+        # unresolved one (e.g. a tracker key) falls through to the summary.
+        if isinstance(work_ref, dict) and work_key(work_ref) is not None:
+            flow_id = flow_of_execution.get(str(call.flow_execution_id or ""))
+            actor: str | None = f"flow:{flow_id}" if flow_id else None
+            if not call.flow_execution_id:
+                agent = agents_by_principal.get(
+                    (call.runtime_principal_type or "", call.runtime_principal_id or "")
+                )
+                if agent:
+                    actor = f"agent:{agent.id}"
+            found = work_key(work_ref)
+            ref_action = work_ref.get("action")
+            if found and ref_action in _ACTION_PRIORITY:
+                ref_kind, key = found
+                add(
+                    key,
+                    ref_kind,
+                    call.timestamp,
+                    ref_action,
+                    url=work_url(work_ref),
+                    node_id=actor,
+                )
+                slot = slot_of(key, ref_kind)
+                if slot and actor:
+                    relate(
+                        "touched",
+                        actor,
+                        slot,
+                        call.timestamp,
+                        _PROVENANCE.get(str(work_ref.get("via")), "tool_call"),
+                        ref_action,
+                    )
+                if slot and ref_kind == "pull_request":
+                    for relation_kind, name in (
+                        ("resolves", "closes"),
+                        ("mentions", "mentions"),
+                    ):
+                        for issue_key in (work_ref.get(name) or [])[:5]:
+                            issue = slot_of(issue_key, "issue")
+                            if issue:
+                                relate(
+                                    relation_kind,
+                                    work_id(*slot),
+                                    issue,
+                                    call.timestamp,
+                                    _PROVENANCE.get(
+                                        str(work_ref.get("via")), "tool_call"
+                                    ),
+                                )
+            continue
         summary = metadata.get("arguments_summary")
         if not isinstance(summary, dict):
             continue
@@ -365,6 +532,7 @@ def build_work_items(
     pull_requests_truncated = (
         len(active_prs) > pull_request_limit or len(merged_prs) > pull_request_limit
     )
+    pr_opened: dict[tuple[Kind, str], datetime] = {}
     for row in active_prs[:pull_request_limit]:
         action = (
             "opened"
@@ -385,8 +553,52 @@ def build_work_items(
             else None,
             related=row.issue_key if not row.ambiguous else None,
         )
+        pr_slot = slot_of(row.pr_key, "pull_request")
+        if pr_slot and row.opened_at:
+            # The forge opening, kept apart from the item's latest action.
+            pr_opened[pr_slot] = _aware(row.opened_at)
+        issue_slot = slot_of(row.issue_key, "issue") if not row.ambiguous else None
+        if pr_slot and issue_slot:
+            # The issue-cost rollup pairs a PR with the issue it closes.
+            relate("resolves", work_id(*pr_slot), issue_slot, row.at, "tracker")
     truncated |= pull_requests_truncated or len(issues) > WORK_LIMIT
+    # Resolve pending create references: first the same caller's next call
+    # naming a PR in the repo, else a unique forge-reported opening in that
+    # repo within ten minutes. Unresolved creates keep no relation.
+    for caller, repo, at, work_ref, creator in unnumbered:
+        later = sorted(
+            (when, key)
+            for who, where, when, key in named
+            if who == caller and where == repo and when >= at
+        )
+        pr_slot = slot_of(later[0][1], "pull_request") if later else None
+        if pr_slot is None:
+            openings = [
+                slot
+                for slot, opened in pr_opened.items()
+                if (item := items.get(slot)) is not None
+                and item.repo == repo
+                and at <= opened <= at + timedelta(minutes=10)
+            ]
+            pr_slot = openings[0] if len(openings) == 1 else None  # type: ignore[assignment]
+        if pr_slot is None:
+            continue
+        provenance = _PROVENANCE.get(str(work_ref.get("via")), "tool_call")
+        if creator:
+            relate("touched", creator, pr_slot, at, provenance, "opened")
+            actors.setdefault(pr_slot, {})[creator] = max(
+                actors.get(pr_slot, {}).get(creator, at), at
+            )
+        for relation_kind, name in (("resolves", "closes"), ("mentions", "mentions")):
+            for issue_key in (work_ref.get(name) or [])[:5]:
+                if issue := slot_of(issue_key, "issue"):
+                    # The referenced issue joins the work list: the PR names it.
+                    add(issue_key, "issue", at, "issue_updated")
+                    relate(relation_kind, work_id(*pr_slot), issue, at, provenance)
+
     for slot, item in items.items():
+        item.id = work_id(slot[0], slot[1])
+        item.href = item.url
         item.node_ids = sorted(
             actors.get(slot, {}),
             key=lambda node: (-actors[slot][node].timestamp(), node),
@@ -403,7 +615,21 @@ def build_work_items(
                 flow_id = node.removeprefix("flow:")
                 at = actors[(item.kind, item.key)][node]
                 active_flows[flow_id] = max(active_flows.get(flow_id, at), at)
+    # A relation needs both work ends among the returned items; a node end
+    # (agent/flow) is checked by the caller's visibility.
+    shown = {item.id for item in visible}
+    kept = sorted(
+        (
+            relation
+            for relation in relations.values()
+            if relation.target in shown
+            and (not relation.source.startswith("work:") or relation.source in shown)
+        ),
+        key=lambda relation: (-relation.at.timestamp(), relation.id),
+    )
     return FleetWorkResult(
+        relations=kept[:RELATION_LIMIT],
+        relations_truncated=len(kept) > RELATION_LIMIT,
         work=visible,
         truncated=truncated or len(ordered) > WORK_LIMIT,
         flow_activity=active_flows,
