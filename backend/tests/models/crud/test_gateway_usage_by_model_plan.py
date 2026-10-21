@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from preloop.models.crud import crud_api_usage
 
 # The values a caller varies: these stay parameters in the generic plan.
-VARIABLE = ("account_id", "timestamp", "ai_model_id")
+VARIABLE = ("account_id", "timestamp", "ai_model_id", "action_type", "cost_source")
 COVERING = ("ix_api_usage_customer_totals", "ix_api_usage_customer_model_totals")
 ACCOUNT = "00000000-0000-0000-0000-0000000000a1"
 MODELS = [f"00000000-0000-0000-0000-0000000000b{n}" for n in range(3)]
@@ -44,8 +44,11 @@ def _captured_select(
         getattr(crud_api_usage, method)(
             db_session,
             account_id=ACCOUNT,
-            start_date=end - timedelta(days=30),
-            end_date=end,
+            **(
+                {"start": end - timedelta(days=30), "end": end}
+                if method == "get_subscription_usage_summary"
+                else {"start_date": end - timedelta(days=30), "end_date": end}
+            ),
             **kwargs,
         )
     finally:
@@ -71,7 +74,12 @@ def _generic_plan(db_session: Session, statement: str, parameters: dict) -> str:
             # Constants such as the 0 of a COALESCE: a generic plan cannot
             # type an untyped parameter inside SUM, and they decide nothing.
             value = parameters[name]
-            assert isinstance(value, (int, float)) or value == "day", (name, value)
+            assert isinstance(value, (int, float)) or value in (
+                "day",
+                "api_equivalent_cost",
+                "number",
+                "unknown",
+            ), (name, value)
             return repr(value)
         number = numbers.setdefault(name, len(numbers) + 1)
         return f"${number}"
@@ -146,7 +154,13 @@ def test_model_keyed_covering_index_is_built_valid(db_session):
 
 
 @pytest.mark.parametrize(
-    "method", ["get_gateway_usage_summary", "get_gateway_usage_timeseries"]
+    "method",
+    [
+        "get_gateway_usage_summary",
+        "get_gateway_usage_timeseries",
+        "get_gateway_usage_by_flow",
+        "get_unpriced_model_breakdown",
+    ],
 )
 def test_cost_headline_and_timeseries_use_customer_covering_index(
     db_session: Session, method: str
@@ -170,3 +184,17 @@ def test_old_replay_covering_index_requires_heap_for_governance_filter(
     plan = _generic_plan(db_session, statement, parameters)
     assert "Index Only Scan" not in plan, plan
     assert "governance_" in plan, plan
+
+
+def test_subscription_totals_use_sparse_index_in_generic_plan(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reading absent subscription usage must not scan all gateway history."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "COVERING", ("ix_api_usage_gateway_subscription",)
+    )
+    statement, parameters = _captured_select(
+        db_session, method="get_subscription_usage_summary"
+    )
+    plan = _generic_plan(db_session, statement, parameters)
+    assert "Index Scan using ix_api_usage_gateway_subscription" in plan, plan

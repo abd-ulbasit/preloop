@@ -23,6 +23,7 @@ from sqlalchemy import (
     select,
     text,
     true,
+    tuple_,
     union_all,
 )
 from sqlalchemy.exc import IntegrityError, TimeoutError as SQLAlchemyTimeoutError
@@ -1435,7 +1436,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             func.count(ApiUsage.id).label("requests"),
             func.coalesce(func.sum(ApiUsage.total_tokens), 0).label("tokens"),
         ).filter(
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             ApiUsage.account_id == account_id,
             exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start_date,
@@ -2165,7 +2166,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             )
             .outerjoin(Flow, ApiUsage.flow_id == Flow.id)
             .filter(
-                ApiUsage.action_type == "model_gateway",
+                gateway_action_condition(),
                 ApiUsage.account_id == account_id,
                 exclude_customer_overhead_condition(),
             )
@@ -2268,7 +2269,7 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
     ) -> list[Any]:
         """Row filter shared by the session aggregate and its key scan."""
         conditions = [
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             ApiUsage.account_id == account_id,
             exclude_customer_overhead_condition(),
             or_(
@@ -2289,6 +2290,9 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
     #: Rows fetched per round trip while walking usage newest first.
     _SESSION_KEY_SCAN_BATCH = 2000
 
+    #: Bound Python work when a few busy sessions fill the whole window.
+    _SESSION_KEY_SCAN_MAX_ROWS = 20000
+
     def _recent_session_keys(
         self,
         db: Session,
@@ -2304,6 +2308,8 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         pair tied with the last one on timestamp. Both pair columns are keys
         of the session breakdown, so a breakdown group whose newest request
         ranks in the top ``limit`` always belongs to one of these pairs.
+        If the bounded walk cannot finish, group in SQL instead of streaming
+        an entire busy account's history into Python.
 
         Args:
             db: Database session.
@@ -2323,15 +2329,32 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             )
             .filter(*self._session_usage_conditions(**filters))
             .order_by(ApiUsage.timestamp.desc())
+            .limit(self._SESSION_KEY_SCAN_MAX_ROWS)
             .yield_per(self._SESSION_KEY_SCAN_BATCH)
         )
+        scanned = 0
         for session_id, execution_id, timestamp in rows:
+            scanned += 1
             if cutoff is not None and timestamp < cutoff:
-                break
+                return list(keys)
             keys.setdefault((session_id, execution_id), None)
             if cutoff is None and len(keys) >= limit:
                 cutoff = timestamp
-        return list(keys)
+        if scanned < self._SESSION_KEY_SCAN_MAX_ROWS:
+            return list(keys)
+        # With fewer than `limit` active sessions, the recency walk otherwise
+        # transfers every request in the window to Python. Aggregate in SQL
+        # once the bounded walk cannot finish. WITH TIES preserves every pair
+        # at the cutoff so the final model slices still compete on count.
+        latest = func.max(ApiUsage.timestamp)
+        grouped = (
+            select(ApiUsage.runtime_session_id, ApiUsage.flow_execution_id)
+            .where(*self._session_usage_conditions(**filters))
+            .group_by(ApiUsage.runtime_session_id, ApiUsage.flow_execution_id)
+            .order_by(latest.desc())
+            .fetch(limit, with_ties=True)
+        )
+        return [(row[0], row[1]) for row in db.execute(grouped).all()]
 
     #: Deepest session rank served by walking rows newest first; past it one
     #: grouped query is cheaper than streaming that many rows into Python.
@@ -4065,9 +4088,10 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
                 0.0,
             ).label("api_equivalent_cost"),
         ).filter(
-            ApiUsage.action_type == "model_gateway",
+            gateway_action_condition(),
             ApiUsage.account_id == account_id,
-            ApiUsage.cost_source == "subscription",
+            # Keep the sparse subscription index eligible in prepared plans.
+            ApiUsage.cost_source == literal_column("'subscription'"),
             exclude_customer_overhead_condition(),
             ApiUsage.timestamp >= start,
             ApiUsage.timestamp < end,
@@ -4465,14 +4489,16 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             db.refresh(db_obj)
         return db_obj
 
-    def _imported_cost_sum(self, *, start_date: datetime, end_date: datetime):
+    def _imported_cost_sum(
+        self, *, account_id: str, start_date: datetime, end_date: datetime
+    ):
         """SUM of imported cost with reconciled-over-estimated precedence.
 
         A ``cost_basis='reconciled'`` row (billing export) supersedes ALL
         ``cost_basis='estimated'`` rows (hook/transcript-derived) with the
         same (account, provider_name, conversation_id) **in the queried
         window**: superseded rows contribute $0, so the two bases are never
-        summed for one scope. The EXISTS is bounded to
+        summed for one scope. The reconciliation key set is bounded to
         ``start_date <= timestamp < end_date`` so a reconciled row outside
         the window cannot zero in-window estimates while contributing $0
         itself. Rows without a conversation_id or with a NULL cost_basis
@@ -4482,17 +4508,20 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         superseded = and_(
             ApiUsage.cost_basis == "estimated",
             ApiUsage.conversation_id.isnot(None),
-            select(reconciled.id)
-            .where(
-                reconciled.account_id == ApiUsage.account_id,
-                reconciled.action_type == self.IMPORTED_USAGE_ACTION_TYPE,
-                reconciled.cost_basis == "reconciled",
-                reconciled.provider_name == ApiUsage.provider_name,
-                reconciled.conversation_id == ApiUsage.conversation_id,
-                reconciled.timestamp >= start_date,
-                reconciled.timestamp < end_date,
-            )
-            .exists(),
+            # Build the reconciliation key set once per account/window. A
+            # correlated EXISTS probes the same conversation for every event
+            # (quadratic work for long conversations with no reconciliation).
+            tuple_(ApiUsage.provider_name, ApiUsage.conversation_id).in_(
+                select(reconciled.provider_name, reconciled.conversation_id).where(
+                    reconciled.account_id == account_id,
+                    reconciled.action_type == self.IMPORTED_USAGE_ACTION_TYPE,
+                    reconciled.cost_basis == "reconciled",
+                    reconciled.provider_name.isnot(None),
+                    reconciled.conversation_id.isnot(None),
+                    reconciled.timestamp >= start_date,
+                    reconciled.timestamp < end_date,
+                )
+            ),
         )
         return func.coalesce(
             func.sum(
@@ -4534,9 +4563,9 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
         query = db.query(
             func.count(ApiUsage.id).label("event_count"),
             func.coalesce(func.sum(ApiUsage.total_tokens), 0).label("total_tokens"),
-            self._imported_cost_sum(start_date=start_date, end_date=end_date).label(
-                "imported_cost"
-            ),
+            self._imported_cost_sum(
+                account_id=account_id, start_date=start_date, end_date=end_date
+            ).label("imported_cost"),
         ).filter(
             ApiUsage.action_type == self.IMPORTED_USAGE_ACTION_TYPE,
             ApiUsage.account_id == account_id,
@@ -4589,9 +4618,9 @@ class CRUDApiUsage(CRUDBase[ApiUsage]):
             import_source.label("source"),
             func.count(ApiUsage.id).label("request_count"),
             func.coalesce(func.sum(ApiUsage.total_tokens), 0).label("total_tokens"),
-            self._imported_cost_sum(start_date=start_date, end_date=end_date).label(
-                "imported_cost"
-            ),
+            self._imported_cost_sum(
+                account_id=account_id, start_date=start_date, end_date=end_date
+            ).label("imported_cost"),
             func.max(ApiUsage.timestamp).label("last_event_at"),
         ).filter(
             ApiUsage.action_type == self.IMPORTED_USAGE_ACTION_TYPE,
