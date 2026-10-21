@@ -163,9 +163,16 @@ def test_model_keyed_covering_index_is_built_valid(db_session):
     ],
 )
 def test_cost_headline_and_timeseries_use_customer_covering_index(
-    db_session: Session, method: str
+    db_session: Session, method: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Prepared Cost totals and chart queries can exclude overhead off the heap."""
+    """Prepared Cost aggregates can exclude overhead off the heap."""
+    if method == "get_gateway_usage_by_flow":
+        # The model-keyed index intentionally omits flow_id. On an empty
+        # fixture its heap scan can cost less than the account index-only scan;
+        # isolate the index that actually covers this query to test eligibility.
+        monkeypatch.setattr(
+            sys.modules[__name__], "COVERING", ("ix_api_usage_customer_totals",)
+        )
     statement, parameters = _captured_select(db_session, method=method)
     plan = _generic_plan(db_session, statement, parameters)
     assert any(f"Index Only Scan using {index}" in plan for index in COVERING), plan
