@@ -374,11 +374,12 @@ func applySelectedModelToUpstream(
 // Canonical provider prefixes carry upstream identity; other prefixes can be
 // intentional friendly aliases, such as team/assistant.
 func isCanonicalGatewayProvider(provider string) bool {
-	// Keep in sync with the provider registry in services/ai_model_provider.py
-	// and the same-family spellings accepted by the CLI normalizers.
+	// Coverage is checked against the backend registry snapshot and the CLI
+	// normalizer declarations in TestCanonicalGatewayProvidersCoverRegistries.
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "openai", "openai-codex", "anthropic", "google", "gemini", "bedrock", "amazon-bedrock", "deepseek", "qwen",
-		"openrouter", "mistral", "moonshot", "zai", "openai-compatible", "custom":
+		"openrouter", "mistral", "moonshot", "zai", "openai-compatible", "custom",
+		"azure", "aws", "vertex", "vertex_ai", "nous", "nous-api", "google-gemini-cli":
 		return true
 	}
 	return false
@@ -402,10 +403,14 @@ func gatewayProviderFamily(provider string) string {
 	switch provider {
 	case "openai-codex":
 		return "openai"
-	case "gemini":
+	case "gemini", "google-gemini-cli":
 		return "google"
-	case "amazon-bedrock":
+	case "amazon-bedrock", "aws":
 		return "bedrock"
+	case "vertex":
+		return "vertex_ai"
+	case "nous-api":
+		return "nous"
 	}
 	return provider
 }

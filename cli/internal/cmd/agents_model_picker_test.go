@@ -395,6 +395,16 @@ func TestGatewaySelectionUsesActualSourceProvider(t *testing.T) {
 		name, adapter, source, selected string
 		allowed                         bool
 	}{
+		{"non azure rejects azure", "openai", "openai", "azure", false},
+		{"non nous rejects nous", "openai", "openai", "nous", false},
+		{"non nous rejects nous-api", "openai", "openai", "nous-api", false},
+		{"azure selection", "azure", "azure", "azure", true},
+		{"nous spelling", "nous", "nous-api", "nous", true},
+		{"nous-api spelling", "nous", "nous", "nous-api", true},
+		{"gemini cli spelling", "google", "google-gemini-cli", "gemini", true},
+		{"aws spelling", "bedrock", "aws", "amazon-bedrock", true},
+		{"vertex spelling", "vertex_ai", "vertex", "vertex_ai", true},
+		{"vertex is separate from google", "google", "google", "vertex", false},
 		{"normalized zai rejects openai", "openai", "zai", "openai", false},
 		{"normalized zai accepts zai", "openai", "zai", "zai", true},
 		{"source beats same-family adapter", "openai-codex", "zai", "openai", false},
@@ -434,6 +444,12 @@ func TestManagedAliasSourceIdentityChoicesAndReuse(t *testing.T) {
 		name, provider, source, alias, managedBy string
 		conflict                                 bool
 	}{
+		{"azure stale model", "azure", "", "azure/other-model", "preloop agents onboard", true},
+		{"azure foreign alias", "openai", "", "azure/old-model", "preloop agents onboard", true},
+		{"nous stale model", "nous", "nous-api", "nous/other-model", "preloop agents onboard", true},
+		{"nous-api stale model", "nous", "nous", "nous-api/other-model", "preloop agents onboard", true},
+		{"nous foreign alias", "openai", "", "nous/old-model", "preloop agents onboard", true},
+		{"nous family valid", "nous", "nous-api", "nous/old-model", "preloop agents onboard", false},
 		{"cross provider", "openai", "", "anthropic/other-model", "preloop agents onboard", true},
 		{"cross provider same model", "openai", "", "anthropic/old-model", "preloop agents onboard", true},
 		{"cross provider collision", "openai", "", "anthropic/old-model-2", "preloop agents onboard", true},
