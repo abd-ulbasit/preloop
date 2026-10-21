@@ -224,7 +224,7 @@ class TestSearchIssues:
         assert "bug" in (data[0].get("labels") or [])
 
     @patch("preloop.api.endpoints.issues.get_tracker_client", new_callable=AsyncMock)
-    def test_search_issues_invalid_search_type_returns_422(
+    def test_search_issues_invalid_search_type_returns_400(
         self,
         mock_get_tracker_client: AsyncMock,
         client: TestClient,
@@ -232,10 +232,10 @@ class TestSearchIssues:
         test_user: User,
         issue_test_data: dict,
     ):
-        """Invalid query choices fail FastAPI validation before searching."""
+        """Test search with invalid search_type returns 400."""
         response = client.get("/api/v1/issues/search?query=Test&search_type=invalid")
-        assert response.status_code == 422
-        assert response.json()["detail"][0]["loc"] == ["query", "search_type"]
+        assert response.status_code == 400
+        assert "Invalid search type" in response.json()["detail"]
 
     @patch("preloop.api.endpoints.issues.get_tracker_client", new_callable=AsyncMock)
     @patch("preloop.api.endpoints.issues.crud_embedding_model")

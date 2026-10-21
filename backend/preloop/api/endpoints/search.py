@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Literal, List, Optional, Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -350,16 +350,18 @@ async def search_all(
         examples=["issue", "comment"],
         description="Type of items to search: 'issue', 'comment', or null for both.",
     ),
-    search_type: Literal["fulltext", "similarity"] = Query(
+    search_type: str = Query(
         "fulltext",
+        json_schema_extra={"enum": ["fulltext", "similarity"]},
         description="Type of search to perform ('fulltext' or 'similarity')",
     ),
     limit: int = Query(
         10, ge=1, le=100, description="Maximum number of comments to return"
     ),
     skip: int = Query(0, ge=0, description="Number of results to skip for pagination"),
-    sort: Optional[Literal["newest"]] = Query(
+    sort: Optional[str] = Query(
         None,
+        json_schema_extra={"enum": ["newest"]},
         description="Sort order. 'newest' sorts by creation date descending.",
     ),
     issue_id: Optional[str | None] = Query(

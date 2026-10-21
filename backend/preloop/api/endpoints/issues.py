@@ -105,8 +105,9 @@ async def search_issues(
     limit: int = Query(
         10, ge=1, le=100, description="Maximum number of issues to return"
     ),
-    search_type: Literal["fulltext", "similarity"] = Query(
+    search_type: str = Query(
         "fulltext",
+        json_schema_extra={"enum": ["fulltext", "similarity"]},
         description="Type of search to perform ('fulltext' or 'similarity')",
     ),
     status: Optional[str] = Query(None, description="Filter by issue status"),

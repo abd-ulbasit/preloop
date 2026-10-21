@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from typing import Literal, Optional, List
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -160,8 +160,9 @@ async def search_comments(
     query: Optional[str] = Query(
         None, description="Search query text for comment body or vector search"
     ),
-    search_type: Literal["fulltext", "similarity"] = Query(
+    search_type: str = Query(
         "fulltext",
+        json_schema_extra={"enum": ["fulltext", "similarity"]},
         description="Type of search to perform ('fulltext' or 'similarity')",
     ),
     limit: int = Query(
