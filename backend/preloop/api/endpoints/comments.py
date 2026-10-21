@@ -162,7 +162,7 @@ async def search_comments(
     ),
     search_type: str = Query(
         "fulltext",
-        enum=["fulltext", "similarity"],
+        json_schema_extra={"enum": ["fulltext", "similarity"]},
         description="Type of search to perform ('fulltext' or 'similarity')",
     ),
     limit: int = Query(
