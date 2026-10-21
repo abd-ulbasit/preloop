@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / "cli/internal/cmd/testdata/backend_gateway_providers.json"
 SOURCES = {
+    "azure_openai.py": ("AZURE_PROVIDERS",),
     "litellm_routing.py": (
         "PROVIDER_PREFIX",
         "BEDROCK_PROVIDERS",

@@ -7,6 +7,9 @@
     "openai-compatible",
     "openrouter"
   ],
+  "azure_openai.py:AZURE_PROVIDERS": [
+    "azure"
+  ],
   "litellm_routing.py:BEDROCK_PROVIDERS": [
     "amazon-bedrock",
     "aws",
