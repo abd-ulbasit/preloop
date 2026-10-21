@@ -49,7 +49,6 @@ import {
   type ListColumn,
 } from '../table';
 import '../table/data-table';
-import '../table/column-picker';
 
 /** Which inventory the box is showing. */
 export type InventoryTab =
@@ -1244,7 +1243,6 @@ export class InventoryCard extends LitElement {
                 >`
             )}
           </sl-select>
-          ${this.activeTab === 'agents' ? this.renderAgentColumnPicker() : nothing}
           <time-range-select
             class="range-select"
             ariaLabel="Inventory time range"
@@ -1438,21 +1436,6 @@ export class InventoryCard extends LitElement {
         cell: (row) => this.relative(row.lastSeenAt),
       },
     ];
-  }
-
-  private renderAgentColumnPicker() {
-    const table = this.agentTable;
-    return html`<column-picker
-      class="column-picker"
-      .columns=${table.pickerColumns}
-      ?can-reset=${table.hasColumnChanges}
-      density=${table.density}
-      @column-toggle=${(event: CustomEvent) =>
-        table.setVisible(event.detail.id, event.detail.visible)}
-      @columns-reset=${() => table.resetColumns()}
-      @density-change=${(event: CustomEvent) =>
-        table.setDensity(event.detail.density)}
-    ></column-picker>`;
   }
 
   private renderAgents() {

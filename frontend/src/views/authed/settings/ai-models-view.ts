@@ -54,7 +54,6 @@ import {
   type ListColumn,
 } from '../../../table';
 import '../../../table/data-table';
-import '../../../table/column-picker';
 import '../../../table/table-pagination';
 import '../../../components/resource-actions';
 import '../../../components/token-figures';
@@ -1177,23 +1176,7 @@ export class AIModelsView extends LitElement {
             <sl-option value="enabled">Enabled</sl-option>
             <sl-option value="disabled">Disabled</sl-option>
           </sl-select>
-          ${
-            this.effectiveView === 'list'
-              ? html`<column-picker
-                  .columns=${this.modelTable.pickerColumns}
-                  ?can-reset=${this.modelTable.hasColumnChanges}
-                  density=${this.modelTable.density}
-                  @column-toggle=${(event: CustomEvent) =>
-                    this.modelTable.setVisible(
-                      event.detail.id,
-                      event.detail.visible
-                    )}
-                  @columns-reset=${() => this.modelTable.resetColumns()}
-                  @density-change=${(event: CustomEvent) =>
-                    this.modelTable.setDensity(event.detail.density)}
-                ></column-picker>`
-              : null
-          }
+
           <span slot="count">${this.resultsLabel}</span>
           ${this.renderBulkBar()}
         </list-toolbar>
