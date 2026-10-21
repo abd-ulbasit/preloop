@@ -26,7 +26,12 @@ func TestReonboardPreservesPinnedIdentityAfterHostnameChange(t *testing.T) {
 				agent := AgentConfig{
 					Name: name, ConfigPath: "/tmp/example/config", DisplayName: "Example",
 				}
-				oldID := runtimeSessionSourceTypeForAgent(name) + "-old-host-id"
+				sourceType := runtimeSessionSourceTypeForAgent(name)
+				oldPayload := strings.Join([]string{
+					"v2", "previous-host", sourceType, filepath.Clean(agent.ConfigPath),
+				}, "\x00")
+				oldHash := sha256.Sum256([]byte(oldPayload))
+				oldID := sourceType + "-" + hex.EncodeToString(oldHash[:6])
 				if err := saveLocalEnrollmentState(&localEnrollmentState{
 					AgentName: name, ConfigPath: agent.ConfigPath, RuntimePrincipalID: oldID,
 				}); err != nil {
@@ -227,5 +232,67 @@ func TestEnsureManagedAgentIdentityReadyRekeysV1(t *testing.T) {
 	}
 	if rekeyBody["new_session_source_id"] != v2 {
 		t.Fatalf("unexpected rekey body: %#v", rekeyBody)
+	}
+}
+
+func TestPinnedLegacyIdentityRetainsMigration(t *testing.T) {
+	for _, derivation := range []string{"v1", "legacy"} {
+		for _, hasV2 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing-v2=%t", derivation, hasV2), func(t *testing.T) {
+				agent := newIdentityTestAgent(t)
+				oldID := generatedRuntimePrincipalID(resolveAgentDisplayName(agent), agent.ConfigPath)
+				if derivation == "legacy" {
+					oldID = legacyRuntimePrincipalIDForAgent(agent)
+				}
+				v2 := stableRuntimePrincipalIDForAgent(agent, "")
+				if err := saveLocalEnrollmentState(&localEnrollmentState{
+					AgentName: agent.Name, ConfigPath: agent.ConfigPath, RuntimePrincipalID: oldID,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var rekeyID string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents":
+						items := []managedAgentSummary{{
+							ID: "legacy-agent", SessionSourceType: "codex", SessionSourceID: oldID,
+							LifecycleState: "active", EnrollmentHostname: "previous-host",
+						}}
+						if hasV2 {
+							items = append(items, managedAgentSummary{
+								ID: "v2-agent", SessionSourceType: "codex", SessionSourceID: v2,
+								LifecycleState: "active",
+							})
+						}
+						_ = json.NewEncoder(w).Encode(managedAgentListResponse{Items: items})
+					case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/legacy-agent/rekey":
+						var body struct {
+							ID string `json:"new_session_source_id"`
+						}
+						_ = json.NewDecoder(r.Body).Decode(&body)
+						rekeyID = body.ID
+						_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+					default:
+						t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				updated, matched, err := ensureManagedAgentIdentityReady(
+					api.NewClientWithToken(server.URL, "tok"), agent, true, false,
+					strings.NewReader(""), &bytes.Buffer{},
+				)
+				if err != nil || matched == nil || updated.RuntimePrincipalID != v2 {
+					t.Fatalf("expected v2 identity: matched=%#v principal=%q error=%v", matched, updated.RuntimePrincipalID, err)
+				}
+				if hasV2 {
+					if matched.ID != "v2-agent" || rekeyID != "" {
+						t.Fatalf("existing v2 must win without rekey: matched=%#v rekey=%q", matched, rekeyID)
+					}
+				} else if matched.ID != "legacy-agent" || rekeyID != v2 {
+					t.Fatalf("legacy pin must migrate in place: matched=%#v rekey=%q", matched, rekeyID)
+				}
+			})
+		}
 	}
 }

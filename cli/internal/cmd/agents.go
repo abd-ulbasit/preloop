@@ -5463,8 +5463,12 @@ func ensureManagedAgentIdentityReady(
 	// the discovered config, and prefer it even if a derived ID also exists.
 	localState, localStateErr := loadLocalEnrollmentState(agent)
 	hasLocalState := localStateErr == nil
-	if hasLocalState && strings.TrimSpace(localState.RuntimePrincipalID) != "" {
-		pinnedID := strings.TrimSpace(localState.RuntimePrincipalID)
+	pinnedID := ""
+	if hasLocalState {
+		pinnedID = strings.TrimSpace(localState.RuntimePrincipalID)
+	}
+	// Known pre-v2 pins retain the existing lazy migration and v2 priority.
+	if pinnedID != "" && pinnedID != v1ID && pinnedID != legacyID {
 		for i := range response.Items {
 			item := response.Items[i]
 			if containsString(sourceTypes, item.SessionSourceType) && item.SessionSourceID == pinnedID {
