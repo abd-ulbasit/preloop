@@ -24,10 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `require_approval` (the audit-log prompt always asked for
   `require_approval`), which `preloop policy apply` refuses. The prompts now
   leave `defaults` out and show a `sensitive_data` rule scoped to one MCP
-  server, with a CEL allowlist, for deny-by-default. A generated `defaults`
-  block that `apply` would reject goes back to the model with the error. The
-  policy-as-code reference and the schema now say that `inherit_from_parent`
-  is not used (#1426).
+  server, with a CEL allowlist, for deny-by-default; the audit-log prompt's
+  version requires approval through a workflow it defines. A generated
+  `defaults` block that `apply` would reject goes back to the model with the
+  error. Because `apply` replaces the whole `sensitive_data` block,
+  generation puts back the stored detectors, rules and `reference_only`
+  entries that the model leaves out. Audit-log generation now runs the same
+  merge as prompt generation. The policy-as-code reference and the schema
+  now say that `inherit_from_parent` is not used (#1426).
 
 ## [0.17.1] - 2026-10-21
 

@@ -66,6 +66,23 @@ sensitive_data:
       action: deny
 """
 
+#: The audit-log prompt's version: tools the logs never show need approval.
+UNSEEN_TOOLS_APPROVAL_EXAMPLE = """\
+approval_workflows:
+  - name: unseen-tool-review
+    timeout_seconds: 300
+sensitive_data:
+  rules:
+    - id: <mcp-server-name>-unseen-tools
+      description: Tools the logs never show on <mcp-server-name> need approval.
+      "on": [tool.args]
+      scope:
+        servers: [<mcp-server-name>]
+      condition: "!(tool.name in ['<seen-tool-name>', '<other-seen-tool-name>'])"
+      action: require_approval
+      approval_workflow: unseen-tool-review
+"""
+
 #: Sent only with a CURRENT ACCOUNT CONFIGURATION block. Without one the
 #: model cannot see the stored entries.
 KEEP_SENSITIVE_DATA_RULE = """
@@ -653,13 +670,13 @@ Output ONLY the raw YAML. No fences, no explanation.
   `unknown_tools: allow`, so a tool call that no rule matches is
   allowed.
 - To require approval for tools the logs never show, add a
-  `sensitive_data` rule like the example below whose condition lists
-  the tools seen in the logs, with `action: require_approval` and an
-  `approval_workflow` instead of `action: deny`. Add one rule per MCP
-  server and replace `<mcp-server-name>` with a server name from the
-  CURRENT ACCOUNT CONFIGURATION block. `preloop policy apply` rejects a
-  scope server the account does not have. Quote the "on" key: YAML
-  reads a bare on as true.{keep_sensitive_data}
+  `sensitive_data` rule like the example below. Its condition lists the
+  tools seen in the logs, its action is `require_approval`, and its
+  `approval_workflow` is defined (reuse an existing one when it fits).
+  Add one rule per MCP server and replace `<mcp-server-name>` with a
+  server name from the CURRENT ACCOUNT CONFIGURATION block.
+  `preloop policy apply` rejects a scope server the account does not
+  have. Quote the "on" key: YAML reads a bare on as true.{keep_sensitive_data}
 
 ### REUSE EXISTING CONFIGURATION
 If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
@@ -670,9 +687,9 @@ If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
    on the audit data, but preserve existing rules that don't conflict.
 4. **Do not drop** tools, servers, or policies already configured.
 
-### EXAMPLE: ONLY LISTED TOOLS ON ONE MCP SERVER
+### EXAMPLE: APPROVAL FOR TOOLS THE LOGS NEVER SHOW
 ```yaml
-{SERVER_ALLOWLIST_EXAMPLE}```
+{UNSEEN_TOOLS_APPROVAL_EXAMPLE}```
 
 ### JSON SCHEMA
 ```json

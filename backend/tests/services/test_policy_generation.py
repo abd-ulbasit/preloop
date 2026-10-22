@@ -284,15 +284,35 @@ class TestPromptDefaultsGuidance:
             assert _apply_accepts(defaults)
             PolicyGenerationService._validate_output(text)
 
-    async def test_allowlist_example_denies_unlisted_tool(
-        self, system_prompt: str
+    @pytest.mark.parametrize(
+        ("builder", "unlisted_decision"),
+        [
+            ("_build_system_prompt", "deny"),
+            # The audit-log policy puts tools the logs never show behind
+            # approval instead of denying them.
+            ("_build_audit_system_prompt", "require_approval"),
+        ],
+    )
+    async def test_example_rule_handles_unlisted_tools(
+        self,
+        service: PolicyGenerationService,
+        builder: str,
+        unlisted_decision: str,
     ) -> None:
+        system_prompt = getattr(service, builder)("{}", "")
         [example] = [e for e in _yaml_examples(system_prompt) if "condition" in e]
         text = _as_policy(example)
         policy, _ = load_policy_from_string(text)
         assert policy is not None and policy.sensitive_data is not None
         [rule] = policy.sensitive_data.rules
         assert rule.condition is not None
+        assert rule.action == unlisted_decision
+        # An approval rule names a workflow the example defines.
+        workflows = {workflow.name for workflow in policy.approval_workflows or []}
+        if unlisted_decision == "require_approval":
+            assert rule.approval_workflow in workflows
+        else:
+            assert rule.approval_workflow is None
         [server] = rule.scope.servers
         listed = re.findall(r"'([^']+)'", rule.condition)
         assert listed
@@ -308,7 +328,7 @@ class TestPromptDefaultsGuidance:
         for name in listed:
             assert (await decide(name)).decision == "allow", name
         result = await decide("tool_the_example_does_not_list")
-        assert result.decision == "deny"
+        assert result.decision == unlisted_decision
         assert result.matched_rule == rule.id
 
     def test_example_scope_server_is_a_placeholder_apply_rejects(
