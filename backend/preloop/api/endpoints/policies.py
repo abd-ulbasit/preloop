@@ -1841,6 +1841,9 @@ async def generate_policy_from_audit(
         yaml_output = await asyncio.to_thread(
             service._call_llm, model, system_prompt, summary
         )
+        # The audit summary asks to remove nothing, so put back everything
+        # configured that the model left out.
+        yaml_output = service._merge_preserving_unrelated(yaml_output, "")
         warnings = service._validate_output(yaml_output)
         result = {"yaml": yaml_output, "warnings": warnings}
     except PolicyGenerationError as exc:

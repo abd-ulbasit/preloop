@@ -180,6 +180,9 @@ class PolicyGenerationService:
         system_prompt = self._build_audit_system_prompt(schema_json, context_block)
 
         yaml_output = self._call_llm(model, system_prompt, summary)
+        # The audit summary asks to remove nothing, so put back everything
+        # configured that the model left out.
+        yaml_output = self._merge_preserving_unrelated(yaml_output, "")
         warnings = self._validate_output(yaml_output)
 
         return {"yaml": yaml_output, "warnings": warnings}

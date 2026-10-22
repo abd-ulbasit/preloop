@@ -979,6 +979,39 @@ class TestGenerateFromAuditLogs:
         mock_ext.assert_called_once_with(logs_json)
         assert result["yaml"] == VALID_POLICY_YAML
 
+    def test_restores_configuration_the_model_left_out(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        current = PolicyDocument.model_validate(
+            {
+                "version": "1.0",
+                "metadata": {"name": "current"},
+                "tools": [{"name": "bash", "source": "builtin"}],
+                "sensitive_data": STORED_SENSITIVE_DATA,
+            }
+        )
+        with (
+            patch.object(service, "_resolve_model", return_value=mock_ai_model),
+            patch.object(service, "_summarise_account_logs", return_value="summary"),
+            patch.object(
+                service, "_call_llm", return_value=GENERATED_SENSITIVE_DATA_YAML
+            ),
+            patch.object(service, "_build_context_block", return_value="ctx"),
+            patch(
+                "preloop.services.policy_generation.export_current_policy",
+                return_value=current,
+            ),
+        ):
+            result = service.generate_from_audit_logs()
+
+        document = PolicyDocument.model_validate(yaml.safe_load(result["yaml"]))
+        assert [tool.name for tool in document.tools or []] == ["bash"]
+        assert document.sensitive_data is not None
+        assert [rule.id for rule in document.sensitive_data.rules] == [
+            "github-allowlist",
+            "block-ids",
+        ]
+
     def test_empty_logs_raises(self, service, mock_ai_model):
         with (
             patch.object(service, "_resolve_model", return_value=mock_ai_model),
@@ -1162,6 +1195,9 @@ class TestGeneratePolicyFromAuditEndpoint:
             instance._build_context_block.return_value = ""
             instance._build_audit_system_prompt.return_value = "system"
             instance._call_llm.return_value = VALID_POLICY_YAML
+            instance._merge_preserving_unrelated.side_effect = (
+                lambda yaml_text, _prompt: yaml_text
+            )
             instance._validate_output.return_value = ["minor warning"]
             result = await generate_policy_from_audit(
                 request,
@@ -1172,6 +1208,9 @@ class TestGeneratePolicyFromAuditEndpoint:
 
         assert result.yaml == VALID_POLICY_YAML
         assert result.warnings == ["minor warning"]
+        instance._merge_preserving_unrelated.assert_called_once_with(
+            VALID_POLICY_YAML, ""
+        )
 
     async def test_with_date_range(self, mock_account, mock_db, mock_user):
         from preloop.api.endpoints.policies import (
@@ -1190,6 +1229,9 @@ class TestGeneratePolicyFromAuditEndpoint:
             instance._build_context_block.return_value = ""
             instance._build_audit_system_prompt.return_value = "system"
             instance._call_llm.return_value = VALID_POLICY_YAML
+            instance._merge_preserving_unrelated.side_effect = (
+                lambda yaml_text, _prompt: yaml_text
+            )
             instance._validate_output.return_value = []
             result = await generate_policy_from_audit(
                 request,
@@ -1285,6 +1327,9 @@ class TestGeneratePolicyFromAuditEndpoint:
             instance._build_context_block.return_value = ""
             instance._build_audit_system_prompt.return_value = "system"
             instance._call_llm.return_value = VALID_POLICY_YAML
+            instance._merge_preserving_unrelated.side_effect = (
+                lambda yaml_text, _prompt: yaml_text
+            )
             instance._validate_output.return_value = []
             result = await generate_policy_from_audit(
                 request,
