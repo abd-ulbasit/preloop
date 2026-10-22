@@ -311,6 +311,33 @@ class TestPromptDefaultsGuidance:
         assert result.decision == "deny"
         assert result.matched_rule == rule.id
 
+    def test_example_scope_server_is_a_placeholder_apply_rejects(
+        self, system_prompt: str, mocker: Any
+    ) -> None:
+        # A copied example fails on apply instead of scoping the rule to a
+        # server that no call comes from.
+        [example] = [e for e in _yaml_examples(system_prompt) if "condition" in e]
+        policy, _ = load_policy_from_string(_as_policy(example))
+        assert policy is not None
+        server = MagicMock()
+        server.name = "github"
+        server.auth_config = None
+        mocker.patch(
+            "preloop.models.crud.crud_mcp_server.get_active_by_account",
+            return_value=[server],
+        )
+        mocker.patch(
+            "preloop.models.crud.crud_approval_workflow.get_names_by_account",
+            return_value=set(),
+        )
+        mocker.patch(
+            "preloop.services.model_content_policy.load_model_io_rules",
+            return_value=[],
+        )
+        applier = PolicyApplier(MagicMock(), account_id=str(uuid.uuid4()))
+        errors = applier._validate_references(policy)
+        assert any("<mcp-server-name>" in error for error in errors), errors
+
 
 # ---------------------------------------------------------------------------
 # sensitive_data: apply replaces the block, so the merge keeps stored entries

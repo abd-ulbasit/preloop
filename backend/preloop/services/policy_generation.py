@@ -51,16 +51,18 @@ logger = logging.getLogger(__name__)
 #: ``preloop policy apply`` only accepts the built-in ``defaults``, so the
 #: prompts ask the model to leave them out and show this rule for
 #: deny-by-default instead, the pattern of
-#: docs/guide/examples/production-access/readonly-policy.yaml.
+#: docs/guide/examples/production-access/readonly-policy.yaml. The names
+#: are placeholders: apply rejects a scope server the account does not
+#: have, so a copied placeholder fails instead of matching no call.
 SERVER_ALLOWLIST_EXAMPLE = """\
 sensitive_data:
   rules:
-    - id: github-allowlist
-      description: Only the listed GitHub tools run.
+    - id: <mcp-server-name>-allowlist
+      description: Only the listed tools run on <mcp-server-name>.
       "on": [tool.args]
       scope:
-        servers: [github]
-      condition: "!(tool.name in ['get_issue', 'list_issues'])"
+        servers: [<mcp-server-name>]
+      condition: "!(tool.name in ['<tool-name>', '<other-tool-name>'])"
       action: deny
 """
 
@@ -582,8 +584,12 @@ No markdown fences, no explanation.
   allowed.
 - To deny every tool on an MCP server except a list, add a
   `sensitive_data` rule scoped to that server whose CEL `condition` is
-  true for any tool not on the list, as in the example below. Quote the
-  "on" key: YAML reads a bare on as true.{keep_sensitive_data}
+  true for any tool not on the list, as in the example below. Replace
+  `<mcp-server-name>` with a server name from the CURRENT ACCOUNT
+  CONFIGURATION block or the user's description, and the tool
+  placeholders with that server's tool names. `preloop policy apply`
+  rejects a scope server the account does not have. Quote the "on" key:
+  YAML reads a bare on as true.{keep_sensitive_data}
 - Model input/output rules live under `model_io` with target
   `model.request` or `model.response`. Actions are allow, deny, or
   require_approval. Detector attributes include pii.found,
@@ -649,10 +655,11 @@ Output ONLY the raw YAML. No fences, no explanation.
 - To require approval for tools the logs never show, add a
   `sensitive_data` rule like the example below whose condition lists
   the tools seen in the logs, with `action: require_approval` and an
-  `approval_workflow` instead of `action: deny`. Scope it with
-  `scope.servers` when the current configuration shows which MCP
-  server the tools belong to. Quote the "on" key: YAML reads a bare on
-  as true.{keep_sensitive_data}
+  `approval_workflow` instead of `action: deny`. Add one rule per MCP
+  server and replace `<mcp-server-name>` with a server name from the
+  CURRENT ACCOUNT CONFIGURATION block. `preloop policy apply` rejects a
+  scope server the account does not have. Quote the "on" key: YAML
+  reads a bare on as true.{keep_sensitive_data}
 
 ### REUSE EXISTING CONFIGURATION
 If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:

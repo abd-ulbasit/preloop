@@ -34,6 +34,7 @@ from preloop.services.policy.schema import (
     PolicyValidationResult,
     PolicyVersion,
     SensitiveDataConfig,
+    SensitiveDataScope,
     ToolCondition,
     ToolDefinition,
     UnknownToolsPolicy,
@@ -1031,11 +1032,15 @@ class PolicyApplier:
            policy file or already configured in the account)
         2. All approval workflow references can be resolved (either defined
            in the policy file or already configured in the account)
+        3. ``sensitive_data`` tool scopes only name servers that resolve the
+           same way, or the ``preloop-mcp`` pseudo server of builtin tools
 
         Args:
             policy: The policy document to validate.
-            skip_missing_servers: If True, don't error on missing servers
-                (they will be skipped during apply).
+            skip_missing_servers: If True, don't error on missing servers.
+                Tools that use one are skipped during apply; a
+                ``sensitive_data`` scope that names one is kept. Both are
+                reported as warnings.
 
         Returns:
             List of error messages. Empty list if validation passes.
@@ -1170,6 +1175,17 @@ class PolicyApplier:
                         f"which is not defined. {suggestion}"
                     )
 
+            # Missing servers are errors unless the caller skips them, as for
+            # tools. Skipping keeps the entry: it matches once a server with
+            # that name is configured.
+            unknown_scope_servers = self._unknown_scope_servers(
+                policy.sensitive_data, all_available_servers
+            )
+            if skip_missing_servers:
+                self._result.warnings.extend(unknown_scope_servers)
+            else:
+                errors.extend(unknown_scope_servers)
+
         if policy.sensitive_data is not None and policy.model_io is None:
             # The block replaces the stored one while the stored model_io
             # rules stay. A rule that scans a custom type the new block no
@@ -1224,6 +1240,49 @@ class PolicyApplier:
                     "rules in the same policy."
                 )
         return conflicts
+
+    def _unknown_scope_servers(
+        self, block: SensitiveDataConfig, available_servers: set[str]
+    ) -> List[str]:
+        """Tool-path scopes that name an MCP server the account does not have.
+
+        A scope matches on the called server's name, and builtin tools run
+        on the ``preloop-mcp`` pseudo server. Any other name never matches,
+        so a deny rule or a reference_only entry scoped to it applies to no
+        call. Model targets ignore ``scope.servers``.
+
+        Args:
+            block: The policy's ``sensitive_data`` block.
+            available_servers: Lowercased server names from the policy file
+                and the account.
+
+        Returns:
+            One message per unknown server name.
+        """
+        from preloop.services.mcp_config_service import DEFAULT_TOOL_SERVER
+
+        known = available_servers | {DEFAULT_TOOL_SERVER}
+        scoped: List[Tuple[str, SensitiveDataScope]] = [
+            (f"sensitive_data rule '{rule.id}'", rule.scope)
+            for rule in block.rules
+            if rule.has_tool_target()
+        ]
+        scoped += [
+            (f"sensitive_data reference_only entry '{entry.id}'", entry.scope)
+            for entry in block.reference_only
+        ]
+        messages: List[str] = []
+        for owner, scope in scoped:
+            for server_name in scope.servers:
+                if server_name.lower() in known:
+                    continue
+                suggestion = self._get_server_suggestion(server_name, known)
+                messages.append(
+                    f"{owner} is scoped to MCP server '{server_name}', which is "
+                    "not configured, so it matches no call until a server with "
+                    f"that name exists. {suggestion}"
+                )
+        return messages
 
     def _get_server_suggestion(self, server_name: str, available_servers: set) -> str:
         """Generate a helpful suggestion for missing server references.

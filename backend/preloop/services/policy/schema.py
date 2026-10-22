@@ -57,7 +57,9 @@ Example YAML:
             terms: ["Project Phoenix"]
       # No defaults block: apply only accepts unknown_tools: allow, so a
       # tool call that no rule matches is allowed. This rule denies every
-      # other tool on github-mcp instead.
+      # other tool on github-mcp instead. The scope names the server
+      # defined under mcp_servers; apply rejects a server that neither the
+      # file nor the account has.
       rules:
         - id: github-allowlist
           "on": [tool.args]

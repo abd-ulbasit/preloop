@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking or behavior changes
+
+- **`apply` rejects a `sensitive_data` scope server it does not know.** A tool
+  rule or `reference_only` entry whose `scope.servers` names a server that is
+  neither in the file's `mcp_servers` nor configured in the account matched no
+  call, so a deny rule or reference-only entry applied to nothing. `apply` now
+  returns an error, as it does for a tool on an unknown server.
+  `skip_missing_servers` turns it into a warning and keeps the entry
+  (#1426).
+
 ### Fixed
 
 - **Generated policies no longer set `defaults` that `apply` rejects.** The
