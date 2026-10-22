@@ -23,6 +23,7 @@ from preloop.models.models.account import Account
 from preloop.services.policy import (
     DefaultsDefinition,
     PolicyApplier,
+    PolicyDocument,
     UnknownToolsPolicy,
     load_policy_from_string,
 )
@@ -309,6 +310,161 @@ class TestPromptDefaultsGuidance:
         result = await decide("tool_the_example_does_not_list")
         assert result.decision == "deny"
         assert result.matched_rule == rule.id
+
+
+# ---------------------------------------------------------------------------
+# sensitive_data: apply replaces the block, so the merge keeps stored entries
+# ---------------------------------------------------------------------------
+
+STORED_SENSITIVE_DATA = {
+    "detectors": {
+        "locales": ["de"],
+        "custom_patterns": [{"name": "employee_id", "regex": r"EMP-\d{6}"}],
+    },
+    "rules": [
+        {
+            "id": "block-ids",
+            "on": ["tool.args"],
+            "types": ["credit_card", "employee_id"],
+            "action": "deny",
+        }
+    ],
+    "reference_only": [{"id": "patient-refs", "scope": {"servers": ["ehr"]}}],
+}
+
+# Only the new allowlist rule and a new keyword list: what a model writes
+# when it does not copy the stored block.
+GENERATED_SENSITIVE_DATA_YAML = """\
+version: "1.0"
+metadata:
+  name: "Generated"
+sensitive_data:
+  detectors:
+    keywords:
+      - name: codenames
+        terms: ["Project Phoenix"]
+  rules:
+    - id: github-allowlist
+      "on": [tool.args]
+      scope:
+        servers: [github]
+      condition: "!(tool.name in ['get_issue'])"
+      action: deny
+"""
+
+
+def _generate_over_stored_block(
+    service: PolicyGenerationService,
+    mock_ai_model: MagicMock,
+    generated_yaml: str,
+    prompt: str = "Only allow get_issue on github",
+) -> PolicyDocument:
+    current = PolicyDocument.model_validate(
+        {
+            "version": "1.0",
+            "metadata": {"name": "current"},
+            "sensitive_data": STORED_SENSITIVE_DATA,
+        }
+    )
+    with (
+        patch.object(service, "_resolve_model", return_value=mock_ai_model),
+        patch.object(service, "_call_llm", return_value=generated_yaml),
+        patch.object(service, "_build_context_block", return_value="ctx"),
+        patch(
+            "preloop.services.policy_generation.export_current_policy",
+            return_value=current,
+        ),
+    ):
+        result = service.generate_from_prompt(prompt)
+    return PolicyDocument.model_validate(yaml.safe_load(result["yaml"]))
+
+
+class TestMergeKeepsSensitiveData:
+    def test_restores_entries_the_model_left_out(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        document = _generate_over_stored_block(
+            service, mock_ai_model, GENERATED_SENSITIVE_DATA_YAML
+        )
+        block = document.sensitive_data
+        assert block is not None and block.detectors is not None
+        assert [rule.id for rule in block.rules] == ["github-allowlist", "block-ids"]
+        assert [item.id for item in block.reference_only] == ["patient-refs"]
+        assert block.detectors.locales == ["de"]
+        assert [item.name for item in block.detectors.custom_patterns] == [
+            "employee_id"
+        ]
+        assert [item.name for item in block.detectors.keywords] == ["codenames"]
+
+    def test_values_the_model_wrote_win(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        data = yaml.safe_load(GENERATED_SENSITIVE_DATA_YAML)
+        data["sensitive_data"]["detectors"]["locales"] = ["nl"]
+        data["sensitive_data"]["rules"].append(
+            {"id": "block-ids", "on": ["tool.args"], "action": "notify"}
+        )
+        document = _generate_over_stored_block(
+            service, mock_ai_model, yaml.safe_dump(data, sort_keys=False)
+        )
+        block = document.sensitive_data
+        assert block is not None and block.detectors is not None
+        assert block.detectors.locales == ["nl"]
+        [stored_id_rule] = [rule for rule in block.rules if rule.id == "block-ids"]
+        assert stored_id_rule.action == "notify"
+
+    def test_prompt_can_drop_a_stored_rule(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        document = _generate_over_stored_block(
+            service,
+            mock_ai_model,
+            GENERATED_SENSITIVE_DATA_YAML,
+            prompt="Remove the block-ids rule",
+        )
+        assert document.sensitive_data is not None
+        assert [rule.id for rule in document.sensitive_data.rules] == [
+            "github-allowlist"
+        ]
+
+    def test_block_left_out_stays_out(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        # Apply keeps the stored block when the document has none.
+        document = _generate_over_stored_block(
+            service, mock_ai_model, VALID_POLICY_YAML
+        )
+        assert document.sensitive_data is None
+
+    @pytest.mark.parametrize("include_current_config", [True, False])
+    def test_prompt_asks_to_keep_entries_only_when_it_shows_them(
+        self,
+        service: PolicyGenerationService,
+        mock_ai_model: MagicMock,
+        include_current_config: bool,
+    ) -> None:
+        with (
+            patch.object(service, "_resolve_model", return_value=mock_ai_model),
+            patch.object(
+                service, "_call_llm", return_value=VALID_POLICY_YAML
+            ) as mock_call,
+            patch.object(service, "_build_context_block", return_value="ctx"),
+            patch(
+                "preloop.services.policy_generation.export_current_policy",
+                side_effect=RuntimeError("not needed"),
+            ),
+        ):
+            service.generate_from_prompt(
+                "test", include_current_config=include_current_config
+            )
+        system_prompt = " ".join(mock_call.call_args.args[1].split())
+        assert ("existing detectors" in system_prompt) is include_current_config
+
+    def test_audit_prompt_asks_to_keep_entries_only_when_it_shows_them(
+        self, service: PolicyGenerationService
+    ) -> None:
+        assert "existing detectors" not in service._build_audit_system_prompt("{}", "")
+        assert "existing detectors" in service._build_audit_system_prompt("{}", "ctx")
 
 
 # ---------------------------------------------------------------------------

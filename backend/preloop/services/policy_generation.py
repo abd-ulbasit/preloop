@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import litellm
 import yaml
@@ -38,6 +38,7 @@ from preloop.services.policy import export_current_policy
 from preloop.services.policy.loader import unsupported_default_settings
 from preloop.services.policy.schema import (
     PolicyDocument,
+    SensitiveDataConfig,
     ToolDefinition,
     is_known_tool_source,
 )
@@ -62,6 +63,13 @@ sensitive_data:
       condition: "!(tool.name in ['get_issue', 'list_issues'])"
       action: deny
 """
+
+#: Sent only with a CURRENT ACCOUNT CONFIGURATION block. Without one the
+#: model cannot see the stored entries.
+KEEP_SENSITIVE_DATA_RULE = """
+- `preloop policy apply` replaces the whole `sensitive_data` block. Keep
+  the account's existing detectors, rules and reference_only entries in
+  it."""
 
 
 class PolicyGenerationError(Exception):
@@ -293,8 +301,9 @@ class PolicyGenerationService:
         """Restore current items the model omitted unless the prompt drops them.
 
         The LLM is asked to emit a complete document. When it drops unrelated
-        tools, workflows, MCP servers, or model_io rules, put them back so an
-        edit cannot silently wipe the rest of the policy.
+        tools, workflows, MCP servers, model_io rules or ``sensitive_data``
+        entries, put them back so an edit cannot silently wipe the rest of
+        the policy.
 
         Starter-policy generation still filters the raw LLM tools list to the
         target MCP server so ``source: agent`` rows never land in the parsed
@@ -410,6 +419,15 @@ class PolicyGenerationService:
             )
             or None
         )
+        # Apply replaces the stored sensitive_data block with a generated
+        # one. A document without the block keeps the stored one.
+        if generated.sensitive_data is not None and current.sensitive_data is not None:
+            merged_sensitive_data = self._merge_sensitive_data(
+                current.sensitive_data, generated.sensitive_data, _restore
+            )
+            if merged_sensitive_data != generated.sensitive_data:
+                restored = True
+            generated.sensitive_data = merged_sensitive_data
 
         if not restored and not scoped_generated_yaml:
             return generated_yaml
@@ -418,6 +436,55 @@ class PolicyGenerationService:
             generated.model_dump(mode="json", exclude_none=True),
             default_flow_style=False,
             sort_keys=False,
+        )
+
+    @staticmethod
+    def _merge_sensitive_data(
+        current: SensitiveDataConfig,
+        generated: SensitiveDataConfig,
+        restore: Callable[..., List[Any]],
+    ) -> SensitiveDataConfig:
+        """Add the stored ``sensitive_data`` entries the generated block lacks.
+
+        Rules and reference_only entries match by id, custom patterns and
+        keyword lists by name. A detector setting the model did not write
+        keeps its stored value. ``restore`` is the merge's list helper, so
+        an entry the prompt asks to drop stays out.
+        """
+        detectors = generated.detectors
+        if detectors is None:
+            detectors = current.detectors
+        elif current.detectors is not None:
+            unwritten = {
+                field: getattr(current.detectors, field)
+                for field in type(current.detectors).model_fields
+                if field not in detectors.model_fields_set
+            }
+            detectors = detectors.model_copy(
+                update={
+                    **unwritten,
+                    "custom_patterns": restore(
+                        current.detectors.custom_patterns,
+                        detectors.custom_patterns,
+                        lambda item: item.name,
+                    ),
+                    "keywords": restore(
+                        current.detectors.keywords,
+                        detectors.keywords,
+                        lambda item: item.name,
+                    ),
+                }
+            )
+        return generated.model_copy(
+            update={
+                "detectors": detectors,
+                "rules": restore(current.rules, generated.rules, lambda item: item.id),
+                "reference_only": restore(
+                    current.reference_only,
+                    generated.reference_only,
+                    lambda item: item.id,
+                ),
+            }
         )
 
     def _build_context_block(
@@ -487,6 +554,7 @@ class PolicyGenerationService:
             return ""
 
     def _build_system_prompt(self, schema_json: str, context_block: str) -> str:
+        keep_sensitive_data = KEEP_SENSITIVE_DATA_RULE if context_block else ""
         return f"""\
 You are an expert at generating Preloop access-policy YAML files.
 
@@ -512,9 +580,7 @@ No markdown fences, no explanation.
 - To deny every tool on an MCP server except a list, add a
   `sensitive_data` rule scoped to that server whose CEL `condition` is
   true for any tool not on the list, as in the example below. Quote the
-  "on" key: YAML reads a bare on as true. Apply replaces the whole
-  `sensitive_data` block, so keep the account's existing detectors and
-  rules in it.
+  "on" key: YAML reads a bare on as true.{keep_sensitive_data}
 - Model input/output rules live under `model_io` with target
   `model.request` or `model.response`. Actions are allow, deny, or
   require_approval. Detector attributes include pii.found,
@@ -551,6 +617,7 @@ follow these rules:
 """
 
     def _build_audit_system_prompt(self, schema_json: str, context_block: str) -> str:
+        keep_sensitive_data = KEEP_SENSITIVE_DATA_RULE if context_block else ""
         return f"""\
 You are an expert at generating Preloop access-policy YAML files.
 
@@ -582,8 +649,7 @@ Output ONLY the raw YAML. No fences, no explanation.
   `approval_workflow` instead of `action: deny`. Scope it with
   `scope.servers` when the current configuration shows which MCP
   server the tools belong to. Quote the "on" key: YAML reads a bare on
-  as true. Apply replaces the whole `sensitive_data` block, so keep
-  the account's existing detectors and rules in it.
+  as true.{keep_sensitive_data}
 
 ### REUSE EXISTING CONFIGURATION
 If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
