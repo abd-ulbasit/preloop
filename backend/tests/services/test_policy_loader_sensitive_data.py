@@ -254,6 +254,39 @@ def test_scope_servers_the_policy_can_match_pass(
     assert PolicyApplier(MagicMock(), uuid.uuid4())._validate_references(policy) == []
 
 
+def test_scope_server_shared_with_the_account_passes(mocker: MockerFixture) -> None:
+    # Tool calls also reach servers another account shares here (hook H3),
+    # so a scope can name one that the account does not own.
+    from preloop.plugins.account_hooks import VISIBLE_MCP_SERVER, VisibilityProvider
+
+    _configured_servers(mocker, "github")
+    shared = MagicMock()
+    shared.id = uuid.uuid4()
+    shared.name = "shared-records"
+
+    class SharedServer(VisibilityProvider):
+        def extra_visible_ids(
+            self, db: Any, account_id: Any, resource_type: str
+        ) -> list[Any]:
+            return [shared.id] if resource_type == VISIBLE_MCP_SERVER else []
+
+    mocker.patch("preloop.plugins.account_hooks._visibility_provider", SharedServer())
+    db = MagicMock()
+    db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [
+        shared
+    ]
+    applier = PolicyApplier(db, uuid.uuid4())
+
+    def scoped_to(server: str) -> PolicyDocument:
+        return _policy(
+            {"reference_only": [{"id": "refs", "scope": {"servers": [server]}}]}
+        )
+
+    assert applier._validate_references(scoped_to("shared-records")) == []
+    [error] = applier._validate_references(scoped_to("githb"))
+    assert "'githb'" in error
+
+
 def test_model_targets_do_not_check_scope_servers(mocker: MockerFixture) -> None:
     # Model targets ignore scope.servers, so the name cannot stop a match.
     _configured_servers(mocker)

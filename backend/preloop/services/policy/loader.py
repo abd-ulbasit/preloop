@@ -1246,10 +1246,11 @@ class PolicyApplier:
     ) -> List[str]:
         """Tool-path scopes that name an MCP server the account does not have.
 
-        A scope matches on the called server's name, and builtin tools run
-        on the ``preloop-mcp`` pseudo server. Any other name never matches,
-        so a deny rule or a reference_only entry scoped to it applies to no
-        call. Model targets ignore ``scope.servers``.
+        A scope matches on the called server's name: a server the account
+        can call, including one another account shares with it (hook H3),
+        or the ``preloop-mcp`` pseudo server of builtin tools. Any other
+        name never matches, so a deny rule or a reference_only entry scoped
+        to it applies to no call. Model targets ignore ``scope.servers``.
 
         Args:
             block: The policy's ``sensitive_data`` block.
@@ -1259,6 +1260,7 @@ class PolicyApplier:
         Returns:
             One message per unknown server name.
         """
+        from preloop.models.crud import crud_mcp_server
         from preloop.services.mcp_config_service import DEFAULT_TOOL_SERVER
 
         known = available_servers | {DEFAULT_TOOL_SERVER}
@@ -1271,17 +1273,30 @@ class PolicyApplier:
             (f"sensitive_data reference_only entry '{entry.id}'", entry.scope)
             for entry in block.reference_only
         ]
-        messages: List[str] = []
-        for owner, scope in scoped:
-            for server_name in scope.servers:
-                if server_name.lower() in known:
-                    continue
-                suggestion = self._get_server_suggestion(server_name, known)
-                messages.append(
-                    f"{owner} is scoped to MCP server '{server_name}', which is "
-                    "not configured, so it matches no call until a server with "
-                    f"that name exists. {suggestion}"
+        unknown = [
+            (owner, server_name)
+            for owner, scope in scoped
+            for server_name in scope.servers
+            if server_name.lower() not in known
+        ]
+        if unknown:
+            # Tool calls also reach the servers shared with this account.
+            known |= {
+                server.name.lower()
+                for server in crud_mcp_server.get_active_visible_by_account(
+                    self.db, account_id=self.account_id
                 )
+            }
+        messages: List[str] = []
+        for owner, server_name in unknown:
+            if server_name.lower() in known:
+                continue
+            suggestion = self._get_server_suggestion(server_name, known)
+            messages.append(
+                f"{owner} is scoped to MCP server '{server_name}', which is "
+                "not configured, so it matches no call until a server with "
+                f"that name exists. {suggestion}"
+            )
         return messages
 
     def _get_server_suggestion(self, server_name: str, available_servers: set) -> str:

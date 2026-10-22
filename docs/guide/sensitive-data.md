@@ -58,7 +58,7 @@ call for its targets. Detectors run only when a rule is in scope.
 
 `preloop policy apply` rejects a tool rule or `reference_only` entry whose
 `scope.servers` names a server that is neither under `mcp_servers` in the file
-nor configured in the account. Such a rule would match no call.
+nor configured in or shared with the account. Such a rule would match no call.
 
 Each rule has `detector_timeout_ms` (default 500) and
 `on_detector_timeout` (default `deny`). A timeout normally fails closed;
