@@ -35,6 +35,7 @@ from preloop.services.model_credentials import (
     resolve_model_call_credentials,
 )
 from preloop.services.policy import export_current_policy
+from preloop.services.policy.loader import unsupported_default_settings
 from preloop.services.policy.schema import (
     PolicyDocument,
     ToolDefinition,
@@ -45,6 +46,22 @@ logger = logging.getLogger(__name__)
 
 # Mapping from our provider_name to litellm prefix.
 # litellm uses prefixes like "openai/", "anthropic/", etc.
+
+#: ``preloop policy apply`` only accepts the built-in ``defaults``, so the
+#: prompts ask the model to leave them out and show this rule for
+#: deny-by-default instead, the pattern of
+#: docs/guide/examples/production-access/readonly-policy.yaml.
+SERVER_ALLOWLIST_EXAMPLE = """\
+sensitive_data:
+  rules:
+    - id: github-allowlist
+      description: Only the listed GitHub tools run.
+      "on": [tool.args]
+      scope:
+        servers: [github]
+      condition: "!(tool.name in ['get_issue', 'list_issues'])"
+      action: deny
+"""
 
 
 class PolicyGenerationError(Exception):
@@ -489,8 +506,15 @@ No markdown fences, no explanation.
 - If the user describes async behaviour, set `async_approval: true`.
 - If the user mentions justification, set `justification: required`.
 - Fill in sensible `timeout_seconds` (default 300).
-- For `defaults`, set `unknown_tools` appropriately based on the user's
-  security posture (allow / deny / require_approval).
+- Leave out `defaults`. `preloop policy apply` only accepts
+  `unknown_tools: allow`, so a tool call that no rule matches is
+  allowed.
+- To deny every tool on an MCP server except a list, add a
+  `sensitive_data` rule scoped to that server whose CEL `condition` is
+  true for any tool not on the list, as in the example below. Quote the
+  "on" key: YAML reads a bare on as true. Apply replaces the whole
+  `sensitive_data` block, so keep the account's existing detectors and
+  rules in it.
 - Model input/output rules live under `model_io` with target
   `model.request` or `model.response`. Actions are allow, deny, or
   require_approval. Detector attributes include pii.found,
@@ -514,6 +538,10 @@ follow these rules:
    not yet covered, but do not drop existing configurations.
 6. Preserve enabled/disabled state. If an existing tool or rule is
    disabled, keep it disabled unless the user asks otherwise.
+
+### EXAMPLE: ONLY LISTED TOOLS ON ONE MCP SERVER
+```yaml
+{SERVER_ALLOWLIST_EXAMPLE}```
 
 ### JSON SCHEMA
 ```json
@@ -545,8 +573,17 @@ Output ONLY the raw YAML. No fences, no explanation.
 - Use `version: "1.0"`.
 - Every `approval_workflow` referenced MUST be defined.
 - Prefer `condition_type: simple` for straightforward conditions.
-- Set `defaults.unknown_tools` to `require_approval` since we're
-  generating a norm-based policy.
+- Leave out `defaults`. `preloop policy apply` only accepts
+  `unknown_tools: allow`, so a tool call that no rule matches is
+  allowed.
+- To require approval for tools the logs never show, add a
+  `sensitive_data` rule like the example below whose condition lists
+  the tools seen in the logs, with `action: require_approval` and an
+  `approval_workflow` instead of `action: deny`. Scope it with
+  `scope.servers` when the current configuration shows which MCP
+  server the tools belong to. Quote the "on" key: YAML reads a bare on
+  as true. Apply replaces the whole `sensitive_data` block, so keep
+  the account's existing detectors and rules in it.
 
 ### REUSE EXISTING CONFIGURATION
 If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
@@ -556,6 +593,10 @@ If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
 3. **Merge with existing tool configs** — add or tighten rules based
    on the audit data, but preserve existing rules that don't conflict.
 4. **Do not drop** tools, servers, or policies already configured.
+
+### EXAMPLE: ONLY LISTED TOOLS ON ONE MCP SERVER
+```yaml
+{SERVER_ALLOWLIST_EXAMPLE}```
 
 ### JSON SCHEMA
 ```json
@@ -660,12 +701,23 @@ If a "CURRENT ACCOUNT CONFIGURATION" block is provided below:
             raise PolicyGenerationError("Generated output is not a YAML mapping.")
 
         try:
-            PolicyDocument(**data)
+            document = PolicyDocument(**data)
         except ValidationError as exc:
             errors = "; ".join(f"{e['loc']}: {e['msg']}" for e in exc.errors())
             raise PolicyGenerationError(
                 f"Generated policy has schema errors: {errors}"
             ) from exc
+
+        if document.defaults is not None:
+            unsupported = unsupported_default_settings(document.defaults)
+            if unsupported:
+                raise PolicyGenerationError(
+                    "Generated policy sets defaults that `preloop policy apply` "
+                    f"rejects: {'; '.join(unsupported)}. Leave out `defaults`. "
+                    "To deny the tools an MCP server does not list, use a "
+                    "sensitive_data rule scoped to that server with a CEL "
+                    "condition."
+                )
 
         return warnings
 

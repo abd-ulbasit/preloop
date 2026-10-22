@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated policies no longer set `defaults` that `apply` rejects.** The
+  policy-generation prompts asked for `unknown_tools: deny` or
+  `require_approval` (the audit-log prompt always asked for
+  `require_approval`), which `preloop policy apply` refuses. The prompts now
+  leave `defaults` out and show a `sensitive_data` rule scoped to one MCP
+  server, with a CEL allowlist, for deny-by-default. A generated `defaults`
+  block that `apply` would reject goes back to the model with the error. The
+  policy-as-code reference and the schema now say that `inherit_from_parent`
+  is not used (#1426).
+
 ## [0.17.1] - 2026-10-21
 
 ### Added

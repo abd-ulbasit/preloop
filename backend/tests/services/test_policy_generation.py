@@ -1,13 +1,16 @@
 """Tests for PolicyGenerationService and policy generation endpoints."""
 
 import json
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
 from types import ModuleType
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 # litellm is not installed in the test environment — provide a stub so
 # the policy_generation module can be imported.
@@ -17,9 +20,20 @@ if "litellm" not in sys.modules:
     sys.modules["litellm"] = _stub
 
 from preloop.models.models.account import Account
+from preloop.services.policy import (
+    DefaultsDefinition,
+    PolicyApplier,
+    UnknownToolsPolicy,
+    load_policy_from_string,
+)
 from preloop.services.policy_generation import (
     PolicyGenerationError,
     PolicyGenerationService,
+)
+from preloop.services.policy_simulation import (
+    PolicyEvaluationRequest,
+    PolicyEvaluationResponse,
+    simulate_policy,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -160,6 +174,141 @@ class TestValidateOutput:
     def test_schema_errors(self):
         with pytest.raises(PolicyGenerationError, match="schema errors"):
             PolicyGenerationService._validate_output(INVALID_POLICY_YAML)
+
+
+# ---------------------------------------------------------------------------
+# defaults: generation accepts what `preloop policy apply` accepts (#1426)
+# ---------------------------------------------------------------------------
+
+DEFAULTS_CASES = [
+    {},
+    {"unknown_tools": "allow"},
+    {"unknown_tools": "deny"},
+    {"unknown_tools": "require_approval"},
+    {"require_approval_for_new_tools": True},
+    {"default_approval_workflow": "review"},
+]
+
+
+def _apply_accepts(defaults: dict[str, Any]) -> bool:
+    """Whether ``PolicyApplier._apply_defaults`` accepts these defaults."""
+    applier = PolicyApplier(MagicMock(), account_id=str(uuid.uuid4()))
+    return applier._apply_defaults(DefaultsDefinition(**defaults), dry_run=True)
+
+
+def _with_defaults(defaults: dict[str, Any]) -> str:
+    policy = yaml.safe_load(VALID_POLICY_YAML)
+    policy["defaults"] = defaults
+    return yaml.safe_dump(policy, sort_keys=False)
+
+
+def _yaml_examples(prompt: str) -> list[str]:
+    return re.findall(r"```yaml\n(.*?)```", prompt, re.DOTALL)
+
+
+def _as_policy(example: str) -> str:
+    """Add the fields a policy file needs to a YAML example from a prompt."""
+    policy = yaml.safe_load(example)
+    policy.setdefault("version", "1.0")
+    policy.setdefault("metadata", {"name": "Prompt example"})
+    return yaml.safe_dump(policy, sort_keys=False)
+
+
+class TestValidateOutputDefaults:
+    @pytest.mark.parametrize("defaults", DEFAULTS_CASES)
+    def test_rejects_what_apply_rejects(self, defaults: dict[str, Any]) -> None:
+        text = _with_defaults(defaults)
+        if _apply_accepts(defaults):
+            PolicyGenerationService._validate_output(text)
+        else:
+            with pytest.raises(PolicyGenerationError, match="defaults"):
+                PolicyGenerationService._validate_output(text)
+
+    def test_retry_names_the_rejected_setting(
+        self, service: PolicyGenerationService, mock_ai_model: MagicMock
+    ) -> None:
+        # What the norm-based prompt used to ask for.
+        bad_response = MagicMock()
+        bad_response.choices = [MagicMock()]
+        bad_response.choices[0].message.content = _with_defaults(
+            {"unknown_tools": "require_approval"}
+        )
+        good_response = MagicMock()
+        good_response.choices = [MagicMock()]
+        good_response.choices[0].message.content = VALID_POLICY_YAML
+
+        with patch("preloop.services.policy_generation.litellm") as mock_litellm:
+            mock_litellm.completion.side_effect = [bad_response, good_response]
+            result = service._call_llm(mock_ai_model, "system", "user")
+
+        assert result == VALID_POLICY_YAML.strip()
+        messages = mock_litellm.completion.call_args.kwargs["messages"]
+        assert "unknown_tools='require_approval'" in messages[-1]["content"]
+
+
+@pytest.fixture(params=["_build_system_prompt", "_build_audit_system_prompt"])
+def system_prompt(
+    request: pytest.FixtureRequest, service: PolicyGenerationService
+) -> str:
+    prompt: str = getattr(service, request.param)("{}", "")
+    return prompt
+
+
+class TestPromptDefaultsGuidance:
+    def test_rules_name_no_unknown_tools_value_apply_rejects(
+        self, system_prompt: str
+    ) -> None:
+        rejected = [
+            value.value
+            for value in UnknownToolsPolicy
+            if not _apply_accepts({"unknown_tools": value.value})
+        ]
+        assert rejected
+        rules = system_prompt.split("### RULES", 1)[1].split("###", 1)[0]
+        for bullet in rules.split("\n- "):
+            if "unknown_tools" not in bullet:
+                continue
+            for value in rejected:
+                assert not re.search(rf"\b{value}\b", bullet), bullet
+
+    def test_yaml_examples_pass_apply(self, system_prompt: str) -> None:
+        examples = _yaml_examples(system_prompt)
+        assert examples, "the prompt shows no YAML example"
+        for example in examples:
+            text = _as_policy(example)
+            policy, result = load_policy_from_string(text)
+            assert result.is_valid, result.errors
+            assert policy is not None
+            defaults = policy.defaults.model_dump() if policy.defaults else {}
+            assert _apply_accepts(defaults)
+            PolicyGenerationService._validate_output(text)
+
+    async def test_allowlist_example_denies_unlisted_tool(
+        self, system_prompt: str
+    ) -> None:
+        [example] = [e for e in _yaml_examples(system_prompt) if "condition" in e]
+        text = _as_policy(example)
+        policy, _ = load_policy_from_string(text)
+        assert policy is not None and policy.sensitive_data is not None
+        [rule] = policy.sensitive_data.rules
+        assert rule.condition is not None
+        [server] = rule.scope.servers
+        listed = re.findall(r"'([^']+)'", rule.condition)
+        assert listed
+
+        async def decide(name: str) -> PolicyEvaluationResponse:
+            request = PolicyEvaluationRequest.model_validate(
+                {"name": name, "server": server, "args": {}, "draft_yaml": text}
+            )
+            return await simulate_policy(
+                request, db=MagicMock(), account_id=uuid.uuid4(), user_id=uuid.uuid4()
+            )
+
+        for name in listed:
+            assert (await decide(name)).decision == "allow", name
+        result = await decide("tool_the_example_does_not_list")
+        assert result.decision == "deny"
+        assert result.matched_rule == rule.id
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from preloop.services.policy.schema import (
     SensitiveDataConfig,
     ToolCondition,
     ToolDefinition,
+    UnknownToolsPolicy,
     is_known_tool_source,
 )
 
@@ -817,6 +818,41 @@ class MissingWorkflowError:
             f"Tool '{self.tool_name}' references approval workflow '{self.workflow_name}' "
             f"which is not defined. {self.suggestion}"
         )
+
+
+def unsupported_default_settings(defaults: DefaultsDefinition) -> List[str]:
+    """List the ``defaults`` settings that ``PolicyApplier`` rejects.
+
+    Only the built-in behavior is implemented: a tool call that no rule
+    matches is allowed. A stricter setting would be ignored and make the
+    policy look stricter than it is, so ``apply`` refuses it. Policy
+    generation runs the same check on model output.
+
+    Args:
+        defaults: The policy's ``defaults`` block.
+
+    Returns:
+        One entry per rejected setting, naming it and why. Empty when
+        ``apply`` accepts the block.
+    """
+    unsupported: List[str] = []
+
+    unknown_tools = getattr(defaults.unknown_tools, "value", defaults.unknown_tools)
+    if unknown_tools != UnknownToolsPolicy.ALLOW.value:
+        unsupported.append(
+            f"unknown_tools='{unknown_tools}' (only 'allow' is currently supported)"
+        )
+
+    if defaults.require_approval_for_new_tools:
+        unsupported.append("require_approval_for_new_tools=true (not yet implemented)")
+
+    if defaults.default_approval_workflow:
+        unsupported.append(
+            f"default_approval_workflow='{defaults.default_approval_workflow}' "
+            "(not yet implemented)"
+        )
+
+    return unsupported
 
 
 class PolicyApplier:
@@ -1676,32 +1712,7 @@ class PolicyApplier:
         - unknown_tools: "deny" or "require_approval"
         - require_approval_for_new_tools: true
         """
-        # Check for restrictive settings that would be silently ignored
-        unsupported_settings = []
-
-        # Check unknown_tools - only "allow" is supported (current default behavior)
-        unknown_tools_value = (
-            defaults.unknown_tools.value
-            if hasattr(defaults.unknown_tools, "value")
-            else defaults.unknown_tools
-        )
-        if unknown_tools_value != "allow":
-            unsupported_settings.append(
-                f"unknown_tools='{unknown_tools_value}' (only 'allow' is currently supported)"
-            )
-
-        # Check require_approval_for_new_tools - only False is supported
-        if defaults.require_approval_for_new_tools:
-            unsupported_settings.append(
-                "require_approval_for_new_tools=true (not yet implemented)"
-            )
-
-        # Check default_approval_workflow - not yet enforced
-        if defaults.default_approval_workflow:
-            unsupported_settings.append(
-                f"default_approval_workflow='{defaults.default_approval_workflow}' (not yet implemented)"
-            )
-
+        unsupported_settings = unsupported_default_settings(defaults)
         if unsupported_settings:
             error_msg = (
                 "Policy contains restrictive default settings that are not yet supported. "
@@ -1714,8 +1725,7 @@ class PolicyApplier:
 
         # Safe defaults - just log and continue
         logger.info(
-            f"Default settings validated (using built-in defaults): "
-            f"unknown_tools={unknown_tools_value}"
+            "Default settings validated (using built-in defaults): unknown_tools=allow"
         )
         return True
 
