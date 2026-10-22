@@ -30,6 +30,7 @@ _GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
 # Single line the container wrapper prints after creating (or finding) the PR:
 #   PRELOOP_PR_OPENED {"url": "...", "branch": "...", "provider": "github"}
 PR_OPENED_MARKER = "PRELOOP_PR_OPENED"
+MAX_PUBLISHED_PRS = 32
 
 # Comment marker written by the PR reviewer flow, e.g.
 #   <!-- preloop-review:flow-id:pr-reviewer:severity:HIGH -->
@@ -442,7 +443,48 @@ def merge_result_preserving_pr_binding(
     for key in ("native_resume", "continuation"):
         if key in existing:
             merged[key] = existing[key]
+    if "published_prs" in existing:
+        merged["published_prs"] = existing["published_prs"]
+    if "published_prs_truncated" in existing:
+        merged["published_prs_truncated"] = existing["published_prs_truncated"]
     return merged
+
+
+def record_published_pr(
+    db: Session,
+    execution_id: Any,
+    publication: Dict[str, str],
+    *,
+    raise_errors: bool = False,
+) -> None:
+    """Save a wrapper publication as an inspectable output without rebinding follow-up."""
+    try:
+        if execution_id and publication.get("url"):
+            parsed_url = urlparse(publication["url"])
+            repository_path = parsed_url.path
+            for separator in (
+                "/-/merge_requests/",
+                "/merge_requests/",
+                "/pull/",
+                "/pull-requests/",
+            ):
+                if separator in repository_path:
+                    repository_path = repository_path.split(separator, 1)[0]
+                    break
+            output = {
+                **publication,
+                "repository": f"{parsed_url.netloc}{repository_path}",
+            }
+            crud_flow_execution.add_published_pr(
+                db, execution_id=execution_id, publication=output
+            )
+    except Exception:
+        logger.warning(
+            "Failed to record published PR on execution %s", execution_id, exc_info=True
+        )
+        db.rollback()
+        if raise_errors:
+            raise
 
 
 def record_cli_session(
@@ -719,6 +761,8 @@ def record_runner_handoff_markers(
                     source_branch=opened.get("branch"),
                     raise_errors=True,
                 )
+            if not current.get("published_prs_truncated"):
+                record_published_pr(db, execution.id, opened, raise_errors=True)
     artifact = parse_native_artifact_marker(line)
     if artifact:
         expected_thread = (execution.trigger_event_details or {}).get(
