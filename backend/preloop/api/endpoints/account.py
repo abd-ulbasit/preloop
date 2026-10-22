@@ -1899,7 +1899,7 @@ def list_owned_agent_shared_sessions(
     response_model=list[ManagedAgentModelBindingSummary],
 )
 @require_permission("view_agents")
-async def list_account_managed_agent_model_bindings(
+def list_account_managed_agent_model_bindings(
     agent_id: str,
     account: Annotated[Account, Depends(get_account_for_user)],
     current_user: UserModel = Depends(get_current_active_user),
