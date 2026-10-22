@@ -93,6 +93,7 @@ import './talk-button';
 import './session-list-panel';
 import './session-replay-panel';
 import './session-request-timeline';
+import { runtimeFromSourceType } from '../utils/session-turns';
 import './similar-sessions-panel';
 import './browser-step-strip';
 import './artifact-image-viewer';
@@ -2336,7 +2337,9 @@ export class PreloopSessionObserver extends LitElement {
       // "Chat" implied you could type here. This tab reads a session; the
       // talk window is where a conversation happens.
       { mode: 'conversation', label: 'Conversation', icon: 'chat-left-text' },
-      { mode: 'timeline', label: 'Transcript', icon: 'list-ul' },
+      // Per model request, with cost and tokens. Conversation is the
+      // terminal-ordered transcript.
+      { mode: 'timeline', label: 'Requests', icon: 'list-ul' },
       { mode: 'replay', label: 'Replay', icon: 'play-circle' },
     ];
     if (this.enabledFeatures.optimization) {
@@ -2512,6 +2515,7 @@ export class PreloopSessionObserver extends LitElement {
         style=${this.replayMode === 'conversation' ? '' : 'display:none'}
         .liveEnabled=${this.replayMode === 'conversation'}
         .sessionId=${this.activeSessionId || ''}
+        .runtime=${runtimeFromSourceType(this.activeSession?.sourceType ?? null)}
         .ended=${Boolean(this.activeSession?.endedAt)}
         @session-live-reload=${() => void this.reloadActiveSession()}
         .events=${this.activeEvents}
@@ -2870,7 +2874,7 @@ export class PreloopSessionObserver extends LitElement {
             }}
           >
             <sl-icon slot="prefix" name="list-columns-reverse"></sl-icon>
-            Requests
+            Usage log
           </sl-button>
           ${this.renderLiveDesktopButton(session)} ${this.renderTalkButton()}
           ${this.renderMoreActions(session)}
@@ -3150,6 +3154,9 @@ export class PreloopSessionObserver extends LitElement {
           }
           .totalEvents=${this.activeEventPage?.total ?? null}
           .optimizationEnabled=${this.enabledFeatures.optimization}
+          .sessionTotalTokens=${
+            this.activeSession?.tokenUsage?.total_tokens ?? null
+          }
           .availableModels=${this.aiModels}
           .availableModelsLoading=${this.aiModelsLoading}
           .optimizationResult=${
