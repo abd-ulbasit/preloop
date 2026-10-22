@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+from pytest_mock import MockerFixture
 
 # litellm is not installed in the test environment — provide a stub so
 # the policy_generation module can be imported.
@@ -332,7 +333,7 @@ class TestPromptDefaultsGuidance:
         assert result.matched_rule == rule.id
 
     def test_example_scope_server_is_a_placeholder_apply_rejects(
-        self, system_prompt: str, mocker: Any
+        self, system_prompt: str, mocker: MockerFixture
     ) -> None:
         # A copied example fails on apply instead of scoping the rule to a
         # server that no call comes from.

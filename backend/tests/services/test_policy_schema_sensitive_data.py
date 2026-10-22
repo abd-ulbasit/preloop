@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 from pydantic import ValidationError
+from pytest_mock import MockerFixture
 
 from preloop.services.policy import (
     PolicyDocument,
@@ -205,7 +206,9 @@ def test_yaml_example_in_schema_docstring_loads() -> None:
     assert "employee_id" in doc.model_io[0].detectors.pii.types
 
 
-def test_schema_docstring_example_passes_the_account_check(mocker) -> None:
+def test_schema_docstring_example_passes_the_account_check(
+    mocker: MockerFixture,
+) -> None:
     """Its scope names a server the example defines, so an empty account
     accepts it."""
     from preloop.services.policy.loader import PolicyApplier
@@ -218,6 +221,7 @@ def test_schema_docstring_example_passes_the_account_check(mocker) -> None:
         return_value=set(),
     )
     doc = _schema_docstring_example()
+    assert doc.sensitive_data is not None
     assert doc.sensitive_data.rules[0].scope.servers == ["github-mcp"]
     applier = PolicyApplier(MagicMock(), uuid.uuid4())
     assert applier._validate_references(doc) == []

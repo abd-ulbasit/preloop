@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pytest_mock import MockerFixture
 
 from preloop.services.policy import PolicyDocument, export_current_policy
 from preloop.services.policy.loader import PolicyApplier
@@ -175,7 +177,7 @@ ALLOWLIST_RULE = {
 }
 
 
-def _configured_servers(mocker, *names: str) -> None:
+def _configured_servers(mocker: MockerFixture, *names: str) -> None:
     servers = []
     for name in names:
         server = MagicMock()
@@ -195,7 +197,7 @@ def _configured_servers(mocker, *names: str) -> None:
     )
 
 
-def _policy(sensitive_data: dict, **sections) -> PolicyDocument:
+def _policy(sensitive_data: dict[str, Any], **sections: Any) -> PolicyDocument:
     return PolicyDocument.model_validate(
         {
             "version": "1.0",
@@ -214,7 +216,7 @@ def _policy(sensitive_data: dict, **sections) -> PolicyDocument:
     ],
 )
 def test_apply_rejects_a_scope_server_the_account_lacks(
-    mocker, section: str, entry: dict
+    mocker: MockerFixture, section: str, entry: dict[str, Any]
 ) -> None:
     _configured_servers(mocker, "github")
     replace = mocker.patch(
@@ -241,7 +243,9 @@ def test_apply_rejects_a_scope_server_the_account_lacks(
 
 
 @pytest.mark.parametrize("server", ["github", "GitHub", "in-file", "preloop-mcp"])
-def test_scope_servers_the_policy_can_match_pass(mocker, server: str) -> None:
+def test_scope_servers_the_policy_can_match_pass(
+    mocker: MockerFixture, server: str
+) -> None:
     _configured_servers(mocker, "github")
     policy = _policy(
         {"rules": [{**ALLOWLIST_RULE, "scope": {"servers": [server]}}]},
@@ -250,7 +254,7 @@ def test_scope_servers_the_policy_can_match_pass(mocker, server: str) -> None:
     assert PolicyApplier(MagicMock(), uuid.uuid4())._validate_references(policy) == []
 
 
-def test_model_targets_do_not_check_scope_servers(mocker) -> None:
+def test_model_targets_do_not_check_scope_servers(mocker: MockerFixture) -> None:
     # Model targets ignore scope.servers, so the name cannot stop a match.
     _configured_servers(mocker)
     rule = {
